@@ -28,6 +28,27 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'twelve_data' => [
+        'token' => env('TWELVE_DATA_TOKEN'),
+        'base_url' => env('TWELVE_DATA_BASE_URL', 'https://api.twelvedata.com'),
+    ],
+
+    'deutsche_borse' => [
+        'id' => env('DEUTSCHE_BORSE_ID'),
+        'token' => env('DEUTSCHE_BORSE_TOKEN'),
+        'graphql_url' => env('DEUTSCHE_BORSE_GRAPHQL_URL', 'https://api.developer.deutsche-boerse.com/eurex-prod-graphql/'),
+    ],
+
+    'stock_identifier_ai' => [
+        'provider' => env('STOCK_IDENTIFIER_AI_PROVIDER', 'openai'),
+        'model' => env('STOCK_IDENTIFIER_AI_MODEL', 'gpt-4.1-mini'),
+    ],
+
+    'stock_price_ai' => [
+        'provider' => env('STOCK_PRICE_AI_PROVIDER', env('STOCK_IDENTIFIER_AI_PROVIDER', 'openai')),
+        'model' => env('STOCK_PRICE_AI_MODEL', env('STOCK_IDENTIFIER_AI_MODEL', 'gpt-4.1-mini')),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),

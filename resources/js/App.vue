@@ -2,14 +2,30 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useAuthStore } from './stores/auth';
+import { useDepotStore } from './stores/depots';
 import { useRoleStore } from './stores/roles';
 import { useUserStore } from './stores/users';
 
 const auth = useAuthStore();
+const depotsStore = useDepotStore();
 const usersStore = useUserStore();
 const rolesStore = useRoleStore();
 
 const { user, loading, notice, error } = storeToRefs(auth);
+const {
+    activeDepot,
+    depots,
+    holdings,
+    stockSearchResults,
+    pagination: depotPagination,
+    holdingsPagination,
+    loading: depotsLoading,
+    holdingsLoading,
+    stockSearchLoading,
+    error: depotsError,
+    holdingsError,
+    stockSearchError,
+} = storeToRefs(depotsStore);
 const {
     users,
     roles: availableUserRoles,
@@ -51,19 +67,34 @@ const selectedRole = ref(null);
 const roleForm = ref(emptyRoleForm());
 const roleMessage = ref('');
 const roleError = ref('');
+const depotDialogMode = ref('create');
+const isDepotDialogOpen = ref(false);
+const selectedDepot = ref(null);
+const depotForm = ref(emptyDepotForm());
+const depotMessage = ref('');
+const depotError = ref('');
+const isHoldingDialogOpen = ref(false);
+const isDeleteHoldingDialogOpen = ref(false);
+const selectedHolding = ref(null);
+const holdingSearchQuery = ref('');
+const holdingMessage = ref('');
+const holdingError = ref('');
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
 const profileDisplayName = computed(() => user.value?.name || 'Loading...');
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
-const totalUsers = computed(() => userPagination.value.total ?? users.value.length);
-const totalRoles = computed(() => rolePagination.value.total ?? roles.value.length);
 
 const menuItems = computed(() => [
     {
         key: 'dashboard',
         label: 'Dashboard',
         icon: 'mdi-view-dashboard-outline',
+    },
+    {
+        key: 'depots',
+        label: 'Depots',
+        icon: 'mdi-briefcase-outline',
     },
     ...(canManageUsers.value ? [
         {
@@ -101,6 +132,13 @@ onMounted(async () => {
     await auth.loadUser();
     applyRouteFromPath();
 
+    await depotsStore.loadActiveDepot();
+    if (activeDepot.value) {
+        await depotsStore.loadActiveDepotHoldings();
+    }
+
+    await depotsStore.loadDepots();
+
     if (canManageUsers.value) {
         await Promise.all([
             usersStore.loadUsers(),
@@ -122,6 +160,10 @@ function navigateSection(section) {
 
     if (section === 'roles') {
         rolesStore.loadRoles(rolePagination.value.current_page);
+    }
+
+    if (section === 'depots') {
+        depotsStore.loadDepots(depotPagination.value.current_page);
     }
 }
 
@@ -380,9 +422,187 @@ async function deleteRole() {
     }
 }
 
+function openCreateDepotDialog() {
+    depotDialogMode.value = 'create';
+    selectedDepot.value = null;
+    depotForm.value = emptyDepotForm();
+    depotError.value = '';
+    depotMessage.value = '';
+    isDepotDialogOpen.value = true;
+}
+
+function openEditDepotDialog(depot) {
+    depotDialogMode.value = 'edit';
+    selectedDepot.value = depot;
+    depotForm.value = {
+        name: depot.name,
+        account_balance: depot.account_balance,
+    };
+    depotError.value = '';
+    depotMessage.value = '';
+    isDepotDialogOpen.value = true;
+}
+
+function abortDepotDialog() {
+    isDepotDialogOpen.value = false;
+    selectedDepot.value = null;
+}
+
+async function saveDepot() {
+    depotError.value = '';
+    depotMessage.value = '';
+
+    try {
+        const data = depotDialogMode.value === 'create'
+            ? await depotsStore.createDepot(depotForm.value)
+            : await depotsStore.updateDepot(selectedDepot.value.id, depotForm.value);
+
+        depotMessage.value = data.message;
+        isDepotDialogOpen.value = false;
+        await depotsStore.loadActiveDepot();
+        await depotsStore.loadDepots(depotPagination.value.current_page);
+    } catch (err) {
+        depotError.value = err.message;
+    }
+}
+
+async function activateDepot(depot) {
+    depotError.value = '';
+    depotMessage.value = '';
+
+    try {
+        const data = await depotsStore.activateDepot(depot.id);
+        depotMessage.value = data.message;
+        await depotsStore.loadActiveDepot();
+        await depotsStore.loadActiveDepotHoldings();
+        await depotsStore.loadDepots(depotPagination.value.current_page);
+    } catch (err) {
+        depotError.value = err.message;
+    }
+}
+
+function openHoldingDialog() {
+    holdingSearchQuery.value = '';
+    depotsStore.stockSearchResults = [];
+    depotsStore.stockSearchError = '';
+    holdingError.value = '';
+    holdingMessage.value = '';
+    isHoldingDialogOpen.value = true;
+}
+
+function abortHoldingDialog() {
+    isHoldingDialogOpen.value = false;
+}
+
+async function searchStocks() {
+    holdingError.value = '';
+    holdingMessage.value = '';
+
+    try {
+        await depotsStore.searchStocks(holdingSearchQuery.value);
+    } catch (err) {
+        holdingError.value = err.message;
+    }
+}
+
+async function saveHolding(result) {
+    holdingError.value = '';
+    holdingMessage.value = '';
+
+    try {
+        const data = await depotsStore.createActiveDepotHolding(result);
+        holdingMessage.value = data.message;
+        isHoldingDialogOpen.value = false;
+        await depotsStore.loadActiveDepotHoldings(holdingsPagination.value.current_page);
+    } catch (err) {
+        holdingError.value = err.message;
+    }
+}
+
+async function refreshHoldingPrices() {
+    holdingError.value = '';
+    holdingMessage.value = '';
+
+    try {
+        const data = await depotsStore.refreshActiveDepotHoldingPrices();
+        holdingMessage.value = data.message;
+        await depotsStore.loadActiveDepotHoldings(holdingsPagination.value.current_page);
+    } catch (err) {
+        holdingError.value = err.message;
+    }
+}
+
+function openDeleteHoldingDialog(holding) {
+    selectedHolding.value = holding;
+    holdingError.value = '';
+    holdingMessage.value = '';
+    isDeleteHoldingDialogOpen.value = true;
+}
+
+function abortDeleteHoldingDialog() {
+    isDeleteHoldingDialogOpen.value = false;
+    selectedHolding.value = null;
+}
+
+async function deleteHolding() {
+    holdingError.value = '';
+    holdingMessage.value = '';
+
+    try {
+        const data = await depotsStore.deleteActiveDepotHolding(selectedHolding.value.id);
+        holdingMessage.value = data.message;
+        abortDeleteHoldingDialog();
+        await depotsStore.loadActiveDepotHoldings(holdingsPagination.value.current_page);
+    } catch (err) {
+        holdingError.value = err.message;
+    }
+}
+
+function formatAccountBalance(value) {
+    return new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    }).format(Number(value ?? 0));
+}
+
+function formatLatestPrice(holding) {
+    if (holding.latest_price === null || holding.latest_price === undefined || holding.latest_price === '') {
+        return holding.latest_price_fetched_at ? 'Unavailable' : '-';
+    }
+
+    const amount = Number(holding.latest_price);
+    const formattedAmount = Number.isNaN(amount)
+        ? holding.latest_price
+        : new Intl.NumberFormat('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 6,
+        }).format(amount);
+
+    return holding.currency ? `${formattedAmount} ${holding.currency}` : formattedAmount;
+}
+
+function formatDateTime(value) {
+    if (!value) {
+        return '-';
+    }
+
+    return new Intl.DateTimeFormat('en-US', {
+        dateStyle: 'short',
+        timeStyle: 'short',
+    }).format(new Date(value));
+}
+
+function formatLatestPriceSource(holding) {
+    return holding.latest_price_source || '-';
+}
+
 function clearSectionMessages() {
     profileMessage.value = '';
     profileError.value = '';
+    depotMessage.value = '';
+    depotError.value = '';
+    holdingMessage.value = '';
+    holdingError.value = '';
     userMessage.value = '';
     userError.value = '';
     roleMessage.value = '';
@@ -401,6 +621,13 @@ function emptyUserForm() {
 function emptyRoleForm() {
     return {
         name: '',
+    };
+}
+
+function emptyDepotForm() {
+    return {
+        name: '',
+        account_balance: '0.00',
     };
 }
 </script>
@@ -525,40 +752,281 @@ function emptyRoleForm() {
                     <section v-if="activeSection === 'dashboard'">
                         <div class="d-flex align-center justify-space-between mb-6">
                             <div>
-                                <p class="text-overline text-primary mb-1">Overview</p>
-                                <h1 class="text-h4">Dashboard</h1>
+                                <p class="text-overline text-primary mb-1">Active depot</p>
+                                <h1 class="text-h4">{{ activeDepot?.name ?? 'No active depot' }}</h1>
+                            </div>
+                            <div class="d-flex align-center ga-2">
+                                <v-btn
+                                    color="primary"
+                                    prepend-icon="mdi-refresh"
+                                    variant="tonal"
+                                    :disabled="!activeDepot || holdings.length === 0"
+                                    :loading="holdingsLoading"
+                                    @click="refreshHoldingPrices"
+                                >
+                                    Refresh prices
+                                </v-btn>
+                                <v-btn
+                                    color="primary"
+                                    prepend-icon="mdi-plus"
+                                    variant="flat"
+                                    :disabled="!activeDepot"
+                                    @click="openHoldingDialog"
+                                >
+                                    Add stock
+                                </v-btn>
                             </div>
                         </div>
 
-                        <v-row>
-                            <v-col cols="12" md="4">
-                                <v-card border flat>
-                                    <v-card-text>
-                                        <v-icon color="primary" icon="mdi-account-outline" size="32" />
-                                        <div class="text-h5 mt-3">{{ profileDisplayName }}</div>
-                                        <div class="text-body-2 text-medium-emphasis">Current admin</div>
-                                    </v-card-text>
-                                </v-card>
-                            </v-col>
-                            <v-col v-if="canManageUsers" cols="12" md="4">
-                                <v-card border flat>
-                                    <v-card-text>
-                                        <v-icon color="primary" icon="mdi-account-group-outline" size="32" />
-                                        <div class="text-h5 mt-3">{{ totalUsers }}</div>
-                                        <div class="text-body-2 text-medium-emphasis">Users</div>
-                                    </v-card-text>
-                                </v-card>
-                            </v-col>
-                            <v-col v-if="canManageUsers" cols="12" md="4">
-                                <v-card border flat>
-                                    <v-card-text>
-                                        <v-icon color="primary" icon="mdi-shield-account-outline" size="32" />
-                                        <div class="text-h5 mt-3">{{ totalRoles }}</div>
-                                        <div class="text-body-2 text-medium-emphasis">Roles</div>
-                                    </v-card-text>
-                                </v-card>
-                            </v-col>
-                        </v-row>
+                        <v-alert v-if="holdingMessage" type="success" variant="tonal" density="compact" class="mb-4">
+                            {{ holdingMessage }}
+                        </v-alert>
+                        <v-alert v-if="holdingError || holdingsError" type="error" variant="tonal" density="compact" class="mb-4">
+                            {{ holdingError || holdingsError }}
+                        </v-alert>
+                        <v-alert v-if="!activeDepot" type="info" variant="tonal" density="compact" class="mb-4">
+                            Activate a depot before adding stocks.
+                        </v-alert>
+
+                        <v-table>
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Name</th>
+                                    <th>ISIN</th>
+                                    <th>WKN</th>
+                                    <th>Exchange</th>
+                                    <th>Latest price</th>
+                                    <th>Fetched at</th>
+                                    <th>Source</th>
+                                    <th class="text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-if="activeDepot && !holdingsLoading && holdings.length === 0">
+                                    <td colspan="9">No stocks in this depot.</td>
+                                </tr>
+                                <tr v-for="holding in holdings" :key="holding.id">
+                                    <td>{{ holding.symbol || '-' }}</td>
+                                    <td>{{ holding.name || '-' }}</td>
+                                    <td>{{ holding.isin || '-' }}</td>
+                                    <td>{{ holding.wkn || '-' }}</td>
+                                    <td>{{ holding.exchange || '-' }}</td>
+                                    <td>{{ formatLatestPrice(holding) }}</td>
+                                    <td>{{ formatDateTime(holding.latest_price_fetched_at) }}</td>
+                                    <td>
+                                        <a
+                                            v-if="holding.latest_price_source_url"
+                                            :href="holding.latest_price_source_url"
+                                            rel="noopener noreferrer"
+                                            target="_blank"
+                                        >
+                                            {{ formatLatestPriceSource(holding) }}
+                                        </a>
+                                        <span v-else>{{ formatLatestPriceSource(holding) }}</span>
+                                    </td>
+                                    <td class="text-right">
+                                        <v-btn
+                                            icon
+                                            variant="text"
+                                            color="error"
+                                            aria-label="Delete stock"
+                                            :disabled="holdingsLoading"
+                                            @click="openDeleteHoldingDialog(holding)"
+                                        >
+                                            <v-icon icon="mdi-delete-outline" />
+                                        </v-btn>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </v-table>
+
+                        <v-progress-linear v-if="holdingsLoading" indeterminate color="primary" class="mt-4" />
+
+                        <v-pagination
+                            v-if="holdingsPagination.last_page > 1"
+                            v-model="holdingsPagination.current_page"
+                            class="mt-6"
+                            :length="holdingsPagination.last_page"
+                            @update:model-value="depotsStore.loadActiveDepotHoldings"
+                        />
+
+                        <v-dialog v-model="isHoldingDialogOpen" persistent max-width="900">
+                            <v-card>
+                                <v-card-title>Add stock</v-card-title>
+                                <v-card-text>
+                                    <form id="holding-search-form" class="d-flex align-center ga-3 mb-5" @submit.prevent="searchStocks">
+                                        <v-text-field
+                                            v-model="holdingSearchQuery"
+                                            density="comfortable"
+                                            hide-details
+                                            label="ISIN, WKN, symbol, or name"
+                                            required
+                                        />
+                                        <v-btn type="submit" color="primary" variant="tonal" :loading="stockSearchLoading">
+                                            Search
+                                        </v-btn>
+                                    </form>
+
+                                    <v-alert v-if="stockSearchError" type="error" variant="tonal" density="compact" class="mb-4">
+                                        {{ stockSearchError }}
+                                    </v-alert>
+
+                                    <v-table v-if="stockSearchResults.length > 0">
+                                        <thead>
+                                            <tr>
+                                                <th>Symbol</th>
+                                                <th>Name</th>
+                                                <th>ISIN</th>
+                                                <th>Exchange</th>
+                                                <th>Type</th>
+                                                <th class="text-right">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="result in stockSearchResults" :key="`${result.symbol}-${result.exchange}-${result.mic_code}`">
+                                                <td>{{ result.symbol }}</td>
+                                                <td>{{ result.name }}</td>
+                                                <td>{{ result.isin || '-' }}</td>
+                                                <td>{{ result.exchange }}</td>
+                                                <td>{{ result.instrument_type }}</td>
+                                                <td class="text-right">
+                                                    <v-btn
+                                                        size="small"
+                                                        color="primary"
+                                                        variant="text"
+                                                        :loading="holdingsLoading"
+                                                        @click="saveHolding(result)"
+                                                    >
+                                                        Add
+                                                    </v-btn>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </v-table>
+                                </v-card-text>
+                                <v-card-actions>
+                                    <v-spacer />
+                                    <v-btn type="button" variant="text" :disabled="holdingsLoading" @click="abortHoldingDialog">
+                                        Cancel
+                                    </v-btn>
+                                </v-card-actions>
+                            </v-card>
+                        </v-dialog>
+
+                        <v-dialog v-model="isDeleteHoldingDialogOpen" persistent max-width="440">
+                            <v-card>
+                                <v-card-title>Delete stock</v-card-title>
+                                <v-card-text>Delete {{ selectedHolding?.name || selectedHolding?.symbol }}?</v-card-text>
+                                <v-card-actions>
+                                    <v-spacer />
+                                    <v-btn type="button" variant="text" :disabled="holdingsLoading" @click="abortDeleteHoldingDialog">
+                                        Cancel
+                                    </v-btn>
+                                    <v-btn type="button" color="error" variant="flat" :loading="holdingsLoading" @click="deleteHolding">
+                                        Delete
+                                    </v-btn>
+                                </v-card-actions>
+                            </v-card>
+                        </v-dialog>
+                    </section>
+
+                    <section v-if="activeSection === 'depots'">
+                        <div class="d-flex align-center justify-space-between mb-6">
+                            <div>
+                                <p class="text-overline text-primary mb-1">Admin</p>
+                                <h1 class="text-h4">Depots</h1>
+                            </div>
+                            <v-btn color="primary" prepend-icon="mdi-briefcase-plus-outline" variant="flat" @click="openCreateDepotDialog">
+                                New depot
+                            </v-btn>
+                        </div>
+
+                        <v-alert v-if="depotMessage" type="success" variant="tonal" density="compact" class="mb-4">
+                            {{ depotMessage }}
+                        </v-alert>
+                        <v-alert v-if="depotError || depotsError" type="error" variant="tonal" density="compact" class="mb-4">
+                            {{ depotError || depotsError }}
+                        </v-alert>
+
+                        <v-table>
+                            <thead>
+                                <tr>
+                                    <th>Status</th>
+                                    <th>Name</th>
+                                    <th class="text-right">Account balance</th>
+                                    <th class="text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-if="!depotsLoading && depots.length === 0">
+                                    <td colspan="4">No depots found.</td>
+                                </tr>
+                                <tr v-for="depot in depots" :key="depot.id">
+                                    <td>
+                                        <v-chip v-if="depot.is_active" color="success" density="comfortable" size="small" variant="tonal">
+                                            Active
+                                        </v-chip>
+                                        <span v-else class="text-medium-emphasis">Inactive</span>
+                                    </td>
+                                    <td>{{ depot.name }}</td>
+                                    <td class="text-right">{{ formatAccountBalance(depot.account_balance) }}</td>
+                                    <td class="text-right">
+                                        <v-btn icon variant="text" aria-label="Edit depot" @click="openEditDepotDialog(depot)">
+                                            <v-icon icon="mdi-pencil-outline" />
+                                        </v-btn>
+                                        <v-btn
+                                            icon
+                                            variant="text"
+                                            color="primary"
+                                            aria-label="Make depot active"
+                                            :disabled="depot.is_active || depotsLoading"
+                                            @click="activateDepot(depot)"
+                                        >
+                                            <v-icon icon="mdi-check-circle-outline" />
+                                        </v-btn>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </v-table>
+
+                        <v-progress-linear v-if="depotsLoading" indeterminate color="primary" class="mt-4" />
+
+                        <v-pagination
+                            v-if="depotPagination.last_page > 1"
+                            v-model="depotPagination.current_page"
+                            class="mt-6"
+                            :length="depotPagination.last_page"
+                            @update:model-value="depotsStore.loadDepots"
+                        />
+
+                        <v-dialog v-model="isDepotDialogOpen" persistent max-width="520">
+                            <v-card>
+                                <v-card-title>{{ depotDialogMode === 'create' ? 'Create depot' : 'Edit depot' }}</v-card-title>
+                                <v-card-text>
+                                    <form id="depot-form" @submit.prevent="saveDepot">
+                                        <v-text-field v-model="depotForm.name" label="Name" required />
+                                        <v-text-field
+                                            v-model="depotForm.account_balance"
+                                            label="Account balance"
+                                            min="0"
+                                            required
+                                            step="0.01"
+                                            type="number"
+                                        />
+                                    </form>
+                                </v-card-text>
+                                <v-card-actions>
+                                    <v-spacer />
+                                    <v-btn type="button" variant="text" :disabled="depotsLoading" @click="abortDepotDialog">
+                                        Cancel
+                                    </v-btn>
+                                    <v-btn type="submit" form="depot-form" color="primary" variant="flat" :loading="depotsLoading">
+                                        Save
+                                    </v-btn>
+                                </v-card-actions>
+                            </v-card>
+                        </v-dialog>
                     </section>
 
                     <section v-if="activeSection === 'users' && canManageUsers">

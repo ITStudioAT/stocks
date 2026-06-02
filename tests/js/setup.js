@@ -30,6 +30,18 @@ Object.defineProperty(window, 'matchMedia', {
     })),
 });
 
+Object.defineProperty(window, 'visualViewport', {
+    writable: true,
+    value: {
+        height: 768,
+        offsetLeft: 0,
+        offsetTop: 0,
+        width: 1024,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+    },
+});
+
 afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
