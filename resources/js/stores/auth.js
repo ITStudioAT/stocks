@@ -101,17 +101,6 @@ export const useAuthStore = defineStore('auth', {
             const data = await request('/admin/me');
             this.user = data.user;
         },
-        selectCompany(company) {
-            if (!this.user) {
-                return;
-            }
-
-            this.user = {
-                ...this.user,
-                selected_company_id: company.id,
-                selected_company_name: company.company_name_1,
-            };
-        },
         async updateName(lastName, firstName) {
             this.loading = true;
             this.error = '';

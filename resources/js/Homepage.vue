@@ -6,8 +6,8 @@ const navigationItems = [
 ];
 
 const trustIndicators = [
-    { value: 'Multi-client', label: 'Manage separate brands from one admin' },
-    { value: 'AI-ready', label: 'Analyze, structure, and preview faster' },
+    { value: 'Personal', label: 'Built for managing your own stock workspace' },
+    { value: 'Focused', label: 'Keep admin, users, and roles lightweight' },
     { value: 'Laravel', label: 'Built on a maintainable production stack' },
 ];
 
@@ -15,35 +15,35 @@ const features = [
     {
         icon: 'mdi-view-dashboard-outline',
         title: 'One calm workspace',
-        text: 'Keep clients, roles, analyses, colors, and publishing decisions in one focused admin experience.',
+        text: 'Keep the admin surface small while the product direction shifts toward your own stock management.',
     },
     {
-        icon: 'mdi-palette-outline',
-        title: 'Design-aware color systems',
-        text: 'Turn selected brand colors into usable tokens for backgrounds, cards, buttons, accents, and text.',
+        icon: 'mdi-account-shield-outline',
+        title: 'Controlled access',
+        text: 'Manage admin users and roles without legacy business context in the way.',
     },
     {
-        icon: 'mdi-web-check',
-        title: 'Homepage-ready output',
-        text: 'Move from client data to polished public pages with clear sections, readable hierarchy, and reliable routes.',
+        icon: 'mdi-chart-line',
+        title: 'Ready for stocks',
+        text: 'The app is prepared for future portfolio and stock workflows without legacy homepage tooling.',
     },
 ];
 
 const workflowSteps = [
     {
         step: '01',
-        title: 'Capture the client',
-        text: 'Create the client profile, active company context, and the public URL structure.',
+        title: 'Sign in',
+        text: 'Use the admin workspace with password or login-code authentication.',
     },
     {
         step: '02',
-        title: 'Analyze and shape',
-        text: 'Use helper workflows to collect site signals, colors, assets, and navigation patterns.',
+        title: 'Keep access tidy',
+        text: 'Maintain the users and roles that should be available before stock features are added.',
     },
     {
         step: '03',
-        title: 'Publish confidently',
-        text: 'Preview the page, refine content, and launch a clean homepage for the selected client.',
+        title: 'Build forward',
+        text: 'Add personal stock management on top of a smaller, cleaner Laravel foundation.',
     },
 ];
 
@@ -131,14 +131,14 @@ const previewImage = `data:image/svg+xml,${encodeURIComponent(`
                                 prepend-icon="mdi-sparkles"
                                 variant="tonal"
                             >
-                                AI-assisted homepage operations
+                                Personal stock workspace
                             </v-chip>
 
-                            <h1>Build polished client homepages from one elegant Laravel workspace.</h1>
+                            <h1>Manage your future stock workspace from one compact Laravel admin.</h1>
 
                             <p class="marketing-hero-copy">
-                                Stocks helps teams manage clients, analyze existing sites, shape design tokens,
-                                and publish clean public pages without turning the admin into a maze.
+                                Stocks keeps the current admin focused on login, users, roles, and profile management
+                                while the product moves toward personal portfolio workflows.
                             </p>
 
                             <div class="marketing-hero-actions">
@@ -167,7 +167,7 @@ const previewImage = `data:image/svg+xml,${encodeURIComponent(`
                             <v-card class="marketing-preview-card" elevation="0">
                                 <v-img
                                     :src="previewImage"
-                                    alt="Stocks dashboard and homepage preview"
+                                    alt="Stocks admin workspace preview"
                                     aspect-ratio="1.548"
                                     cover
                                 />
@@ -199,10 +199,10 @@ const previewImage = `data:image/svg+xml,${encodeURIComponent(`
                 <v-container>
                     <div class="marketing-section-heading">
                         <v-chip color="accent" variant="tonal">Platform</v-chip>
-                        <h2>Designed for modern homepage production.</h2>
+                        <h2>Designed for a smaller admin surface.</h2>
                         <p>
-                            The interface should feel calm and premium, but the workflow stays practical: choose a
-                            company, manage a client, analyze the source, and ship a better page.
+                            The interface stays practical: authenticate, manage access, keep your profile current,
+                            and leave room for stock-specific tools.
                         </p>
                     </div>
 
@@ -229,10 +229,10 @@ const previewImage = `data:image/svg+xml,${encodeURIComponent(`
                         <v-col cols="12" lg="5">
                             <div class="marketing-section-heading is-left">
                                 <v-chip color="primary" variant="tonal">Workflow</v-chip>
-                                <h2>From client context to public page, without clutter.</h2>
+                                <h2>From admin setup to stock workflows, without clutter.</h2>
                                 <p>
-                                    A strong AI-assisted coding setup needs a clear product rhythm. These are the
-                                    screens and sections future agents should preserve.
+                                    A smaller product base is easier to extend when the next features are focused on
+                                    your own portfolio instead of unrelated workflows.
                                 </p>
                             </div>
                         </v-col>
@@ -288,10 +288,10 @@ const previewImage = `data:image/svg+xml,${encodeURIComponent(`
                 <v-container>
                     <v-card class="marketing-final-cta" elevation="0">
                         <v-chip color="accent" variant="flat">Ready for better screens</v-chip>
-                        <h2>Use the admin workspace to create the next homepage.</h2>
+                        <h2>Use the admin workspace as the base for your stocks app.</h2>
                         <p>
-                            Start with a client, keep the design system close, and let AI assistance work from real
-                            project rules instead of generic demo patterns.
+                            Start with a compact admin and add personal stock management without carrying old
+                            legacy admin screens.
                         </p>
                         <v-btn
                             color="primary"

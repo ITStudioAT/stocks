@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\kron\\\\.vscode\\\\extensions\\\\\" | Where-Object { $_.Name -match \"openai|codex|chatgpt\" } | Select-Object Name)",
+      "WebSearch",
+      "WebFetch(domain:gist.github.com)",
+      "WebFetch(domain:claudefa.st)",
+      "PowerShell(Get-ChildItem \"$env:APPDATA\\\\Code\\\\User\\\\globalStorage\\\\\" | Select-Object Name | Format-Table -AutoSize)",
+      "PowerShell(Copy-Item \"C:\\\\Users\\\\kron\\\\.codex\\\\config.toml\" \"C:\\\\Users\\\\kron\\\\.codex\\\\config.toml.bak_$\\(Get-Date -Format 'yyyyMMdd_HHmmss'\\)\" -Force; Write-Host \"Backed up.\")",
+      "Bash(codex --version)",
+      "Bash(wsl --status)",
+      "Bash(codex --help)",
+      "Bash(codex debug *)",
+      "Bash(codex sandbox *)",
+      "PowerShell(Write-Output \"=== Account detail ===\"; Get-LocalUser CodexSandboxOffline,CodexSandboxOnline | Format-List Name,Enabled,PasswordExpires,PasswordLastSet,LastLogon,UserMayChangePassword; Write-Output \"=== Group membership ===\"; foreach\\($u in 'CodexSandboxOffline','CodexSandboxOnline'\\){ Write-Output \"-- $u --\"; \\(Get-LocalUser $u | ForEach-Object { Get-LocalGroup | Where-Object { try { \\(Get-LocalGroupMember $_ -Member $u -ErrorAction Stop\\) } catch { $false } } }\\) | Select-Object -ExpandProperty Name })",
+      "Bash(echo \"\\(exit $?\\)\")",
+      "Bash(ls -la /c/Users/ | grep -i codex; echo \"\\(profile dirs above, if any\\)\")",
+      "Read(//c/Users//**)",
+      "PowerShell(Write-Output \"=== TEST: can we create a local user at all? ===\"; try { $p = ConvertTo-SecureString \"Tмp!Pass12345xZ\" -AsPlainText -Force; New-LocalUser -Name \"CodexTestProbe\" -Password $p -AccountNeverExpires -ErrorAction Stop | Out-Null; Write-Output \"CREATE OK\"; Remove-LocalUser CodexTestProbe; Write-Output \"CLEANUP OK\" } catch { Write-Output \\(\"CREATE FAILED: \" + $_.Exception.Message\\) }; Write-Output \"=== find setup binary ===\"; Get-ChildItem \"C:\\\\Users\\\\kron\\\\.vscode\\\\extensions\" -Filter \"codex-windows-sandbox-setup.exe\" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)",
+      "PowerShell($exe = \"C:\\\\Users\\\\kron\\\\.vscode\\\\extensions\\\\openai.chatgpt-26.527.60818-win32-x64\\\\bin\\\\windows-x86_64\\\\codex-windows-sandbox-setup.exe\"; Write-Output \"=== file info ===\"; Get-Item $exe | Select-Object Length,LastWriteTime; Write-Output \"=== --help ===\"; $p = Start-Process -FilePath $exe -ArgumentList \"--help\" -NoNewWindow -Wait -PassThru -RedirectStandardOutput \"$env:TEMP\\\\codexsetup_out.txt\" -RedirectStandardError \"$env:TEMP\\\\codexsetup_err.txt\"; Write-Output \\(\"exit code: \" + $p.ExitCode\\); Write-Output \"--- stdout ---\"; Get-Content \"$env:TEMP\\\\codexsetup_out.txt\" -ErrorAction SilentlyContinue; Write-Output \"--- stderr ---\"; Get-Content \"$env:TEMP\\\\codexsetup_err.txt\" -ErrorAction SilentlyContinue)",
+      "PowerShell($logRoot = \"$env:APPDATA\\\\Code\\\\logs\"; Write-Output \"=== newest log session ===\"; $latest = Get-ChildItem $logRoot -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1; Write-Output $latest.FullName; Write-Output \"=== chatgpt/codex log files \\(recent\\) ===\"; Get-ChildItem $logRoot -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'chatgpt|codex|openai' -or $_.Directory.Name -match 'chatgpt|codex|openai' } | Sort-Object LastWriteTime -Descending | Select-Object -First 10 FullName,LastWriteTime | Format-Table -Auto)",
+      "PowerShell($cx = Get-ChildItem \"C:\\\\Users\\\\kron\\\\.vscode\\\\extensions\\\\openai.chatgpt-26.527.60818-win32-x64\" -Filter \"codex.exe\" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName; Write-Output \"bundled codex: $cx\"; if \\($cx\\) { Write-Output \"=== version ===\"; & $cx --version; Write-Output \"=== config load test \\(mcp list reads config\\) ===\"; $out = & $cx mcp list 2>&1; Write-Output $out })"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\kron\\.claude"
+    ]
+  }
+}

@@ -8,7 +8,7 @@ This guide sets the quality bar for AI-assisted UI generation in this Laravel, V
 - Interfaces should look intentionally designed, not like generic demos.
 - Use restrained depth: subtle borders, soft shadows, and layered surfaces.
 - Use soft gradients only where they support hierarchy, such as hero backgrounds or CTA bands.
-- Prefer real product context: admin workflows, homepage previews, design tokens, client management, analysis, and publishing.
+- Prefer real product context: admin workflows, portfolio views, stock data, watchlists, and personal account management.
 - Keep corners rounded but controlled. Use Vuetify `rounded="lg"` or `rounded="xl"` for cards and major surfaces.
 
 ## Layout Rules

@@ -16,8 +16,8 @@ describe('Homepage', () => {
         const wrapper = mountHomepage();
 
         expect(wrapper.text()).toContain('Stocks');
-        expect(wrapper.text()).toContain('Build polished client homepages from one elegant Laravel workspace.');
-        expect(wrapper.text()).toContain('AI-assisted homepage operations');
+        expect(wrapper.text()).toContain('Manage your future stock workspace from one compact Laravel admin.');
+        expect(wrapper.text()).toContain('Personal stock workspace');
         expect(wrapper.text()).toContain('Open admin');
         expect(wrapper.text()).toContain('Continue to admin');
     });
@@ -36,10 +36,10 @@ describe('Homepage', () => {
         const wrapper = mountHomepage();
 
         expect(wrapper.text()).toContain('One calm workspace');
-        expect(wrapper.text()).toContain('Design-aware color systems');
-        expect(wrapper.text()).toContain('Homepage-ready output');
-        expect(wrapper.text()).toContain('Capture the client');
-        expect(wrapper.text()).toContain('Analyze and shape');
-        expect(wrapper.text()).toContain('Publish confidently');
+        expect(wrapper.text()).toContain('Controlled access');
+        expect(wrapper.text()).toContain('Ready for stocks');
+        expect(wrapper.text()).toContain('Sign in');
+        expect(wrapper.text()).toContain('Keep access tidy');
+        expect(wrapper.text()).toContain('Build forward');
     });
 });

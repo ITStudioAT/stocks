@@ -2,7 +2,6 @@
 
 namespace Tests\Feature;
 
-use App\Models\Company;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
@@ -13,28 +12,13 @@ class AdminUserTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_admin_can_list_users_for_selected_company_with_pagination(): void
+    public function test_admin_can_list_users_with_pagination(): void
     {
-        $company = Company::factory()->create([
-            'is_active' => true,
-        ]);
-        $otherCompany = Company::factory()->create();
-        $admin = $this->superAdminUser([
-            'company_id' => $company->id,
-        ]);
+        $admin = $this->superAdminUser();
 
         User::factory()
             ->count(12)
-            ->create([
-                'company_id' => $company->id,
-            ])
-            ->each(fn (User $user): User => $user->assignRole('admin'));
-
-        User::factory()
-            ->count(5)
-            ->create([
-                'company_id' => $otherCompany->id,
-            ])
+            ->create()
             ->each(fn (User $user): User => $user->assignRole('admin'));
 
         $this->actingAs($admin)
@@ -45,34 +29,25 @@ class AdminUserTest extends TestCase
             ->assertJsonPath('meta.total', 13)
             ->assertJsonPath('roles.0', 'admin')
             ->assertJsonPath('roles.1', 'super_admin')
-            ->assertJsonStructure([
-                'companies' => [
-                    '*' => ['id', 'company_name_1'],
-                ],
-            ]);
+            ->assertJsonMissingPath('companies');
     }
 
     public function test_admin_can_create_a_user(): void
     {
         $admin = $this->superAdminUser();
-        $company = Company::factory()->create([
-            'company_name_1' => 'ITStudio.at',
-        ]);
 
         $this->actingAs($admin)
             ->postJson('/admin/users', [
                 'last_name' => 'Demo',
                 'first_name' => 'User',
                 'email' => 'demo@example.com',
-                'company_id' => $company->id,
                 'roles' => ['admin'],
             ])
             ->assertCreated()
             ->assertJsonPath('user.name', 'Demo User')
             ->assertJsonPath('user.email', 'demo@example.com')
-            ->assertJsonPath('user.company_id', $company->id)
-            ->assertJsonPath('user.company_name', 'ITStudio.at')
-            ->assertJsonPath('user.roles.0', 'admin');
+            ->assertJsonPath('user.roles.0', 'admin')
+            ->assertJsonMissingPath('user.company_id');
 
         $user = User::where('email', 'demo@example.com')->firstOrFail();
 
@@ -84,9 +59,6 @@ class AdminUserTest extends TestCase
     public function test_admin_can_update_a_user(): void
     {
         $admin = $this->superAdminUser();
-        $company = Company::factory()->create([
-            'company_name_1' => 'Updated Company',
-        ]);
         $user = User::factory()->create([
             'email' => 'old@example.com',
             'password' => Hash::make('old-password'),
@@ -98,19 +70,16 @@ class AdminUserTest extends TestCase
                 'last_name' => 'Updated',
                 'first_name' => 'User',
                 'email' => 'updated@example.com',
-                'company_id' => $company->id,
                 'roles' => ['super_admin'],
             ])
             ->assertOk()
             ->assertJsonPath('user.name', 'Updated User')
             ->assertJsonPath('user.email', 'updated@example.com')
-            ->assertJsonPath('user.company_id', $company->id)
             ->assertJsonPath('user.roles.0', 'super_admin');
 
         $user->refresh();
 
         $this->assertTrue(Hash::check('old-password', $user->password));
-        $this->assertTrue($user->company()->is($company));
         $this->assertTrue($user->hasRole('super_admin'));
         $this->assertFalse($user->hasRole('admin'));
     }
@@ -146,7 +115,7 @@ class AdminUserTest extends TestCase
         $user = User::factory()->create([
             'email' => 'kron@naturwelt.at',
             'last_name' => 'Kron',
-            'first_name' => 'Günther',
+            'first_name' => 'Guenther',
         ]);
         $user->assignRole('super_admin');
 
@@ -161,20 +130,18 @@ class AdminUserTest extends TestCase
     public function test_kron_guenther_super_admin_role_cannot_be_removed(): void
     {
         $admin = $this->superAdminUser();
-        $company = Company::factory()->create();
         $user = User::factory()->create([
             'email' => 'kron@naturwelt.at',
             'last_name' => 'Kron',
-            'first_name' => 'Günther',
+            'first_name' => 'Guenther',
         ]);
         $user->syncRoles(['admin', 'super_admin']);
 
         $this->actingAs($admin)
             ->patchJson("/admin/users/{$user->id}", [
                 'last_name' => 'Kron',
-                'first_name' => 'Günther',
+                'first_name' => 'Guenther',
                 'email' => 'kron@naturwelt.at',
-                'company_id' => $company->id,
                 'roles' => ['admin'],
             ])
             ->assertUnprocessable()

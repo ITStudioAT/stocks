@@ -5,7 +5,6 @@ export const useUserStore = defineStore('users', {
     state: () => ({
         users: [],
         roles: [],
-        companies: [],
         pagination: {
             current_page: 1,
             last_page: 1,
@@ -26,7 +25,6 @@ export const useUserStore = defineStore('users', {
                 const data = await request(`/admin/users?page=${page}`);
                 this.users = data.users;
                 this.roles = data.roles;
-                this.companies = data.companies;
                 this.pagination = data.meta;
             } catch (error) {
                 this.error = error.message;

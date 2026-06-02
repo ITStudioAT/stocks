@@ -3,7 +3,6 @@
 namespace Tests\Feature;
 
 use App\Mail\AdminLoginCodeMail;
-use App\Models\Company;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
@@ -70,27 +69,18 @@ class AdminLoginTest extends TestCase
         $this->assertAuthenticatedAs($user);
     }
 
-    public function test_super_admin_payload_uses_the_active_company_as_selected_company(): void
+    public function test_current_admin_payload_does_not_include_company_context(): void
     {
         Role::findOrCreate('super_admin');
 
-        $userCompany = Company::factory()->create([
-            'is_active' => false,
-        ]);
-        $activeCompany = Company::factory()->create([
-            'company_name_1' => 'Active Company',
-            'is_active' => true,
-        ]);
-        $user = User::factory()->create([
-            'company_id' => $userCompany->id,
-        ]);
+        $user = User::factory()->create();
         $user->assignRole('super_admin');
 
         $this->actingAs($user)
             ->getJson('/admin/me')
             ->assertOk()
-            ->assertJsonPath('user.selected_company_id', $activeCompany->id)
-            ->assertJsonPath('user.selected_company_name', 'Active Company');
+            ->assertJsonMissingPath('user.company_id')
+            ->assertJsonMissingPath('user.selected_company_id');
     }
 
     public function test_non_admin_cannot_login_with_password(): void
