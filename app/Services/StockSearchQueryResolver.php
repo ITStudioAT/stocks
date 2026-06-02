@@ -38,7 +38,7 @@ class StockSearchQueryResolver
     }
 
     /**
-     * @return array<int, array{name: ?string, isin: ?string, wkn: ?string, symbol: ?string, exchange: ?string, search_terms: array<int, string>}>
+     * @return array<int, array{name: ?string, isin: ?string, wkn: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, search_terms: array<int, string>}>
      */
     public function resolveCandidates(string $query): array
     {
@@ -79,7 +79,7 @@ class StockSearchQueryResolver
     }
 
     /**
-     * @return array<int, array{name: ?string, isin: ?string, wkn: ?string, symbol: ?string, exchange: ?string, search_terms: array<int, string>}>
+     * @return array<int, array{name: ?string, isin: ?string, wkn: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, search_terms: array<int, string>}>
      */
     private function resolveFreshCandidates(string $query): array
     {
@@ -100,21 +100,26 @@ class StockSearchQueryResolver
     }
 
     /**
-     * @return array{name: ?string, isin: ?string, wkn: ?string, symbol: ?string, exchange: ?string, search_terms: array<int, string>}
+     * @return array{name: ?string, isin: ?string, wkn: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, search_terms: array<int, string>}
      */
     private function candidatePayload(string $query, array $candidate): array
     {
         $payload = [
             'name' => $this->nullableString(Arr::get($candidate, 'name')),
-            'isin' => $this->nullableString(Arr::get($candidate, 'isin')),
-            'wkn' => $this->nullableString(Arr::get($candidate, 'wkn')),
-            'symbol' => $this->nullableString(Arr::get($candidate, 'symbol')),
+            'isin' => $this->nullableUpperString(Arr::get($candidate, 'isin')),
+            'wkn' => $this->nullableUpperString(Arr::get($candidate, 'wkn')),
+            'symbol' => $this->nullableUpperString(Arr::get($candidate, 'symbol')),
             'exchange' => $this->nullableString(Arr::get($candidate, 'exchange')),
+            'mic_code' => $this->nullableUpperString(Arr::get($candidate, 'mic_code')),
+            'instrument_type' => $this->nullableString(Arr::get($candidate, 'instrument_type')),
+            'country' => $this->nullableString(Arr::get($candidate, 'country')),
+            'currency' => $this->nullableUpperString(Arr::get($candidate, 'currency')),
         ];
 
         $identifierTerms = collect([
             $payload['isin'],
             $payload['symbol'],
+            $payload['wkn'],
         ])->filter();
 
         $nameTerms = collect([$payload['name']])->filter();
@@ -140,14 +145,21 @@ class StockSearchQueryResolver
         return $value === '' ? null : $value;
     }
 
+    private function nullableUpperString(mixed $value): ?string
+    {
+        $value = $this->nullableString($value);
+
+        return $value === null ? null : Str::upper($value);
+    }
+
     private function prompt(string $query): string
     {
         return <<<PROMPT
-Resolve this stock, ETF, or fund search query to identifiers that can be used with Twelve Data symbol_search.
+Resolve this stock, ETF, or fund search query to portfolio-ready instrument identifiers using public web sources.
 
 Query: {$query}
 
-Return likely identifiers for the exact same instrument only. If the query is a WKN, find the matching ISIN and likely exchange tickers.
+Return likely identifiers for the exact same instrument only. If the query is a WKN, find the matching ISIN and likely exchange ticker symbols.
 PROMPT;
     }
 

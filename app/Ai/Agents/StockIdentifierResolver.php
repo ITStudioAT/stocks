@@ -20,7 +20,7 @@ class StockIdentifierResolver implements Agent, HasStructuredOutput, HasTools
 You resolve user-entered stock, ETF, or fund identifiers for a portfolio application.
 Use web search when the input is a WKN, local ticker, or ambiguous name.
 Return only likely financial instruments that exactly match the user's query.
-Prefer ISIN, WKN, ticker symbol, exchange, and official instrument name.
+Prefer ISIN, WKN, ticker symbol, exchange, MIC, instrument type, country, currency, and official instrument name.
 Do not include unrelated instruments or explanatory prose.
 INSTRUCTIONS;
     }
@@ -52,6 +52,10 @@ INSTRUCTIONS;
                     'wkn' => $schema->string()->nullable(),
                     'symbol' => $schema->string()->nullable(),
                     'exchange' => $schema->string()->nullable(),
+                    'mic_code' => $schema->string()->nullable(),
+                    'instrument_type' => $schema->string()->nullable(),
+                    'country' => $schema->string()->nullable(),
+                    'currency' => $schema->string()->nullable(),
                 ])->withoutAdditionalProperties())
                 ->required(),
         ];

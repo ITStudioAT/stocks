@@ -83,7 +83,7 @@ class AdminDepotHoldingTest extends TestCase
                 ])
                 ->andReturn([
                     'price' => '123.456789',
-                    'currency' => 'USD',
+                    'currency' => 'EUR',
                     'fetched_at' => Carbon::parse('2026-06-02 12:00:00'),
                     'source' => 'AI SDK web search',
                     'source_url' => 'https://example.com/aapl',
@@ -109,7 +109,7 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holding.isin', 'US9229083632')
             ->assertJsonPath('holding.wkn', 'A1JX53')
             ->assertJsonPath('holding.mic_code', 'XNAS')
-            ->assertJsonPath('holding.currency', 'USD')
+            ->assertJsonPath('holding.currency', 'EUR')
             ->assertJsonPath('holding.latest_price', '123.456789')
             ->assertJsonPath('holding.latest_price_fetched_at', '2026-06-02T12:00:00+00:00')
             ->assertJsonPath('holding.latest_price_source', 'AI SDK web search')
@@ -123,7 +123,7 @@ class AdminDepotHoldingTest extends TestCase
             'isin' => 'US9229083632',
             'wkn' => 'A1JX53',
             'exchange' => 'NASDAQ',
-            'currency' => 'USD',
+            'currency' => 'EUR',
             'latest_price' => '123.456789',
             'latest_price_fetched_at' => '2026-06-02 12:00:00',
             'latest_price_source' => 'AI SDK web search',
@@ -242,7 +242,7 @@ class AdminDepotHoldingTest extends TestCase
                 ])
                 ->andReturn([
                     'price' => '306.320010',
-                    'currency' => 'USD',
+                    'currency' => 'EUR',
                     'fetched_at' => Carbon::parse('2026-06-02 15:00:00'),
                     'source' => 'Nasdaq',
                     'source_url' => 'https://www.nasdaq.com/market-activity/stocks/aapl',
@@ -280,6 +280,7 @@ class AdminDepotHoldingTest extends TestCase
 
         $this->assertDatabaseHas('stock_holdings', [
             'id' => $apple->id,
+            'currency' => 'EUR',
             'latest_price' => '306.320010',
             'latest_price_fetched_at' => '2026-06-02 15:00:00',
             'latest_price_source' => 'Nasdaq',

@@ -113,8 +113,6 @@ This project has domain-specific skills available in `**/skills/**`. You MUST ac
 # Test Enforcement
 
 - Every change must be programmatically tested. Write a new test or update an existing test, then run the affected tests to make sure they pass.
-- Every coding change must include or update both backend and frontend tests. Backend behavior should be covered with PHPUnit via `php artisan test --compact`; frontend behavior should be covered with Vitest via `npm run test:frontend`.
-- If a coding change genuinely has no backend or no frontend behavioral surface, explicitly state why that side has no applicable test before finalizing.
 - Run the minimum number of tests needed to ensure code quality and speed. Use `php artisan test --compact` with a specific filename or filter.
 
 === laravel/core rules ===

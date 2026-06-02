@@ -19,7 +19,11 @@ class StockPriceResolver implements Agent, HasStructuredOutput, HasTools
         return <<<'INSTRUCTIONS'
 You resolve the latest publicly visible market price for a stock, ETF, or fund holding.
 Use web search to find the exact instrument from the provided symbol, name, ISIN, WKN, exchange, MIC, and currency.
-Return a price only when the source clearly refers to the same instrument. Prefer official exchange, issuer, broker market-data, or finance pages.
+Check sources in the exact order provided by the user prompt. Do not change the order between requests.
+Return a price only when the source clearly refers to the same instrument and quotes the price in EUR.
+If one source has no EUR quote, continue with the next source in the provided order.
+Use the latest visible trade or last price. If the market is closed, use the most recent official close or latest available price with its date/time.
+Do not convert non-EUR prices to EUR. Return null values only after every ordered source has been checked and only non-EUR or unverifiable prices are available.
 Return decimal_price as a plain decimal string with a dot separator and no currency symbol.
 Return null values when the price is unavailable or confidence is low. Do not include explanatory prose.
 INSTRUCTIONS;
@@ -38,7 +42,7 @@ INSTRUCTIONS;
     public function tools(): iterable
     {
         return [
-            (new WebSearch)->max(5),
+            (new WebSearch)->max(10),
         ];
     }
 

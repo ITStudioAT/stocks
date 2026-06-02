@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Ai\Agents\StockIdentifierResolver;
 use App\Models\User;
-use App\Services\TwelveDataClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Spatie\Permission\Models\Role;
@@ -16,24 +15,25 @@ class AdminStockSearchTest extends TestCase
 
     public function test_admin_can_search_stocks(): void
     {
+        Cache::flush();
         $admin = $this->adminUser();
-        StockIdentifierResolver::fake()->preventStrayPrompts();
-        $this->mock(TwelveDataClient::class, function ($mock): void {
-            $mock->shouldReceive('symbolSearch')
-                ->once()
-                ->with('Apple', 10)
-                ->andReturn(collect(range(1, 12))
+        StockIdentifierResolver::fake([
+            [
+                'candidates' => collect(range(1, 12))
                     ->map(fn (int $index): array => [
                         'symbol' => "AAPL{$index}",
-                        'instrument_name' => "Apple {$index}",
+                        'name' => "Apple {$index}",
+                        'isin' => "US037833100{$index}",
+                        'wkn' => null,
                         'exchange' => 'NASDAQ',
                         'mic_code' => 'XNAS',
                         'instrument_type' => 'Common Stock',
                         'country' => 'United States',
                         'currency' => 'USD',
                     ])
-                    ->all());
-        });
+                    ->all(),
+            ],
+        ])->preventStrayPrompts();
 
         $this->actingAs($admin)
             ->getJson('/admin/stocks/search?query=Apple')
@@ -44,10 +44,10 @@ class AdminStockSearchTest extends TestCase
             ->assertJsonPath('results.0.exchange', 'NASDAQ')
             ->assertJsonPath('results.0.currency', 'USD');
 
-        StockIdentifierResolver::assertNeverPrompted();
+        StockIdentifierResolver::assertPrompted(fn ($prompt): bool => $prompt->contains('Apple'));
     }
 
-    public function test_admin_can_search_by_wkn_with_ai_resolved_identifier_fallback(): void
+    public function test_admin_can_search_by_wkn_with_ai_resolved_identifiers(): void
     {
         Cache::flush();
         $admin = $this->adminUser();
@@ -58,24 +58,7 @@ class AdminStockSearchTest extends TestCase
                         'name' => 'iShares ATX UCITS ETF (DE)',
                         'isin' => 'DE000A0D8Q23',
                         'wkn' => 'A0D8Q2',
-                        'symbol' => null,
-                        'exchange' => null,
-                    ],
-                ],
-            ],
-        ])->preventStrayPrompts();
-        $this->mock(TwelveDataClient::class, function ($mock): void {
-            $mock->shouldReceive('symbolSearch')
-                ->once()
-                ->with('A0D8Q2', 10)
-                ->andReturn([]);
-            $mock->shouldReceive('symbolSearch')
-                ->once()
-                ->with('DE000A0D8Q23', 10)
-                ->andReturn([
-                    [
                         'symbol' => 'EXXX',
-                        'instrument_name' => 'iShares ATX UCITS ETF (DE)',
                         'exchange' => 'XETR',
                         'mic_code' => 'XETR',
                         'instrument_type' => 'ETF',
@@ -83,16 +66,19 @@ class AdminStockSearchTest extends TestCase
                         'currency' => 'EUR',
                     ],
                     [
+                        'name' => 'iShares ATX UCITS ETF (DE)',
+                        'isin' => 'DE000A0D8Q23',
+                        'wkn' => 'A0D8Q2',
                         'symbol' => 'EX01',
-                        'instrument_name' => 'iShares ATX UCITS ETF (DE)',
                         'exchange' => 'VSE',
                         'mic_code' => 'XWBO',
                         'instrument_type' => 'ETF',
                         'country' => 'Austria',
                         'currency' => 'EUR',
                     ],
-                ]);
-        });
+                ],
+            ],
+        ])->preventStrayPrompts();
 
         $this->actingAs($admin)
             ->getJson('/admin/stocks/search?query=A0D8Q2')
@@ -103,6 +89,8 @@ class AdminStockSearchTest extends TestCase
             ->assertJsonPath('results.0.isin', 'DE000A0D8Q23')
             ->assertJsonPath('results.0.wkn', 'A0D8Q2')
             ->assertJsonPath('results.0.exchange', 'XETR')
+            ->assertJsonPath('results.0.mic_code', 'XETR')
+            ->assertJsonPath('results.0.currency', 'EUR')
             ->assertJsonPath('results.1.symbol', 'EX01')
             ->assertJsonPath('results.1.isin', 'DE000A0D8Q23')
             ->assertJsonPath('results.1.wkn', 'A0D8Q2')

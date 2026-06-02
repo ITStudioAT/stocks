@@ -349,11 +349,13 @@ describe('App', () => {
         expect(wrapper.text()).toContain('US0378331005');
         expect(wrapper.text()).toContain('865985');
         expect(wrapper.text()).toContain('306.32001 USD');
+        expect(wrapper.text()).toContain('02.06.2026, 14:00');
         expect(wrapper.text()).toContain('Nasdaq');
         expect(wrapper.text()).toContain('EXXX');
         expect(wrapper.text()).toContain('DE000A0D8Q23');
         expect(wrapper.text()).toContain('A0D8Q2');
         expect(wrapper.text()).toContain('Unavailable');
+        expect(wrapper.text()).toContain('02.06.2026, 15:00');
         expect(wrapper.text()).toContain('AI SDK web search');
         expect(wrapper.text()).not.toContain('Trading depot');
         expect(wrapper.text()).not.toContain('250.50');

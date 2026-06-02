@@ -28,11 +28,6 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
-    'twelve_data' => [
-        'token' => env('TWELVE_DATA_TOKEN'),
-        'base_url' => env('TWELVE_DATA_BASE_URL', 'https://api.twelvedata.com'),
-    ],
-
     'deutsche_borse' => [
         'id' => env('DEUTSCHE_BORSE_ID'),
         'token' => env('DEUTSCHE_BORSE_TOKEN'),

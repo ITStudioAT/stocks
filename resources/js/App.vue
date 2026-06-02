@@ -586,9 +586,14 @@ function formatDateTime(value) {
         return '-';
     }
 
-    return new Intl.DateTimeFormat('en-US', {
-        dateStyle: 'short',
-        timeStyle: 'short',
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: 'Europe/Vienna',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
     }).format(new Date(value));
 }
 

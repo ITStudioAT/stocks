@@ -52,7 +52,7 @@ class AdminDepotHoldingController extends Controller
             'mic_code' => $validated['mic_code'] ?? null,
             'instrument_type' => $validated['instrument_type'] ?? null,
             'country' => $validated['country'] ?? null,
-            'currency' => $validated['currency'] ?? $latestPriceData['currency'],
+            'currency' => $latestPriceData['currency'] ?? $validated['currency'] ?? null,
             'latest_price' => $latestPriceData['price'],
             'latest_price_fetched_at' => $latestPriceData['fetched_at'],
             'latest_price_source' => $latestPriceData['source'],
