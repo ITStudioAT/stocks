@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useAuthStore } from './stores/auth';
 import { useDepotStore } from './stores/depots';
@@ -16,6 +16,7 @@ const {
     activeDepot,
     depots,
     holdings,
+    priceRefresh,
     stockSearchResults,
     pagination: depotPagination,
     holdingsPagination,
@@ -79,11 +80,20 @@ const selectedHolding = ref(null);
 const holdingSearchQuery = ref('');
 const holdingMessage = ref('');
 const holdingError = ref('');
+const priceRefreshTimer = ref(null);
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
 const profileDisplayName = computed(() => user.value?.name || 'Loading...');
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
+const isPriceRefreshRunning = computed(() => ['queued', 'running'].includes(priceRefresh.value?.status));
+const priceRefreshProgressValue = computed(() => {
+    if (!priceRefresh.value || priceRefresh.value.total === 0) {
+        return 0;
+    }
+
+    return Math.round((priceRefresh.value.processed / priceRefresh.value.total) * 100);
+});
 
 const menuItems = computed(() => [
     {
@@ -147,6 +157,11 @@ onMounted(async () => {
     }
 
     window.addEventListener('popstate', applyRouteFromPath);
+});
+
+onBeforeUnmount(() => {
+    stopPriceRefreshPolling();
+    window.removeEventListener('popstate', applyRouteFromPath);
 });
 
 function navigateSection(section) {
@@ -526,10 +541,56 @@ async function refreshHoldingPrices() {
     try {
         const data = await depotsStore.refreshActiveDepotHoldingPrices();
         holdingMessage.value = data.message;
-        await depotsStore.loadActiveDepotHoldings(holdingsPagination.value.current_page);
+
+        if (isFinishedPriceRefresh(data.refresh)) {
+            await finishPriceRefresh(data.refresh);
+
+            return;
+        }
+
+        startPriceRefreshPolling(data.refresh.refresh_id);
     } catch (err) {
         holdingError.value = err.message;
     }
+}
+
+function startPriceRefreshPolling(refreshId) {
+    stopPriceRefreshPolling();
+    pollPriceRefreshStatus(refreshId);
+    priceRefreshTimer.value = window.setInterval(() => pollPriceRefreshStatus(refreshId), 2000);
+}
+
+function stopPriceRefreshPolling() {
+    if (!priceRefreshTimer.value) {
+        return;
+    }
+
+    window.clearInterval(priceRefreshTimer.value);
+    priceRefreshTimer.value = null;
+}
+
+async function pollPriceRefreshStatus(refreshId) {
+    try {
+        const data = await depotsStore.loadActiveDepotHoldingPriceRefresh(refreshId);
+        holdingMessage.value = data.message;
+
+        if (isFinishedPriceRefresh(data.refresh)) {
+            await finishPriceRefresh(data.refresh);
+        }
+    } catch (err) {
+        stopPriceRefreshPolling();
+        holdingError.value = err.message;
+    }
+}
+
+async function finishPriceRefresh(refresh) {
+    stopPriceRefreshPolling();
+    holdingMessage.value = refresh.error || refresh.message;
+    await depotsStore.loadActiveDepotHoldings(holdingsPagination.value.current_page);
+}
+
+function isFinishedPriceRefresh(refresh) {
+    return ['finished', 'failed'].includes(refresh?.status);
 }
 
 function openDeleteHoldingDialog(holding) {
@@ -586,6 +647,18 @@ function formatDateTime(value) {
         return '-';
     }
 
+    const localDateTime = parseLocalUsDateTime(value);
+
+    if (localDateTime) {
+        return localDateTime;
+    }
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return '-';
+    }
+
     return new Intl.DateTimeFormat('de-AT', {
         timeZone: 'Europe/Vienna',
         day: '2-digit',
@@ -594,11 +667,137 @@ function formatDateTime(value) {
         hour: '2-digit',
         minute: '2-digit',
         hourCycle: 'h23',
-    }).format(new Date(value));
+    }).format(date);
+}
+
+function formatSourceDateTime(value) {
+    if (!value || typeof value !== 'string') {
+        return '-';
+    }
+
+    const sourceDateTime = parseSourceDateTime(value);
+
+    if (sourceDateTime) {
+        return sourceDateTime;
+    }
+
+    return formatDateTime(value);
+}
+
+function parseSourceDateTime(value) {
+    const trimmedValue = value.trim();
+    const isoLikeMatch = trimmedValue.match(
+        /^(?<year>\d{4})-(?<month>\d{1,2})-(?<day>\d{1,2})(?:[ T](?<hour>\d{1,2}):(?<minute>\d{2})(?::\d{2})?)?(?:\s*(?<timezone>Z|UTC|CET|CEST|Europe\/[A-Za-z_]+|[+-]\d{2}:?\d{2}))?$/i,
+    );
+
+    if (isoLikeMatch?.groups) {
+        return formatSourceDateTimeParts(isoLikeMatch.groups);
+    }
+
+    const europeanMatch = trimmedValue.match(
+        /^(?<day>\d{1,2})[.\/-](?<month>\d{1,2})[.\/-](?<year>\d{2,4})(?:\s+(?<hour>\d{1,2}):(?<minute>\d{2})(?::\d{2})?)?(?:\s*(?<timezone>CET|CEST|UTC|Europe\/[A-Za-z_]+))?$/i,
+    );
+
+    if (!europeanMatch?.groups) {
+        return null;
+    }
+
+    return formatSourceDateTimeParts(europeanMatch.groups);
+}
+
+function formatSourceDateTimeParts(parts) {
+    const year = Number(parts.year.length === 2 ? `20${parts.year}` : parts.year);
+    const month = Number(parts.month);
+    const day = Number(parts.day);
+
+    if (!isValidDateParts(year, month, day)) {
+        return null;
+    }
+
+    const dateText = [
+        String(day).padStart(2, '0'),
+        String(month).padStart(2, '0'),
+        String(year),
+    ].join('.');
+
+    if (!parts.hour || !parts.minute) {
+        return dateText;
+    }
+
+    const hour = Number(parts.hour);
+    const minute = Number(parts.minute);
+
+    if (hour > 23 || minute > 59) {
+        return null;
+    }
+
+    const timezone = parts.timezone?.toUpperCase();
+
+    if (timezone === 'UTC' || timezone === 'Z' || /^[+-]\d{2}:?\d{2}$/.test(parts.timezone ?? '')) {
+        const offset = timezone === 'UTC' || timezone === 'Z' ? 'Z' : parts.timezone;
+        const date = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00${offset}`);
+
+        if (!Number.isNaN(date.getTime())) {
+            return new Intl.DateTimeFormat('de-AT', {
+                timeZone: 'Europe/Vienna',
+                day: '2-digit',
+                month: '2-digit',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                hourCycle: 'h23',
+            }).format(date);
+        }
+    }
+
+    return `${dateText}, ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function isValidDateParts(year, month, day) {
+    return year >= 1900 && month >= 1 && month <= 12 && day >= 1 && day <= 31;
+}
+
+function parseLocalUsDateTime(value) {
+    if (typeof value !== 'string') {
+        return null;
+    }
+
+    const match = value
+        .trim()
+        .match(/^(?<month>\d{1,2})\/(?<day>\d{1,2})\/(?<year>\d{2,4}),?\s+(?<hour>\d{1,2}):(?<minute>\d{2})\s*(?<period>AM|PM)$/i);
+
+    if (!match?.groups) {
+        return null;
+    }
+
+    const month = Number(match.groups.month);
+    const day = Number(match.groups.day);
+    const year = Number(match.groups.year);
+    const hour = Number(match.groups.hour);
+    const minute = Number(match.groups.minute);
+
+    if (month < 1 || month > 12 || day < 1 || day > 31 || hour < 1 || hour > 12 || minute > 59) {
+        return null;
+    }
+
+    const fullYear = year < 100 ? 2000 + year : year;
+    const normalizedHour = match.groups.period.toUpperCase() === 'PM'
+        ? (hour === 12 ? 12 : hour + 12)
+        : (hour === 12 ? 0 : hour);
+
+    return [
+        String(day).padStart(2, '0'),
+        String(month).padStart(2, '0'),
+        String(fullYear),
+    ].join('.') + `, ${String(normalizedHour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
 function formatLatestPriceSource(holding) {
     return holding.latest_price_source || '-';
+}
+
+function formatTradingTimes(holding) {
+    return holding.trading_times || '-';
 }
 
 function clearSectionMessages() {
@@ -765,11 +964,11 @@ function emptyDepotForm() {
                                     color="primary"
                                     prepend-icon="mdi-refresh"
                                     variant="tonal"
-                                    :disabled="!activeDepot || holdings.length === 0"
-                                    :loading="holdingsLoading"
+                                    :disabled="!activeDepot || holdings.length === 0 || isPriceRefreshRunning"
+                                    :loading="holdingsLoading && !isPriceRefreshRunning"
                                     @click="refreshHoldingPrices"
                                 >
-                                    Refresh prices
+                                    {{ isPriceRefreshRunning ? `Refreshing ${priceRefresh.step}` : 'Refresh prices' }}
                                 </v-btn>
                                 <v-btn
                                     color="primary"
@@ -786,6 +985,26 @@ function emptyDepotForm() {
                         <v-alert v-if="holdingMessage" type="success" variant="tonal" density="compact" class="mb-4">
                             {{ holdingMessage }}
                         </v-alert>
+                        <v-alert
+                            v-if="priceRefresh"
+                            type="info"
+                            variant="tonal"
+                            density="compact"
+                            class="mb-4"
+                        >
+                            <div class="d-flex align-center justify-space-between ga-4">
+                                <span>Price refresh: {{ priceRefresh.step }}</span>
+                                <span v-if="priceRefresh.current">{{ priceRefresh.current }}</span>
+                            </div>
+                            <v-progress-linear
+                                class="mt-2"
+                                color="primary"
+                                height="6"
+                                rounded
+                                :indeterminate="priceRefresh.status === 'queued'"
+                                :model-value="priceRefreshProgressValue"
+                            />
+                        </v-alert>
                         <v-alert v-if="holdingError || holdingsError" type="error" variant="tonal" density="compact" class="mb-4">
                             {{ holdingError || holdingsError }}
                         </v-alert>
@@ -798,27 +1017,33 @@ function emptyDepotForm() {
                                 <tr>
                                     <th>Symbol</th>
                                     <th>Name</th>
-                                    <th>ISIN</th>
-                                    <th>WKN</th>
-                                    <th>Exchange</th>
+                                    <th>Instrument</th>
                                     <th>Latest price</th>
-                                    <th>Fetched at</th>
+                                    <th>Source time</th>
+                                    <th>Trading times</th>
                                     <th>Source</th>
                                     <th class="text-right">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <tr v-if="activeDepot && !holdingsLoading && holdings.length === 0">
-                                    <td colspan="9">No stocks in this depot.</td>
+                                    <td colspan="8">No stocks in this depot.</td>
                                 </tr>
                                 <tr v-for="holding in holdings" :key="holding.id">
                                     <td>{{ holding.symbol || '-' }}</td>
                                     <td>{{ holding.name || '-' }}</td>
-                                    <td>{{ holding.isin || '-' }}</td>
-                                    <td>{{ holding.wkn || '-' }}</td>
-                                    <td>{{ holding.exchange || '-' }}</td>
+                                    <td>
+                                        <div>{{ holding.isin || '-' }}</div>
+                                        <div class="text-caption text-medium-emphasis">
+                                            WKN: {{ holding.wkn || '-' }}
+                                        </div>
+                                        <div class="text-caption text-medium-emphasis">
+                                            Exchange: {{ holding.exchange || '-' }}
+                                        </div>
+                                    </td>
                                     <td>{{ formatLatestPrice(holding) }}</td>
-                                    <td>{{ formatDateTime(holding.latest_price_fetched_at) }}</td>
+                                    <td>{{ formatSourceDateTime(holding.latest_price_as_of) }}</td>
+                                    <td>{{ formatTradingTimes(holding) }}</td>
                                     <td>
                                         <a
                                             v-if="holding.latest_price_source_url"

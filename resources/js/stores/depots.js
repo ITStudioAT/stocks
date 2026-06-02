@@ -6,6 +6,7 @@ export const useDepotStore = defineStore('depots', {
         activeDepot: null,
         depots: [],
         holdings: [],
+        priceRefresh: null,
         stockSearchResults: [],
         pagination: {
             current_page: 1,
@@ -124,14 +125,30 @@ export const useDepotStore = defineStore('depots', {
             this.holdingsError = '';
 
             try {
-                return await request('/admin/active-depot/holdings/refresh-prices', {
+                const data = await request('/admin/active-depot/holdings/refresh-prices', {
                     method: 'POST',
                 });
+                this.priceRefresh = data.refresh;
+
+                return data;
             } catch (error) {
                 this.holdingsError = error.message;
                 throw error;
             } finally {
                 this.holdingsLoading = false;
+            }
+        },
+        async loadActiveDepotHoldingPriceRefresh(refreshId) {
+            this.holdingsError = '';
+
+            try {
+                const data = await request(`/admin/active-depot/holdings/refresh-prices/${refreshId}`);
+                this.priceRefresh = data.refresh;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
             }
         },
         async searchStocks(query) {

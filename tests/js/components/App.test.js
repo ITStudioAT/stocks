@@ -112,6 +112,7 @@ describe('App', () => {
                             latest_price_source: 'Nasdaq',
                             latest_price_source_url: 'https://www.nasdaq.com/market-activity/stocks/aapl',
                             latest_price_as_of: '2026-06-02 11:59 UTC',
+                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Berlin',
                         },
                         {
                             id: 2,
@@ -122,10 +123,11 @@ describe('App', () => {
                             exchange: 'XETR',
                             currency: 'EUR',
                             latest_price: null,
-                            latest_price_fetched_at: '2026-06-02T13:00:00+00:00',
+                            latest_price_fetched_at: '6/2/26, 10:04 PM',
                             latest_price_source: 'AI SDK web search',
                             latest_price_source_url: null,
                             latest_price_as_of: null,
+                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Vienna',
                         },
                     ],
                     meta: {
@@ -261,6 +263,7 @@ describe('App', () => {
                             latest_price_source: 'Nasdaq',
                             latest_price_source_url: 'https://www.nasdaq.com/market-activity/stocks/aapl',
                             latest_price_as_of: '2026-06-02 11:59 UTC',
+                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Berlin',
                         },
                         {
                             id: 2,
@@ -271,10 +274,11 @@ describe('App', () => {
                             exchange: 'XETR',
                             currency: 'EUR',
                             latest_price: null,
-                            latest_price_fetched_at: '2026-06-02T13:00:00+00:00',
+                            latest_price_fetched_at: '6/2/26, 10:04 PM',
                             latest_price_source: 'AI SDK web search',
                             latest_price_source_url: null,
                             latest_price_as_of: null,
+                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Vienna',
                         },
                     ],
                     meta: {
@@ -302,14 +306,44 @@ describe('App', () => {
                         latest_price_source: 'AI SDK web search',
                         latest_price_source_url: 'https://example.com/msft',
                         latest_price_as_of: '2026-06-02 12:09 UTC',
+                        trading_times: 'Monday-Friday 09:00-17:30 Europe/Berlin',
                     },
                 }));
             }
 
             if (path === '/admin/active-depot/holdings/refresh-prices') {
                 return Promise.resolve(jsonResponse({
+                    message: '2 stock prices queued for refresh.',
+                    refresh: {
+                        refresh_id: 'refresh-1',
+                        status: 'queued',
+                        processed: 0,
+                        total: 2,
+                        step: '0/2',
+                        message: '2 stock prices queued for refresh.',
+                        current: null,
+                        started_at: '2026-06-02T12:15:00+00:00',
+                        finished_at: null,
+                        error: null,
+                    },
+                }));
+            }
+
+            if (path === '/admin/active-depot/holdings/refresh-prices/refresh-1') {
+                return Promise.resolve(jsonResponse({
                     message: '2 stock prices refreshed.',
-                    refreshed_count: 2,
+                    refresh: {
+                        refresh_id: 'refresh-1',
+                        status: 'finished',
+                        processed: 2,
+                        total: 2,
+                        step: '2/2',
+                        message: '2 stock prices refreshed.',
+                        current: null,
+                        started_at: '2026-06-02T12:15:00+00:00',
+                        finished_at: '2026-06-02T12:20:00+00:00',
+                        error: null,
+                    },
                 }));
             }
 
@@ -343,19 +377,33 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
+        const dashboardHeaders = wrapper.findAll('thead th').map((header) => header.text());
+
+        expect(dashboardHeaders).toEqual([
+            'Symbol',
+            'Name',
+            'Instrument',
+            'Latest price',
+            'Source time',
+            'Trading times',
+            'Source',
+            'Actions',
+        ]);
         expect(wrapper.text()).toContain('Long term depot');
         expect(wrapper.text()).toContain('AAPL');
         expect(wrapper.text()).toContain('Apple');
         expect(wrapper.text()).toContain('US0378331005');
         expect(wrapper.text()).toContain('865985');
         expect(wrapper.text()).toContain('306.32001 USD');
-        expect(wrapper.text()).toContain('02.06.2026, 14:00');
+        expect(wrapper.text()).toContain('02.06.2026, 13:59');
+        expect(wrapper.text()).toContain('Monday-Friday 09:00-17:30 Europe/Berlin');
         expect(wrapper.text()).toContain('Nasdaq');
         expect(wrapper.text()).toContain('EXXX');
         expect(wrapper.text()).toContain('DE000A0D8Q23');
         expect(wrapper.text()).toContain('A0D8Q2');
         expect(wrapper.text()).toContain('Unavailable');
-        expect(wrapper.text()).toContain('02.06.2026, 15:00');
+        expect(wrapper.text()).not.toContain('02.06.2026, 22:04');
+        expect(wrapper.text()).toContain('Monday-Friday 09:00-17:30 Europe/Vienna');
         expect(wrapper.text()).toContain('AI SDK web search');
         expect(wrapper.text()).not.toContain('Trading depot');
         expect(wrapper.text()).not.toContain('250.50');
@@ -367,7 +415,9 @@ describe('App', () => {
         expect(fetchMock).toHaveBeenCalledWith('/admin/active-depot/holdings/refresh-prices', expect.objectContaining({
             method: 'POST',
         }));
+        expect(fetchMock).toHaveBeenCalledWith('/admin/active-depot/holdings/refresh-prices/refresh-1', expect.any(Object));
         expect(wrapper.text()).toContain('2 stock prices refreshed.');
+        expect(wrapper.text()).toContain('Price refresh: 2/2');
 
         const addStockButton = wrapper.findAll('button').find((button) => button.text().includes('Add stock'));
         await addStockButton.trigger('click');

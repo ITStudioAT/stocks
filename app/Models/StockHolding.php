@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-#[Fillable(['depot_id', 'symbol', 'name', 'isin', 'wkn', 'exchange', 'mic_code', 'instrument_type', 'country', 'currency', 'latest_price', 'latest_price_fetched_at', 'latest_price_source', 'latest_price_source_url', 'latest_price_as_of'])]
+#[Fillable(['depot_id', 'symbol', 'name', 'isin', 'wkn', 'exchange', 'mic_code', 'instrument_type', 'country', 'currency', 'latest_price', 'latest_price_fetched_at', 'latest_price_source', 'latest_price_source_url', 'latest_price_as_of', 'trading_times'])]
 class StockHolding extends Model
 {
     /** @use HasFactory<StockHoldingFactory> */

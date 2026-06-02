@@ -2,12 +2,15 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\Depot;
 use App\Models\StockHolding;
 use App\Models\User;
+use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\StockPriceLookupService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Queue;
 use Mockery\MockInterface;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
@@ -53,6 +56,7 @@ class AdminDepotHoldingTest extends TestCase
                         'latest_price_source',
                         'latest_price_source_url',
                         'latest_price_as_of',
+                        'trading_times',
                         'created_at',
                     ],
                 ],
@@ -88,6 +92,7 @@ class AdminDepotHoldingTest extends TestCase
                     'source' => 'AI SDK web search',
                     'source_url' => 'https://example.com/aapl',
                     'as_of' => '2026-06-02 11:59 UTC',
+                    'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
                 ]);
         });
 
@@ -114,7 +119,8 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holding.latest_price_fetched_at', '2026-06-02T12:00:00+00:00')
             ->assertJsonPath('holding.latest_price_source', 'AI SDK web search')
             ->assertJsonPath('holding.latest_price_source_url', 'https://example.com/aapl')
-            ->assertJsonPath('holding.latest_price_as_of', '2026-06-02 11:59 UTC');
+            ->assertJsonPath('holding.latest_price_as_of', '2026-06-02 11:59 UTC')
+            ->assertJsonPath('holding.trading_times', 'Monday-Friday 09:00-17:30 Europe/Berlin');
 
         $this->assertDatabaseHas('stock_holdings', [
             'depot_id' => $depot->id,
@@ -129,6 +135,7 @@ class AdminDepotHoldingTest extends TestCase
             'latest_price_source' => 'AI SDK web search',
             'latest_price_source_url' => 'https://example.com/aapl',
             'latest_price_as_of' => '2026-06-02 11:59 UTC',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
         ]);
     }
 
@@ -150,6 +157,7 @@ class AdminDepotHoldingTest extends TestCase
                     'source' => 'AI SDK web search',
                     'source_url' => null,
                     'as_of' => null,
+                    'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
                 ]);
         });
 
@@ -172,7 +180,8 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holding.latest_price', null)
             ->assertJsonPath('holding.latest_price_fetched_at', '2026-06-02T13:00:00+00:00')
             ->assertJsonPath('holding.latest_price_source', 'AI SDK web search')
-            ->assertJsonPath('holding.latest_price_source_url', null);
+            ->assertJsonPath('holding.latest_price_source_url', null)
+            ->assertJsonPath('holding.trading_times', 'Monday-Friday 09:00-17:30 Europe/Vienna');
 
         $this->assertDatabaseHas('stock_holdings', [
             'symbol' => 'EXXX',
@@ -186,12 +195,59 @@ class AdminDepotHoldingTest extends TestCase
             'latest_price_source' => 'AI SDK web search',
             'latest_price_source_url' => null,
             'latest_price_as_of' => null,
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
         ]);
     }
 
-    public function test_admin_can_refresh_all_active_depot_holding_prices(): void
+    public function test_admin_can_queue_active_depot_holding_price_refresh(): void
     {
+        Queue::fake();
         $admin = $this->adminUser();
+        $depot = Depot::factory()->create([
+            'is_active' => true,
+        ]);
+        StockHolding::factory()->create([
+            'depot_id' => $depot->id,
+            'symbol' => 'AAPL',
+        ]);
+        StockHolding::factory()->create([
+            'depot_id' => $depot->id,
+            'symbol' => 'MSFT',
+        ]);
+        $inactiveHolding = StockHolding::factory()->create([
+            'symbol' => 'EXXX',
+            'latest_price' => '300.000000',
+        ]);
+
+        $response = $this->actingAs($admin)
+            ->postJson('/admin/active-depot/holdings/refresh-prices')
+            ->assertAccepted()
+            ->assertJsonPath('message', '2 stock prices queued for refresh.')
+            ->assertJsonPath('refresh.status', 'queued')
+            ->assertJsonPath('refresh.processed', 0)
+            ->assertJsonPath('refresh.total', 2)
+            ->assertJsonPath('refresh.step', '0/2');
+
+        $refreshId = $response->json('refresh.refresh_id');
+
+        Queue::assertPushed(RefreshDepotHoldingPrices::class, fn (RefreshDepotHoldingPrices $job): bool => $job->depotId === $depot->id
+            && $job->refreshId === $refreshId);
+
+        $this->actingAs($admin)
+            ->getJson("/admin/active-depot/holdings/refresh-prices/{$refreshId}")
+            ->assertOk()
+            ->assertJsonPath('refresh.refresh_id', $refreshId)
+            ->assertJsonPath('refresh.status', 'queued')
+            ->assertJsonPath('refresh.step', '0/2');
+
+        $this->assertDatabaseHas('stock_holdings', [
+            'id' => $inactiveHolding->id,
+            'latest_price' => '300.000000',
+        ]);
+    }
+
+    public function test_queued_job_refreshes_active_depot_holding_prices_and_tracks_progress(): void
+    {
         $depot = Depot::factory()->create([
             'is_active' => true,
         ]);
@@ -221,10 +277,6 @@ class AdminDepotHoldingTest extends TestCase
             'currency' => 'USD',
             'latest_price' => '200.000000',
         ]);
-        $inactiveHolding = StockHolding::factory()->create([
-            'symbol' => 'EXXX',
-            'latest_price' => '300.000000',
-        ]);
         $this->mock(StockPriceLookupService::class, function (MockInterface $mock): void {
             $mock
                 ->shouldReceive('latestPrice')
@@ -239,6 +291,7 @@ class AdminDepotHoldingTest extends TestCase
                     'instrument_type' => 'Common Stock',
                     'country' => 'United States',
                     'currency' => 'USD',
+                    'source_url' => 'https://example.com/market-data',
                 ])
                 ->andReturn([
                     'price' => '306.320010',
@@ -247,6 +300,7 @@ class AdminDepotHoldingTest extends TestCase
                     'source' => 'Nasdaq',
                     'source_url' => 'https://www.nasdaq.com/market-activity/stocks/aapl',
                     'as_of' => '2026-06-02 14:59 UTC',
+                    'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
                 ]);
             $mock
                 ->shouldReceive('latestPrice')
@@ -261,22 +315,25 @@ class AdminDepotHoldingTest extends TestCase
                     'instrument_type' => 'Common Stock',
                     'country' => 'United States',
                     'currency' => 'USD',
+                    'source_url' => 'https://example.com/market-data',
                 ])
                 ->andReturn([
-                    'price' => '415.250000',
+                    'price' => null,
                     'currency' => null,
                     'fetched_at' => Carbon::parse('2026-06-02 15:01:00'),
                     'source' => 'AI SDK web search',
-                    'source_url' => 'https://example.com/msft',
-                    'as_of' => '2026-06-02 15:00 UTC',
+                    'source_url' => null,
+                    'as_of' => null,
+                    'trading_times' => null,
                 ]);
         });
+        $progress = app(DepotHoldingPriceRefreshProgress::class);
+        $progress->start('refresh-test', $depot->id, 2);
 
-        $this->actingAs($admin)
-            ->postJson('/admin/active-depot/holdings/refresh-prices')
-            ->assertOk()
-            ->assertJsonPath('message', '2 stock prices refreshed.')
-            ->assertJsonPath('refreshed_count', 2);
+        (new RefreshDepotHoldingPrices($depot->id, 'refresh-test'))->handle(
+            app(StockPriceLookupService::class),
+            $progress,
+        );
 
         $this->assertDatabaseHas('stock_holdings', [
             'id' => $apple->id,
@@ -286,20 +343,15 @@ class AdminDepotHoldingTest extends TestCase
             'latest_price_source' => 'Nasdaq',
             'latest_price_source_url' => 'https://www.nasdaq.com/market-activity/stocks/aapl',
             'latest_price_as_of' => '2026-06-02 14:59 UTC',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
         ]);
         $this->assertDatabaseHas('stock_holdings', [
             'id' => $microsoft->id,
             'currency' => 'USD',
-            'latest_price' => '415.250000',
-            'latest_price_fetched_at' => '2026-06-02 15:01:00',
-            'latest_price_source' => 'AI SDK web search',
-            'latest_price_source_url' => 'https://example.com/msft',
-            'latest_price_as_of' => '2026-06-02 15:00 UTC',
+            'latest_price' => '200.000000',
         ]);
-        $this->assertDatabaseHas('stock_holdings', [
-            'id' => $inactiveHolding->id,
-            'latest_price' => '300.000000',
-        ]);
+        $this->assertSame('finished', $progress->get('refresh-test')['status']);
+        $this->assertSame('2/2', $progress->get('refresh-test')['step']);
     }
 
     public function test_admin_must_provide_a_selected_symbol(): void
@@ -369,6 +421,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->getJson('/admin/active-depot/holdings')->assertUnauthorized();
         $this->postJson('/admin/active-depot/holdings', ['symbol' => 'AAPL'])->assertUnauthorized();
         $this->postJson('/admin/active-depot/holdings/refresh-prices')->assertUnauthorized();
+        $this->getJson('/admin/active-depot/holdings/refresh-prices/example')->assertUnauthorized();
         $this->deleteJson('/admin/active-depot/holdings/1')->assertUnauthorized();
     }
 

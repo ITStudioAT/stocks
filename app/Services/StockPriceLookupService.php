@@ -10,6 +10,10 @@ use Throwable;
 
 class StockPriceLookupService
 {
+    public function __construct(
+        private DeterministicStockPriceLookupService $deterministicStockPriceLookup,
+    ) {}
+
     /**
      * @var array<int, string>
      */
@@ -27,16 +31,30 @@ class StockPriceLookupService
         'European Investor Exchange / Boerse Hannover official pages for shares, ETFs, ETPs, and funds quoted in EUR',
         'Issuer or fund provider official pages for the exact ISIN, such as iShares, Vanguard, Xtrackers / DWS, Amundi, Invesco, VanEck, SPDR, UBS, or Lyxor; use only if the page clearly shows an EUR market price or EUR listing',
         'justETF pages for ETFs only, using the listing table or quote only when it clearly matches the ISIN, venue, ticker, and EUR currency',
-        'Major finance portals as a last resort, such as onvista, finanzen.net, ARIVA, wallstreet-online, or MarketScreener, only when the page clearly matches the ISIN/WKN, venue, ticker, and EUR currency',
+        'finanzen.net ETF Kurs pages for ETFs when the result clearly matches the ISIN/WKN and shows a current EUR quote',
+        'Major finance portals as a last resort, such as onvista, ARIVA, boersennews.de, stockanalysis.com, wallstreet-online, or MarketScreener, only when the page clearly matches the ISIN/WKN, venue, ticker, and EUR currency',
     ];
 
     /**
-     * @param  array{symbol: string, name?: ?string, isin?: ?string, wkn?: ?string, exchange?: ?string, mic_code?: ?string, currency?: ?string}  $instrument
-     * @return array{price: ?string, currency: ?string, fetched_at: Carbon, source: string, source_url: ?string, as_of: ?string}
+     * @param  array{symbol: string, name?: ?string, isin?: ?string, wkn?: ?string, exchange?: ?string, mic_code?: ?string, currency?: ?string, source_url?: ?string}  $instrument
+     * @return array{price: ?string, currency: ?string, fetched_at: Carbon, source: string, source_url: ?string, as_of: ?string, trading_times: ?string}
      */
     public function latestPrice(array $instrument): array
     {
         $fetchedAt = now();
+        $deterministicResult = $this->deterministicStockPriceLookup->latestPrice($instrument);
+
+        if ($deterministicResult !== null) {
+            return [
+                'price' => $deterministicResult['price'],
+                'currency' => $deterministicResult['currency'],
+                'fetched_at' => $fetchedAt,
+                'source' => $deterministicResult['source'],
+                'source_url' => $deterministicResult['source_url'],
+                'as_of' => $deterministicResult['as_of'],
+                'trading_times' => $deterministicResult['trading_times'],
+            ];
+        }
 
         try {
             $response = StockPriceResolver::make()->prompt($this->prompt($instrument), timeout: 45);
@@ -60,19 +78,21 @@ class StockPriceLookupService
     }
 
     /**
-     * @return array{price: ?string, currency: ?string, fetched_at: Carbon, source: string, source_url: ?string, as_of: ?string}
+     * @return array{price: ?string, currency: ?string, fetched_at: Carbon, source: string, source_url: ?string, as_of: ?string, trading_times: ?string}
      */
     private function resultFromResponse(mixed $response, Carbon $fetchedAt): array
     {
         $price = $this->decimalPrice(Arr::get($response, 'decimal_price'));
         $currency = $this->nullableCurrency(Arr::get($response, 'currency'));
+        $asOf = $this->nullableString(Arr::get($response, 'as_of'));
 
-        if ($price === null || $currency !== 'EUR') {
+        if ($price === null || $currency !== 'EUR' || $this->isStaleAsOf($asOf)) {
             return $this->unavailableResult(
                 fetchedAt: $fetchedAt,
                 source: $this->nullableString(Arr::get($response, 'source_name')) ?? 'AI SDK web search',
                 sourceUrl: $this->nullableUrl(Arr::get($response, 'source_url')),
-                asOf: $this->nullableString(Arr::get($response, 'as_of')),
+                asOf: $asOf,
+                tradingTimes: $this->nullableString(Arr::get($response, 'trading_times')),
             );
         }
 
@@ -82,18 +102,20 @@ class StockPriceLookupService
             'fetched_at' => $fetchedAt,
             'source' => $this->nullableString(Arr::get($response, 'source_name')) ?? 'AI SDK web search',
             'source_url' => $this->nullableUrl(Arr::get($response, 'source_url')),
-            'as_of' => $this->nullableString(Arr::get($response, 'as_of')),
+            'as_of' => $asOf,
+            'trading_times' => $this->nullableString(Arr::get($response, 'trading_times')),
         ];
     }
 
     /**
-     * @return array{price: null, currency: null, fetched_at: Carbon, source: string, source_url: ?string, as_of: ?string}
+     * @return array{price: null, currency: null, fetched_at: Carbon, source: string, source_url: ?string, as_of: ?string, trading_times: ?string}
      */
     private function unavailableResult(
         Carbon $fetchedAt,
         string $source = 'AI SDK web search',
         ?string $sourceUrl = null,
         ?string $asOf = null,
+        ?string $tradingTimes = null,
     ): array {
         return [
             'price' => null,
@@ -102,11 +124,12 @@ class StockPriceLookupService
             'source' => $source,
             'source_url' => $sourceUrl,
             'as_of' => $asOf,
+            'trading_times' => $tradingTimes,
         ];
     }
 
     /**
-     * @param  array{symbol: string, name?: ?string, isin?: ?string, wkn?: ?string, exchange?: ?string, mic_code?: ?string, currency?: ?string}  $instrument
+     * @param  array{symbol: string, name?: ?string, isin?: ?string, wkn?: ?string, exchange?: ?string, mic_code?: ?string, currency?: ?string, source_url?: ?string}  $instrument
      */
     private function prompt(array $instrument, bool $exhaustive = false): string
     {
@@ -128,7 +151,7 @@ class StockPriceLookupService
             ->implode("\n");
 
         $exhaustiveInstructions = $exhaustive
-            ? "This is an exhaustive retry because the first attempt did not return an EUR price. Search deeper, but keep the same source order. Do not return null until every ordered source has been checked for a matching EUR quote.\n\n"
+            ? "This is an exhaustive retry because the first attempt did not return a fresh EUR price. Search deeper, but keep the same source order. Do not return null until every ordered source has been checked for a matching fresh EUR quote.\n\n"
             : '';
 
         return <<<PROMPT
@@ -137,13 +160,15 @@ Find the latest available market price for this exact holding.
 {$details}
 
 {$exhaustiveInstructions}Latest means the latest visible trade, last price, or official close available from the source. If markets are closed, use the most recent official close or latest available price and include its date/time in as_of.
+Fresh means the visible price date is within the last 7 calendar days, or the source clearly shows a live/current quote without an old date. Reject stale quote pages, factsheets, PDFs, NAV-only pages, and ETF Capital pages unless the visible price date is fresh.
 
 Check sources in this exact order every time:
 {$sourceOrder}
 
 Use the first source in that order that clearly identifies the exact same instrument and quotes a latest/current price in EUR. If a source has no matching EUR quote, continue to the next source.
-Return null for decimal_price if the current/latest EUR price cannot be verified for this exact instrument.
-Return null for decimal_price only after every ordered source has been checked and only non-EUR or unverifiable prices are available. Do not convert currencies.
+Also retrieve the regular exchange trading times for the exact listing when visible or verifiable. Return trading_times as a short string such as "Monday-Friday 09:00-17:30 Europe/Vienna". Use the exchange's local timezone.
+Return null for decimal_price if a fresh current/latest EUR price cannot be verified for this exact instrument.
+Return null for decimal_price only after every ordered source has been checked and only stale, non-EUR, or unverifiable prices are available. Do not convert currencies.
 Set currency to EUR when returning a price.
 PROMPT;
     }
@@ -200,5 +225,35 @@ PROMPT;
         }
 
         return Str::limit($value, 2048, '');
+    }
+
+    private function isStaleAsOf(?string $asOf): bool
+    {
+        if ($asOf === null) {
+            return false;
+        }
+
+        $date = $this->dateFromAsOf($asOf);
+
+        return $date !== null && $date->lt(now()->subDays(7));
+    }
+
+    private function dateFromAsOf(string $asOf): ?Carbon
+    {
+        if (preg_match('/\b(?<year>\d{4})-(?<month>\d{1,2})-(?<day>\d{1,2})\b/', $asOf, $matches)) {
+            return Carbon::create((int) $matches['year'], (int) $matches['month'], (int) $matches['day'])->startOfDay();
+        }
+
+        if (! preg_match('/\b(?<day>\d{1,2})[.\/-](?<month>\d{1,2})[.\/-](?<year>\d{2,4})\b/', $asOf, $matches)) {
+            return null;
+        }
+
+        $year = (int) $matches['year'];
+
+        if ($year < 100) {
+            $year += 2000;
+        }
+
+        return Carbon::create($year, (int) $matches['month'], (int) $matches['day'])->startOfDay();
     }
 }

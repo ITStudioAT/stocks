@@ -34,6 +34,7 @@ class StockHoldingFactory extends Factory
             'latest_price_source' => 'AI SDK web search',
             'latest_price_source_url' => 'https://example.com/market-data',
             'latest_price_as_of' => now()->toIso8601String(),
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
         ];
     }
 }

@@ -2,8 +2,10 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\Depot;
 use App\Models\StockHolding;
+use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\StockPriceLookupService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -58,6 +60,7 @@ class AdminDepotHoldingController extends Controller
             'latest_price_source' => $latestPriceData['source'],
             'latest_price_source_url' => $latestPriceData['source_url'],
             'latest_price_as_of' => $latestPriceData['as_of'],
+            'trading_times' => $latestPriceData['trading_times'],
         ]);
 
         return response()->json([
@@ -66,30 +69,38 @@ class AdminDepotHoldingController extends Controller
         ], 201);
     }
 
-    public function refreshPrices(StockPriceLookupService $stockPriceLookup): JsonResponse
+    public function refreshPrices(DepotHoldingPriceRefreshProgress $refreshProgress): JsonResponse
     {
         $depot = $this->activeDepot();
-        $refreshedCount = 0;
+        $refreshId = (string) Str::uuid();
+        $total = $depot->stockHoldings()->count();
+        $progress = $refreshProgress->start($refreshId, $depot->id, $total);
 
-        $depot->stockHoldings()
-            ->eachById(function (StockHolding $holding) use ($stockPriceLookup, &$refreshedCount): void {
-                $latestPriceData = $stockPriceLookup->latestPrice($this->instrumentPayload($holding));
-
-                $holding->update([
-                    'currency' => $latestPriceData['currency'] ?? $holding->currency,
-                    'latest_price' => $latestPriceData['price'],
-                    'latest_price_fetched_at' => $latestPriceData['fetched_at'],
-                    'latest_price_source' => $latestPriceData['source'],
-                    'latest_price_source_url' => $latestPriceData['source_url'],
-                    'latest_price_as_of' => $latestPriceData['as_of'],
-                ]);
-
-                $refreshedCount++;
-            });
+        if ($total > 0) {
+            RefreshDepotHoldingPrices::dispatch($depot->id, $refreshId);
+            $progress = $refreshProgress->get($refreshId) ?? $progress;
+        }
 
         return response()->json([
-            'message' => trans_choice('{0} No stock prices refreshed.|{1} 1 stock price refreshed.|[2,*] :count stock prices refreshed.', $refreshedCount),
-            'refreshed_count' => $refreshedCount,
+            'message' => $progress['message'],
+            'refresh' => $this->refreshPayload($progress),
+        ], 202);
+    }
+
+    public function refreshPriceStatus(string $refreshId, DepotHoldingPriceRefreshProgress $refreshProgress): JsonResponse
+    {
+        $depot = $this->activeDepot();
+        $progress = $refreshProgress->get($refreshId);
+
+        if ($progress === null || $progress['depot_id'] !== $depot->id) {
+            return response()->json([
+                'message' => 'Stock price refresh not found.',
+            ], 404);
+        }
+
+        return response()->json([
+            'message' => $progress['message'],
+            'refresh' => $this->refreshPayload($progress),
         ]);
     }
 
@@ -139,7 +150,7 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, created_at: ?string}
+     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, created_at: ?string}
      */
     private function holdingPayload(StockHolding $holding): array
     {
@@ -159,25 +170,8 @@ class AdminDepotHoldingController extends Controller
             'latest_price_source' => $holding->latest_price_source,
             'latest_price_source_url' => $holding->latest_price_source_url,
             'latest_price_as_of' => $holding->latest_price_as_of,
+            'trading_times' => $holding->trading_times,
             'created_at' => $holding->created_at?->toIso8601String(),
-        ];
-    }
-
-    /**
-     * @return array{symbol: string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string}
-     */
-    private function instrumentPayload(StockHolding $holding): array
-    {
-        return [
-            'symbol' => $holding->symbol ?? '',
-            'name' => $holding->name,
-            'isin' => $holding->isin,
-            'wkn' => $holding->wkn,
-            'exchange' => $holding->exchange,
-            'mic_code' => $holding->mic_code,
-            'instrument_type' => $holding->instrument_type,
-            'country' => $holding->country,
-            'currency' => $holding->currency,
         ];
     }
 
@@ -219,5 +213,25 @@ class AdminDepotHoldingController extends Controller
             'country' => ['nullable', 'string', 'max:255'],
             'currency' => ['nullable', 'string', 'max:8'],
         ]);
+    }
+
+    /**
+     * @param  array{refresh_id: string, depot_id: int, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}  $progress
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}
+     */
+    private function refreshPayload(array $progress): array
+    {
+        return [
+            'refresh_id' => $progress['refresh_id'],
+            'status' => $progress['status'],
+            'processed' => $progress['processed'],
+            'total' => $progress['total'],
+            'step' => $progress['step'],
+            'message' => $progress['message'],
+            'current' => $progress['current'],
+            'started_at' => $progress['started_at'],
+            'finished_at' => $progress['finished_at'],
+            'error' => $progress['error'],
+        ];
     }
 }
