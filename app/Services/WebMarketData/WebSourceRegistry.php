@@ -60,12 +60,14 @@ class WebSourceRegistry
             ));
         }
 
-        if ($holding->latest_price_source_url && $this->supportedPreviousUrl($holding->latest_price_source_url)) {
-            $sourceKey = $this->sourceKeyFromUrl($holding->latest_price_source_url);
+        $previousSourceUrl = $holding->latestStockPrice?->source_url ?? $holding->latest_price_source_url;
+
+        if ($previousSourceUrl && $this->supportedPreviousUrl($previousSourceUrl)) {
+            $sourceKey = $this->sourceKeyFromUrl($previousSourceUrl);
             $sources->push($this->candidate(
                 sourceKey: $sourceKey,
                 sourceName: $this->sourceName($sourceKey),
-                url: $holding->latest_price_source_url,
+                url: $previousSourceUrl,
                 parserKey: $sourceKey,
                 venue: $holding->preferred_venue,
                 mic: $holding->preferred_mic,

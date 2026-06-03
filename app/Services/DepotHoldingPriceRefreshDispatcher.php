@@ -3,7 +3,7 @@
 namespace App\Services;
 
 use App\Jobs\RefreshDepotHoldingPrices;
-use App\Models\Depot;
+use App\Models\StockHolding;
 use App\Models\StockPriceRefreshRun;
 use Illuminate\Support\Str;
 
@@ -14,29 +14,29 @@ class DepotHoldingPriceRefreshDispatcher
     ) {}
 
     /**
-     * @return array{refresh_id: string, depot_id: int, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
      */
-    public function dispatch(Depot $depot): array
+    public function dispatch(): ?array
     {
+        $total = StockHolding::query()->count();
+
+        if ($total === 0) {
+            return null;
+        }
+
         $refreshId = (string) Str::uuid();
-        $total = $depot->stockHoldings()->count();
-        $progress = $this->refreshProgress->start($refreshId, $depot->id, $total);
+        $progress = $this->refreshProgress->start($refreshId, $total);
 
         StockPriceRefreshRun::query()->create([
             'id' => $refreshId,
-            'depot_id' => $depot->id,
-            'status' => $total === 0 ? 'finished' : 'queued',
+            'status' => 'queued',
             'total_count' => $total,
             'started_at' => now(),
-            'finished_at' => $total === 0 ? now() : null,
+            'finished_at' => null,
         ]);
 
-        if ($total > 0) {
-            RefreshDepotHoldingPrices::dispatch($depot->id, $refreshId);
+        RefreshDepotHoldingPrices::dispatch($refreshId);
 
-            return $this->refreshProgress->get($refreshId) ?? $progress;
-        }
-
-        return $progress;
+        return $this->refreshProgress->get($refreshId) ?? $progress;
     }
 }

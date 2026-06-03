@@ -4,10 +4,9 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['id', 'depot_id', 'status', 'total_count', 'processed_count', 'success_count', 'stale_count', 'unavailable_count', 'invalid_count', 'suspicious_count', 'started_at', 'finished_at', 'error_summary'])]
+#[Fillable(['id', 'status', 'total_count', 'processed_count', 'success_count', 'stale_count', 'unavailable_count', 'invalid_count', 'suspicious_count', 'started_at', 'finished_at', 'error_summary'])]
 class StockPriceRefreshRun extends Model
 {
     public $incrementing = false;
@@ -42,14 +41,6 @@ class StockPriceRefreshRun extends Model
             'finished_at' => 'datetime',
             'error_summary' => 'array',
         ];
-    }
-
-    /**
-     * @return BelongsTo<Depot, $this>
-     */
-    public function depot(): BelongsTo
-    {
-        return $this->belongsTo(Depot::class);
     }
 
     /**

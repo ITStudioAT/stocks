@@ -4,7 +4,6 @@ namespace Tests\Feature;
 
 use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\AppConfig;
-use App\Models\Depot;
 use App\Models\StockHolding;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -51,19 +50,14 @@ class PriceRefreshSettingsTest extends TestCase
         $this->assertSame(45, $config->value['closed_interval_minutes']);
     }
 
-    public function test_due_price_refresh_command_dispatches_all_depots_with_holdings_together(): void
+    public function test_due_price_refresh_command_dispatches_the_watchlist_refresh_job(): void
     {
         Queue::fake();
         $this->travelTo(Carbon::parse('2026-06-03 18:00:00', 'Europe/Vienna'));
-        $firstDepot = Depot::factory()->create();
-        $secondDepot = Depot::factory()->create();
-        $emptyDepot = Depot::factory()->create();
         StockHolding::factory()->create([
-            'depot_id' => $firstDepot->id,
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
         ]);
         StockHolding::factory()->create([
-            'depot_id' => $secondDepot->id,
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
         ]);
         AppConfig::query()->create([
@@ -79,23 +73,15 @@ class PriceRefreshSettingsTest extends TestCase
         $this->artisan('price-refresh:dispatch-due')
             ->assertExitCode(0);
 
-        Queue::assertPushed(RefreshDepotHoldingPrices::class, fn (RefreshDepotHoldingPrices $job): bool => $job->depotId === $firstDepot->id);
-        Queue::assertPushed(RefreshDepotHoldingPrices::class, fn (RefreshDepotHoldingPrices $job): bool => $job->depotId === $secondDepot->id);
-        Queue::assertNotPushed(RefreshDepotHoldingPrices::class, fn (RefreshDepotHoldingPrices $job): bool => $job->depotId === $emptyDepot->id);
+        Queue::assertPushedTimes(RefreshDepotHoldingPrices::class, 1);
         $this->assertDatabaseHas('stock_price_refresh_runs', [
-            'depot_id' => $firstDepot->id,
             'status' => 'queued',
-            'total_count' => 1,
-        ]);
-        $this->assertDatabaseHas('stock_price_refresh_runs', [
-            'depot_id' => $secondDepot->id,
-            'status' => 'queued',
-            'total_count' => 1,
+            'total_count' => 2,
         ]);
         $config = AppConfig::query()->where('key', 'price_refresh.schedule')->firstOrFail();
 
-        $this->assertSame('2026-06-03T16:00:00+00:00', $config->value['last_refreshed_at']);
-        $this->assertSame('2026-06-03T17:00:00+00:00', $config->value['next_refresh_at']);
+        $this->assertSame('2026-06-03T18:00:00+02:00', $config->value['last_refreshed_at']);
+        $this->assertSame('2026-06-03T19:00:00+02:00', $config->value['next_refresh_at']);
     }
 
     private function adminUser(): User

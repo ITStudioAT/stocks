@@ -143,7 +143,7 @@ class WebQuoteSelector
 
         $quote = new ParsedQuote(
             sourceKey: 'calculated_median',
-            sourceName: sprintf('Calculated median (%d quotes)', $quotes->count()),
+            sourceName: sprintf('%d quotes', $quotes->count()),
             sourceUrl: $latestQuote->quote->sourceUrl,
             sourceQuality: 'calculated',
             venue: $latestQuote->quote->venue,

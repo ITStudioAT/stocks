@@ -105,7 +105,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/active-depot/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1') {
                 return Promise.resolve(jsonResponse({
                     depot: {
                         id: 1,
@@ -128,11 +128,29 @@ describe('App', () => {
                             latest_price_fetched_at: '2026-06-02T12:00:00+00:00',
                             latest_price_source: 'Tradegate Exchange',
                             latest_price_source_url: 'https://www.tradegatebsx.com/orderbuch.php?isin=US0378331005',
-                            latest_price_as_of: '2026-06-02 13:59:00',
+                            latest_price_as_of: '2026-06-03T15:35:00+00:00',
                             trading_times: 'Monday-Friday 08:00-22:00 Europe/Berlin',
                             venue: 'Tradegate',
                             price_type: 'indicative_mid',
                             price_spread_pct: '0.050000',
+                            recent_prices: [
+                                {
+                                    id: 11,
+                                    price: '306.32001000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T15:35:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 10,
+                                    price: '305.55000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T15:10:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                            ],
                             validation_errors: [],
                         },
                         {
@@ -154,6 +172,7 @@ describe('App', () => {
                             venue: null,
                             price_type: null,
                             price_spread_pct: null,
+                            recent_prices: [],
                             validation_errors: [],
                         },
                         {
@@ -216,6 +235,12 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Inactive');
         expect(fetchMock).toHaveBeenCalledWith('/admin/depots?page=1', expect.any(Object));
 
+        const html = wrapper.html();
+        const tabsIndex = html.indexOf('v-tabs');
+        const depotsHeadingIndex = html.indexOf('New depot');
+        expect(tabsIndex).toBeGreaterThanOrEqual(0);
+        expect(tabsIndex).toBeLessThan(depotsHeadingIndex);
+
         const newDepotButton = wrapper.findAll('button').find((button) => button.text().includes('New depot'));
         await newDepotButton.trigger('click');
         await flushPromises();
@@ -237,9 +262,9 @@ describe('App', () => {
         }));
     });
 
-    it('shows only the active depot on the dashboard', async () => {
+    it('shows the watch-list stocks on the dashboard', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
-        const fetchMock = vi.fn((path) => {
+        const fetchMock = vi.fn((path, options) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
                     user: {
@@ -289,7 +314,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/active-depot/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1') {
                 return Promise.resolve(jsonResponse({
                     depot: {
                         id: 1,
@@ -307,16 +332,93 @@ describe('App', () => {
                             exchange: 'NASDAQ',
                             currency: 'EUR',
                             latest_price: '306.320010',
+                            start_price: '300.100000',
+                            end_price: '305.900000',
+                            latest_price_trend: 'up',
+                            latest_price_change_pct: '0.14',
+                            latest_price_tick_trend: 'up',
                             latest_price_status: 'fresh',
                             price_status: 'fresh',
                             latest_price_fetched_at: '2026-06-02T12:00:00+00:00',
                             latest_price_source: 'Tradegate Exchange',
                             latest_price_source_url: 'https://www.tradegatebsx.com/orderbuch.php?isin=US0378331005',
-                            latest_price_as_of: '2026-06-02 13:59:00',
+                            latest_price_as_of: '2026-06-03T15:35:00+00:00',
                             trading_times: 'Monday-Friday 08:00-22:00 Europe/Berlin',
                             venue: 'Tradegate',
                             price_type: 'indicative_mid',
                             price_spread_pct: '0.050000',
+                            recent_prices: [
+                                {
+                                    id: 11,
+                                    price: '306.32001000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T15:35:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 10,
+                                    price: '305.55000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T15:10:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                            ],
+                            validation_errors: [],
+                        },
+                        {
+                            id: 4,
+                            symbol: 'DOWN',
+                            name: 'Closed Market Fund',
+                            isin: 'LU0000000004',
+                            wkn: 'DOWN01',
+                            exchange: 'XETR',
+                            currency: 'EUR',
+                            latest_price: '190.000000',
+                            start_price: '185.000000',
+                            end_price: '195.000000',
+                            latest_price_trend: 'down',
+                            latest_price_change_pct: '-2.56',
+                            latest_price_tick_trend: 'down',
+                            latest_price_status: 'closed_market',
+                            price_status: 'closed_market',
+                            latest_price_fetched_at: '2026-06-03T18:10:00+00:00',
+                            latest_price_source: 'Tradegate Exchange',
+                            latest_price_source_url: 'https://example.com/down',
+                            latest_price_as_of: '2026-06-03T18:00:00+00:00',
+                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Berlin',
+                            venue: 'Tradegate',
+                            price_type: 'last',
+                            price_spread_pct: '0.020000',
+                            recent_prices: [],
+                            validation_errors: [],
+                        },
+                        {
+                            id: 5,
+                            symbol: 'FLAT',
+                            name: 'Flat Price Fund',
+                            isin: 'LU0000000005',
+                            wkn: 'FLAT01',
+                            exchange: 'XETR',
+                            currency: 'EUR',
+                            latest_price: '100.000000',
+                            start_price: '100.000000',
+                            end_price: '100.000000',
+                            latest_price_trend: 'flat',
+                            latest_price_change_pct: '0.00',
+                            latest_price_tick_trend: 'flat',
+                            latest_price_status: 'fresh',
+                            price_status: 'fresh',
+                            latest_price_fetched_at: '2026-06-03T12:10:00+00:00',
+                            latest_price_source: 'Tradegate Exchange',
+                            latest_price_source_url: 'https://example.com/flat',
+                            latest_price_as_of: '2026-06-03T12:00:00+00:00',
+                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Berlin',
+                            venue: 'Tradegate',
+                            price_type: 'last',
+                            price_spread_pct: '0.020000',
+                            recent_prices: [],
                             validation_errors: [],
                         },
                         {
@@ -338,6 +440,7 @@ describe('App', () => {
                             venue: null,
                             price_type: null,
                             price_spread_pct: null,
+                            recent_prices: [],
                             validation_errors: [],
                         },
                         {
@@ -366,15 +469,15 @@ describe('App', () => {
                         current_page: 1,
                         last_page: 1,
                         per_page: 10,
-                        total: 3,
+                        total: 5,
                         from: 1,
-                        to: 3,
+                        to: 5,
                     },
                     price_refresh_settings: priceRefreshSettings(),
                 }));
             }
 
-            if (path === '/admin/price-refresh-settings') {
+            if (path === '/admin/price-refresh-settings' && options?.method === 'PATCH') {
                 return Promise.resolve(jsonResponse({
                     message: 'Price refresh schedule updated.',
                     price_refresh_settings: priceRefreshSettings({
@@ -386,9 +489,15 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/active-depot/holdings') {
+            if (path === '/admin/price-refresh-settings') {
                 return Promise.resolve(jsonResponse({
-                    message: 'Stock added.',
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Stock added to watch-list.',
                     holding: {
                         id: 2,
                         symbol: 'MSFT',
@@ -406,12 +515,13 @@ describe('App', () => {
                         venue: 'Tradegate',
                         price_type: 'indicative_mid',
                         price_spread_pct: '0.050000',
+                        latest_price_tick_trend: null,
                         validation_errors: [],
                     },
                 }));
             }
 
-            if (path === '/admin/active-depot/holdings/refresh-prices') {
+            if (path === '/admin/watchlist/holdings/refresh-prices') {
                 return Promise.resolve(jsonResponse({
                     message: '2 stock prices queued for refresh.',
                     refresh: {
@@ -429,7 +539,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/active-depot/holdings/refresh-prices/refresh-1') {
+            if (path === '/admin/watchlist/holdings/refresh-prices/refresh-1') {
                 return Promise.resolve(jsonResponse({
                     message: '2 stock prices refreshed.',
                     refresh: {
@@ -447,7 +557,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/active-depot/holdings/1') {
+            if (path === '/admin/watchlist/holdings/1') {
                 return Promise.resolve(jsonResponse({
                     message: 'Stock deleted.',
                 }));
@@ -483,19 +593,58 @@ describe('App', () => {
             'Symbol',
             'Name',
             'Latest price',
+            'Start price',
+            'End price',
             'Source time',
             'Trading times',
-            'Source',
             'Actions',
         ]);
-        expect(wrapper.text()).toContain('Long term depot');
+        expect(wrapper.text()).toContain('Watch-list');
+        expect(wrapper.text()).not.toContain('Long term depot');
         expect(wrapper.text()).toContain('AAPL');
         expect(wrapper.text()).toContain('Apple');
         expect(wrapper.text()).toContain('US0378331005');
         expect(wrapper.text()).toContain('865985');
         expect(wrapper.text()).toContain('306.32001');
         expect(wrapper.text()).not.toContain('306.32001 EUR');
-        expect(wrapper.text()).toContain('02.06.2026, 13:59');
+        expect(wrapper.text()).toContain('300.1');
+        expect(wrapper.text()).toContain('305.9');
+        expect(wrapper.text()).toContain('DOWN');
+        expect(wrapper.text()).toContain('190');
+        expect(wrapper.text()).toContain('FLAT');
+        expect(wrapper.text()).toContain('100');
+
+        const holdingRows = wrapper.findAll('tbody tr');
+        const upPriceValue = holdingRows[0].findAll('td')[2].find('.latest-price-value');
+        const downPriceValue = holdingRows[1].findAll('td')[2].find('.latest-price-value');
+        expect(holdingRows[0].findAll('td')[2].classes()).not.toContain('bg-success');
+        expect(holdingRows[1].findAll('td')[2].classes()).not.toContain('bg-error');
+        expect(upPriceValue.classes()).toContain('bg-success');
+        expect(upPriceValue.classes()).toContain('text-white');
+        expect(downPriceValue.classes()).toContain('bg-error');
+        expect(downPriceValue.classes()).toContain('text-white');
+        expect(upPriceValue.text()).toContain('+0.14%');
+        expect(downPriceValue.text()).toContain('-2.56%');
+        expect(wrapper.html()).toContain('latest-price-tick');
+        expect(wrapper.text()).toContain('↑');
+        expect(wrapper.text()).toContain('↓');
+        expect(wrapper.text()).toContain('=');
+
+        expect(wrapper.text()).not.toContain('305.55');
+
+        await holdingRows[0].trigger('click');
+        await flushPromises();
+
+        expect(wrapper.text()).toContain('305.55');
+        const recentPriceStrip = wrapper.find('.recent-price-strip');
+        expect(recentPriceStrip.text()).toContain('17:10');
+        expect(recentPriceStrip.text()).not.toContain('03.06.2026');
+
+        await wrapper.find('.stock-holding-row').trigger('click');
+        await flushPromises();
+
+        expect(wrapper.text()).not.toContain('305.55');
+        expect(wrapper.text()).toContain('03.06.2026, 17:35');
         expect(wrapper.text()).toContain('Monday-Friday 08:00-22:00 Europe/Berlin');
         expect(wrapper.text()).toContain('Tradegate Exchange');
         expect(wrapper.text()).toContain('EXXX');
@@ -510,11 +659,11 @@ describe('App', () => {
         expect(wrapper.text()).toContain('waiting');
         expect(wrapper.text()).not.toContain('Automatic price refresh');
 
-        wrapper.vm.navigateSection('dashboard-admin');
+        wrapper.vm.navigateSection('updates');
         await flushPromises();
 
-        expect(window.location.pathname).toBe('/admin/menu/dashboard-admin');
-        expect(wrapper.text()).toContain('Dashboard Admin');
+        expect(window.location.pathname).toBe('/admin/menu/updates');
+        expect(wrapper.text()).toContain('Updates');
         expect(wrapper.text()).toContain('Automatic price refresh');
         expect(wrapper.text()).toContain('Current interval: 20 min');
 
@@ -541,11 +690,11 @@ describe('App', () => {
         await refreshPricesButton.trigger('click');
         await flushPromises();
 
-        expect(fetchMock).toHaveBeenCalledWith('/admin/active-depot/holdings/refresh-prices', expect.objectContaining({
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/refresh-prices', expect.objectContaining({
             method: 'POST',
         }));
-        expect(fetchMock).toHaveBeenCalledWith('/admin/active-depot/holdings/refresh-prices/refresh-1', expect.any(Object));
-        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/active-depot/holdings?page=1')).toHaveLength(2);
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/refresh-prices/refresh-1', expect.any(Object));
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1')).toHaveLength(2);
         expect(wrapper.text()).not.toContain('2 stock prices refreshed.');
         expect(wrapper.text()).not.toContain('Price refresh: 2/2');
 
@@ -591,7 +740,7 @@ describe('App', () => {
         addButton.click();
         await flushPromises();
 
-        expect(fetchMock).toHaveBeenCalledWith('/admin/active-depot/holdings', expect.objectContaining({
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings', expect.objectContaining({
             method: 'POST',
             body: JSON.stringify({
                 symbol: 'MSFT',
@@ -628,12 +777,12 @@ describe('App', () => {
         deleteButton.click();
         await flushPromises();
 
-        expect(fetchMock).toHaveBeenCalledWith('/admin/active-depot/holdings/1', expect.objectContaining({
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/1', expect.objectContaining({
             method: 'DELETE',
         }));
     });
 
-    it('shows Admin group with horizontal Users and Roles submenu chips for super_admin', async () => {
+    it('shows Admin group with horizontal Users, Roles, and Updates submenu chips for super_admin', async () => {
         window.history.pushState({}, '', '/admin/menu/users');
         const fetchMock = vi.fn((path) => {
             if (path === '/admin/me') {
@@ -653,6 +802,15 @@ describe('App', () => {
 
             if (path === '/admin/depots/active') {
                 return Promise.resolve(jsonResponse({ depot: null }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    holdings: [],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null },
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
             }
 
             if (path === '/admin/users?page=1') {
@@ -680,11 +838,13 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Admin');
         expect(wrapper.text()).toContain('Users');
         expect(wrapper.text()).toContain('Roles');
+        expect(wrapper.text()).toContain('Updates');
 
         const tabs = wrapper.findAll('.v-tab');
         const tabLabels = tabs.map((t) => t.text());
         expect(tabLabels.some((l) => l.includes('Users'))).toBe(true);
         expect(tabLabels.some((l) => l.includes('Roles'))).toBe(true);
+        expect(tabLabels.some((l) => l.includes('Updates'))).toBe(true);
 
         const rolesTab = tabs.find((t) => t.text().includes('Roles'));
         await rolesTab.trigger('click');
@@ -692,5 +852,73 @@ describe('App', () => {
 
         expect(window.location.pathname).toBe('/admin/menu/roles');
         expect(wrapper.text()).toContain('admin');
+    });
+
+    it('opens the watch-list PDF export in a new tab', async () => {
+        window.history.pushState({}, '', '/admin/dashboard');
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null },
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    holdings: [
+                        {
+                            id: 1,
+                            symbol: 'AAPL',
+                            name: 'Apple',
+                            isin: 'US0378331005',
+                            wkn: '865985',
+                            exchange: 'NASDAQ',
+                            currency: 'EUR',
+                            latest_price: '306.320010',
+                            recent_prices: [],
+                            validation_errors: [],
+                        },
+                    ],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 1, from: 1, to: 1 },
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        const openMock = vi.fn();
+        vi.stubGlobal('open', openMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const exportButton = wrapper.findAll('button').find((button) => button.text().includes('Export PDF'));
+        expect(exportButton).toBeTruthy();
+
+        await exportButton.trigger('click');
+        await flushPromises();
+
+        expect(openMock).toHaveBeenCalledWith('/admin/watchlist/holdings/pdf', '_blank', 'noopener');
     });
 });

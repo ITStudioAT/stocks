@@ -25,6 +25,8 @@ class InstrumentIdentity
 
     public static function fromHolding(StockHolding $holding): self
     {
+        $latestStockPrice = $holding->latestStockPrice;
+
         return new self(
             symbol: (string) ($holding->symbol ?? ''),
             name: $holding->name,
@@ -34,11 +36,11 @@ class InstrumentIdentity
             mic: $holding->mic_code ? Str::upper($holding->mic_code) : null,
             instrumentType: $holding->instrument_type,
             country: $holding->country,
-            currency: $holding->currency,
+            currency: $latestStockPrice?->currency ?? $holding->currency,
             preferredVenue: $holding->preferred_venue,
             preferredMic: $holding->preferred_mic ? Str::upper($holding->preferred_mic) : null,
             preferredSourceKey: $holding->preferred_source_key,
-            lastPrice: $holding->latest_price,
+            lastPrice: $latestStockPrice?->price ?? $holding->latest_price,
         );
     }
 

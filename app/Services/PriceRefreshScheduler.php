@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Models\AppConfig;
-use App\Models\Depot;
 use App\Models\StockHolding;
 use App\Models\StockPriceRefreshRun;
 use Illuminate\Support\Carbon;
@@ -87,33 +86,17 @@ class PriceRefreshScheduler
             return 0;
         }
 
-        return $this->dispatchAllDepots()['depot_count'];
+        return $this->dispatchWatchlist()['job_count'];
     }
 
     /**
-     * @return array{progress: ?array, depot_count: int, total_holdings: int}
+     * @return array{progress: ?array, job_count: int, total_holdings: int}
      */
-    public function dispatchAllDepots(?Depot $preferredDepot = null): array
+    public function dispatchWatchlist(): array
     {
         $settings = $this->settings();
-        $depots = Depot::query()
-            ->whereHas('stockHoldings')
-            ->withCount('stockHoldings')
-            ->orderBy('id')
-            ->get();
-        $preferredProgress = null;
-        $firstProgress = null;
-        $totalHoldings = 0;
-
-        foreach ($depots as $depot) {
-            $progress = $this->dispatcher->dispatch($depot);
-            $firstProgress ??= $progress;
-            $totalHoldings += $depot->stock_holdings_count;
-
-            if ($preferredDepot !== null && $depot->is($preferredDepot)) {
-                $preferredProgress = $progress;
-            }
-        }
+        $totalHoldings = StockHolding::query()->count();
+        $progress = $this->dispatcher->dispatch();
 
         $this->storeSettings([
             ...$settings,
@@ -122,8 +105,8 @@ class PriceRefreshScheduler
         ]);
 
         return [
-            'progress' => $preferredDepot === null ? $firstProgress : $preferredProgress,
-            'depot_count' => $depots->count(),
+            'progress' => $progress,
+            'job_count' => $progress === null ? 0 : 1,
             'total_holdings' => $totalHoldings,
         ];
     }

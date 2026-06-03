@@ -8,13 +8,12 @@ use Illuminate\Support\Str;
 class DepotHoldingPriceRefreshProgress
 {
     /**
-     * @return array{refresh_id: string, depot_id: int, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}
      */
-    public function start(string $refreshId, int $depotId, int $total): array
+    public function start(string $refreshId, int $total): array
     {
         return $this->put($refreshId, [
             'refresh_id' => $refreshId,
-            'depot_id' => $depotId,
             'status' => $total === 0 ? 'finished' : 'queued',
             'processed' => 0,
             'total' => $total,
@@ -30,7 +29,7 @@ class DepotHoldingPriceRefreshProgress
     }
 
     /**
-     * @return array{refresh_id: string, depot_id: int, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
      */
     public function get(string $refreshId): ?array
     {
@@ -40,7 +39,7 @@ class DepotHoldingPriceRefreshProgress
     }
 
     /**
-     * @return array{refresh_id: string, depot_id: int, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
      */
     public function markRunning(string $refreshId): ?array
     {
@@ -52,7 +51,7 @@ class DepotHoldingPriceRefreshProgress
     }
 
     /**
-     * @return array{refresh_id: string, depot_id: int, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
      */
     public function advance(string $refreshId, ?string $current): ?array
     {
@@ -71,7 +70,7 @@ class DepotHoldingPriceRefreshProgress
     }
 
     /**
-     * @return array{refresh_id: string, depot_id: int, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
      */
     public function finish(string $refreshId): ?array
     {
@@ -87,7 +86,7 @@ class DepotHoldingPriceRefreshProgress
     }
 
     /**
-     * @return array{refresh_id: string, depot_id: int, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
      */
     public function fail(string $refreshId, string $error): ?array
     {
@@ -102,7 +101,7 @@ class DepotHoldingPriceRefreshProgress
 
     /**
      * @param  callable(array): array  $callback
-     * @return array{refresh_id: string, depot_id: int, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
      */
     private function update(string $refreshId, callable $callback): ?array
     {
@@ -116,8 +115,8 @@ class DepotHoldingPriceRefreshProgress
     }
 
     /**
-     * @param  array{refresh_id: string, depot_id: int, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}  $payload
-     * @return array{refresh_id: string, depot_id: int, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}
+     * @param  array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}  $payload
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}
      */
     private function put(string $refreshId, array $payload): array
     {

@@ -5,7 +5,8 @@ namespace App\Services\WebMarketData;
 use App\Ai\Agents\StockPriceResolver;
 use App\Models\StockHolding;
 use App\Models\StockHoldingSourceCandidate;
-use App\Models\StockPriceQuote;
+use App\Models\StockPrice;
+use App\Services\StockPriceCatalog;
 use App\Services\WebMarketData\DTO\InstrumentIdentity;
 use App\Services\WebMarketData\DTO\ParsedQuote;
 use App\Services\WebMarketData\DTO\ParserDiagnostics;
@@ -42,6 +43,7 @@ class WebMarketDataOrchestrator
         private WebQuoteValidator $validator,
         private WebQuoteSelector $selector,
         private MarketHours $marketHours,
+        private StockPriceCatalog $stockPriceCatalog,
     ) {
         $this->parsers = collect([
             new TradegateQuoteParser,
@@ -373,15 +375,10 @@ PROMPT;
 
     private function persistResult(StockHolding $holding, QuoteSelectionResult $result): void
     {
-        $quoteModels = [];
-
-        foreach ($result->quotes as $validatedQuote) {
-            $quoteModels[spl_object_id($validatedQuote)] = $this->storeQuote($holding, $validatedQuote);
-        }
-
         if (! $result->selectedQuote) {
-            if ($holding->latest_price === null) {
+            if (! $this->holdingHasStoredPrice($holding)) {
                 $holding->update([
+                    'latest_stock_price_id' => null,
                     'latest_price_source' => null,
                     'latest_price_source_url' => null,
                     'latest_price_as_of' => null,
@@ -401,70 +398,31 @@ PROMPT;
             return;
         }
 
-        $selectedQuote = $quoteModels[spl_object_id($result->selectedQuote)] ?? $this->storeQuote($holding, $result->selectedQuote);
         $quote = $result->selectedQuote->quote;
 
         if ($this->selectedQuoteIsOlderThanHolding($result->selectedQuote, $holding)) {
             return;
         }
 
+        $selectedPrice = $this->storePrice($holding, $result->selectedQuote);
+
         $holding->update([
             'currency' => $quote->currency ?? $holding->currency,
-            'latest_price' => $quote->price,
-            'latest_price_fetched_at' => $quote->fetchedAt,
-            'latest_price_source' => $quote->sourceName,
-            'latest_price_source_url' => $quote->sourceUrl,
-            'latest_price_as_of' => $this->holdingSourceDateTime($quote->asOf),
-            'latest_quote_id' => $selectedQuote->id,
+            'latest_stock_price_id' => $selectedPrice->id,
+            'latest_quote_id' => null,
             'price_status' => $result->status,
-            'latest_price_type' => $quote->priceType,
-            'price_spread_pct' => $result->selectedQuote->spreadPct,
             'source_verified_at' => now(),
-            'trading_times' => $this->tradingTimes($quote),
+            'trading_times' => $selectedPrice->trading_times,
         ]);
     }
 
-    private function storeQuote(StockHolding $holding, ValidatedQuote $validatedQuote): StockPriceQuote
+    private function storePrice(StockHolding $holding, ValidatedQuote $validatedQuote): StockPrice
     {
-        $quote = $validatedQuote->quote;
-
-        return $holding->priceQuotes()->create([
-            'source_key' => $quote->sourceKey,
-            'source_name' => $quote->sourceName,
-            'source_url' => $quote->sourceUrl,
-            'source_quality' => $quote->sourceQuality,
-            'venue' => $quote->venue,
-            'mic' => $quote->mic,
-            'isin' => $quote->isin,
-            'wkn' => $quote->wkn,
-            'symbol' => $quote->symbol,
-            'currency' => $quote->currency,
-            'bid' => $quote->bid,
-            'ask' => $quote->ask,
-            'last' => $quote->last,
-            'close' => $quote->close,
-            'nav' => $quote->nav,
-            'price' => $quote->price,
-            'price_type' => $quote->priceType,
-            'spread_abs' => $validatedQuote->spreadAbs,
-            'spread_pct' => $validatedQuote->spreadPct,
-            'as_of' => $quote->asOf,
-            'fetched_at' => $quote->fetchedAt,
-            'freshness_status' => $validatedQuote->freshnessStatus,
-            'validation_status' => $validatedQuote->validationStatus,
-            'validation_errors' => $validatedQuote->validationErrors,
-            'raw_text_hash' => $quote->rawTextHash,
-            'raw_payload' => (bool) config('market-data.store_raw_payloads') ? $quote->rawPayload : null,
-        ]);
-    }
-
-    private function holdingSourceDateTime(?Carbon $asOf): ?string
-    {
-        if ($asOf === null) {
-            return null;
-        }
-
-        return $asOf->copy()->utc()->format('Y-m-d H:i:s').' UTC';
+        return $this->stockPriceCatalog->store(
+            $holding,
+            $validatedQuote,
+            $this->tradingTimes($validatedQuote->quote),
+        );
     }
 
     private function markCandidateSucceeded(StockHolding $holding, WebSourceCandidate $candidate, ValidatedQuote $quote): void
@@ -515,7 +473,7 @@ PROMPT;
 
     private function selectedQuoteIsOlderThanHolding(ValidatedQuote $quote, StockHolding $holding): bool
     {
-        if ($holding->latest_price === null) {
+        if (! $this->holdingHasStoredPrice($holding)) {
             return false;
         }
 
@@ -530,6 +488,12 @@ PROMPT;
 
     private function holdingLatestPriceAsOf(StockHolding $holding): ?Carbon
     {
+        $stockPrice = $holding->latestStockPrice ?? $holding->latestStockPrice()->first();
+
+        if ($stockPrice?->as_of !== null) {
+            return $stockPrice->as_of;
+        }
+
         if (! $holding->latest_price_as_of) {
             return null;
         }
@@ -539,5 +503,10 @@ PROMPT;
         } catch (Throwable) {
             return null;
         }
+    }
+
+    private function holdingHasStoredPrice(StockHolding $holding): bool
+    {
+        return $holding->latest_stock_price_id !== null || $holding->latest_price !== null;
     }
 }

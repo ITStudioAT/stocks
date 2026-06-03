@@ -42,17 +42,6 @@ export const useDepotStore = defineStore('depots', {
                 this.activeDepot = data.depot;
                 this.priceRefreshSettings = data.price_refresh_settings;
 
-                if (!this.activeDepot) {
-                    this.holdings = [];
-                    this.holdingsPagination = {
-                        current_page: 1,
-                        last_page: 1,
-                        per_page: 10,
-                        total: 0,
-                        from: null,
-                        to: null,
-                    };
-                }
             } catch (error) {
                 this.error = error.message;
                 throw error;
@@ -75,13 +64,13 @@ export const useDepotStore = defineStore('depots', {
                 this.loading = false;
             }
         },
-        async loadActiveDepotHoldings(page = 1) {
+        async loadWatchlistHoldings(page = 1) {
             this.holdingsLoading = true;
             this.holdingsError = '';
 
             try {
-                const data = await request(`/admin/active-depot/holdings?page=${page}`);
-                this.activeDepot = data.depot;
+                const data = await request(`/admin/watchlist/holdings?page=${page}`);
+                this.activeDepot = data.depot ?? this.activeDepot;
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.holdings = data.holdings;
                 this.holdingsPagination = data.meta;
@@ -92,12 +81,15 @@ export const useDepotStore = defineStore('depots', {
                 this.holdingsLoading = false;
             }
         },
-        async createActiveDepotHolding(payload) {
+        async loadActiveDepotHoldings(page = 1) {
+            return await this.loadWatchlistHoldings(page);
+        },
+        async createWatchlistHolding(payload) {
             this.holdingsLoading = true;
             this.holdingsError = '';
 
             try {
-                return await request('/admin/active-depot/holdings', {
+                return await request('/admin/watchlist/holdings', {
                     method: 'POST',
                     body: JSON.stringify(payload),
                 });
@@ -108,12 +100,15 @@ export const useDepotStore = defineStore('depots', {
                 this.holdingsLoading = false;
             }
         },
-        async deleteActiveDepotHolding(id) {
+        async createActiveDepotHolding(payload) {
+            return await this.createWatchlistHolding(payload);
+        },
+        async deleteWatchlistHolding(id) {
             this.holdingsLoading = true;
             this.holdingsError = '';
 
             try {
-                return await request(`/admin/active-depot/holdings/${id}`, {
+                return await request(`/admin/watchlist/holdings/${id}`, {
                     method: 'DELETE',
                 });
             } catch (error) {
@@ -123,12 +118,15 @@ export const useDepotStore = defineStore('depots', {
                 this.holdingsLoading = false;
             }
         },
-        async refreshActiveDepotHoldingPrices() {
+        async deleteActiveDepotHolding(id) {
+            return await this.deleteWatchlistHolding(id);
+        },
+        async refreshWatchlistPrices() {
             this.holdingsLoading = true;
             this.holdingsError = '';
 
             try {
-                const data = await request('/admin/active-depot/holdings/refresh-prices', {
+                const data = await request('/admin/watchlist/holdings/refresh-prices', {
                     method: 'POST',
                 });
                 this.priceRefresh = data.refresh;
@@ -146,11 +144,14 @@ export const useDepotStore = defineStore('depots', {
                 this.holdingsLoading = false;
             }
         },
-        async loadActiveDepotHoldingPriceRefresh(refreshId) {
+        async refreshActiveDepotHoldingPrices() {
+            return await this.refreshWatchlistPrices();
+        },
+        async loadWatchlistPriceRefresh(refreshId) {
             this.holdingsError = '';
 
             try {
-                const data = await request(`/admin/active-depot/holdings/refresh-prices/${refreshId}`);
+                const data = await request(`/admin/watchlist/holdings/refresh-prices/${refreshId}`);
                 this.priceRefresh = data.refresh;
 
                 return data;
@@ -158,6 +159,9 @@ export const useDepotStore = defineStore('depots', {
                 this.holdingsError = error.message;
                 throw error;
             }
+        },
+        async loadActiveDepotHoldingPriceRefresh(refreshId) {
+            return await this.loadWatchlistPriceRefresh(refreshId);
         },
         clearPriceRefresh() {
             this.priceRefresh = null;
@@ -170,6 +174,19 @@ export const useDepotStore = defineStore('depots', {
                     method: 'PATCH',
                     body: JSON.stringify(payload),
                 });
+                this.priceRefreshSettings = data.price_refresh_settings;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async loadPriceRefreshSettings() {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/price-refresh-settings');
                 this.priceRefreshSettings = data.price_refresh_settings;
 
                 return data;

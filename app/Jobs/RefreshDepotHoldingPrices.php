@@ -23,7 +23,6 @@ class RefreshDepotHoldingPrices implements ShouldQueue
      * Create a new job instance.
      */
     public function __construct(
-        public int $depotId,
         public string $refreshId,
     ) {}
 
@@ -39,7 +38,6 @@ class RefreshDepotHoldingPrices implements ShouldQueue
         ]);
 
         StockHolding::query()
-            ->where('depot_id', $this->depotId)
             ->orderBy('id')
             ->eachById(function (StockHolding $holding) use ($marketData, $progress, $run): void {
                 $item = StockPriceRefreshItem::query()->create([
@@ -50,7 +48,7 @@ class RefreshDepotHoldingPrices implements ShouldQueue
 
                 try {
                     $result = $marketData->resolve($holding);
-                    $selectedQuoteId = $holding->fresh()->latest_quote_id;
+                    $selectedStockPriceId = $holding->fresh()->latest_stock_price_id;
                     $status = $this->itemStatus($result->status);
 
                     $item->update([
@@ -60,7 +58,7 @@ class RefreshDepotHoldingPrices implements ShouldQueue
                             'source_url' => $source->url,
                             'parser_key' => $source->parserKey,
                         ])->values()->all(),
-                        'selected_quote_id' => $selectedQuoteId,
+                        'selected_stock_price_id' => $selectedStockPriceId,
                         'error_message' => $result->errors === [] ? null : implode(' ', $result->errors),
                     ]);
 

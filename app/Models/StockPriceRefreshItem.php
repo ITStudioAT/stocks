@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-#[Fillable(['refresh_run_id', 'stock_holding_id', 'status', 'attempted_sources', 'selected_quote_id', 'error_message'])]
+#[Fillable(['refresh_run_id', 'stock_holding_id', 'status', 'attempted_sources', 'selected_quote_id', 'selected_stock_price_id', 'error_message'])]
 class StockPriceRefreshItem extends Model
 {
     protected $attributes = [
@@ -45,5 +45,13 @@ class StockPriceRefreshItem extends Model
     public function selectedQuote(): BelongsTo
     {
         return $this->belongsTo(StockPriceQuote::class, 'selected_quote_id');
+    }
+
+    /**
+     * @return BelongsTo<StockPrice, $this>
+     */
+    public function selectedStockPrice(): BelongsTo
+    {
+        return $this->belongsTo(StockPrice::class, 'selected_stock_price_id');
     }
 }

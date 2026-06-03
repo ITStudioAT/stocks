@@ -2,7 +2,6 @@
 
 namespace Database\Factories;
 
-use App\Models\Depot;
 use App\Models\StockHolding;
 use Illuminate\Database\Eloquent\Factories\Factory;
 
@@ -19,7 +18,6 @@ class StockHoldingFactory extends Factory
     public function definition(): array
     {
         return [
-            'depot_id' => Depot::factory(),
             'symbol' => strtoupper($this->faker->unique()->bothify('???')),
             'name' => $this->faker->company(),
             'isin' => strtoupper($this->faker->unique()->bothify('??##########')),

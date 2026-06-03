@@ -3,10 +3,11 @@
 namespace Tests\Feature;
 
 use App\Jobs\RefreshDepotHoldingPrices;
-use App\Models\Depot;
 use App\Models\StockHolding;
+use App\Models\StockPrice;
 use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
+use App\Services\StockPriceCatalog;
 use App\Services\WebMarketData\DTO\QuoteSelectionResult;
 use App\Services\WebMarketData\WebMarketDataOrchestrator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -20,22 +21,15 @@ class AdminDepotHoldingTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_admin_can_list_active_depot_holdings_with_pagination(): void
+    public function test_admin_can_list_watchlist_holdings_with_pagination(): void
     {
         $admin = $this->adminUser();
-        $depot = Depot::factory()->create([
-            'name' => 'Main depot',
-            'is_active' => true,
-        ]);
-        StockHolding::factory()->count(12)->create([
-            'depot_id' => $depot->id,
-        ]);
-        StockHolding::factory()->create();
+        StockHolding::factory()->count(12)->create();
 
         $this->actingAs($admin)
-            ->getJson('/admin/active-depot/holdings?page=2')
+            ->getJson('/admin/watchlist/holdings?page=2')
             ->assertOk()
-            ->assertJsonPath('depot.name', 'Main depot')
+            ->assertJsonPath('depot', null)
             ->assertJsonCount(2, 'holdings')
             ->assertJsonPath('meta.current_page', 2)
             ->assertJsonPath('meta.total', 12)
@@ -53,6 +47,11 @@ class AdminDepotHoldingTest extends TestCase
                         'country',
                         'currency',
                         'latest_price',
+                        'start_price',
+                        'end_price',
+                        'latest_price_trend',
+                        'latest_price_change_pct',
+                        'latest_price_tick_trend',
                         'latest_price_status',
                         'price_status',
                         'latest_price_fetched_at',
@@ -63,6 +62,7 @@ class AdminDepotHoldingTest extends TestCase
                         'venue',
                         'price_type',
                         'price_spread_pct',
+                        'recent_prices',
                         'validation_errors',
                         'created_at',
                     ],
@@ -73,12 +73,8 @@ class AdminDepotHoldingTest extends TestCase
     public function test_admin_listing_hides_stale_holding_prices(): void
     {
         $admin = $this->adminUser();
-        $depot = Depot::factory()->create([
-            'is_active' => true,
-        ]);
         $this->travelTo(Carbon::parse('2026-06-03 08:30:00'));
         StockHolding::factory()->create([
-            'depot_id' => $depot->id,
             'symbol' => 'LEER',
             'latest_price' => '43.370000',
             'latest_price_as_of' => '2026-06-01 11:10:33',
@@ -86,11 +82,14 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/active-depot/holdings')
+            ->getJson('/admin/watchlist/holdings')
             ->assertOk()
             ->assertJsonPath('holdings.0.symbol', 'LEER')
             ->assertJsonPath('holdings.0.latest_price', null)
             ->assertJsonPath('holdings.0.latest_price_status', 'stale')
+            ->assertJsonPath('holdings.0.latest_price_trend', null)
+            ->assertJsonPath('holdings.0.latest_price_change_pct', null)
+            ->assertJsonPath('holdings.0.latest_price_tick_trend', null)
             ->assertJsonPath('holdings.0.latest_price_as_of', null)
             ->assertJsonPath('holdings.0.venue', null)
             ->assertJsonPath('holdings.0.price_type', null);
@@ -99,12 +98,8 @@ class AdminDepotHoldingTest extends TestCase
     public function test_admin_listing_hides_date_only_stale_holding_prices(): void
     {
         $admin = $this->adminUser();
-        $depot = Depot::factory()->create([
-            'is_active' => true,
-        ]);
         $this->travelTo(Carbon::parse('2026-06-03 12:00:00'));
         StockHolding::factory()->create([
-            'depot_id' => $depot->id,
             'symbol' => 'EXXX',
             'latest_price' => '26.990000',
             'latest_price_as_of' => '03.06.2026',
@@ -112,11 +107,14 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/active-depot/holdings')
+            ->getJson('/admin/watchlist/holdings')
             ->assertOk()
             ->assertJsonPath('holdings.0.symbol', 'EXXX')
             ->assertJsonPath('holdings.0.latest_price', null)
             ->assertJsonPath('holdings.0.latest_price_status', 'stale')
+            ->assertJsonPath('holdings.0.latest_price_trend', null)
+            ->assertJsonPath('holdings.0.latest_price_change_pct', null)
+            ->assertJsonPath('holdings.0.latest_price_tick_trend', null)
             ->assertJsonPath('holdings.0.latest_price_as_of', null)
             ->assertJsonPath('holdings.0.venue', null)
             ->assertJsonPath('holdings.0.price_type', null);
@@ -125,11 +123,7 @@ class AdminDepotHoldingTest extends TestCase
     public function test_admin_listing_hides_source_time_for_unavailable_holding_prices(): void
     {
         $admin = $this->adminUser();
-        $depot = Depot::factory()->create([
-            'is_active' => true,
-        ]);
         StockHolding::factory()->create([
-            'depot_id' => $depot->id,
             'symbol' => 'LYMH',
             'latest_price' => null,
             'latest_price_fetched_at' => '2026-06-03 05:40:55',
@@ -137,20 +131,254 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/active-depot/holdings')
+            ->getJson('/admin/watchlist/holdings')
             ->assertOk()
             ->assertJsonPath('holdings.0.symbol', 'LYMH')
             ->assertJsonPath('holdings.0.latest_price', null)
             ->assertJsonPath('holdings.0.latest_price_status', 'unavailable')
+            ->assertJsonPath('holdings.0.latest_price_trend', null)
+            ->assertJsonPath('holdings.0.latest_price_change_pct', null)
+            ->assertJsonPath('holdings.0.latest_price_tick_trend', null)
             ->assertJsonPath('holdings.0.latest_price_as_of', null);
+    }
+
+    public function test_admin_listing_includes_trading_session_start_and_end_prices(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-03 20:00:00'));
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'LYXIB',
+            'currency' => 'EUR',
+            'latest_price' => '191.500000',
+            'latest_price_fetched_at' => '2026-06-03 17:50:00',
+            'latest_price_as_of' => '2026-06-03 17:45:00',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+            'price_status' => 'closed_market',
+            'latest_price_type' => 'last',
+        ]);
+        // Berlin (CEST, +02:00): 08:30 (pre-open), 09:10 (start), 14:00, 17:45 (after close).
+        $this->createMedianQuote($holding, '2026-06-03 06:30:00', '190.00');
+        $this->createMedianQuote($holding, '2026-06-03 07:10:00', '191.00');
+        $this->createMedianQuote($holding, '2026-06-03 12:00:00', '195.00');
+        $this->createMedianQuote($holding, '2026-06-03 15:45:00', '193.00');
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.symbol', 'LYXIB')
+            ->assertJsonPath('holdings.0.start_price', '191.00000000')
+            ->assertJsonPath('holdings.0.end_price', '193.00000000')
+            ->assertJsonPath('holdings.0.latest_price_trend', 'down')
+            ->assertJsonPath('holdings.0.latest_price_change_pct', '-0.78');
+    }
+
+    public function test_admin_listing_serializes_stored_stock_price_source_time_as_utc(): void
+    {
+        $admin = $this->adminUser();
+        $stockPrice = StockPrice::query()->create([
+            'instrument_key' => 'isin:FR0010251744',
+            'quote_hash' => hash('sha256', 'lyxib-source-time'),
+            'source_key' => 'calculated_median',
+            'source_name' => '4 quotes',
+            'source_url' => 'https://example.com/lyxib',
+            'source_quality' => 'calculated',
+            'venue' => 'Madrid SIBE',
+            'isin' => 'FR0010251744',
+            'wkn' => 'LYX0A6',
+            'symbol' => 'LYXIB',
+            'currency' => 'EUR',
+            'price' => '191.00000000',
+            'price_type' => 'calculated_median',
+            'as_of' => Carbon::parse('2026-06-03 15:35:00', 'UTC'),
+            'fetched_at' => Carbon::parse('2026-06-03 17:10:00', 'UTC'),
+            'freshness_status' => 'fresh',
+            'validation_status' => 'valid',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Madrid',
+        ]);
+
+        StockHolding::factory()->create([
+            'symbol' => 'LYXIB',
+            'name' => 'Amundi IBEX 35 UCITS ETF Dist',
+            'isin' => 'FR0010251744',
+            'wkn' => 'LYX0A6',
+            'exchange' => 'Madrid',
+            'currency' => 'EUR',
+            'latest_stock_price_id' => $stockPrice->id,
+            'price_status' => 'fresh',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Madrid',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-03T15:35:00+00:00');
+    }
+
+    public function test_admin_listing_compares_latest_price_to_previous_stored_price(): void
+    {
+        $admin = $this->adminUser();
+
+        $upHolding = StockHolding::factory()->create([
+            'name' => 'A Up',
+            'symbol' => 'UP',
+            'currency' => 'EUR',
+            'price_status' => 'fresh',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+        $this->createMedianQuote($upHolding, '2026-06-03 10:00:00', '100.00');
+        $upLatestPrice = $this->createMedianQuote($upHolding, '2026-06-03 10:20:00', '101.00');
+        $upHolding->update(['latest_stock_price_id' => $upLatestPrice->id]);
+
+        $downHolding = StockHolding::factory()->create([
+            'name' => 'B Down',
+            'symbol' => 'DOWN',
+            'currency' => 'EUR',
+            'price_status' => 'fresh',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+        $this->createMedianQuote($downHolding, '2026-06-03 10:00:00', '100.00');
+        $downLatestPrice = $this->createMedianQuote($downHolding, '2026-06-03 10:20:00', '99.00');
+        $downHolding->update(['latest_stock_price_id' => $downLatestPrice->id]);
+
+        $flatHolding = StockHolding::factory()->create([
+            'name' => 'C Flat',
+            'symbol' => 'FLAT',
+            'currency' => 'EUR',
+            'price_status' => 'fresh',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+        $this->createMedianQuote($flatHolding, '2026-06-03 10:00:00', '100.00');
+        $flatLatestPrice = $this->createMedianQuote($flatHolding, '2026-06-03 10:20:00', '100.00');
+        $flatHolding->update(['latest_stock_price_id' => $flatLatestPrice->id]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.latest_price_tick_trend', 'up')
+            ->assertJsonPath('holdings.1.latest_price_tick_trend', 'down')
+            ->assertJsonPath('holdings.2.latest_price_tick_trend', 'flat');
+    }
+
+    public function test_admin_listing_compares_latest_price_to_previous_stored_price_with_same_source_time(): void
+    {
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create([
+            'name' => 'Amundi IBEX 35 UCITS ETF Dist',
+            'symbol' => 'LYXIB',
+            'isin' => 'FR0010251744',
+            'currency' => 'EUR',
+            'price_status' => 'closed_market',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Madrid',
+        ]);
+
+        $this->createMedianQuote($holding, '2026-06-03 15:35:00', '191.00');
+        $latestPrice = $this->createMedianQuote($holding, '2026-06-03 15:35:00', '191.04');
+        $holding->update(['latest_stock_price_id' => $latestPrice->id]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.latest_price', '191.040000')
+            ->assertJsonPath('holdings.0.latest_price_tick_trend', 'up');
+    }
+
+    public function test_admin_listing_includes_recent_stored_prices_from_last_24_hours(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-03 18:00:00', 'UTC'));
+
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'RECENT',
+            'currency' => 'EUR',
+            'price_status' => 'fresh',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+
+        $this->createMedianQuote($holding, '2026-06-02 17:50:00', '98.00');
+        $this->createMedianQuote($holding, '2026-06-03 12:00:00', '100.00');
+        StockPrice::query()->create([
+            'instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($holding),
+            'quote_hash' => hash('sha256', "{$holding->id}|raw-source|2026-06-03 13:00:00"),
+            'source_key' => 'tradegate',
+            'source_name' => 'Tradegate',
+            'source_url' => 'https://example.com/raw',
+            'source_quality' => 'official_venue',
+            'isin' => $holding->isin,
+            'wkn' => $holding->wkn,
+            'symbol' => $holding->symbol,
+            'currency' => $holding->currency,
+            'price' => '100.50000000',
+            'price_type' => 'indicative_mid',
+            'as_of' => Carbon::parse('2026-06-03 13:00:00', 'UTC'),
+            'fetched_at' => Carbon::parse('2026-06-03 13:00:00', 'UTC'),
+            'freshness_status' => 'fresh',
+            'validation_status' => 'valid',
+        ]);
+        $latestPrice = $this->createMedianQuote($holding, '2026-06-03 17:00:00', '101.00');
+        $holding->update(['latest_stock_price_id' => $latestPrice->id]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.recent_prices.0.price', '101.00000000')
+            ->assertJsonPath('holdings.0.recent_prices.1.price', '100.00000000')
+            ->assertJsonMissingPath('holdings.0.recent_prices.2');
+    }
+
+    public function test_admin_listing_falls_back_to_latest_price_when_session_has_no_close_quote(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-03 13:00:00'));
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'LYXIB',
+            'currency' => 'EUR',
+            'latest_price' => '195.250000',
+            'latest_price_fetched_at' => '2026-06-03 12:30:00',
+            'latest_price_as_of' => '2026-06-03 12:00:00',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+            'price_status' => 'fresh',
+            'latest_price_type' => 'last',
+        ]);
+        // Mid-session only (Berlin 09:10 and 14:00); the market has not closed yet.
+        $this->createMedianQuote($holding, '2026-06-03 07:10:00', '191.00');
+        $this->createMedianQuote($holding, '2026-06-03 12:00:00', '195.00');
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.start_price', '191.00000000')
+            ->assertJsonPath('holdings.0.end_price', '195.250000')
+            ->assertJsonPath('holdings.0.latest_price_trend', 'up')
+            ->assertJsonPath('holdings.0.latest_price_change_pct', '2.23');
+    }
+
+    public function test_admin_listing_falls_back_to_latest_price_when_session_has_no_quotes(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-03 13:00:00'));
+        StockHolding::factory()->create([
+            'symbol' => 'LYXIB',
+            'currency' => 'EUR',
+            'latest_price' => '50.000000',
+            'latest_price_fetched_at' => '2026-06-03 12:30:00',
+            'latest_price_as_of' => '2026-06-03 12:00:00',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+            'price_status' => 'fresh',
+            'latest_price_type' => 'last',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.start_price', '50.000000')
+            ->assertJsonPath('holdings.0.end_price', '50.000000')
+            ->assertJsonPath('holdings.0.latest_price_trend', 'flat')
+            ->assertJsonPath('holdings.0.latest_price_change_pct', '0.00');
     }
 
     public function test_admin_can_add_a_selected_stock_holding(): void
     {
         $admin = $this->adminUser();
-        $depot = Depot::factory()->create([
-            'is_active' => true,
-        ]);
         $this->travelTo(Carbon::parse('2026-06-02 12:00:00'));
         $this->mock(WebMarketDataOrchestrator::class, function (MockInterface $mock): void {
             $mock
@@ -174,7 +402,7 @@ class AdminDepotHoldingTest extends TestCase
         });
 
         $this->actingAs($admin)
-            ->postJson('/admin/active-depot/holdings', [
+            ->postJson('/admin/watchlist/holdings', [
                 'symbol' => 'aapl',
                 'name' => 'Vanguard S&P 500 ETF',
                 'isin' => 'us9229083632',
@@ -194,15 +422,14 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holding.currency', 'EUR')
             ->assertJsonPath('holding.latest_price', '123.456789')
             ->assertJsonPath('holding.latest_price_status', 'fresh')
-            ->assertJsonPath('holding.latest_price_fetched_at', '2026-06-02T12:00:00+00:00')
+            ->assertJsonPath('holding.latest_price_fetched_at', '2026-06-02T12:00:00+02:00')
             ->assertJsonPath('holding.latest_price_source', 'Tradegate Exchange')
             ->assertJsonPath('holding.latest_price_source_url', 'https://www.tradegatebsx.com/orderbuch.php?isin=US9229083632')
-            ->assertJsonPath('holding.latest_price_as_of', '2026-06-02T11:59:00+00:00')
+            ->assertJsonPath('holding.latest_price_as_of', '2026-06-02T11:59:00+02:00')
             ->assertJsonPath('holding.trading_times', 'Monday-Friday 08:00-22:00 Europe/Berlin')
             ->assertJsonPath('holding.price_type', 'indicative_mid');
 
         $this->assertDatabaseHas('stock_holdings', [
-            'depot_id' => $depot->id,
             'symbol' => 'AAPL',
             'name' => 'Vanguard S&P 500 ETF',
             'isin' => 'US9229083632',
@@ -222,9 +449,6 @@ class AdminDepotHoldingTest extends TestCase
     public function test_admin_can_add_a_selected_stock_holding_without_latest_price_access(): void
     {
         $admin = $this->adminUser();
-        Depot::factory()->create([
-            'is_active' => true,
-        ]);
         $this->travelTo(Carbon::parse('2026-06-02 13:00:00'));
         $this->mock(WebMarketDataOrchestrator::class, function (MockInterface $mock): void {
             $mock
@@ -234,7 +458,7 @@ class AdminDepotHoldingTest extends TestCase
         });
 
         $this->actingAs($admin)
-            ->postJson('/admin/active-depot/holdings', [
+            ->postJson('/admin/watchlist/holdings', [
                 'symbol' => 'exxx',
                 'name' => 'iShares ATX UCITS ETF (DE)',
                 'isin' => 'DE000A0D8Q23',
@@ -272,85 +496,69 @@ class AdminDepotHoldingTest extends TestCase
         ]);
     }
 
-    public function test_admin_can_queue_all_depot_holding_price_refreshes(): void
+    public function test_admin_can_queue_all_watchlist_price_refreshes(): void
     {
         Queue::fake();
         $admin = $this->adminUser();
-        $depot = Depot::factory()->create([
-            'is_active' => true,
-        ]);
         StockHolding::factory()->create([
-            'depot_id' => $depot->id,
             'symbol' => 'AAPL',
         ]);
         StockHolding::factory()->create([
-            'depot_id' => $depot->id,
             'symbol' => 'MSFT',
         ]);
-        $inactiveHolding = StockHolding::factory()->create([
+        $thirdHolding = StockHolding::factory()->create([
             'symbol' => 'EXXX',
             'latest_price' => '300.000000',
         ]);
 
         $response = $this->actingAs($admin)
-            ->postJson('/admin/active-depot/holdings/refresh-prices')
+            ->postJson('/admin/watchlist/holdings/refresh-prices')
             ->assertAccepted()
             ->assertJsonPath('message', '3 stock prices queued for refresh.')
             ->assertJsonPath('refresh.status', 'queued')
             ->assertJsonPath('refresh.processed', 0)
-            ->assertJsonPath('refresh.total', 2)
-            ->assertJsonPath('refresh.step', '0/2');
+            ->assertJsonPath('refresh.total', 3)
+            ->assertJsonPath('refresh.step', '0/3');
 
         $refreshId = $response->json('refresh.refresh_id');
 
-        Queue::assertPushedTimes(RefreshDepotHoldingPrices::class, 2);
-        Queue::assertPushed(RefreshDepotHoldingPrices::class, fn (RefreshDepotHoldingPrices $job): bool => $job->depotId === $depot->id
-            && $job->refreshId === $refreshId);
-        Queue::assertPushed(RefreshDepotHoldingPrices::class, fn (RefreshDepotHoldingPrices $job): bool => $job->depotId === $inactiveHolding->depot_id);
+        Queue::assertPushedTimes(RefreshDepotHoldingPrices::class, 1);
+        Queue::assertPushed(RefreshDepotHoldingPrices::class, fn (RefreshDepotHoldingPrices $job): bool => $job->refreshId === $refreshId);
 
         $this->actingAs($admin)
-            ->getJson("/admin/active-depot/holdings/refresh-prices/{$refreshId}")
+            ->getJson("/admin/watchlist/holdings/refresh-prices/{$refreshId}")
             ->assertOk()
             ->assertJsonPath('refresh.refresh_id', $refreshId)
             ->assertJsonPath('refresh.status', 'queued')
-            ->assertJsonPath('refresh.step', '0/2');
+            ->assertJsonPath('refresh.step', '0/3');
 
         $this->assertDatabaseHas('stock_holdings', [
-            'id' => $inactiveHolding->id,
+            'id' => $thirdHolding->id,
             'latest_price' => '300.000000',
         ]);
     }
 
-    public function test_admin_can_queue_all_depot_holding_price_refreshes_when_active_depot_is_empty(): void
+    public function test_admin_can_queue_watchlist_price_refreshes_without_an_active_depot(): void
     {
         Queue::fake();
         $admin = $this->adminUser();
-        Depot::factory()->create([
-            'is_active' => true,
-        ]);
-        $otherDepot = Depot::factory()->create();
         StockHolding::factory()->create([
-            'depot_id' => $otherDepot->id,
             'symbol' => 'EXXX',
         ]);
 
         $this->actingAs($admin)
-            ->postJson('/admin/active-depot/holdings/refresh-prices')
+            ->postJson('/admin/watchlist/holdings/refresh-prices')
             ->assertAccepted()
             ->assertJsonPath('message', '1 stock price queued for refresh.')
-            ->assertJsonPath('refresh', null);
+            ->assertJsonPath('refresh.status', 'queued')
+            ->assertJsonPath('refresh.total', 1);
 
         Queue::assertPushedTimes(RefreshDepotHoldingPrices::class, 1);
-        Queue::assertPushed(RefreshDepotHoldingPrices::class, fn (RefreshDepotHoldingPrices $job): bool => $job->depotId === $otherDepot->id);
     }
 
-    public function test_queued_job_refreshes_active_depot_holding_prices_and_tracks_progress(): void
+    public function test_queued_job_refreshes_watchlist_prices_and_tracks_progress(): void
     {
-        $depot = Depot::factory()->create([
-            'is_active' => true,
-        ]);
         $apple = StockHolding::factory()->create([
-            'depot_id' => $depot->id,
             'symbol' => 'AAPL',
             'name' => 'Apple Inc.',
             'isin' => 'US0378331005',
@@ -363,7 +571,6 @@ class AdminDepotHoldingTest extends TestCase
             'latest_price' => '100.000000',
         ]);
         $microsoft = StockHolding::factory()->create([
-            'depot_id' => $depot->id,
             'symbol' => 'MSFT',
             'name' => 'Microsoft Corporation',
             'isin' => 'US5949181045',
@@ -405,9 +612,9 @@ class AdminDepotHoldingTest extends TestCase
                 ->andReturn(new QuoteSelectionResult(null, [], [], status: 'unavailable'));
         });
         $progress = app(DepotHoldingPriceRefreshProgress::class);
-        $progress->start('refresh-test', $depot->id, 2);
+        $progress->start('refresh-test', 2);
 
-        (new RefreshDepotHoldingPrices($depot->id, 'refresh-test'))->handle(
+        (new RefreshDepotHoldingPrices('refresh-test'))->handle(
             app(WebMarketDataOrchestrator::class),
             $progress,
         );
@@ -439,72 +646,116 @@ class AdminDepotHoldingTest extends TestCase
     public function test_admin_must_provide_a_selected_symbol(): void
     {
         $admin = $this->adminUser();
-        Depot::factory()->create([
-            'is_active' => true,
-        ]);
 
         $this->actingAs($admin)
-            ->postJson('/admin/active-depot/holdings', [])
+            ->postJson('/admin/watchlist/holdings', [])
             ->assertUnprocessable()
             ->assertJsonValidationErrors('symbol');
     }
 
-    public function test_admin_can_delete_an_active_depot_holding(): void
+    public function test_admin_can_delete_a_watchlist_holding(): void
     {
         $admin = $this->adminUser();
-        $depot = Depot::factory()->create([
-            'is_active' => true,
-        ]);
-        $holding = StockHolding::factory()->create([
-            'depot_id' => $depot->id,
-        ]);
+        $holding = StockHolding::factory()->create();
 
         $this->actingAs($admin)
-            ->deleteJson("/admin/active-depot/holdings/{$holding->id}")
+            ->deleteJson("/admin/watchlist/holdings/{$holding->id}")
             ->assertOk()
             ->assertJsonPath('message', 'Stock deleted.');
 
         $this->assertModelMissing($holding);
     }
 
-    public function test_admin_cannot_delete_a_holding_from_an_inactive_depot(): void
+    public function test_admin_can_delete_a_watchlist_holding_without_an_active_depot(): void
     {
         $admin = $this->adminUser();
-        Depot::factory()->create([
-            'is_active' => true,
-        ]);
-        $inactiveDepot = Depot::factory()->create([
-            'is_active' => false,
-        ]);
-        $holding = StockHolding::factory()->create([
-            'depot_id' => $inactiveDepot->id,
-        ]);
+        $holding = StockHolding::factory()->create();
 
         $this->actingAs($admin)
-            ->deleteJson("/admin/active-depot/holdings/{$holding->id}")
-            ->assertUnprocessable()
-            ->assertJsonValidationErrors('holding');
+            ->deleteJson("/admin/watchlist/holdings/{$holding->id}")
+            ->assertOk()
+            ->assertJsonPath('message', 'Stock deleted.');
 
-        $this->assertModelExists($holding);
+        $this->assertModelMissing($holding);
     }
 
-    public function test_admin_cannot_list_holdings_without_an_active_depot(): void
+    public function test_admin_can_list_watchlist_holdings_without_an_active_depot(): void
+    {
+        $admin = $this->adminUser();
+        StockHolding::factory()->create([
+            'symbol' => 'AAPL',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('depot', null)
+            ->assertJsonPath('holdings.0.symbol', 'AAPL');
+    }
+
+    public function test_admin_can_export_watchlist_pdf(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-03 18:00:00', 'UTC'));
+
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'PDFCO',
+            'currency' => 'EUR',
+            'price_status' => 'fresh',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+        $latestPrice = $this->createMedianQuote($holding, '2026-06-03 17:00:00', '101.00');
+        $holding->update(['latest_stock_price_id' => $latestPrice->id]);
+
+        $response = $this->actingAs($admin)->get('/admin/watchlist/holdings/pdf');
+
+        $response->assertOk();
+        $this->assertSame('application/pdf', $response->headers->get('content-type'));
+        $this->assertStringContainsString('attachment', (string) $response->headers->get('content-disposition'));
+        $this->assertStringContainsString('watch-list-', (string) $response->headers->get('content-disposition'));
+        $this->assertStringStartsWith('%PDF', (string) $response->getContent());
+    }
+
+    public function test_admin_can_export_watchlist_pdf_without_holdings(): void
     {
         $admin = $this->adminUser();
 
         $this->actingAs($admin)
-            ->getJson('/admin/active-depot/holdings')
-            ->assertUnprocessable()
-            ->assertJsonValidationErrors('depot');
+            ->get('/admin/watchlist/holdings/pdf')
+            ->assertOk()
+            ->assertHeader('content-type', 'application/pdf');
     }
 
     public function test_guest_cannot_manage_holdings(): void
     {
-        $this->getJson('/admin/active-depot/holdings')->assertUnauthorized();
-        $this->postJson('/admin/active-depot/holdings', ['symbol' => 'AAPL'])->assertUnauthorized();
-        $this->postJson('/admin/active-depot/holdings/refresh-prices')->assertUnauthorized();
-        $this->getJson('/admin/active-depot/holdings/refresh-prices/example')->assertUnauthorized();
-        $this->deleteJson('/admin/active-depot/holdings/1')->assertUnauthorized();
+        $this->getJson('/admin/watchlist/holdings')->assertUnauthorized();
+        $this->getJson('/admin/watchlist/holdings/pdf')->assertUnauthorized();
+        $this->postJson('/admin/watchlist/holdings', ['symbol' => 'AAPL'])->assertUnauthorized();
+        $this->postJson('/admin/watchlist/holdings/refresh-prices')->assertUnauthorized();
+        $this->getJson('/admin/watchlist/holdings/refresh-prices/example')->assertUnauthorized();
+        $this->deleteJson('/admin/watchlist/holdings/1')->assertUnauthorized();
+    }
+
+    private function createMedianQuote(StockHolding $holding, string $asOf, string $price): StockPrice
+    {
+        return StockPrice::query()->create([
+            'instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($holding),
+            'quote_hash' => hash('sha256', "{$holding->id}|{$asOf}|{$price}"),
+            'source_key' => 'calculated_median',
+            'source_name' => '2 quotes',
+            'source_url' => 'https://example.com',
+            'source_quality' => 'calculated',
+            'isin' => $holding->isin,
+            'wkn' => $holding->wkn,
+            'symbol' => $holding->symbol,
+            'currency' => $holding->currency,
+            'price' => $price,
+            'price_type' => 'indicative_mid',
+            'as_of' => Carbon::parse($asOf, 'UTC'),
+            'fetched_at' => Carbon::parse($asOf, 'UTC'),
+            'freshness_status' => 'fresh',
+            'validation_status' => 'valid',
+        ]);
     }
 
     private function adminUser(): User

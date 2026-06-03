@@ -3,8 +3,8 @@
 namespace Tests\Unit;
 
 use App\Ai\Agents\StockPriceResolver;
-use App\Models\Depot;
 use App\Models\StockHolding;
+use App\Models\StockPrice;
 use App\Services\WebMarketData\DTO\InstrumentIdentity;
 use App\Services\WebMarketData\DTO\ParsedQuote;
 use App\Services\WebMarketData\DTO\ParserDiagnostics;
@@ -34,7 +34,7 @@ class WebMarketDataTest extends TestCase
     {
         parent::setUp();
 
-        $this->travelTo(Carbon::parse('2026-06-02 11:30:00'));
+        $this->travelTo(Carbon::parse('2026-06-02 11:30:00', 'UTC'));
         config(['market-data.ai_fallback_enabled' => false]);
         Cache::flush();
     }
@@ -152,7 +152,7 @@ class WebMarketDataTest extends TestCase
 
     public function test_selector_does_not_select_stale_quotes_as_latest_price(): void
     {
-        $this->travelTo(Carbon::parse('2026-06-03 11:30:00'));
+        $this->travelTo(Carbon::parse('2026-06-03 11:30:00', 'UTC'));
         $instrument = new InstrumentIdentity(
             symbol: 'LYXIB',
             name: 'Amundi IBEX 35 UCITS ETF Dist',
@@ -248,7 +248,7 @@ class WebMarketDataTest extends TestCase
         $this->assertSame('66.350000', $selection->selectedQuote?->quote->price);
         $this->assertSame('66.350000', $selection->median);
         $this->assertSame('66.350000', $selection->arithmeticMean);
-        $this->assertSame('Calculated median (2 quotes)', $selection->selectedQuote?->quote->sourceName);
+        $this->assertSame('2 quotes', $selection->selectedQuote?->quote->sourceName);
         $this->assertCount(2, $selection->usedQuotes);
         $this->assertSame('suspicious', $quotes[2]->validationStatus);
         $this->assertContains('Excluded from median calculation as a price outlier.', $quotes[2]->validationErrors);
@@ -270,27 +270,47 @@ class WebMarketDataTest extends TestCase
         $holding->refresh();
 
         $this->assertSame('realtime', $result->status);
-        $this->assertSame('180.200000', $holding->latest_price);
-        $this->assertSame('Calculated median (1 quotes)', $holding->latest_price_source);
-        $this->assertSame('calculated_median', $holding->latest_price_type);
-        $this->assertDatabaseHas('stock_price_quotes', [
-            'stock_holding_id' => $holding->id,
-            'source_key' => 'tradegate',
+        $this->assertSame('180.20000000', $holding->latestStockPrice?->price);
+        $this->assertSame('1 quotes', $holding->latestStockPrice?->source_name);
+        $this->assertSame('calculated_median', $holding->latestStockPrice?->price_type);
+        $this->assertDatabaseHas('stock_prices', [
+            'source_key' => 'calculated_median',
             'price' => '180.20000000',
             'validation_status' => 'valid',
         ]);
-        $this->assertDatabaseHas('stock_price_quotes', [
-            'stock_holding_id' => $holding->id,
-            'source_key' => 'calculated_median',
-            'price' => '180.200000',
-            'validation_status' => 'valid',
+        $this->assertDatabaseMissing('stock_prices', [
+            'source_key' => 'tradegate',
+            'price' => '180.20000000',
         ]);
+    }
+
+    public function test_orchestrator_reuses_the_same_app_wide_price_for_repeated_watchlist_refreshes(): void
+    {
+        Http::fake([
+            'www.tradegatebsx.com/*' => Http::response(
+                '<html><body>Apple Inc. ISIN US0378331005 WKN 865985 Geld 180,10 EUR Brief 180,30 EUR 02.06.2026 13:25</body></html>',
+                200,
+                ['content-type' => 'text/html'],
+            ),
+            '*' => Http::response('<html><body>No matching quote.</body></html>', 200, ['content-type' => 'text/html']),
+        ]);
+        $holding = $this->holding();
+
+        app(WebMarketDataOrchestrator::class)->resolve($holding);
+        $holding->refresh();
+        $firstStockPriceId = $holding->latest_stock_price_id;
+
+        app(WebMarketDataOrchestrator::class)->resolve($holding);
+        $holding->refresh();
+
+        $this->assertSame($firstStockPriceId, $holding->latest_stock_price_id);
+        $this->assertSame(1, StockPrice::query()->count());
     }
 
     public function test_orchestrator_does_not_use_stale_onvista_quote_as_latest_available_price(): void
     {
         config(['market-data.ai_fallback_enabled' => false]);
-        $this->travelTo(Carbon::parse('2026-06-03 11:30:00'));
+        $this->travelTo(Carbon::parse('2026-06-03 11:30:00', 'UTC'));
         Http::fake([
             'www.tradegatebsx.com/*' => Http::response('<html><body>No matching quote.</body></html>', 200, ['content-type' => 'text/html']),
             'www.onvista.de/*' => Http::response(
@@ -321,7 +341,7 @@ class WebMarketDataTest extends TestCase
         $this->assertNull($holding->latest_price_source);
         $this->assertNull($holding->latest_price_source_url);
         $this->assertSame('unavailable_now', $holding->price_status);
-        $this->assertNull($holding->latestQuote);
+        $this->assertNull($holding->latestStockPrice);
     }
 
     public function test_orchestrator_extends_search_when_initial_quote_is_stale_or_suspicious(): void
@@ -330,7 +350,7 @@ class WebMarketDataTest extends TestCase
             'market-data.max_sources_per_holding' => 2,
             'market-data.max_extended_sources_per_holding' => 14,
         ]);
-        $this->travelTo(Carbon::parse('2026-06-03 12:40:00'));
+        $this->travelTo(Carbon::parse('2026-06-03 12:40:00', 'UTC'));
         Http::fake([
             'www.tradegatebsx.com/*' => Http::response('<html><body>No matching quote.</body></html>', 200, ['content-type' => 'text/html']),
             'www.onvista.de/*' => Http::response(
@@ -362,11 +382,11 @@ class WebMarketDataTest extends TestCase
         $holding->refresh();
 
         $this->assertSame('delayed', $result->status);
-        $this->assertSame('191.380000', $holding->latest_price);
-        $this->assertSame('Calculated median (1 quotes)', $holding->latest_price_source);
-        $this->assertSame('https://www.finanzen.at/etf/amundi-ibex-35-etf-fr0010251744', $holding->latest_price_source_url);
-        $this->assertSame('2026-06-03 12:35:04 UTC', $holding->latest_price_as_of);
-        $this->assertSame('BX Swiss', $holding->latestQuote?->venue);
+        $this->assertSame('191.38000000', $holding->latestStockPrice?->price);
+        $this->assertSame('1 quotes', $holding->latestStockPrice?->source_name);
+        $this->assertSame('https://www.finanzen.at/etf/amundi-ibex-35-etf-fr0010251744', $holding->latestStockPrice?->source_url);
+        $this->assertSame('2026-06-03 12:35:04', $holding->latestStockPrice?->as_of?->copy()->utc()->toDateTimeString());
+        $this->assertSame('BX Swiss', $holding->latestStockPrice?->venue);
         $this->assertContains('finanzen_markets', collect($result->attemptedSources)->pluck('sourceKey')->all());
     }
 
@@ -408,10 +428,10 @@ class WebMarketDataTest extends TestCase
         $holding->refresh();
 
         $this->assertSame('delayed', $result->status);
-        $this->assertSame('191.930000', $holding->latest_price);
-        $this->assertSame('Calculated median (2 quotes)', $holding->latest_price_source);
-        $this->assertSame('https://www.bxswiss.com/instruments/FR0010251744', $holding->latest_price_source_url);
-        $this->assertSame('2026-06-03 14:57:00 UTC', $holding->latest_price_as_of);
+        $this->assertSame('191.93000000', $holding->latestStockPrice?->price);
+        $this->assertSame('2 quotes', $holding->latestStockPrice?->source_name);
+        $this->assertSame('https://www.bxswiss.com/instruments/FR0010251744', $holding->latestStockPrice?->source_url);
+        $this->assertSame('2026-06-03 14:57:00', $holding->latestStockPrice?->as_of?->copy()->utc()->toDateTimeString());
         $this->assertSame('Monday-Friday 09:00-17:30 Europe/Zurich', $holding->trading_times);
         $this->assertContains('bx_swiss', collect($result->attemptedSources)->pluck('sourceKey')->all());
     }
@@ -465,11 +485,11 @@ class WebMarketDataTest extends TestCase
 
         $this->assertContains('https://www.finanzen.at/etf/boersenplaetze/ishares-atx-etf-de000a0d8q23', $extendedCandidateUrls);
         $this->assertSame('delayed', $result->status);
-        $this->assertSame('66.420000', $holding->latest_price);
-        $this->assertSame('Calculated median (1 quotes)', $holding->latest_price_source);
-        $this->assertSame('https://www.finanzen.at/etf/boersenplaetze/ishares-atx-etf-de000a0d8q23', $holding->latest_price_source_url);
-        $this->assertSame('2026-06-03 15:59:20 UTC', $holding->latest_price_as_of);
-        $this->assertSame('Hamburg', $holding->latestQuote?->venue);
+        $this->assertSame('66.42000000', $holding->latestStockPrice?->price);
+        $this->assertSame('1 quotes', $holding->latestStockPrice?->source_name);
+        $this->assertSame('https://www.finanzen.at/etf/boersenplaetze/ishares-atx-etf-de000a0d8q23', $holding->latestStockPrice?->source_url);
+        $this->assertSame('2026-06-03 15:59:20', $holding->latestStockPrice?->as_of?->copy()->utc()->toDateTimeString());
+        $this->assertSame('Hamburg', $holding->latestStockPrice?->venue);
         $this->assertSame('Monday-Friday 09:00-17:30 Europe/Berlin', $holding->trading_times);
     }
 
@@ -479,7 +499,7 @@ class WebMarketDataTest extends TestCase
             'market-data.max_sources_per_holding' => 2,
             'market-data.max_extended_sources_per_holding' => 14,
         ]);
-        $this->travelTo(Carbon::parse('2026-06-03 12:50:00'));
+        $this->travelTo(Carbon::parse('2026-06-03 12:50:00', 'UTC'));
         Http::fake([
             'www.tradegatebsx.com/*' => Http::response('<html><body>No matching quote.</body></html>', 200, ['content-type' => 'text/html']),
             'www.onvista.de/*' => Http::response(
@@ -513,11 +533,11 @@ class WebMarketDataTest extends TestCase
         $holding->refresh();
 
         $this->assertSame('delayed', $result->status);
-        $this->assertSame('192.054000', $holding->latest_price);
-        $this->assertSame('Calculated median (1 quotes)', $holding->latest_price_source);
-        $this->assertSame('https://www.bxswiss.com/instruments/FR0010251744', $holding->latest_price_source_url);
-        $this->assertSame('2026-06-03 12:48:54 UTC', $holding->latest_price_as_of);
-        $this->assertSame('calculated_median', $holding->latest_price_type);
+        $this->assertSame('192.05400000', $holding->latestStockPrice?->price);
+        $this->assertSame('1 quotes', $holding->latestStockPrice?->source_name);
+        $this->assertSame('https://www.bxswiss.com/instruments/FR0010251744', $holding->latestStockPrice?->source_url);
+        $this->assertSame('2026-06-03 12:48:54', $holding->latestStockPrice?->as_of?->copy()->utc()->toDateTimeString());
+        $this->assertSame('calculated_median', $holding->latestStockPrice?->price_type);
         $this->assertContains('bx_swiss', collect($result->attemptedSources)->pluck('sourceKey')->all());
     }
 
@@ -528,7 +548,7 @@ class WebMarketDataTest extends TestCase
             'market-data.max_extended_sources_per_holding' => 3,
             'market-data.ai_fallback_enabled' => true,
         ]);
-        $this->travelTo(Carbon::parse('2026-06-03 11:30:00'));
+        $this->travelTo(Carbon::parse('2026-06-03 11:30:00', 'UTC'));
         Http::fake([
             'www.tradegatebsx.com/*' => Http::response('<html><body>No matching quote.</body></html>', 200, ['content-type' => 'text/html']),
             'www.onvista.de/*' => Http::response(
@@ -565,9 +585,9 @@ class WebMarketDataTest extends TestCase
         $holding->refresh();
 
         $this->assertSame('delayed', $result->status);
-        $this->assertSame('193.020000', $holding->latest_price);
-        $this->assertSame('Calculated median (1 quotes)', $holding->latest_price_source);
-        $this->assertSame('https://example.com/fr0010251744-madrid', $holding->latest_price_source_url);
+        $this->assertSame('193.02000000', $holding->latestStockPrice?->price);
+        $this->assertSame('1 quotes', $holding->latestStockPrice?->source_name);
+        $this->assertSame('https://example.com/fr0010251744-madrid', $holding->latestStockPrice?->source_url);
         $this->assertContains('ai_sdk_web_search', collect($result->attemptedSources)->pluck('sourceKey')->all());
         StockPriceResolver::assertPrompted(fn ($prompt): bool => $prompt->contains('FR0010251744')
             && $prompt->contains('weak quotes'));
@@ -636,8 +656,11 @@ class WebMarketDataTest extends TestCase
         $this->assertSame('Previous newer source', $holding->latest_price_source);
         $this->assertSame('https://example.com/newer', $holding->latest_price_source_url);
         $this->assertSame('2026-06-03 16:15:00', $holding->latest_price_as_of);
-        $this->assertDatabaseHas('stock_price_quotes', [
-            'stock_holding_id' => $holding->id,
+        $this->assertDatabaseHas('stock_prices', [
+            'source_key' => 'calculated_median',
+            'as_of' => '2026-06-03 15:35:00',
+        ]);
+        $this->assertDatabaseMissing('stock_prices', [
             'source_key' => 'onvista_markets',
             'as_of' => '2026-06-03 15:35:00',
         ]);
@@ -733,10 +756,7 @@ class WebMarketDataTest extends TestCase
      */
     private function holding(array $attributes = []): StockHolding
     {
-        $depot = Depot::factory()->create(['is_active' => true]);
-
         return StockHolding::factory()->create([
-            'depot_id' => $depot->id,
             'symbol' => 'AAPL',
             'name' => 'Apple Inc.',
             'isin' => 'US0378331005',
