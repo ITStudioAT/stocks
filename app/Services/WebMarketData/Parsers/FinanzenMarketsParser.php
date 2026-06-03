@@ -72,6 +72,10 @@ class FinanzenMarketsParser extends AbstractRegexQuoteParser
 
     private function venue(string $text, WebSourceCandidate $candidate): ?string
     {
+        if (str_contains($text, 'BX Swiss')) {
+            return 'BX Swiss';
+        }
+
         foreach (['Tradegate', 'gettex', 'Lang & Schwarz', 'L&S Exchange', 'Quotrix', 'Stuttgart', 'Düsseldorf', 'Hamburg', 'München', 'Frankfurt', 'Wien'] as $venue) {
             if (str_contains($text, $venue)) {
                 return $venue;

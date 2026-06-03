@@ -149,16 +149,16 @@ describe('App', () => {
                             wkn: 'A2H58Q',
                             exchange: 'Borsa Italiana',
                             currency: 'EUR',
-                            latest_price: '43.370000',
+                            latest_price: null,
                             latest_price_status: 'stale',
                             price_status: 'stale',
                             latest_price_fetched_at: '2026-06-03T04:18:46+00:00',
                             latest_price_source: 'Borsa Italiana',
                             latest_price_source_url: 'https://www.borsaitaliana.it/example',
-                            latest_price_as_of: '2026-06-01 11:10:33',
+                            latest_price_as_of: null,
                             trading_times: 'Monday-Friday 09:00-17:30 Europe/Rome',
-                            venue: 'Borsa Italiana',
-                            price_type: 'last',
+                            venue: null,
+                            price_type: null,
                             price_spread_pct: null,
                             validation_errors: [],
                         },
@@ -290,7 +290,7 @@ describe('App', () => {
                             isin: 'US0378331005',
                             wkn: '865985',
                             exchange: 'NASDAQ',
-                            currency: 'USD',
+                            currency: 'EUR',
                             latest_price: '306.320010',
                             latest_price_status: 'fresh',
                             price_status: 'fresh',
@@ -333,16 +333,16 @@ describe('App', () => {
                             wkn: 'A2H58Q',
                             exchange: 'Borsa Italiana',
                             currency: 'EUR',
-                            latest_price: '43.370000',
+                            latest_price: null,
                             latest_price_status: 'stale',
                             price_status: 'stale',
                             latest_price_fetched_at: '2026-06-03T04:18:46+00:00',
                             latest_price_source: 'Borsa Italiana',
                             latest_price_source_url: 'https://www.borsaitaliana.it/example',
-                            latest_price_as_of: '2026-06-01 11:10:33',
+                            latest_price_as_of: null,
                             trading_times: 'Monday-Friday 09:00-17:30 Europe/Rome',
-                            venue: 'Borsa Italiana',
-                            price_type: 'last',
+                            venue: null,
+                            price_type: null,
                             price_spread_pct: null,
                             validation_errors: [],
                         },
@@ -467,7 +467,8 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Apple');
         expect(wrapper.text()).toContain('US0378331005');
         expect(wrapper.text()).toContain('865985');
-        expect(wrapper.text()).toContain('306.32001 USD');
+        expect(wrapper.text()).toContain('306.32001');
+        expect(wrapper.text()).not.toContain('306.32001 EUR');
         expect(wrapper.text()).toContain('Fresh');
         expect(wrapper.text()).toContain('Mid');
         expect(wrapper.text()).toContain('Spread: 0.05%');

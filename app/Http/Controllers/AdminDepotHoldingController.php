@@ -166,6 +166,7 @@ class AdminDepotHoldingController extends Controller
     private function holdingPayload(StockHolding $holding): array
     {
         $latestPriceStatus = $this->latestPriceStatus($holding);
+        $hasCurrentPrice = in_array($latestPriceStatus, ['realtime', 'fresh', 'delayed', 'closed_market', 'suspicious', 'unavailable_now'], true);
 
         return [
             'id' => $holding->id,
@@ -178,18 +179,18 @@ class AdminDepotHoldingController extends Controller
             'instrument_type' => $holding->instrument_type,
             'country' => $holding->country,
             'currency' => $holding->currency,
-            'latest_price' => in_array($latestPriceStatus, ['realtime', 'fresh', 'delayed', 'closed_market', 'suspicious', 'unavailable_now'], true) ? $holding->latest_price : null,
+            'latest_price' => $hasCurrentPrice ? $holding->latest_price : null,
             'latest_price_status' => $latestPriceStatus,
             'price_status' => $holding->price_status,
             'latest_price_fetched_at' => $holding->latest_price_fetched_at?->toIso8601String(),
             'latest_price_source' => $holding->latest_price_source,
             'latest_price_source_url' => $holding->latest_price_source_url,
-            'latest_price_as_of' => in_array($latestPriceStatus, ['realtime', 'fresh', 'delayed', 'closed_market', 'suspicious', 'stale', 'unavailable_now'], true) ? $holding->latest_price_as_of : null,
+            'latest_price_as_of' => $hasCurrentPrice ? $holding->latest_price_as_of : null,
             'trading_times' => $holding->trading_times,
-            'venue' => $holding->latestQuote?->venue,
-            'price_type' => $holding->latest_price_type,
-            'price_spread_pct' => $holding->price_spread_pct,
-            'validation_errors' => $holding->latestQuote?->validation_errors ?? [],
+            'venue' => $hasCurrentPrice ? $holding->latestQuote?->venue : null,
+            'price_type' => $hasCurrentPrice ? $holding->latest_price_type : null,
+            'price_spread_pct' => $hasCurrentPrice ? $holding->price_spread_pct : null,
+            'validation_errors' => $hasCurrentPrice ? $holding->latestQuote?->validation_errors ?? [] : [],
             'created_at' => $holding->created_at?->toIso8601String(),
         ];
     }

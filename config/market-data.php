@@ -7,6 +7,8 @@ return [
     'connect_timeout_seconds' => env('MARKET_DATA_CONNECT_TIMEOUT_SECONDS', 4),
     'cache_seconds' => env('MARKET_DATA_CACHE_SECONDS', 45),
     'max_sources_per_holding' => env('MARKET_DATA_MAX_SOURCES_PER_HOLDING', 6),
+    'max_extended_sources_per_holding' => env('MARKET_DATA_MAX_EXTENDED_SOURCES_PER_HOLDING', 14),
+    'ai_fallback_enabled' => env('MARKET_DATA_AI_FALLBACK_ENABLED', true),
     'realtime_window_seconds' => env('MARKET_DATA_REALTIME_WINDOW_SECONDS', 300),
     'delayed_window_seconds' => env('MARKET_DATA_DELAYED_WINDOW_SECONDS', 1800),
     'max_spread_pct_warning' => env('MARKET_DATA_MAX_SPREAD_PCT_WARNING', 2.0),
@@ -33,6 +35,11 @@ return [
             'enabled' => true,
             'priority' => 30,
             'quality' => 'multi_venue_portal',
+        ],
+        'bx_swiss' => [
+            'enabled' => true,
+            'priority' => 35,
+            'quality' => 'official_venue',
         ],
         'quotrix' => [
             'enabled' => true,
@@ -79,6 +86,11 @@ return [
             'enabled' => true,
             'priority' => 210,
             'quality' => 'finance_portal',
+        ],
+        'ai_sdk_web_search' => [
+            'enabled' => true,
+            'priority' => 500,
+            'quality' => 'ai_assisted',
         ],
     ],
 ];

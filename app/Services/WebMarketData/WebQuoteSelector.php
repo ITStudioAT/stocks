@@ -6,6 +6,8 @@ use App\Services\WebMarketData\DTO\InstrumentIdentity;
 use App\Services\WebMarketData\DTO\QuoteSelectionResult;
 use App\Services\WebMarketData\DTO\ValidatedQuote;
 use App\Services\WebMarketData\DTO\WebSourceCandidate;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Str;
 
 class WebQuoteSelector
 {
@@ -13,12 +15,11 @@ class WebQuoteSelector
      * @param  array<int, ValidatedQuote>  $quotes
      * @param  array<int, WebSourceCandidate>  $attemptedSources
      */
-    public function select(array $quotes, InstrumentIdentity $instrument, array $attemptedSources): QuoteSelectionResult
+    public function select(array $quotes, InstrumentIdentity $instrument, array $attemptedSources, bool $applyCrossCheck = true): QuoteSelectionResult
     {
         $selectable = collect($quotes)->filter(fn (ValidatedQuote $quote): bool => $quote->isSelectable());
-        $selected = $selectable
-            ->sortBy(fn (ValidatedQuote $quote): array => $this->ranking($quote, $instrument))
-            ->first();
+
+        $selected = $this->rankedQuotes($selectable, $instrument)->first();
 
         if (! $selected) {
             return new QuoteSelectionResult(null, $quotes, $attemptedSources, status: 'unavailable');
@@ -26,14 +27,17 @@ class WebQuoteSelector
 
         $crossCheck = $selectable
             ->filter(fn (ValidatedQuote $quote): bool => $quote !== $selected && $quote->quote->sourceKey !== $selected->quote->sourceKey)
-            ->sortBy(fn (ValidatedQuote $quote): array => $this->ranking($quote, $instrument))
+            ->pipe(fn (Collection $quotes): Collection => $this->rankedQuotes($quotes, $instrument))
             ->first();
 
         $status = $selected->validationStatus === 'suspicious' ? 'suspicious' : $selected->freshnessStatus;
 
         if ($crossCheck && $this->quotesDiverge($selected, $crossCheck)) {
-            $selected->validationStatus = 'suspicious';
-            $selected->validationErrors[] = 'Cross-check quote diverges from selected quote.';
+            if ($applyCrossCheck) {
+                $selected->validationStatus = 'suspicious';
+                $selected->validationErrors[] = 'Cross-check quote diverges from selected quote.';
+            }
+
             $status = 'suspicious';
         }
 
@@ -47,13 +51,37 @@ class WebQuoteSelector
     {
         return [
             $quote->validationStatus === 'valid' ? 0 : 1,
-            $this->qualityRank($quote->quote->sourceQuality),
             $this->freshnessRank($quote->freshnessStatus),
             $this->preferredVenueRank($quote, $instrument),
+            $this->qualityRank($quote->quote->sourceQuality),
             $this->priceTypeRank($quote->quote->priceType),
             $quote->spreadPct === null ? 999.0 : (float) $quote->spreadPct,
             (int) config("market-data.sources.{$quote->quote->sourceKey}.priority", 999),
         ];
+    }
+
+    /**
+     * @param  Collection<int, ValidatedQuote>  $quotes
+     * @return Collection<int, ValidatedQuote>
+     */
+    private function rankedQuotes(Collection $quotes, InstrumentIdentity $instrument): Collection
+    {
+        return $quotes->sort(function (ValidatedQuote $left, ValidatedQuote $right) use ($instrument): int {
+            $leftRanking = $this->ranking($left, $instrument);
+            $rightRanking = $this->ranking($right, $instrument);
+
+            foreach ($leftRanking as $index => $leftRank) {
+                $rightRank = $rightRanking[$index];
+
+                if ($leftRank === $rightRank) {
+                    continue;
+                }
+
+                return $leftRank <=> $rightRank;
+            }
+
+            return 0;
+        });
     }
 
     private function qualityRank(string $quality): int
@@ -94,7 +122,20 @@ class WebQuoteSelector
             return 1;
         }
 
+        if ($this->matchesInstrumentExchange($quote, $instrument)) {
+            return 1;
+        }
+
         return 2;
+    }
+
+    private function matchesInstrumentExchange(ValidatedQuote $quote, InstrumentIdentity $instrument): bool
+    {
+        if (! $instrument->exchange || ! $quote->quote->venue) {
+            return false;
+        }
+
+        return Str::contains(Str::lower($quote->quote->venue), Str::lower($instrument->exchange));
     }
 
     private function priceTypeRank(string $priceType): int

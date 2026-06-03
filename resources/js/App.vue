@@ -627,11 +627,11 @@ function formatAccountBalance(value) {
 }
 
 function formatLatestPrice(holding) {
-    if (holding.latest_price_status === 'stale') {
-        return 'Stale';
-    }
-
     if (holding.latest_price === null || holding.latest_price === undefined || holding.latest_price === '') {
+        if (holding.latest_price_status === 'stale') {
+            return 'Stale';
+        }
+
         return holding.latest_price_fetched_at ? 'Unavailable' : '-';
     }
 
@@ -643,7 +643,11 @@ function formatLatestPrice(holding) {
             maximumFractionDigits: 6,
         }).format(amount);
 
-    return holding.currency ? `${formattedAmount} ${holding.currency}` : formattedAmount;
+    if (!holding.currency || holding.currency === 'EUR') {
+        return formattedAmount;
+    }
+
+    return `${formattedAmount} ${holding.currency}`;
 }
 
 function formatDateTime(value) {

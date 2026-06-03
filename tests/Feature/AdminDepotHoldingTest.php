@@ -91,10 +91,12 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.symbol', 'LEER')
             ->assertJsonPath('holdings.0.latest_price', null)
             ->assertJsonPath('holdings.0.latest_price_status', 'stale')
-            ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-01 11:10:33');
+            ->assertJsonPath('holdings.0.latest_price_as_of', null)
+            ->assertJsonPath('holdings.0.venue', null)
+            ->assertJsonPath('holdings.0.price_type', null);
     }
 
-    public function test_admin_listing_hides_date_only_holding_prices(): void
+    public function test_admin_listing_hides_date_only_stale_holding_prices(): void
     {
         $admin = $this->adminUser();
         $depot = Depot::factory()->create([
@@ -115,7 +117,9 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.symbol', 'EXXX')
             ->assertJsonPath('holdings.0.latest_price', null)
             ->assertJsonPath('holdings.0.latest_price_status', 'stale')
-            ->assertJsonPath('holdings.0.latest_price_as_of', '03.06.2026');
+            ->assertJsonPath('holdings.0.latest_price_as_of', null)
+            ->assertJsonPath('holdings.0.venue', null)
+            ->assertJsonPath('holdings.0.price_type', null);
     }
 
     public function test_admin_listing_hides_source_time_for_unavailable_holding_prices(): void
