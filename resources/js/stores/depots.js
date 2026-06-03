@@ -7,6 +7,7 @@ export const useDepotStore = defineStore('depots', {
         depots: [],
         holdings: [],
         priceRefresh: null,
+        priceRefreshSettings: null,
         stockSearchResults: [],
         pagination: {
             current_page: 1,
@@ -39,6 +40,7 @@ export const useDepotStore = defineStore('depots', {
             try {
                 const data = await request('/admin/depots/active');
                 this.activeDepot = data.depot;
+                this.priceRefreshSettings = data.price_refresh_settings;
 
                 if (!this.activeDepot) {
                     this.holdings = [];
@@ -80,6 +82,7 @@ export const useDepotStore = defineStore('depots', {
             try {
                 const data = await request(`/admin/active-depot/holdings?page=${page}`);
                 this.activeDepot = data.depot;
+                this.priceRefreshSettings = data.price_refresh_settings;
                 this.holdings = data.holdings;
                 this.holdingsPagination = data.meta;
             } catch (error) {
@@ -129,6 +132,11 @@ export const useDepotStore = defineStore('depots', {
                     method: 'POST',
                 });
                 this.priceRefresh = data.refresh;
+                this.priceRefreshSettings = {
+                    ...(this.priceRefreshSettings ?? {}),
+                    status: 'updating',
+                    status_label: 'Updating prices',
+                };
 
                 return data;
             } catch (error) {
@@ -144,6 +152,25 @@ export const useDepotStore = defineStore('depots', {
             try {
                 const data = await request(`/admin/active-depot/holdings/refresh-prices/${refreshId}`);
                 this.priceRefresh = data.refresh;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        clearPriceRefresh() {
+            this.priceRefresh = null;
+        },
+        async updatePriceRefreshSettings(payload) {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/price-refresh-settings', {
+                    method: 'PATCH',
+                    body: JSON.stringify(payload),
+                });
+                this.priceRefreshSettings = data.price_refresh_settings;
 
                 return data;
             } catch (error) {

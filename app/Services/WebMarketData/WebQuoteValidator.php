@@ -5,11 +5,14 @@ namespace App\Services\WebMarketData;
 use App\Services\WebMarketData\DTO\InstrumentIdentity;
 use App\Services\WebMarketData\DTO\ParsedQuote;
 use App\Services\WebMarketData\DTO\ValidatedQuote;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
 class WebQuoteValidator
 {
+    public function __construct(
+        private MarketHours $marketHours,
+    ) {}
+
     public function validate(ParsedQuote $quote, InstrumentIdentity $instrument): ValidatedQuote
     {
         $errors = [];
@@ -102,14 +105,12 @@ class WebQuoteValidator
             return $quote->freshnessStatus === 'delayed' ? 'delayed' : 'fresh';
         }
 
-        return $this->marketClosed($quote->asOf) ? 'closed_market' : 'stale';
+        return $this->marketClosed($quote) ? 'closed_market' : 'stale';
     }
 
-    private function marketClosed(Carbon $asOf): bool
+    private function marketClosed(ParsedQuote $quote): bool
     {
-        $now = now($asOf->timezone);
-
-        return $now->isWeekend() || $now->hour < 9 || $now->hour >= 22;
+        return ! $this->marketHours->isOpen($quote);
     }
 
     /**

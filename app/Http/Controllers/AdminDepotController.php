@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Depot;
+use App\Services\PriceRefreshScheduler;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -30,7 +31,7 @@ class AdminDepotController extends Controller
         ]);
     }
 
-    public function active(): JsonResponse
+    public function active(PriceRefreshScheduler $priceRefreshScheduler): JsonResponse
     {
         $depot = Depot::query()
             ->where('is_active', true)
@@ -38,6 +39,7 @@ class AdminDepotController extends Controller
 
         return response()->json([
             'depot' => $depot ? $this->depotPayload($depot) : null,
+            'price_refresh_settings' => $priceRefreshScheduler->payload(),
         ]);
     }
 

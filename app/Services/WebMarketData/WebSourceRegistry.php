@@ -153,13 +153,22 @@ class WebSourceRegistry
         ])
             ->filter()
             ->unique()
-            ->map(fn (string $slug): WebSourceCandidate => $this->candidate(
-                'finanzen_markets',
-                'finanzen Markets Austria',
-                "https://www.finanzen.at/etf/{$slug}-{$isin}",
-                'finanzen_markets',
-                'finanzen.at',
-            ))
+            ->flatMap(fn (string $slug): array => [
+                $this->candidate(
+                    'finanzen_markets',
+                    'finanzen Markets Austria Börsenplätze',
+                    "https://www.finanzen.at/etf/boersenplaetze/{$slug}-{$isin}",
+                    'finanzen_markets',
+                    'finanzen.at',
+                ),
+                $this->candidate(
+                    'finanzen_markets',
+                    'finanzen Markets Austria',
+                    "https://www.finanzen.at/etf/{$slug}-{$isin}",
+                    'finanzen_markets',
+                    'finanzen.at',
+                ),
+            ])
             ->values()
             ->all();
     }

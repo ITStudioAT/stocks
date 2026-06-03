@@ -38,7 +38,7 @@ class StockSearchQueryResolver
     }
 
     /**
-     * @return array<int, array{name: ?string, isin: ?string, wkn: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, search_terms: array<int, string>}>
+     * @return array<int, array{name: ?string, isin: ?string, wkn: ?string, valor: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, search_terms: array<int, string>}>
      */
     public function resolveCandidates(string $query): array
     {
@@ -79,7 +79,7 @@ class StockSearchQueryResolver
     }
 
     /**
-     * @return array<int, array{name: ?string, isin: ?string, wkn: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, search_terms: array<int, string>}>
+     * @return array<int, array{name: ?string, isin: ?string, wkn: ?string, valor: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, search_terms: array<int, string>}>
      */
     private function resolveFreshCandidates(string $query): array
     {
@@ -100,7 +100,7 @@ class StockSearchQueryResolver
     }
 
     /**
-     * @return array{name: ?string, isin: ?string, wkn: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, search_terms: array<int, string>}
+     * @return array{name: ?string, isin: ?string, wkn: ?string, valor: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, search_terms: array<int, string>}
      */
     private function candidatePayload(string $query, array $candidate): array
     {
@@ -108,6 +108,7 @@ class StockSearchQueryResolver
             'name' => $this->nullableString(Arr::get($candidate, 'name')),
             'isin' => $this->nullableUpperString(Arr::get($candidate, 'isin')),
             'wkn' => $this->nullableUpperString(Arr::get($candidate, 'wkn')),
+            'valor' => $this->nullableUpperString(Arr::get($candidate, 'valor')),
             'symbol' => $this->nullableUpperString(Arr::get($candidate, 'symbol')),
             'exchange' => $this->nullableString(Arr::get($candidate, 'exchange')),
             'mic_code' => $this->nullableUpperString(Arr::get($candidate, 'mic_code')),
@@ -120,6 +121,7 @@ class StockSearchQueryResolver
             $payload['isin'],
             $payload['symbol'],
             $payload['wkn'],
+            $payload['valor'],
         ])->filter();
 
         $nameTerms = collect([$payload['name']])->filter();
@@ -154,13 +156,50 @@ class StockSearchQueryResolver
 
     private function prompt(string $query): string
     {
+        $queryContext = implode("\n", $this->queryContext($query));
+
         return <<<PROMPT
 Resolve this stock, ETF, or fund search query to portfolio-ready instrument identifiers using public web sources.
 
 Query: {$query}
+Detected query context:
+{$queryContext}
 
-Return likely identifiers for the exact same instrument only. If the query is a WKN, find the matching ISIN and likely exchange ticker symbols.
+Search exact identifier queries with their identifier label:
+- WKN: six-character German security code.
+- ISIN: twelve-character international security identifier.
+- Valor: Swiss numeric security identifier.
+- Symbol or name: local ticker or instrument name.
+
+Return likely identifiers for the exact same instrument only. Find the matching ISIN, WKN, Valor when available, exchange ticker symbols, exchanges, MIC codes, currency, country, instrument type, and official instrument name.
 PROMPT;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function queryContext(string $query): array
+    {
+        $normalizedQuery = Str::upper(trim($query));
+        $context = [];
+
+        if (preg_match('/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/', $normalizedQuery) === 1) {
+            $context[] = "- {$normalizedQuery} looks like an ISIN.";
+        }
+
+        if (preg_match('/^[A-Z0-9]{6}$/', $normalizedQuery) === 1) {
+            $context[] = "- {$normalizedQuery} looks like a WKN or local ticker.";
+        }
+
+        if (preg_match('/^[0-9]{1,9}$/', $normalizedQuery) === 1) {
+            $context[] = "- {$normalizedQuery} looks like a Valor number; if it is six digits, also check WKN.";
+        }
+
+        if ($context === []) {
+            $context[] = '- Treat this as a ticker symbol or instrument name and resolve exact matching instruments.';
+        }
+
+        return $context;
     }
 
     private function cacheKey(string $query): string

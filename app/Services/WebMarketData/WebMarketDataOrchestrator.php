@@ -41,6 +41,7 @@ class WebMarketDataOrchestrator
         private WebQuoteFetcher $fetcher,
         private WebQuoteValidator $validator,
         private WebQuoteSelector $selector,
+        private MarketHours $marketHours,
     ) {
         $this->parsers = collect([
             new TradegateQuoteParser,
@@ -63,20 +64,21 @@ class WebMarketDataOrchestrator
         $instrument = InstrumentIdentity::fromHolding($holding);
         $candidates = $this->sourceRegistry->candidatesFor($holding);
         $validatedQuotes = [];
+        $parsedQuoteKeys = [];
         $diagnostics = [];
         $errors = [];
 
-        $this->collectQuotes($holding, $instrument, $candidates, $validatedQuotes, $diagnostics, $errors);
+        $this->collectQuotes($holding, $instrument, $candidates, $validatedQuotes, $parsedQuoteKeys, $diagnostics, $errors);
 
         $result = $this->selector->select($validatedQuotes, $instrument, $candidates, applyCrossCheck: false);
 
-        if ($this->shouldExtendSearch($result)) {
+        if ($this->shouldExtendSearch($result, $holding)) {
             $additionalCandidates = $this->additionalCandidates(
                 $this->sourceRegistry->extendedCandidatesFor($holding),
                 $candidates,
             );
 
-            $this->collectQuotes($holding, $instrument, $additionalCandidates, $validatedQuotes, $diagnostics, $errors);
+            $this->collectQuotes($holding, $instrument, $additionalCandidates, $validatedQuotes, $parsedQuoteKeys, $diagnostics, $errors);
 
             $candidates = [
                 ...$candidates,
@@ -86,7 +88,7 @@ class WebMarketDataOrchestrator
             $result = $this->selector->select($validatedQuotes, $instrument, $candidates);
         }
 
-        if ($this->shouldAskAi($result)) {
+        if ($this->shouldAskAi($result, $holding)) {
             $aiQuote = $this->resolveWithAi($instrument, $result);
 
             if ($aiQuote) {
@@ -114,6 +116,7 @@ class WebMarketDataOrchestrator
     /**
      * @param  array<int, WebSourceCandidate>  $candidates
      * @param  array<int, ValidatedQuote>  $validatedQuotes
+     * @param  array<string, bool>  $parsedQuoteKeys
      * @param  array<int, ParserDiagnostics>  $diagnostics
      * @param  array<int, string>  $errors
      */
@@ -122,6 +125,7 @@ class WebMarketDataOrchestrator
         InstrumentIdentity $instrument,
         array $candidates,
         array &$validatedQuotes,
+        array &$parsedQuoteKeys,
         array &$diagnostics,
         array &$errors,
     ): void {
@@ -152,6 +156,13 @@ class WebMarketDataOrchestrator
             }
 
             foreach ($parsedQuotes as $quote) {
+                $quoteKey = $this->quoteKey($quote);
+
+                if (isset($parsedQuoteKeys[$quoteKey])) {
+                    continue;
+                }
+
+                $parsedQuoteKeys[$quoteKey] = true;
                 $validated = $this->validator->validate($quote, $instrument);
                 $validatedQuotes[] = $validated;
 
@@ -162,19 +173,53 @@ class WebMarketDataOrchestrator
         }
     }
 
-    private function shouldExtendSearch(QuoteSelectionResult $result): bool
+    private function quoteKey(ParsedQuote $quote): string
+    {
+        return implode('|', [
+            $quote->sourceKey,
+            $quote->venue,
+            $quote->mic,
+            $quote->currency,
+            $quote->price,
+            $quote->priceType,
+            $quote->asOf?->getTimestamp(),
+        ]);
+    }
+
+    private function shouldExtendSearch(QuoteSelectionResult $result, StockHolding $holding): bool
     {
         if (! $result->selectedQuote) {
             return true;
         }
 
-        return in_array($result->status, ['stale', 'suspicious', 'unavailable'], true);
+        if ($this->selectedQuoteIsOlderThanHolding($result->selectedQuote, $holding)) {
+            return true;
+        }
+
+        if ($this->selectedQuoteNeedsYoungerOpenMarketQuote($result->selectedQuote)) {
+            return true;
+        }
+
+        return in_array($result->status, ['closed_market', 'stale', 'suspicious', 'unavailable'], true);
     }
 
-    private function shouldAskAi(QuoteSelectionResult $result): bool
+    private function selectedQuoteNeedsYoungerOpenMarketQuote(ValidatedQuote $quote): bool
+    {
+        if ($quote->quote->asOf === null || ! in_array($quote->freshnessStatus, ['fresh', 'delayed'], true)) {
+            return false;
+        }
+
+        if (! $this->marketHours->isOpen($quote->quote)) {
+            return false;
+        }
+
+        return $quote->quote->asOf->diffInSeconds(now(), false) > (int) config('market-data.realtime_window_seconds', 300);
+    }
+
+    private function shouldAskAi(QuoteSelectionResult $result, StockHolding $holding): bool
     {
         return (bool) config('market-data.ai_fallback_enabled', false)
-            && $this->shouldExtendSearch($result);
+            && $this->shouldExtendSearch($result, $holding);
     }
 
     private function resolveWithAi(InstrumentIdentity $instrument, QuoteSelectionResult $result): ?ParsedQuote
@@ -250,7 +295,7 @@ The deterministic refresh already checked these sources:
 It found these weak quotes:
 {$foundQuotes}
 
-Prefer the holding exchange/MIC. If you cannot verify a current timestamped EUR quote from a reliable page, return null fields.
+Prefer the holding exchange/MIC. For finanzen.at ETF pages, also check the related Boersenplaetze page by inserting /boersenplaetze/ after /etf/ in the ETF URL; those venue rows often expose a newer timestamped EUR quote than the snapshot page. If deterministic fetches were blocked by Access Denied, still use web search/browser-visible public results for the same URL when available. If you cannot verify a current timestamped EUR quote from a reliable page, return null fields.
 PROMPT;
     }
 
@@ -302,11 +347,21 @@ PROMPT;
      */
     private function additionalCandidates(array $candidates, array $alreadyAttempted): array
     {
-        $attemptedKeys = collect($alreadyAttempted)
+        $seenCandidateKeys = collect($alreadyAttempted)
             ->mapWithKeys(fn (WebSourceCandidate $candidate): array => [$this->candidateKey($candidate) => true]);
 
         return collect($candidates)
-            ->reject(fn (WebSourceCandidate $candidate): bool => $attemptedKeys->has($this->candidateKey($candidate)))
+            ->filter(function (WebSourceCandidate $candidate) use (&$seenCandidateKeys): bool {
+                $candidateKey = $this->candidateKey($candidate);
+
+                if ($seenCandidateKeys->has($candidateKey)) {
+                    return false;
+                }
+
+                $seenCandidateKeys->put($candidateKey, true);
+
+                return true;
+            })
             ->values()
             ->all();
     }
@@ -321,9 +376,7 @@ PROMPT;
         $quoteModels = [];
 
         foreach ($result->quotes as $validatedQuote) {
-            if ($validatedQuote === $result->selectedQuote || $validatedQuote->validationStatus === 'suspicious') {
-                $quoteModels[spl_object_id($validatedQuote)] = $this->storeQuote($holding, $validatedQuote);
-            }
+            $quoteModels[spl_object_id($validatedQuote)] = $this->storeQuote($holding, $validatedQuote);
         }
 
         if (! $result->selectedQuote) {
@@ -351,13 +404,17 @@ PROMPT;
         $selectedQuote = $quoteModels[spl_object_id($result->selectedQuote)] ?? $this->storeQuote($holding, $result->selectedQuote);
         $quote = $result->selectedQuote->quote;
 
+        if ($this->selectedQuoteIsOlderThanHolding($result->selectedQuote, $holding)) {
+            return;
+        }
+
         $holding->update([
             'currency' => $quote->currency ?? $holding->currency,
             'latest_price' => $quote->price,
             'latest_price_fetched_at' => $quote->fetchedAt,
             'latest_price_source' => $quote->sourceName,
             'latest_price_source_url' => $quote->sourceUrl,
-            'latest_price_as_of' => $quote->asOf?->toDateTimeString(),
+            'latest_price_as_of' => $this->holdingSourceDateTime($quote->asOf),
             'latest_quote_id' => $selectedQuote->id,
             'price_status' => $result->status,
             'latest_price_type' => $quote->priceType,
@@ -399,6 +456,15 @@ PROMPT;
             'raw_text_hash' => $quote->rawTextHash,
             'raw_payload' => (bool) config('market-data.store_raw_payloads') ? $quote->rawPayload : null,
         ]);
+    }
+
+    private function holdingSourceDateTime(?Carbon $asOf): ?string
+    {
+        if ($asOf === null) {
+            return null;
+        }
+
+        return $asOf->copy()->utc()->format('Y-m-d H:i:s').' UTC';
     }
 
     private function markCandidateSucceeded(StockHolding $holding, WebSourceCandidate $candidate, ValidatedQuote $quote): void
@@ -444,11 +510,34 @@ PROMPT;
 
     private function tradingTimes(ParsedQuote $quote): string
     {
-        $timezone = $quote->asOf instanceof Carbon ? $quote->asOf->timezoneName : 'Europe/Berlin';
+        return $this->marketHours->tradingTimes($quote);
+    }
 
-        return match ($quote->venue) {
-            'Tradegate', 'gettex' => "Monday-Friday 08:00-22:00 {$timezone}",
-            default => "Monday-Friday 09:00-17:30 {$timezone}",
-        };
+    private function selectedQuoteIsOlderThanHolding(ValidatedQuote $quote, StockHolding $holding): bool
+    {
+        if ($holding->latest_price === null) {
+            return false;
+        }
+
+        $holdingAsOf = $this->holdingLatestPriceAsOf($holding);
+
+        if ($holdingAsOf === null || $quote->quote->asOf === null) {
+            return false;
+        }
+
+        return $quote->quote->asOf->lt($holdingAsOf);
+    }
+
+    private function holdingLatestPriceAsOf(StockHolding $holding): ?Carbon
+    {
+        if (! $holding->latest_price_as_of) {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($holding->latest_price_as_of);
+        } catch (Throwable) {
+            return null;
+        }
     }
 }

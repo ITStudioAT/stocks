@@ -3,6 +3,7 @@
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminDepotController;
 use App\Http\Controllers\AdminDepotHoldingController;
+use App\Http\Controllers\AdminPriceRefreshSettingsController;
 use App\Http\Controllers\AdminProfileController;
 use App\Http\Controllers\AdminRoleController;
 use App\Http\Controllers\AdminStockSearchController;
@@ -38,6 +39,8 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::get('/admin/me', [AdminAuthController::class, 'me'])->name('admin.me');
     Route::get('/admin/depots', [AdminDepotController::class, 'index'])->name('admin.depots.index');
     Route::get('/admin/depots/active', [AdminDepotController::class, 'active'])->name('admin.depots.active');
+    Route::get('/admin/price-refresh-settings', [AdminPriceRefreshSettingsController::class, 'show'])->name('admin.price-refresh-settings.show');
+    Route::patch('/admin/price-refresh-settings', [AdminPriceRefreshSettingsController::class, 'update'])->name('admin.price-refresh-settings.update');
     Route::post('/admin/depots', [AdminDepotController::class, 'store'])->name('admin.depots.store');
     Route::patch('/admin/depots/{depot}', [AdminDepotController::class, 'update'])->name('admin.depots.update');
     Route::patch('/admin/depots/{depot}/activate', [AdminDepotController::class, 'activate'])->name('admin.depots.activate');

@@ -23,6 +23,20 @@ function jsonResponse(data) {
     };
 }
 
+function priceRefreshSettings(overrides = {}) {
+    return {
+        trading_interval_minutes: 20,
+        closed_interval_minutes: 60,
+        last_refreshed_at: '2026-06-02T12:20:00+00:00',
+        next_refresh_at: '2026-06-02T12:40:00+00:00',
+        status: 'waiting',
+        status_label: 'waiting',
+        is_trading_time: true,
+        current_interval_minutes: 20,
+        ...overrides,
+    };
+}
+
 describe('App', () => {
     it('renders the admin login screen without loading authenticated data', () => {
         window.history.pushState({}, '', '/admin/login');
@@ -87,6 +101,7 @@ describe('App', () => {
                         account_balance: '12345.67',
                         is_active: true,
                     },
+                    price_refresh_settings: priceRefreshSettings(),
                 }));
             }
 
@@ -355,6 +370,19 @@ describe('App', () => {
                         from: 1,
                         to: 3,
                     },
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/price-refresh-settings') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Price refresh schedule updated.',
+                    price_refresh_settings: priceRefreshSettings({
+                        trading_interval_minutes: 15,
+                        closed_interval_minutes: 45,
+                        next_refresh_at: '2026-06-02T12:35:00+00:00',
+                        current_interval_minutes: 15,
+                    }),
                 }));
             }
 
@@ -406,7 +434,7 @@ describe('App', () => {
                     message: '2 stock prices refreshed.',
                     refresh: {
                         refresh_id: 'refresh-1',
-                        status: 'finished',
+                        status: 'running',
                         processed: 2,
                         total: 2,
                         step: '2/2',
@@ -454,9 +482,7 @@ describe('App', () => {
         expect(dashboardHeaders).toEqual([
             'Symbol',
             'Name',
-            'Instrument',
             'Latest price',
-            'Status',
             'Source time',
             'Trading times',
             'Source',
@@ -469,21 +495,47 @@ describe('App', () => {
         expect(wrapper.text()).toContain('865985');
         expect(wrapper.text()).toContain('306.32001');
         expect(wrapper.text()).not.toContain('306.32001 EUR');
-        expect(wrapper.text()).toContain('Fresh');
-        expect(wrapper.text()).toContain('Mid');
-        expect(wrapper.text()).toContain('Spread: 0.05%');
         expect(wrapper.text()).toContain('02.06.2026, 13:59');
         expect(wrapper.text()).toContain('Monday-Friday 08:00-22:00 Europe/Berlin');
         expect(wrapper.text()).toContain('Tradegate Exchange');
         expect(wrapper.text()).toContain('EXXX');
         expect(wrapper.text()).toContain('DE000A0D8Q23');
         expect(wrapper.text()).toContain('A0D8Q2');
-        expect(wrapper.text()).toContain('Missing');
         expect(wrapper.text()).toContain('LEER');
-        expect(wrapper.text()).toContain('Stale');
         expect(wrapper.text()).not.toContain('43.37 EUR');
         expect(wrapper.text()).not.toContain('Trading depot');
         expect(wrapper.text()).not.toContain('250.50');
+        expect(wrapper.text()).toContain('Last: 02.06.2026, 14:20');
+        expect(wrapper.text()).toContain('Next: 02.06.2026, 14:40');
+        expect(wrapper.text()).toContain('waiting');
+        expect(wrapper.text()).not.toContain('Automatic price refresh');
+
+        wrapper.vm.navigateSection('dashboard-admin');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/dashboard-admin');
+        expect(wrapper.text()).toContain('Dashboard Admin');
+        expect(wrapper.text()).toContain('Automatic price refresh');
+        expect(wrapper.text()).toContain('Current interval: 20 min');
+
+        const scheduleInputs = wrapper.find('#price-refresh-schedule-form').findAll('input');
+        await scheduleInputs[0].setValue('15');
+        await scheduleInputs[1].setValue('45');
+        await wrapper.find('#price-refresh-schedule-form').trigger('submit');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/price-refresh-settings', expect.objectContaining({
+            method: 'PATCH',
+            body: JSON.stringify({
+                trading_interval_minutes: 15,
+                closed_interval_minutes: 45,
+            }),
+        }));
+        expect(wrapper.text()).toContain('Price refresh schedule updated.');
+        expect(wrapper.text()).toContain('Current interval: 15 min');
+
+        wrapper.vm.navigateSection('dashboard');
+        await flushPromises();
 
         const refreshPricesButton = wrapper.findAll('button').find((button) => button.text().includes('Refresh prices'));
         await refreshPricesButton.trigger('click');
@@ -493,8 +545,27 @@ describe('App', () => {
             method: 'POST',
         }));
         expect(fetchMock).toHaveBeenCalledWith('/admin/active-depot/holdings/refresh-prices/refresh-1', expect.any(Object));
-        expect(wrapper.text()).toContain('2 stock prices refreshed.');
-        expect(wrapper.text()).toContain('Price refresh: 2/2');
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/active-depot/holdings?page=1')).toHaveLength(2);
+        expect(wrapper.text()).not.toContain('2 stock prices refreshed.');
+        expect(wrapper.text()).not.toContain('Price refresh: 2/2');
+
+        wrapper.vm.holdingMessage = '2 stock prices refreshed.';
+        wrapper.vm.priceRefresh = {
+            refresh_id: 'refresh-1',
+            status: 'running',
+            processed: 2,
+            total: 2,
+            step: '2/2',
+            message: '2 stock prices refreshed.',
+            current: null,
+            started_at: '2026-06-02T12:15:00+00:00',
+            finished_at: '2026-06-02T12:20:00+00:00',
+            error: null,
+        };
+        await flushPromises();
+
+        expect(wrapper.text()).not.toContain('2 stock prices refreshed.');
+        expect(wrapper.text()).not.toContain('Price refresh: 2/2');
 
         const addStockButton = wrapper.findAll('button').find((button) => button.text().includes('Add stock'));
         await addStockButton.trigger('click');
@@ -502,12 +573,12 @@ describe('App', () => {
 
         expect(document.body.textContent).toContain('Add stock');
 
-        const inputs = document.body.querySelectorAll('input');
-        inputs[0].value = 'Microsoft';
-        inputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+        const holdingSearchInput = document.body.querySelector('#holding-search-form input');
+        expect(document.activeElement).toBe(holdingSearchInput);
 
-        const searchButton = Array.from(document.body.querySelectorAll('button')).find((button) => button.textContent.includes('Search'));
-        searchButton.click();
+        holdingSearchInput.value = 'Microsoft';
+        holdingSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+        holdingSearchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
         await flushPromises();
 
         expect(document.body.textContent).toContain('Microsoft Corporation');
@@ -534,15 +605,25 @@ describe('App', () => {
             }),
         }));
 
+        await addStockButton.trigger('click');
+        await flushPromises();
+
+        expect(wrapper.vm.isHoldingDialogOpen).toBe(true);
+
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+        await flushPromises();
+
+        expect(wrapper.vm.isHoldingDialogOpen).toBe(false);
+
         const deleteStockButton = wrapper.find('[aria-label="Delete stock"]');
         await deleteStockButton.trigger('click');
         await flushPromises();
 
-        expect(document.body.textContent).toContain('Delete stock');
+        expect(document.body.textContent).toContain('Confirm delete');
         expect(document.body.textContent).toContain('Delete Apple?');
 
         const deleteButton = Array.from(document.body.querySelectorAll('button'))
-            .filter((button) => button.textContent.trim() === 'Delete')
+            .filter((button) => button.textContent.trim() === 'Confirm')
             .at(-1);
         deleteButton.click();
         await flushPromises();
@@ -550,5 +631,66 @@ describe('App', () => {
         expect(fetchMock).toHaveBeenCalledWith('/admin/active-depot/holdings/1', expect.objectContaining({
             method: 'DELETE',
         }));
+    });
+
+    it('shows Admin group with horizontal Users and Roles submenu chips for super_admin', async () => {
+        window.history.pushState({}, '', '/admin/menu/users');
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Super Admin',
+                        email: 'super@example.com',
+                        roles: ['super_admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [], meta: { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null } }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({ depot: null }));
+            }
+
+            if (path === '/admin/users?page=1') {
+                return Promise.resolve(jsonResponse({
+                    users: [{ id: 1, name: 'Alice Smith', email: 'alice@example.com', roles: ['admin'] }],
+                    roles: ['admin', 'super_admin'],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 1, from: 1, to: 1 },
+                }));
+            }
+
+            if (path === '/admin/roles?page=1') {
+                return Promise.resolve(jsonResponse({
+                    roles: [{ id: 1, name: 'admin', users_count: 2 }],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 1, from: 1, to: 1 },
+                }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        expect(wrapper.text()).toContain('Admin');
+        expect(wrapper.text()).toContain('Users');
+        expect(wrapper.text()).toContain('Roles');
+
+        const tabs = wrapper.findAll('.v-tab');
+        const tabLabels = tabs.map((t) => t.text());
+        expect(tabLabels.some((l) => l.includes('Users'))).toBe(true);
+        expect(tabLabels.some((l) => l.includes('Roles'))).toBe(true);
+
+        const rolesTab = tabs.find((t) => t.text().includes('Roles'));
+        await rolesTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/roles');
+        expect(wrapper.text()).toContain('admin');
     });
 });

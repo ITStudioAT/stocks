@@ -197,7 +197,7 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holding.latest_price_fetched_at', '2026-06-02T12:00:00+00:00')
             ->assertJsonPath('holding.latest_price_source', 'Tradegate Exchange')
             ->assertJsonPath('holding.latest_price_source_url', 'https://www.tradegatebsx.com/orderbuch.php?isin=US9229083632')
-            ->assertJsonPath('holding.latest_price_as_of', '2026-06-02 11:59:00')
+            ->assertJsonPath('holding.latest_price_as_of', '2026-06-02T11:59:00+00:00')
             ->assertJsonPath('holding.trading_times', 'Monday-Friday 08:00-22:00 Europe/Berlin')
             ->assertJsonPath('holding.price_type', 'indicative_mid');
 
@@ -272,7 +272,7 @@ class AdminDepotHoldingTest extends TestCase
         ]);
     }
 
-    public function test_admin_can_queue_active_depot_holding_price_refresh(): void
+    public function test_admin_can_queue_all_depot_holding_price_refreshes(): void
     {
         Queue::fake();
         $admin = $this->adminUser();
@@ -295,7 +295,7 @@ class AdminDepotHoldingTest extends TestCase
         $response = $this->actingAs($admin)
             ->postJson('/admin/active-depot/holdings/refresh-prices')
             ->assertAccepted()
-            ->assertJsonPath('message', '2 stock prices queued for refresh.')
+            ->assertJsonPath('message', '3 stock prices queued for refresh.')
             ->assertJsonPath('refresh.status', 'queued')
             ->assertJsonPath('refresh.processed', 0)
             ->assertJsonPath('refresh.total', 2)
@@ -303,8 +303,10 @@ class AdminDepotHoldingTest extends TestCase
 
         $refreshId = $response->json('refresh.refresh_id');
 
+        Queue::assertPushedTimes(RefreshDepotHoldingPrices::class, 2);
         Queue::assertPushed(RefreshDepotHoldingPrices::class, fn (RefreshDepotHoldingPrices $job): bool => $job->depotId === $depot->id
             && $job->refreshId === $refreshId);
+        Queue::assertPushed(RefreshDepotHoldingPrices::class, fn (RefreshDepotHoldingPrices $job): bool => $job->depotId === $inactiveHolding->depot_id);
 
         $this->actingAs($admin)
             ->getJson("/admin/active-depot/holdings/refresh-prices/{$refreshId}")
@@ -317,6 +319,29 @@ class AdminDepotHoldingTest extends TestCase
             'id' => $inactiveHolding->id,
             'latest_price' => '300.000000',
         ]);
+    }
+
+    public function test_admin_can_queue_all_depot_holding_price_refreshes_when_active_depot_is_empty(): void
+    {
+        Queue::fake();
+        $admin = $this->adminUser();
+        Depot::factory()->create([
+            'is_active' => true,
+        ]);
+        $otherDepot = Depot::factory()->create();
+        StockHolding::factory()->create([
+            'depot_id' => $otherDepot->id,
+            'symbol' => 'EXXX',
+        ]);
+
+        $this->actingAs($admin)
+            ->postJson('/admin/active-depot/holdings/refresh-prices')
+            ->assertAccepted()
+            ->assertJsonPath('message', '1 stock price queued for refresh.')
+            ->assertJsonPath('refresh', null);
+
+        Queue::assertPushedTimes(RefreshDepotHoldingPrices::class, 1);
+        Queue::assertPushed(RefreshDepotHoldingPrices::class, fn (RefreshDepotHoldingPrices $job): bool => $job->depotId === $otherDepot->id);
     }
 
     public function test_queued_job_refreshes_active_depot_holding_prices_and_tracks_progress(): void

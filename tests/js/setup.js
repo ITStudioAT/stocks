@@ -1,5 +1,3 @@
-import { afterEach, vi } from 'vitest';
-
 global.ResizeObserver = class ResizeObserver {
     observe() {}
 
@@ -18,7 +16,7 @@ global.IntersectionObserver = class IntersectionObserver {
 
 Object.defineProperty(window, 'matchMedia', {
     writable: true,
-    value: vi.fn().mockImplementation((query) => ({
+    value: vi.fn((query) => ({
         matches: false,
         media: query,
         onchange: null,
@@ -37,8 +35,8 @@ Object.defineProperty(window, 'visualViewport', {
         offsetLeft: 0,
         offsetTop: 0,
         width: 1024,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
+        addEventListener: () => {},
+        removeEventListener: () => {},
     },
 });
 

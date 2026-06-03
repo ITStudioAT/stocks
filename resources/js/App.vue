@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { useAuthStore } from './stores/auth';
 import { useDepotStore } from './stores/depots';
@@ -17,6 +17,7 @@ const {
     depots,
     holdings,
     priceRefresh,
+    priceRefreshSettings,
     stockSearchResults,
     pagination: depotPagination,
     holdingsPagination,
@@ -78,15 +79,38 @@ const isHoldingDialogOpen = ref(false);
 const isDeleteHoldingDialogOpen = ref(false);
 const selectedHolding = ref(null);
 const holdingSearchQuery = ref('');
+const holdingSearchInput = ref(null);
 const holdingMessage = ref('');
 const holdingError = ref('');
+const priceRefreshScheduleForm = ref(emptyPriceRefreshScheduleForm());
+const priceRefreshScheduleMessage = ref('');
+const priceRefreshScheduleError = ref('');
 const priceRefreshTimer = ref(null);
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
+const canManageDashboardAdmin = computed(() => user.value?.roles?.some((role) => ['admin', 'super_admin'].includes(role)) ?? false);
 const profileDisplayName = computed(() => user.value?.name || 'Loading...');
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
-const isPriceRefreshRunning = computed(() => ['queued', 'running'].includes(priceRefresh.value?.status));
+const isPriceRefreshRunning = computed(() => {
+    if (!priceRefresh.value || isFinishedPriceRefresh(priceRefresh.value)) {
+        return false;
+    }
+
+    return ['queued', 'running'].includes(priceRefresh.value.status);
+});
+const isAutomaticPriceRefreshUpdating = computed(() => isPriceRefreshRunning.value
+    || priceRefreshSettings.value?.status === 'updating');
+const priceRefreshHeaderStatusLabel = computed(() => (
+    isAutomaticPriceRefreshUpdating.value ? 'Updating prices' : 'waiting'
+));
+const visibleHoldingMessage = computed(() => {
+    if (priceRefresh.value && isFinishedPriceRefresh(priceRefresh.value)) {
+        return '';
+    }
+
+    return holdingMessage.value;
+});
 const priceRefreshProgressValue = computed(() => {
     if (!priceRefresh.value || priceRefresh.value.total === 0) {
         return 0;
@@ -101,21 +125,35 @@ const menuItems = computed(() => [
         label: 'Dashboard',
         icon: 'mdi-view-dashboard-outline',
     },
-    {
-        key: 'depots',
-        label: 'Depots',
-        icon: 'mdi-briefcase-outline',
-    },
-    ...(canManageUsers.value ? [
+    ...(canManageDashboardAdmin.value ? [
         {
-            key: 'users',
-            label: 'Users',
-            icon: 'mdi-account-group-outline',
-        },
-        {
-            key: 'roles',
-            label: 'Roles',
-            icon: 'mdi-shield-account-outline',
+            key: 'admin',
+            label: 'Admin',
+            icon: 'mdi-shield-crown-outline',
+            children: [
+                {
+                    key: 'depots',
+                    label: 'Depots',
+                    icon: 'mdi-briefcase-outline',
+                },
+                {
+                    key: 'dashboard-admin',
+                    label: 'Dashboard Admin',
+                    icon: 'mdi-view-dashboard-edit-outline',
+                },
+                ...(canManageUsers.value ? [
+                    {
+                        key: 'users',
+                        label: 'Users',
+                        icon: 'mdi-account-group-outline',
+                    },
+                    {
+                        key: 'roles',
+                        label: 'Roles',
+                        icon: 'mdi-shield-account-outline',
+                    },
+                ] : []),
+            ],
         },
     ] : []),
     {
@@ -130,6 +168,17 @@ watch(
     (currentUser) => {
         profileLastName.value = currentUser?.last_name ?? '';
         profileFirstName.value = currentUser?.first_name ?? '';
+    },
+    { immediate: true },
+);
+
+watch(
+    priceRefreshSettings,
+    (settings) => {
+        priceRefreshScheduleForm.value = {
+            trading_interval_minutes: settings?.trading_interval_minutes ?? 20,
+            closed_interval_minutes: settings?.closed_interval_minutes ?? 60,
+        };
     },
     { immediate: true },
 );
@@ -161,6 +210,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
     stopPriceRefreshPolling();
+    stopHoldingDialogKeyboardShortcuts();
     window.removeEventListener('popstate', applyRouteFromPath);
 });
 
@@ -193,7 +243,9 @@ function applyRouteFromPath() {
 
     if (path.startsWith('/admin/menu/')) {
         const section = decodeURIComponent(path.replace('/admin/menu/', ''));
-        activeSection.value = menuItems.value.some((item) => item.key === section) ? section : 'dashboard';
+        const isTopLevel = menuItems.value.some((item) => item.key === section);
+        const isChild = menuItems.value.flatMap((item) => item.children ?? []).some((c) => c.key === section);
+        activeSection.value = (isTopLevel || isChild) ? section : 'dashboard';
 
         return;
     }
@@ -503,10 +555,52 @@ function openHoldingDialog() {
     holdingError.value = '';
     holdingMessage.value = '';
     isHoldingDialogOpen.value = true;
+    startHoldingDialogKeyboardShortcuts();
+    focusHoldingSearchInput();
 }
 
 function abortHoldingDialog() {
     isHoldingDialogOpen.value = false;
+    stopHoldingDialogKeyboardShortcuts();
+}
+
+async function focusHoldingSearchInput() {
+    await nextTick();
+
+    holdingSearchInput.value?.focus?.();
+}
+
+function handleHoldingSearchKeydown(event) {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        searchStocks();
+
+        return;
+    }
+
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        abortHoldingDialog();
+    }
+}
+
+function handleHoldingDialogDocumentKeydown(event) {
+    if (! isHoldingDialogOpen.value || event.key !== 'Escape') {
+        return;
+    }
+
+    event.preventDefault();
+    abortHoldingDialog();
+}
+
+function startHoldingDialogKeyboardShortcuts() {
+    stopHoldingDialogKeyboardShortcuts();
+    document.addEventListener('keydown', handleHoldingDialogDocumentKeydown, true);
+}
+
+function stopHoldingDialogKeyboardShortcuts() {
+    document.removeEventListener('keydown', handleHoldingDialogDocumentKeydown, true);
 }
 
 async function searchStocks() {
@@ -528,6 +622,7 @@ async function saveHolding(result) {
         const data = await depotsStore.createActiveDepotHolding(result);
         holdingMessage.value = data.message;
         isHoldingDialogOpen.value = false;
+        stopHoldingDialogKeyboardShortcuts();
         await depotsStore.loadActiveDepotHoldings(holdingsPagination.value.current_page);
     } catch (err) {
         holdingError.value = err.message;
@@ -542,6 +637,14 @@ async function refreshHoldingPrices() {
         const data = await depotsStore.refreshActiveDepotHoldingPrices();
         holdingMessage.value = data.message;
 
+        if (!data.refresh) {
+            await loadActiveDepotHoldings();
+            await loadPriceRefreshSettings();
+            holdingMessage.value = '';
+
+            return;
+        }
+
         if (isFinishedPriceRefresh(data.refresh)) {
             await finishPriceRefresh(data.refresh);
 
@@ -551,6 +654,22 @@ async function refreshHoldingPrices() {
         startPriceRefreshPolling(data.refresh.refresh_id);
     } catch (err) {
         holdingError.value = err.message;
+    }
+}
+
+async function savePriceRefreshSchedule() {
+    priceRefreshScheduleError.value = '';
+    priceRefreshScheduleMessage.value = '';
+
+    try {
+        const data = await depotsStore.updatePriceRefreshSettings({
+            trading_interval_minutes: Number(priceRefreshScheduleForm.value.trading_interval_minutes),
+            closed_interval_minutes: Number(priceRefreshScheduleForm.value.closed_interval_minutes),
+        });
+
+        priceRefreshScheduleMessage.value = data.message;
+    } catch (err) {
+        priceRefreshScheduleError.value = err.message;
     }
 }
 
@@ -585,12 +704,25 @@ async function pollPriceRefreshStatus(refreshId) {
 
 async function finishPriceRefresh(refresh) {
     stopPriceRefreshPolling();
-    holdingMessage.value = refresh.error || refresh.message;
+    depotsStore.clearPriceRefresh();
     await depotsStore.loadActiveDepotHoldings(holdingsPagination.value.current_page);
+
+    if (refresh.status === 'failed') {
+        holdingError.value = refresh.error || refresh.message;
+
+        return;
+    }
+
+    holdingMessage.value = '';
 }
 
 function isFinishedPriceRefresh(refresh) {
-    return ['finished', 'failed'].includes(refresh?.status);
+    if (['finished', 'failed'].includes(refresh?.status)) {
+        return true;
+    }
+
+    return Number(refresh?.total ?? 0) > 0
+        && Number(refresh?.processed ?? 0) >= Number(refresh?.total ?? 0);
 }
 
 function openDeleteHoldingDialog(holding) {
@@ -808,6 +940,10 @@ function formatTradingTimes(holding) {
     return holding.trading_times || '-';
 }
 
+function formatScheduleDateTime(value) {
+    return formatDateTime(value);
+}
+
 function formatPriceStatus(holding) {
     const labels = {
         realtime: 'Realtime',
@@ -886,6 +1022,13 @@ function emptyDepotForm() {
     return {
         name: '',
         account_balance: '0.00',
+    };
+}
+
+function emptyPriceRefreshScheduleForm() {
+    return {
+        trading_interval_minutes: 20,
+        closed_interval_minutes: 60,
     };
 }
 </script>
@@ -980,25 +1123,40 @@ function emptyDepotForm() {
                         </v-avatar>
                         <div>
                             <strong>Stocks</strong>
-                            <div class="text-caption text-medium-emphasis">{{ roleList }}</div>
+                            <div class="text-caption text-medium-emphasis">{{ profileDisplayName }}</div>
                         </div>
                     </div>
                 </div>
 
                 <v-list nav>
-                    <v-list-item
-                        v-for="item in menuItems"
-                        :key="item.key"
-                        :active="activeSection === item.key"
-                        :prepend-icon="item.icon"
-                        :title="item.label"
-                        @click="navigateSection(item.key)"
-                    />
+                    <template v-for="item in menuItems" :key="item.key">
+                        <v-list-item
+                            :active="item.children ? item.children.some(c => activeSection === c.key) : activeSection === item.key"
+                            :prepend-icon="item.icon"
+                            :title="item.label"
+                            @click="item.children ? navigateSection(item.children[0].key) : navigateSection(item.key)"
+                        />
+                    </template>
                 </v-list>
             </v-navigation-drawer>
 
             <v-app-bar flat border>
-                <v-app-bar-title>{{ profileDisplayName }}</v-app-bar-title>
+                <v-app-bar-title>
+                    <div class="d-flex align-center flex-wrap ga-4">
+                        <span>{{ profileDisplayName }}</span>
+                        <span v-if="priceRefreshSettings" class="text-caption text-medium-emphasis">
+                            Last: {{ formatScheduleDateTime(priceRefreshSettings.last_refreshed_at) }}
+                            · Next: {{ formatScheduleDateTime(priceRefreshSettings.next_refresh_at) }}
+                        </span>
+                        <span v-if="priceRefreshSettings" class="d-inline-flex align-center ga-2 text-caption">
+                            <span
+                                class="price-refresh-status-dot"
+                                :class="isAutomaticPriceRefreshUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
+                            />
+                            {{ priceRefreshHeaderStatusLabel }}
+                        </span>
+                    </div>
+                </v-app-bar-title>
                 <v-spacer />
                 <v-btn href="/admin/logout" prepend-icon="mdi-logout" variant="text">
                     Logout
@@ -1007,6 +1165,63 @@ function emptyDepotForm() {
 
             <v-main>
                 <v-container class="py-8">
+                    <section v-if="activeSection === 'dashboard-admin' && canManageDashboardAdmin">
+                        <div class="mb-6">
+                            <p class="text-overline text-primary mb-1">Admin</p>
+                            <h1 class="text-h4">Dashboard Admin</h1>
+                        </div>
+
+                        <v-sheet border rounded class="pa-4 mb-4">
+                            <form
+                                id="price-refresh-schedule-form"
+                                class="d-flex align-center flex-wrap ga-3"
+                                @submit.prevent="savePriceRefreshSchedule"
+                            >
+                                <div class="text-subtitle-2 mr-2">Automatic price refresh</div>
+                                <v-text-field
+                                    v-model="priceRefreshScheduleForm.trading_interval_minutes"
+                                    density="compact"
+                                    hide-details
+                                    label="During trading"
+                                    min="1"
+                                    max="1440"
+                                    suffix="min"
+                                    type="number"
+                                    style="max-width: 180px"
+                                />
+                                <v-text-field
+                                    v-model="priceRefreshScheduleForm.closed_interval_minutes"
+                                    density="compact"
+                                    hide-details
+                                    label="Outside trading"
+                                    min="1"
+                                    max="1440"
+                                    suffix="min"
+                                    type="number"
+                                    style="max-width: 190px"
+                                />
+                                <v-btn
+                                    type="submit"
+                                    color="primary"
+                                    prepend-icon="mdi-content-save-outline"
+                                    variant="tonal"
+                                    :loading="holdingsLoading"
+                                >
+                                    Save
+                                </v-btn>
+                                <span class="text-caption text-medium-emphasis">
+                                    Current interval: {{ priceRefreshSettings?.current_interval_minutes ?? '-' }} min
+                                </span>
+                            </form>
+                        </v-sheet>
+                        <v-alert v-if="priceRefreshScheduleMessage" type="success" variant="tonal" density="compact" class="mb-4">
+                            {{ priceRefreshScheduleMessage }}
+                        </v-alert>
+                        <v-alert v-if="priceRefreshScheduleError" type="error" variant="tonal" density="compact" class="mb-4">
+                            {{ priceRefreshScheduleError }}
+                        </v-alert>
+                    </section>
+
                     <section v-if="activeSection === 'dashboard'">
                         <div class="d-flex align-center justify-space-between mb-6">
                             <div>
@@ -1018,7 +1233,7 @@ function emptyDepotForm() {
                                     color="primary"
                                     prepend-icon="mdi-refresh"
                                     variant="tonal"
-                                    :disabled="!activeDepot || holdings.length === 0 || isPriceRefreshRunning"
+                                    :disabled="!activeDepot || isAutomaticPriceRefreshUpdating"
                                     :loading="holdingsLoading && !isPriceRefreshRunning"
                                     @click="refreshHoldingPrices"
                                 >
@@ -1036,11 +1251,11 @@ function emptyDepotForm() {
                             </div>
                         </div>
 
-                        <v-alert v-if="holdingMessage" type="success" variant="tonal" density="compact" class="mb-4">
-                            {{ holdingMessage }}
+                        <v-alert v-if="visibleHoldingMessage" type="success" variant="tonal" density="compact" class="mb-4">
+                            {{ visibleHoldingMessage }}
                         </v-alert>
                         <v-alert
-                            v-if="priceRefresh"
+                            v-if="isPriceRefreshRunning"
                             type="info"
                             variant="tonal"
                             density="compact"
@@ -1071,9 +1286,7 @@ function emptyDepotForm() {
                                 <tr>
                                     <th>Symbol</th>
                                     <th>Name</th>
-                                    <th>Instrument</th>
                                     <th>Latest price</th>
-                                    <th>Status</th>
                                     <th>Source time</th>
                                     <th>Trading times</th>
                                     <th>Source</th>
@@ -1082,13 +1295,15 @@ function emptyDepotForm() {
                             </thead>
                             <tbody>
                                 <tr v-if="activeDepot && !holdingsLoading && holdings.length === 0">
-                                    <td colspan="9">No stocks in this depot.</td>
+                                    <td colspan="7">No stocks in this depot.</td>
                                 </tr>
                                 <tr v-for="holding in holdings" :key="holding.id">
                                     <td>{{ holding.symbol || '-' }}</td>
-                                    <td>{{ holding.name || '-' }}</td>
                                     <td>
-                                        <div>{{ holding.isin || '-' }}</div>
+                                        <div>{{ holding.name || '-' }}</div>
+                                        <div class="text-caption text-medium-emphasis">
+                                            {{ holding.isin || '-' }}
+                                        </div>
                                         <div class="text-caption text-medium-emphasis">
                                             WKN: {{ holding.wkn || '-' }}
                                         </div>
@@ -1097,15 +1312,6 @@ function emptyDepotForm() {
                                         </div>
                                     </td>
                                     <td>{{ formatLatestPrice(holding) }}</td>
-                                    <td :title="formatValidationErrors(holding)">
-                                        <div>{{ formatPriceStatus(holding) }}</div>
-                                        <div class="text-caption text-medium-emphasis">
-                                            {{ formatPriceType(holding) }} · {{ holding.venue || '-' }}
-                                        </div>
-                                        <div class="text-caption text-medium-emphasis">
-                                            Spread: {{ formatSpread(holding) }}
-                                        </div>
-                                    </td>
                                     <td>{{ formatSourceDateTime(holding.latest_price_as_of) }}</td>
                                     <td>{{ formatTradingTimes(holding) }}</td>
                                     <td>
@@ -1149,12 +1355,18 @@ function emptyDepotForm() {
                             <v-card>
                                 <v-card-title>Add stock</v-card-title>
                                 <v-card-text>
-                                    <form id="holding-search-form" class="d-flex align-center ga-3 mb-5" @submit.prevent="searchStocks">
+                                    <form
+                                        id="holding-search-form"
+                                        class="d-flex align-center ga-3 mb-5"
+                                        @submit.prevent="searchStocks"
+                                        @keydown.capture="handleHoldingSearchKeydown"
+                                    >
                                         <v-text-field
+                                            ref="holdingSearchInput"
                                             v-model="holdingSearchQuery"
                                             density="comfortable"
                                             hide-details
-                                            label="ISIN, WKN, symbol, or name"
+                                            label="ISIN, WKN, Valor, symbol, or name"
                                             required
                                         />
                                         <v-btn type="submit" color="primary" variant="tonal" :loading="stockSearchLoading">
@@ -1172,6 +1384,7 @@ function emptyDepotForm() {
                                                 <th>Symbol</th>
                                                 <th>Name</th>
                                                 <th>ISIN</th>
+                                                <th>WKN / Valor</th>
                                                 <th>Exchange</th>
                                                 <th>Type</th>
                                                 <th class="text-right">Action</th>
@@ -1182,6 +1395,7 @@ function emptyDepotForm() {
                                                 <td>{{ result.symbol }}</td>
                                                 <td>{{ result.name }}</td>
                                                 <td>{{ result.isin || '-' }}</td>
+                                                <td>{{ result.wkn || result.valor || '-' }}</td>
                                                 <td>{{ result.exchange }}</td>
                                                 <td>{{ result.instrument_type }}</td>
                                                 <td class="text-right">
@@ -1210,15 +1424,23 @@ function emptyDepotForm() {
 
                         <v-dialog v-model="isDeleteHoldingDialogOpen" persistent max-width="440">
                             <v-card>
-                                <v-card-title>Delete stock</v-card-title>
-                                <v-card-text>Delete {{ selectedHolding?.name || selectedHolding?.symbol }}?</v-card-text>
+                                <v-card-title>Confirm delete</v-card-title>
+                                <v-card-text>
+                                    Delete {{ selectedHolding?.name || selectedHolding?.symbol }}?
+                                </v-card-text>
                                 <v-card-actions>
                                     <v-spacer />
                                     <v-btn type="button" variant="text" :disabled="holdingsLoading" @click="abortDeleteHoldingDialog">
                                         Cancel
                                     </v-btn>
-                                    <v-btn type="button" color="error" variant="flat" :loading="holdingsLoading" @click="deleteHolding">
-                                        Delete
+                                    <v-btn
+                                        type="button"
+                                        color="error"
+                                        variant="flat"
+                                        :loading="holdingsLoading"
+                                        @click="deleteHolding"
+                                    >
+                                        Confirm
                                     </v-btn>
                                 </v-card-actions>
                             </v-card>
@@ -1322,6 +1544,18 @@ function emptyDepotForm() {
                             </v-card>
                         </v-dialog>
                     </section>
+
+                    <v-tabs
+                        v-if="(activeSection === 'depots' || activeSection === 'users' || activeSection === 'roles') && canManageDashboardAdmin"
+                        :model-value="activeSection"
+                        color="primary"
+                        class="mb-6"
+                        @update:model-value="(s) => s !== activeSection && navigateSection(s)"
+                    >
+                        <v-tab value="depots" prepend-icon="mdi-briefcase-outline">Depots</v-tab>
+                        <v-tab v-if="canManageUsers" value="users" prepend-icon="mdi-account-group-outline">Users</v-tab>
+                        <v-tab v-if="canManageUsers" value="roles" prepend-icon="mdi-shield-account-outline">Roles</v-tab>
+                    </v-tabs>
 
                     <section v-if="activeSection === 'users' && canManageUsers">
                         <div class="d-flex align-center justify-space-between mb-6">
@@ -1625,3 +1859,20 @@ function emptyDepotForm() {
         </template>
     </v-app>
 </template>
+
+<style scoped>
+.price-refresh-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    display: inline-block;
+}
+
+.price-refresh-status-dot--updating {
+    background: #d32f2f;
+}
+
+.price-refresh-status-dot--waiting {
+    background: #2e7d32;
+}
+</style>

@@ -14,6 +14,7 @@ return [
     'max_spread_pct_warning' => env('MARKET_DATA_MAX_SPREAD_PCT_WARNING', 2.0),
     'max_price_jump_pct_warning' => env('MARKET_DATA_MAX_PRICE_JUMP_PCT_WARNING', 25.0),
     'cross_check_tolerance_pct' => env('MARKET_DATA_CROSS_CHECK_TOLERANCE_PCT', 1.5),
+    'outlier_tolerance_pct' => env('MARKET_DATA_OUTLIER_TOLERANCE_PCT', 3.0),
     'store_raw_payloads' => env('MARKET_DATA_STORE_RAW_PAYLOADS', false),
     'user_agent' => env('MARKET_DATA_USER_AGENT', 'Mozilla/5.0 compatible portfolio price checker'),
     'sources' => [

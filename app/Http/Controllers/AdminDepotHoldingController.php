@@ -2,23 +2,25 @@
 
 namespace App\Http\Controllers;
 
-use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\Depot;
 use App\Models\StockHolding;
-use App\Models\StockPriceRefreshRun;
 use App\Services\DepotHoldingPriceRefreshProgress;
+use App\Services\PriceRefreshScheduler;
 use App\Services\StockPriceFreshness;
 use App\Services\WebMarketData\WebMarketDataOrchestrator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
+use Throwable;
 
 class AdminDepotHoldingController extends Controller
 {
     public function __construct(
         private StockPriceFreshness $stockPriceFreshness,
+        private PriceRefreshScheduler $priceRefreshScheduler,
     ) {}
 
     public function index(): JsonResponse
@@ -34,6 +36,7 @@ class AdminDepotHoldingController extends Controller
 
         return response()->json([
             'depot' => $this->depotPayload($depot),
+            'price_refresh_settings' => $this->priceRefreshScheduler->payload(),
             'holdings' => $holdings->items(),
             'meta' => [
                 'current_page' => $holdings->currentPage(),
@@ -72,28 +75,22 @@ class AdminDepotHoldingController extends Controller
         ], 201);
     }
 
-    public function refreshPrices(DepotHoldingPriceRefreshProgress $refreshProgress): JsonResponse
+    public function refreshPrices(): JsonResponse
     {
         $depot = $this->activeDepot();
-        $refreshId = (string) Str::uuid();
-        $total = $depot->stockHoldings()->count();
-        $progress = $refreshProgress->start($refreshId, $depot->id, $total);
-        StockPriceRefreshRun::query()->create([
-            'id' => $refreshId,
-            'depot_id' => $depot->id,
-            'status' => $total === 0 ? 'finished' : 'queued',
-            'total_count' => $total,
-            'started_at' => now(),
-            'finished_at' => $total === 0 ? now() : null,
-        ]);
+        $dispatchedRefresh = $this->priceRefreshScheduler->dispatchAllDepots($depot);
+        $progress = $dispatchedRefresh['progress'];
+        $message = trans_choice('{0} No stock prices queued for refresh.|{1} 1 stock price queued for refresh.|[2,*] :count stock prices queued for refresh.', $dispatchedRefresh['total_holdings']);
 
-        if ($total > 0) {
-            RefreshDepotHoldingPrices::dispatch($depot->id, $refreshId);
-            $progress = $refreshProgress->get($refreshId) ?? $progress;
+        if ($progress === null) {
+            return response()->json([
+                'message' => $message,
+                'refresh' => null,
+            ], 202);
         }
 
         return response()->json([
-            'message' => $progress['message'],
+            'message' => $message,
             'refresh' => $this->refreshPayload($progress),
         ], 202);
     }
@@ -185,7 +182,7 @@ class AdminDepotHoldingController extends Controller
             'latest_price_fetched_at' => $holding->latest_price_fetched_at?->toIso8601String(),
             'latest_price_source' => $holding->latest_price_source,
             'latest_price_source_url' => $holding->latest_price_source_url,
-            'latest_price_as_of' => $hasCurrentPrice ? $holding->latest_price_as_of : null,
+            'latest_price_as_of' => $this->sourceDateTimePayload($holding->latest_price_as_of, $hasCurrentPrice),
             'trading_times' => $holding->trading_times,
             'venue' => $hasCurrentPrice ? $holding->latestQuote?->venue : null,
             'price_type' => $hasCurrentPrice ? $holding->latest_price_type : null,
@@ -210,6 +207,19 @@ class AdminDepotHoldingController extends Controller
         }
 
         return 'stale';
+    }
+
+    private function sourceDateTimePayload(?string $asOf, bool $hasCurrentPrice): ?string
+    {
+        if (! $hasCurrentPrice || $asOf === null || trim($asOf) === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($asOf)->toIso8601String();
+        } catch (Throwable) {
+            return $asOf;
+        }
     }
 
     /**

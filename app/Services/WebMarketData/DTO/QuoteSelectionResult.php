@@ -18,5 +18,10 @@ class QuoteSelectionResult
         public array $errors = [],
         public string $status = 'unavailable',
         public ?ValidatedQuote $crossCheckQuote = null,
+        public array $usedQuotes = [],
+        public ?string $arithmeticMean = null,
+        public ?string $median = null,
+        public ?string $confidence = null,
+        public ?string $reason = null,
     ) {}
 }
