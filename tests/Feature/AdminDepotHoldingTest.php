@@ -7,7 +7,8 @@ use App\Models\Depot;
 use App\Models\StockHolding;
 use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
-use App\Services\StockPriceLookupService;
+use App\Services\WebMarketData\DTO\QuoteSelectionResult;
+use App\Services\WebMarketData\WebMarketDataOrchestrator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Queue;
@@ -53,11 +54,16 @@ class AdminDepotHoldingTest extends TestCase
                         'currency',
                         'latest_price',
                         'latest_price_status',
+                        'price_status',
                         'latest_price_fetched_at',
                         'latest_price_source',
                         'latest_price_source_url',
                         'latest_price_as_of',
                         'trading_times',
+                        'venue',
+                        'price_type',
+                        'price_spread_pct',
+                        'validation_errors',
                         'created_at',
                     ],
                 ],
@@ -86,6 +92,30 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.latest_price', null)
             ->assertJsonPath('holdings.0.latest_price_status', 'stale')
             ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-01 11:10:33');
+    }
+
+    public function test_admin_listing_hides_date_only_holding_prices(): void
+    {
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create([
+            'is_active' => true,
+        ]);
+        $this->travelTo(Carbon::parse('2026-06-03 12:00:00'));
+        StockHolding::factory()->create([
+            'depot_id' => $depot->id,
+            'symbol' => 'EXXX',
+            'latest_price' => '26.990000',
+            'latest_price_as_of' => '03.06.2026',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/active-depot/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.symbol', 'EXXX')
+            ->assertJsonPath('holdings.0.latest_price', null)
+            ->assertJsonPath('holdings.0.latest_price_status', 'stale')
+            ->assertJsonPath('holdings.0.latest_price_as_of', '03.06.2026');
     }
 
     public function test_admin_listing_hides_source_time_for_unavailable_holding_prices(): void
@@ -118,30 +148,25 @@ class AdminDepotHoldingTest extends TestCase
             'is_active' => true,
         ]);
         $this->travelTo(Carbon::parse('2026-06-02 12:00:00'));
-        $this->mock(StockPriceLookupService::class, function (MockInterface $mock): void {
+        $this->mock(WebMarketDataOrchestrator::class, function (MockInterface $mock): void {
             $mock
-                ->shouldReceive('latestPrice')
+                ->shouldReceive('resolve')
                 ->once()
-                ->with([
-                    'symbol' => 'AAPL',
-                    'name' => 'Vanguard S&P 500 ETF',
-                    'isin' => 'US9229083632',
-                    'wkn' => 'A1JX53',
-                    'exchange' => 'NASDAQ',
-                    'mic_code' => 'XNAS',
-                    'instrument_type' => 'ETF',
-                    'country' => 'United States',
-                    'currency' => 'USD',
-                ])
-                ->andReturn([
-                    'price' => '123.456789',
-                    'currency' => 'EUR',
-                    'fetched_at' => Carbon::parse('2026-06-02 12:00:00'),
-                    'source' => 'AI SDK web search',
-                    'source_url' => 'https://example.com/aapl',
-                    'as_of' => '2026-06-02 11:59 UTC',
-                    'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
-                ]);
+                ->andReturnUsing(function (StockHolding $holding): QuoteSelectionResult {
+                    $holding->update([
+                        'currency' => 'EUR',
+                        'latest_price' => '123.456789',
+                        'latest_price_fetched_at' => Carbon::parse('2026-06-02 12:00:00'),
+                        'latest_price_source' => 'Tradegate Exchange',
+                        'latest_price_source_url' => 'https://www.tradegatebsx.com/orderbuch.php?isin=US9229083632',
+                        'latest_price_as_of' => '2026-06-02 11:59:00',
+                        'trading_times' => 'Monday-Friday 08:00-22:00 Europe/Berlin',
+                        'price_status' => 'fresh',
+                        'latest_price_type' => 'indicative_mid',
+                    ]);
+
+                    return new QuoteSelectionResult(null, [], [], status: 'fresh');
+                });
         });
 
         $this->actingAs($admin)
@@ -166,10 +191,11 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holding.latest_price', '123.456789')
             ->assertJsonPath('holding.latest_price_status', 'fresh')
             ->assertJsonPath('holding.latest_price_fetched_at', '2026-06-02T12:00:00+00:00')
-            ->assertJsonPath('holding.latest_price_source', 'AI SDK web search')
-            ->assertJsonPath('holding.latest_price_source_url', 'https://example.com/aapl')
-            ->assertJsonPath('holding.latest_price_as_of', '2026-06-02 11:59 UTC')
-            ->assertJsonPath('holding.trading_times', 'Monday-Friday 09:00-17:30 Europe/Berlin');
+            ->assertJsonPath('holding.latest_price_source', 'Tradegate Exchange')
+            ->assertJsonPath('holding.latest_price_source_url', 'https://www.tradegatebsx.com/orderbuch.php?isin=US9229083632')
+            ->assertJsonPath('holding.latest_price_as_of', '2026-06-02 11:59:00')
+            ->assertJsonPath('holding.trading_times', 'Monday-Friday 08:00-22:00 Europe/Berlin')
+            ->assertJsonPath('holding.price_type', 'indicative_mid');
 
         $this->assertDatabaseHas('stock_holdings', [
             'depot_id' => $depot->id,
@@ -181,10 +207,11 @@ class AdminDepotHoldingTest extends TestCase
             'currency' => 'EUR',
             'latest_price' => '123.456789',
             'latest_price_fetched_at' => '2026-06-02 12:00:00',
-            'latest_price_source' => 'AI SDK web search',
-            'latest_price_source_url' => 'https://example.com/aapl',
-            'latest_price_as_of' => '2026-06-02 11:59 UTC',
-            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+            'latest_price_source' => 'Tradegate Exchange',
+            'latest_price_source_url' => 'https://www.tradegatebsx.com/orderbuch.php?isin=US9229083632',
+            'latest_price_as_of' => '2026-06-02 11:59:00',
+            'trading_times' => 'Monday-Friday 08:00-22:00 Europe/Berlin',
+            'latest_price_type' => 'indicative_mid',
         ]);
     }
 
@@ -195,19 +222,11 @@ class AdminDepotHoldingTest extends TestCase
             'is_active' => true,
         ]);
         $this->travelTo(Carbon::parse('2026-06-02 13:00:00'));
-        $this->mock(StockPriceLookupService::class, function (MockInterface $mock): void {
+        $this->mock(WebMarketDataOrchestrator::class, function (MockInterface $mock): void {
             $mock
-                ->shouldReceive('latestPrice')
+                ->shouldReceive('resolve')
                 ->once()
-                ->andReturn([
-                    'price' => null,
-                    'currency' => null,
-                    'fetched_at' => Carbon::parse('2026-06-02 13:00:00'),
-                    'source' => 'AI SDK web search',
-                    'source_url' => null,
-                    'as_of' => null,
-                    'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
-                ]);
+                ->andReturn(new QuoteSelectionResult(null, [], [], status: 'unavailable'));
         });
 
         $this->actingAs($admin)
@@ -227,11 +246,11 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holding.exchange', 'XETRA')
             ->assertJsonPath('holding.mic_code', 'XETR')
             ->assertJsonPath('holding.latest_price', null)
-            ->assertJsonPath('holding.latest_price_status', 'unavailable')
-            ->assertJsonPath('holding.latest_price_fetched_at', '2026-06-02T13:00:00+00:00')
-            ->assertJsonPath('holding.latest_price_source', 'AI SDK web search')
+            ->assertJsonPath('holding.latest_price_status', 'missing')
+            ->assertJsonPath('holding.latest_price_fetched_at', null)
+            ->assertJsonPath('holding.latest_price_source', null)
             ->assertJsonPath('holding.latest_price_source_url', null)
-            ->assertJsonPath('holding.trading_times', 'Monday-Friday 09:00-17:30 Europe/Vienna');
+            ->assertJsonPath('holding.trading_times', null);
 
         $this->assertDatabaseHas('stock_holdings', [
             'symbol' => 'EXXX',
@@ -241,11 +260,11 @@ class AdminDepotHoldingTest extends TestCase
             'mic_code' => 'XETR',
             'currency' => 'EUR',
             'latest_price' => null,
-            'latest_price_fetched_at' => '2026-06-02 13:00:00',
-            'latest_price_source' => 'AI SDK web search',
+            'latest_price_fetched_at' => null,
+            'latest_price_source' => null,
             'latest_price_source_url' => null,
             'latest_price_as_of' => null,
-            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
+            'trading_times' => null,
         ]);
     }
 
@@ -326,64 +345,41 @@ class AdminDepotHoldingTest extends TestCase
             'country' => 'United States',
             'currency' => 'USD',
             'latest_price' => '200.000000',
+            'latest_price_fetched_at' => '2026-06-02 14:30:00',
+            'latest_price_source' => 'Previous verified source',
+            'latest_price_source_url' => 'https://example.com/msft',
+            'latest_price_as_of' => '2026-06-02 14:29 UTC',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
         ]);
-        $this->mock(StockPriceLookupService::class, function (MockInterface $mock): void {
+        $this->mock(WebMarketDataOrchestrator::class, function (MockInterface $mock): void {
             $mock
-                ->shouldReceive('latestPrice')
+                ->shouldReceive('resolve')
                 ->once()
-                ->with([
-                    'symbol' => 'AAPL',
-                    'name' => 'Apple Inc.',
-                    'isin' => 'US0378331005',
-                    'wkn' => '865985',
-                    'exchange' => 'NASDAQ',
-                    'mic_code' => 'XNAS',
-                    'instrument_type' => 'Common Stock',
-                    'country' => 'United States',
-                    'currency' => 'USD',
-                    'source_url' => 'https://example.com/market-data',
-                    'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
-                ])
-                ->andReturn([
-                    'price' => '306.320010',
-                    'currency' => 'EUR',
-                    'fetched_at' => Carbon::parse('2026-06-02 15:00:00'),
-                    'source' => 'Nasdaq',
-                    'source_url' => 'https://www.nasdaq.com/market-activity/stocks/aapl',
-                    'as_of' => '2026-06-02 14:59 UTC',
-                    'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
-                ]);
+                ->andReturnUsing(function (StockHolding $holding): QuoteSelectionResult {
+                    $holding->update([
+                        'currency' => 'EUR',
+                        'latest_price' => '306.320010',
+                        'latest_price_fetched_at' => Carbon::parse('2026-06-02 15:00:00'),
+                        'latest_price_source' => 'Tradegate Exchange',
+                        'latest_price_source_url' => 'https://www.tradegatebsx.com/orderbuch.php?isin=US0378331005',
+                        'latest_price_as_of' => '2026-06-02 14:59:00',
+                        'trading_times' => 'Monday-Friday 08:00-22:00 Europe/Berlin',
+                        'price_status' => 'fresh',
+                        'latest_price_type' => 'indicative_mid',
+                    ]);
+
+                    return new QuoteSelectionResult(null, [], [], status: 'fresh');
+                });
             $mock
-                ->shouldReceive('latestPrice')
+                ->shouldReceive('resolve')
                 ->once()
-                ->with([
-                    'symbol' => 'MSFT',
-                    'name' => 'Microsoft Corporation',
-                    'isin' => 'US5949181045',
-                    'wkn' => '870747',
-                    'exchange' => 'NASDAQ',
-                    'mic_code' => 'XNAS',
-                    'instrument_type' => 'Common Stock',
-                    'country' => 'United States',
-                    'currency' => 'USD',
-                    'source_url' => 'https://example.com/market-data',
-                    'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
-                ])
-                ->andReturn([
-                    'price' => null,
-                    'currency' => null,
-                    'fetched_at' => Carbon::parse('2026-06-02 15:01:00'),
-                    'source' => 'AI SDK web search',
-                    'source_url' => null,
-                    'as_of' => null,
-                    'trading_times' => null,
-                ]);
+                ->andReturn(new QuoteSelectionResult(null, [], [], status: 'unavailable'));
         });
         $progress = app(DepotHoldingPriceRefreshProgress::class);
         $progress->start('refresh-test', $depot->id, 2);
 
         (new RefreshDepotHoldingPrices($depot->id, 'refresh-test'))->handle(
-            app(StockPriceLookupService::class),
+            app(WebMarketDataOrchestrator::class),
             $progress,
         );
 
@@ -392,19 +388,20 @@ class AdminDepotHoldingTest extends TestCase
             'currency' => 'EUR',
             'latest_price' => '306.320010',
             'latest_price_fetched_at' => '2026-06-02 15:00:00',
-            'latest_price_source' => 'Nasdaq',
-            'latest_price_source_url' => 'https://www.nasdaq.com/market-activity/stocks/aapl',
-            'latest_price_as_of' => '2026-06-02 14:59 UTC',
-            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+            'latest_price_source' => 'Tradegate Exchange',
+            'latest_price_source_url' => 'https://www.tradegatebsx.com/orderbuch.php?isin=US0378331005',
+            'latest_price_as_of' => '2026-06-02 14:59:00',
+            'trading_times' => 'Monday-Friday 08:00-22:00 Europe/Berlin',
+            'latest_price_type' => 'indicative_mid',
         ]);
         $this->assertDatabaseHas('stock_holdings', [
             'id' => $microsoft->id,
             'currency' => 'USD',
-            'latest_price' => null,
-            'latest_price_fetched_at' => '2026-06-02 15:01:00',
-            'latest_price_source' => 'AI SDK web search',
-            'latest_price_source_url' => null,
-            'latest_price_as_of' => null,
+            'latest_price' => '200.000000',
+            'latest_price_fetched_at' => '2026-06-02 14:30:00',
+            'latest_price_source' => 'Previous verified source',
+            'latest_price_source_url' => 'https://example.com/msft',
+            'latest_price_as_of' => '2026-06-02 14:29 UTC',
         ]);
         $this->assertSame('finished', $progress->get('refresh-test')['status']);
         $this->assertSame('2/2', $progress->get('refresh-test')['step']);

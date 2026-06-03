@@ -23,6 +23,10 @@ class StockPriceFreshness
         $sourceDate = $sourceDateTime['date'];
         $currentDate = ($now ?? now())->copy()->setTimezone($sourceDate->timezone);
 
+        if (! $sourceDateTime['has_time']) {
+            return false;
+        }
+
         if ($sourceDate->gt($currentDate->copy()->addMinutes(5))) {
             return false;
         }

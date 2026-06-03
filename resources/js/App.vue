@@ -804,6 +804,52 @@ function formatTradingTimes(holding) {
     return holding.trading_times || '-';
 }
 
+function formatPriceStatus(holding) {
+    const labels = {
+        realtime: 'Realtime',
+        fresh: 'Fresh',
+        delayed: 'Delayed',
+        closed_market: 'Closed Market',
+        stale: 'Stale',
+        unavailable: 'Unavailable',
+        unavailable_now: 'Unavailable Now',
+        suspicious: 'Suspicious',
+        missing: 'Missing',
+    };
+
+    return labels[holding.latest_price_status] ?? labels[holding.price_status] ?? holding.latest_price_status ?? '-';
+}
+
+function formatPriceType(holding) {
+    const labels = {
+        indicative_mid: 'Mid',
+        last: 'Last',
+        close: 'Close',
+        nav: 'NAV',
+        unavailable: 'Unavailable',
+    };
+
+    return labels[holding.price_type] ?? holding.price_type ?? '-';
+}
+
+function formatSpread(holding) {
+    if (holding.price_spread_pct === null || holding.price_spread_pct === undefined || holding.price_spread_pct === '') {
+        return '-';
+    }
+
+    const amount = Number(holding.price_spread_pct);
+
+    return Number.isNaN(amount) ? `${holding.price_spread_pct}%` : `${amount.toFixed(2)}%`;
+}
+
+function formatValidationErrors(holding) {
+    if (!Array.isArray(holding.validation_errors) || holding.validation_errors.length === 0) {
+        return '';
+    }
+
+    return holding.validation_errors.join('\n');
+}
+
 function clearSectionMessages() {
     profileMessage.value = '';
     profileError.value = '';
@@ -1023,6 +1069,7 @@ function emptyDepotForm() {
                                     <th>Name</th>
                                     <th>Instrument</th>
                                     <th>Latest price</th>
+                                    <th>Status</th>
                                     <th>Source time</th>
                                     <th>Trading times</th>
                                     <th>Source</th>
@@ -1031,7 +1078,7 @@ function emptyDepotForm() {
                             </thead>
                             <tbody>
                                 <tr v-if="activeDepot && !holdingsLoading && holdings.length === 0">
-                                    <td colspan="8">No stocks in this depot.</td>
+                                    <td colspan="9">No stocks in this depot.</td>
                                 </tr>
                                 <tr v-for="holding in holdings" :key="holding.id">
                                     <td>{{ holding.symbol || '-' }}</td>
@@ -1046,6 +1093,15 @@ function emptyDepotForm() {
                                         </div>
                                     </td>
                                     <td>{{ formatLatestPrice(holding) }}</td>
+                                    <td :title="formatValidationErrors(holding)">
+                                        <div>{{ formatPriceStatus(holding) }}</div>
+                                        <div class="text-caption text-medium-emphasis">
+                                            {{ formatPriceType(holding) }} · {{ holding.venue || '-' }}
+                                        </div>
+                                        <div class="text-caption text-medium-emphasis">
+                                            Spread: {{ formatSpread(holding) }}
+                                        </div>
+                                    </td>
                                     <td>{{ formatSourceDateTime(holding.latest_price_as_of) }}</td>
                                     <td>{{ formatTradingTimes(holding) }}</td>
                                     <td>

@@ -65,7 +65,11 @@ class DeterministicStockPriceLookupService
 
         $candidates = collect();
 
-        if ($providedSourceUrl !== null && ! $this->isSearchUrl($providedSourceUrl)) {
+        if (
+            $providedSourceUrl !== null
+            && ! $this->isSearchUrl($providedSourceUrl)
+            && $this->isSupportedPreviousSourceUrl($providedSourceUrl)
+        ) {
             $candidates->push([
                 'name' => 'Previous verified source',
                 'url' => $providedSourceUrl,
@@ -371,6 +375,17 @@ class DeterministicStockPriceLookupService
             return Carbon::now('Europe/Berlin')->format('d.m.Y').' '.$matches['time'].' Europe/Berlin';
         }
 
+        $date = '\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}|\d{4}-\d{2}-\d{2}';
+        $time = '\d{1,2}:\d{2}(?::\d{2})?';
+
+        if (preg_match("/(?:datum|date)[^0-9]{0,40}(?<date>{$date}).{0,120}(?:zeit|time)[^0-9]{0,40}(?<time>{$time})/iu", $content, $matches)) {
+            return "{$matches['date']} {$matches['time']}";
+        }
+
+        if (preg_match("/(?:zeit|time)[^0-9]{0,40}(?<time>{$time}).{0,120}(?:datum|date)[^0-9]{0,40}(?<date>{$date})/iu", $content, $matches)) {
+            return "{$matches['date']} {$matches['time']}";
+        }
+
         $dateTimePattern = '/(?<as_of>\b\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?(?:\s*(?:CET|CEST|UTC|Europe\/[A-Za-z_]+))?|\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:?\d{2})?)?)/iu';
 
         if (! preg_match($dateTimePattern, $content, $matches)) {
@@ -654,6 +669,43 @@ class DeterministicStockPriceLookupService
 
         return Str::contains($path, ['/search', '/suche', 'search_instruments'])
             || Str::contains($query, ['query=', 'q=', 'search=', 'searchvalue=']);
+    }
+
+    private function isSupportedPreviousSourceUrl(string $url): bool
+    {
+        $host = Str::lower((string) (parse_url($url, PHP_URL_HOST) ?? ''));
+
+        return in_array($host, [
+            'live.euronext.com',
+            'www.borsaitaliana.it',
+            'borsaitaliana.it',
+            'www.tradegate.de',
+            'tradegate.de',
+            'www.justetf.com',
+            'justetf.com',
+            'extraetf.com',
+            'www.extraetf.com',
+            'www.onvista.de',
+            'onvista.de',
+            'www.finanzen.at',
+            'finanzen.at',
+            'www.boerse-frankfurt.de',
+            'boerse-frankfurt.de',
+            'www.wienerborse.at',
+            'wienerborse.at',
+            'www.boerse-stuttgart.de',
+            'boerse-stuttgart.de',
+            'www.gettex.de',
+            'gettex.de',
+            'www.ls-x.de',
+            'ls-x.de',
+            'www.boerse-duesseldorf.de',
+            'boerse-duesseldorf.de',
+            'www.boerse-hamburg.de',
+            'boerse-hamburg.de',
+            'www.boerse-hannover.de',
+            'boerse-hannover.de',
+        ], true);
     }
 
     /**

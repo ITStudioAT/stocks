@@ -5,9 +5,10 @@ namespace App\Http\Controllers;
 use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\Depot;
 use App\Models\StockHolding;
+use App\Models\StockPriceRefreshRun;
 use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\StockPriceFreshness;
-use App\Services\StockPriceLookupService;
+use App\Services\WebMarketData\WebMarketDataOrchestrator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
@@ -25,6 +26,7 @@ class AdminDepotHoldingController extends Controller
         $depot = $this->activeDepot();
 
         $holdings = $depot->stockHoldings()
+            ->with('latestQuote')
             ->orderBy('name')
             ->orderBy('isin')
             ->paginate(10)
@@ -44,11 +46,10 @@ class AdminDepotHoldingController extends Controller
         ]);
     }
 
-    public function store(Request $request, StockPriceLookupService $stockPriceLookup): JsonResponse
+    public function store(Request $request, WebMarketDataOrchestrator $marketData): JsonResponse
     {
         $depot = $this->activeDepot();
         $validated = $this->validatedHoldingData($request, $depot);
-        $latestPriceData = $stockPriceLookup->latestPrice($validated);
 
         $holding = $depot->stockHoldings()->create([
             'symbol' => $validated['symbol'],
@@ -59,14 +60,11 @@ class AdminDepotHoldingController extends Controller
             'mic_code' => $validated['mic_code'] ?? null,
             'instrument_type' => $validated['instrument_type'] ?? null,
             'country' => $validated['country'] ?? null,
-            'currency' => $latestPriceData['currency'] ?? $validated['currency'] ?? null,
-            'latest_price' => $latestPriceData['price'],
-            'latest_price_fetched_at' => $latestPriceData['fetched_at'],
-            'latest_price_source' => $latestPriceData['source'],
-            'latest_price_source_url' => $latestPriceData['source_url'],
-            'latest_price_as_of' => $latestPriceData['as_of'],
-            'trading_times' => $latestPriceData['trading_times'],
+            'currency' => $validated['currency'] ?? null,
         ]);
+
+        $marketData->resolve($holding);
+        $holding->refresh();
 
         return response()->json([
             'message' => 'Stock added.',
@@ -80,6 +78,14 @@ class AdminDepotHoldingController extends Controller
         $refreshId = (string) Str::uuid();
         $total = $depot->stockHoldings()->count();
         $progress = $refreshProgress->start($refreshId, $depot->id, $total);
+        StockPriceRefreshRun::query()->create([
+            'id' => $refreshId,
+            'depot_id' => $depot->id,
+            'status' => $total === 0 ? 'finished' : 'queued',
+            'total_count' => $total,
+            'started_at' => now(),
+            'finished_at' => $total === 0 ? now() : null,
+        ]);
 
         if ($total > 0) {
             RefreshDepotHoldingPrices::dispatch($depot->id, $refreshId);
@@ -155,7 +161,7 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, latest_price_status: string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, created_at: ?string}
+     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, validation_errors: array<int, string>, created_at: ?string}
      */
     private function holdingPayload(StockHolding $holding): array
     {
@@ -172,19 +178,28 @@ class AdminDepotHoldingController extends Controller
             'instrument_type' => $holding->instrument_type,
             'country' => $holding->country,
             'currency' => $holding->currency,
-            'latest_price' => $latestPriceStatus === 'fresh' ? $holding->latest_price : null,
+            'latest_price' => in_array($latestPriceStatus, ['realtime', 'fresh', 'delayed', 'closed_market', 'suspicious', 'unavailable_now'], true) ? $holding->latest_price : null,
             'latest_price_status' => $latestPriceStatus,
+            'price_status' => $holding->price_status,
             'latest_price_fetched_at' => $holding->latest_price_fetched_at?->toIso8601String(),
             'latest_price_source' => $holding->latest_price_source,
             'latest_price_source_url' => $holding->latest_price_source_url,
-            'latest_price_as_of' => in_array($latestPriceStatus, ['fresh', 'stale'], true) ? $holding->latest_price_as_of : null,
+            'latest_price_as_of' => in_array($latestPriceStatus, ['realtime', 'fresh', 'delayed', 'closed_market', 'suspicious', 'stale', 'unavailable_now'], true) ? $holding->latest_price_as_of : null,
             'trading_times' => $holding->trading_times,
+            'venue' => $holding->latestQuote?->venue,
+            'price_type' => $holding->latest_price_type,
+            'price_spread_pct' => $holding->price_spread_pct,
+            'validation_errors' => $holding->latestQuote?->validation_errors ?? [],
             'created_at' => $holding->created_at?->toIso8601String(),
         ];
     }
 
     private function latestPriceStatus(StockHolding $holding): string
     {
+        if (in_array($holding->price_status, ['realtime', 'fresh', 'delayed', 'closed_market', 'suspicious', 'unavailable_now', 'stale'], true)) {
+            return $holding->price_status;
+        }
+
         if ($holding->latest_price === null) {
             return $holding->latest_price_fetched_at === null ? 'missing' : 'unavailable';
         }

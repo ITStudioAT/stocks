@@ -109,11 +109,16 @@ describe('App', () => {
                             currency: 'USD',
                             latest_price: '306.320010',
                             latest_price_status: 'fresh',
+                            price_status: 'fresh',
                             latest_price_fetched_at: '2026-06-02T12:00:00+00:00',
-                            latest_price_source: 'Nasdaq',
-                            latest_price_source_url: 'https://www.nasdaq.com/market-activity/stocks/aapl',
-                            latest_price_as_of: '2026-06-02 11:59 UTC',
-                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Berlin',
+                            latest_price_source: 'Tradegate Exchange',
+                            latest_price_source_url: 'https://www.tradegatebsx.com/orderbuch.php?isin=US0378331005',
+                            latest_price_as_of: '2026-06-02 13:59:00',
+                            trading_times: 'Monday-Friday 08:00-22:00 Europe/Berlin',
+                            venue: 'Tradegate',
+                            price_type: 'indicative_mid',
+                            price_spread_pct: '0.050000',
+                            validation_errors: [],
                         },
                         {
                             id: 2,
@@ -124,12 +129,17 @@ describe('App', () => {
                             exchange: 'XETR',
                             currency: 'EUR',
                             latest_price: null,
-                            latest_price_status: 'unavailable',
-                            latest_price_fetched_at: '6/2/26, 10:04 PM',
-                            latest_price_source: 'AI SDK web search',
+                            latest_price_status: 'missing',
+                            price_status: 'unavailable_now',
+                            latest_price_fetched_at: null,
+                            latest_price_source: null,
                             latest_price_source_url: null,
                             latest_price_as_of: null,
-                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Vienna',
+                            trading_times: null,
+                            venue: null,
+                            price_type: null,
+                            price_spread_pct: null,
+                            validation_errors: [],
                         },
                         {
                             id: 3,
@@ -141,11 +151,16 @@ describe('App', () => {
                             currency: 'EUR',
                             latest_price: '43.370000',
                             latest_price_status: 'stale',
+                            price_status: 'stale',
                             latest_price_fetched_at: '2026-06-03T04:18:46+00:00',
                             latest_price_source: 'Borsa Italiana',
                             latest_price_source_url: 'https://www.borsaitaliana.it/example',
                             latest_price_as_of: '2026-06-01 11:10:33',
                             trading_times: 'Monday-Friday 09:00-17:30 Europe/Rome',
+                            venue: 'Borsa Italiana',
+                            price_type: 'last',
+                            price_spread_pct: null,
+                            validation_errors: [],
                         },
                     ],
                     meta: {
@@ -278,11 +293,16 @@ describe('App', () => {
                             currency: 'USD',
                             latest_price: '306.320010',
                             latest_price_status: 'fresh',
+                            price_status: 'fresh',
                             latest_price_fetched_at: '2026-06-02T12:00:00+00:00',
-                            latest_price_source: 'Nasdaq',
-                            latest_price_source_url: 'https://www.nasdaq.com/market-activity/stocks/aapl',
-                            latest_price_as_of: '2026-06-02 11:59 UTC',
-                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Berlin',
+                            latest_price_source: 'Tradegate Exchange',
+                            latest_price_source_url: 'https://www.tradegatebsx.com/orderbuch.php?isin=US0378331005',
+                            latest_price_as_of: '2026-06-02 13:59:00',
+                            trading_times: 'Monday-Friday 08:00-22:00 Europe/Berlin',
+                            venue: 'Tradegate',
+                            price_type: 'indicative_mid',
+                            price_spread_pct: '0.050000',
+                            validation_errors: [],
                         },
                         {
                             id: 2,
@@ -293,12 +313,17 @@ describe('App', () => {
                             exchange: 'XETR',
                             currency: 'EUR',
                             latest_price: null,
-                            latest_price_status: 'unavailable',
-                            latest_price_fetched_at: '6/2/26, 10:04 PM',
-                            latest_price_source: 'AI SDK web search',
+                            latest_price_status: 'missing',
+                            price_status: 'unavailable_now',
+                            latest_price_fetched_at: null,
+                            latest_price_source: null,
                             latest_price_source_url: null,
                             latest_price_as_of: null,
-                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Vienna',
+                            trading_times: null,
+                            venue: null,
+                            price_type: null,
+                            price_spread_pct: null,
+                            validation_errors: [],
                         },
                         {
                             id: 3,
@@ -310,11 +335,16 @@ describe('App', () => {
                             currency: 'EUR',
                             latest_price: '43.370000',
                             latest_price_status: 'stale',
+                            price_status: 'stale',
                             latest_price_fetched_at: '2026-06-03T04:18:46+00:00',
                             latest_price_source: 'Borsa Italiana',
                             latest_price_source_url: 'https://www.borsaitaliana.it/example',
                             latest_price_as_of: '2026-06-01 11:10:33',
                             trading_times: 'Monday-Friday 09:00-17:30 Europe/Rome',
+                            venue: 'Borsa Italiana',
+                            price_type: 'last',
+                            price_spread_pct: null,
+                            validation_errors: [],
                         },
                     ],
                     meta: {
@@ -338,11 +368,17 @@ describe('App', () => {
                         exchange: 'NASDAQ',
                         currency: 'USD',
                         latest_price: '415.250000',
+                        latest_price_status: 'fresh',
+                        price_status: 'fresh',
                         latest_price_fetched_at: '2026-06-02T12:10:00+00:00',
-                        latest_price_source: 'AI SDK web search',
-                        latest_price_source_url: 'https://example.com/msft',
-                        latest_price_as_of: '2026-06-02 12:09 UTC',
-                        trading_times: 'Monday-Friday 09:00-17:30 Europe/Berlin',
+                        latest_price_source: 'Tradegate Exchange',
+                        latest_price_source_url: 'https://www.tradegatebsx.com/orderbuch.php?isin=US5949181045',
+                        latest_price_as_of: '2026-06-02 14:09:00',
+                        trading_times: 'Monday-Friday 08:00-22:00 Europe/Berlin',
+                        venue: 'Tradegate',
+                        price_type: 'indicative_mid',
+                        price_spread_pct: '0.050000',
+                        validation_errors: [],
                     },
                 }));
             }
@@ -420,6 +456,7 @@ describe('App', () => {
             'Name',
             'Instrument',
             'Latest price',
+            'Status',
             'Source time',
             'Trading times',
             'Source',
@@ -431,16 +468,16 @@ describe('App', () => {
         expect(wrapper.text()).toContain('US0378331005');
         expect(wrapper.text()).toContain('865985');
         expect(wrapper.text()).toContain('306.32001 USD');
+        expect(wrapper.text()).toContain('Fresh');
+        expect(wrapper.text()).toContain('Mid');
+        expect(wrapper.text()).toContain('Spread: 0.05%');
         expect(wrapper.text()).toContain('02.06.2026, 13:59');
-        expect(wrapper.text()).toContain('Monday-Friday 09:00-17:30 Europe/Berlin');
-        expect(wrapper.text()).toContain('Nasdaq');
+        expect(wrapper.text()).toContain('Monday-Friday 08:00-22:00 Europe/Berlin');
+        expect(wrapper.text()).toContain('Tradegate Exchange');
         expect(wrapper.text()).toContain('EXXX');
         expect(wrapper.text()).toContain('DE000A0D8Q23');
         expect(wrapper.text()).toContain('A0D8Q2');
-        expect(wrapper.text()).toContain('Unavailable');
-        expect(wrapper.text()).not.toContain('02.06.2026, 22:04');
-        expect(wrapper.text()).toContain('Monday-Friday 09:00-17:30 Europe/Vienna');
-        expect(wrapper.text()).toContain('AI SDK web search');
+        expect(wrapper.text()).toContain('Missing');
         expect(wrapper.text()).toContain('LEER');
         expect(wrapper.text()).toContain('Stale');
         expect(wrapper.text()).not.toContain('43.37 EUR');
