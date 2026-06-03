@@ -627,6 +627,10 @@ function formatAccountBalance(value) {
 }
 
 function formatLatestPrice(holding) {
+    if (holding.latest_price_status === 'stale') {
+        return 'Stale';
+    }
+
     if (holding.latest_price === null || holding.latest_price === undefined || holding.latest_price === '') {
         return holding.latest_price_fetched_at ? 'Unavailable' : '-';
     }

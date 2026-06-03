@@ -108,6 +108,7 @@ describe('App', () => {
                             exchange: 'NASDAQ',
                             currency: 'USD',
                             latest_price: '306.320010',
+                            latest_price_status: 'fresh',
                             latest_price_fetched_at: '2026-06-02T12:00:00+00:00',
                             latest_price_source: 'Nasdaq',
                             latest_price_source_url: 'https://www.nasdaq.com/market-activity/stocks/aapl',
@@ -123,20 +124,37 @@ describe('App', () => {
                             exchange: 'XETR',
                             currency: 'EUR',
                             latest_price: null,
+                            latest_price_status: 'unavailable',
                             latest_price_fetched_at: '6/2/26, 10:04 PM',
                             latest_price_source: 'AI SDK web search',
                             latest_price_source_url: null,
                             latest_price_as_of: null,
                             trading_times: 'Monday-Friday 09:00-17:30 Europe/Vienna',
                         },
+                        {
+                            id: 3,
+                            symbol: 'LEER',
+                            name: 'Amundi MSCI Eastern Europe Ex Russia UCITS ETF Acc',
+                            isin: 'LU1681043912',
+                            wkn: 'A2H58Q',
+                            exchange: 'Borsa Italiana',
+                            currency: 'EUR',
+                            latest_price: '43.370000',
+                            latest_price_status: 'stale',
+                            latest_price_fetched_at: '2026-06-03T04:18:46+00:00',
+                            latest_price_source: 'Borsa Italiana',
+                            latest_price_source_url: 'https://www.borsaitaliana.it/example',
+                            latest_price_as_of: '2026-06-01 11:10:33',
+                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Rome',
+                        },
                     ],
                     meta: {
                         current_page: 1,
                         last_page: 1,
                         per_page: 10,
-                        total: 2,
+                        total: 3,
                         from: 1,
-                        to: 2,
+                        to: 3,
                     },
                 }));
             }
@@ -259,6 +277,7 @@ describe('App', () => {
                             exchange: 'NASDAQ',
                             currency: 'USD',
                             latest_price: '306.320010',
+                            latest_price_status: 'fresh',
                             latest_price_fetched_at: '2026-06-02T12:00:00+00:00',
                             latest_price_source: 'Nasdaq',
                             latest_price_source_url: 'https://www.nasdaq.com/market-activity/stocks/aapl',
@@ -274,20 +293,37 @@ describe('App', () => {
                             exchange: 'XETR',
                             currency: 'EUR',
                             latest_price: null,
+                            latest_price_status: 'unavailable',
                             latest_price_fetched_at: '6/2/26, 10:04 PM',
                             latest_price_source: 'AI SDK web search',
                             latest_price_source_url: null,
                             latest_price_as_of: null,
                             trading_times: 'Monday-Friday 09:00-17:30 Europe/Vienna',
                         },
+                        {
+                            id: 3,
+                            symbol: 'LEER',
+                            name: 'Amundi MSCI Eastern Europe Ex Russia UCITS ETF Acc',
+                            isin: 'LU1681043912',
+                            wkn: 'A2H58Q',
+                            exchange: 'Borsa Italiana',
+                            currency: 'EUR',
+                            latest_price: '43.370000',
+                            latest_price_status: 'stale',
+                            latest_price_fetched_at: '2026-06-03T04:18:46+00:00',
+                            latest_price_source: 'Borsa Italiana',
+                            latest_price_source_url: 'https://www.borsaitaliana.it/example',
+                            latest_price_as_of: '2026-06-01 11:10:33',
+                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Rome',
+                        },
                     ],
                     meta: {
                         current_page: 1,
                         last_page: 1,
                         per_page: 10,
-                        total: 2,
+                        total: 3,
                         from: 1,
-                        to: 2,
+                        to: 3,
                     },
                 }));
             }
@@ -405,6 +441,9 @@ describe('App', () => {
         expect(wrapper.text()).not.toContain('02.06.2026, 22:04');
         expect(wrapper.text()).toContain('Monday-Friday 09:00-17:30 Europe/Vienna');
         expect(wrapper.text()).toContain('AI SDK web search');
+        expect(wrapper.text()).toContain('LEER');
+        expect(wrapper.text()).toContain('Stale');
+        expect(wrapper.text()).not.toContain('43.37 EUR');
         expect(wrapper.text()).not.toContain('Trading depot');
         expect(wrapper.text()).not.toContain('250.50');
 

@@ -52,6 +52,7 @@ class AdminDepotHoldingTest extends TestCase
                         'country',
                         'currency',
                         'latest_price',
+                        'latest_price_status',
                         'latest_price_fetched_at',
                         'latest_price_source',
                         'latest_price_source_url',
@@ -61,6 +62,53 @@ class AdminDepotHoldingTest extends TestCase
                     ],
                 ],
             ]);
+    }
+
+    public function test_admin_listing_hides_stale_holding_prices(): void
+    {
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create([
+            'is_active' => true,
+        ]);
+        $this->travelTo(Carbon::parse('2026-06-03 08:30:00'));
+        StockHolding::factory()->create([
+            'depot_id' => $depot->id,
+            'symbol' => 'LEER',
+            'latest_price' => '43.370000',
+            'latest_price_as_of' => '2026-06-01 11:10:33',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Rome',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/active-depot/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.symbol', 'LEER')
+            ->assertJsonPath('holdings.0.latest_price', null)
+            ->assertJsonPath('holdings.0.latest_price_status', 'stale')
+            ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-01 11:10:33');
+    }
+
+    public function test_admin_listing_hides_source_time_for_unavailable_holding_prices(): void
+    {
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create([
+            'is_active' => true,
+        ]);
+        StockHolding::factory()->create([
+            'depot_id' => $depot->id,
+            'symbol' => 'LYMH',
+            'latest_price' => null,
+            'latest_price_fetched_at' => '2026-06-03 05:40:55',
+            'latest_price_as_of' => '03.06.2026 05:32:08 Europe/Berlin',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/active-depot/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.symbol', 'LYMH')
+            ->assertJsonPath('holdings.0.latest_price', null)
+            ->assertJsonPath('holdings.0.latest_price_status', 'unavailable')
+            ->assertJsonPath('holdings.0.latest_price_as_of', null);
     }
 
     public function test_admin_can_add_a_selected_stock_holding(): void
@@ -116,6 +164,7 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holding.mic_code', 'XNAS')
             ->assertJsonPath('holding.currency', 'EUR')
             ->assertJsonPath('holding.latest_price', '123.456789')
+            ->assertJsonPath('holding.latest_price_status', 'fresh')
             ->assertJsonPath('holding.latest_price_fetched_at', '2026-06-02T12:00:00+00:00')
             ->assertJsonPath('holding.latest_price_source', 'AI SDK web search')
             ->assertJsonPath('holding.latest_price_source_url', 'https://example.com/aapl')
@@ -178,6 +227,7 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holding.exchange', 'XETRA')
             ->assertJsonPath('holding.mic_code', 'XETR')
             ->assertJsonPath('holding.latest_price', null)
+            ->assertJsonPath('holding.latest_price_status', 'unavailable')
             ->assertJsonPath('holding.latest_price_fetched_at', '2026-06-02T13:00:00+00:00')
             ->assertJsonPath('holding.latest_price_source', 'AI SDK web search')
             ->assertJsonPath('holding.latest_price_source_url', null)
@@ -292,6 +342,7 @@ class AdminDepotHoldingTest extends TestCase
                     'country' => 'United States',
                     'currency' => 'USD',
                     'source_url' => 'https://example.com/market-data',
+                    'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
                 ])
                 ->andReturn([
                     'price' => '306.320010',
@@ -316,6 +367,7 @@ class AdminDepotHoldingTest extends TestCase
                     'country' => 'United States',
                     'currency' => 'USD',
                     'source_url' => 'https://example.com/market-data',
+                    'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
                 ])
                 ->andReturn([
                     'price' => null,
@@ -348,7 +400,11 @@ class AdminDepotHoldingTest extends TestCase
         $this->assertDatabaseHas('stock_holdings', [
             'id' => $microsoft->id,
             'currency' => 'USD',
-            'latest_price' => '200.000000',
+            'latest_price' => null,
+            'latest_price_fetched_at' => '2026-06-02 15:01:00',
+            'latest_price_source' => 'AI SDK web search',
+            'latest_price_source_url' => null,
+            'latest_price_as_of' => null,
         ]);
         $this->assertSame('finished', $progress->get('refresh-test')['status']);
         $this->assertSame('2/2', $progress->get('refresh-test')['step']);

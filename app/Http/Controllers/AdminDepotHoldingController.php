@@ -6,6 +6,7 @@ use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\Depot;
 use App\Models\StockHolding;
 use App\Services\DepotHoldingPriceRefreshProgress;
+use App\Services\StockPriceFreshness;
 use App\Services\StockPriceLookupService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,6 +16,10 @@ use Illuminate\Validation\ValidationException;
 
 class AdminDepotHoldingController extends Controller
 {
+    public function __construct(
+        private StockPriceFreshness $stockPriceFreshness,
+    ) {}
+
     public function index(): JsonResponse
     {
         $depot = $this->activeDepot();
@@ -150,10 +155,12 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, created_at: ?string}
+     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, latest_price_status: string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, created_at: ?string}
      */
     private function holdingPayload(StockHolding $holding): array
     {
+        $latestPriceStatus = $this->latestPriceStatus($holding);
+
         return [
             'id' => $holding->id,
             'symbol' => $holding->symbol,
@@ -165,14 +172,28 @@ class AdminDepotHoldingController extends Controller
             'instrument_type' => $holding->instrument_type,
             'country' => $holding->country,
             'currency' => $holding->currency,
-            'latest_price' => $holding->latest_price,
+            'latest_price' => $latestPriceStatus === 'fresh' ? $holding->latest_price : null,
+            'latest_price_status' => $latestPriceStatus,
             'latest_price_fetched_at' => $holding->latest_price_fetched_at?->toIso8601String(),
             'latest_price_source' => $holding->latest_price_source,
             'latest_price_source_url' => $holding->latest_price_source_url,
-            'latest_price_as_of' => $holding->latest_price_as_of,
+            'latest_price_as_of' => in_array($latestPriceStatus, ['fresh', 'stale'], true) ? $holding->latest_price_as_of : null,
             'trading_times' => $holding->trading_times,
             'created_at' => $holding->created_at?->toIso8601String(),
         ];
+    }
+
+    private function latestPriceStatus(StockHolding $holding): string
+    {
+        if ($holding->latest_price === null) {
+            return $holding->latest_price_fetched_at === null ? 'missing' : 'unavailable';
+        }
+
+        if ($this->stockPriceFreshness->isFresh($holding->latest_price_as_of, $holding->trading_times)) {
+            return 'fresh';
+        }
+
+        return 'stale';
     }
 
     /**

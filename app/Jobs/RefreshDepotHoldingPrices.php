@@ -37,20 +37,14 @@ class RefreshDepotHoldingPrices implements ShouldQueue
             ->eachById(function (StockHolding $holding) use ($stockPriceLookup, $progress): void {
                 $latestPriceData = $stockPriceLookup->latestPrice($this->instrumentPayload($holding));
                 $updates = [
+                    'currency' => $latestPriceData['currency'] ?? $holding->currency,
+                    'latest_price' => $latestPriceData['price'],
+                    'latest_price_fetched_at' => $latestPriceData['fetched_at'],
+                    'latest_price_source' => $latestPriceData['source'],
+                    'latest_price_source_url' => $latestPriceData['source_url'],
+                    'latest_price_as_of' => $latestPriceData['as_of'],
                     'trading_times' => $latestPriceData['trading_times'] ?? $holding->trading_times,
                 ];
-
-                if ($latestPriceData['price'] !== null) {
-                    $updates = [
-                        ...$updates,
-                        'currency' => $latestPriceData['currency'] ?? $holding->currency,
-                        'latest_price' => $latestPriceData['price'],
-                        'latest_price_fetched_at' => $latestPriceData['fetched_at'],
-                        'latest_price_source' => $latestPriceData['source'],
-                        'latest_price_source_url' => $latestPriceData['source_url'],
-                        'latest_price_as_of' => $latestPriceData['as_of'],
-                    ];
-                }
 
                 $holding->update($updates);
 
@@ -69,7 +63,7 @@ class RefreshDepotHoldingPrices implements ShouldQueue
     }
 
     /**
-     * @return array{symbol: string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, source_url: ?string}
+     * @return array{symbol: string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, source_url: ?string, trading_times: ?string}
      */
     private function instrumentPayload(StockHolding $holding): array
     {
@@ -84,6 +78,7 @@ class RefreshDepotHoldingPrices implements ShouldQueue
             'country' => $holding->country,
             'currency' => $holding->currency,
             'source_url' => $holding->latest_price_source_url,
+            'trading_times' => $holding->trading_times,
         ];
     }
 }

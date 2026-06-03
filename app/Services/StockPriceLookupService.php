@@ -12,6 +12,7 @@ class StockPriceLookupService
 {
     public function __construct(
         private DeterministicStockPriceLookupService $deterministicStockPriceLookup,
+        private StockPriceFreshness $stockPriceFreshness,
     ) {}
 
     /**
@@ -26,13 +27,13 @@ class StockPriceLookupService
         'Boerse Stuttgart official pages for Stuttgart-listed shares, ETFs, funds, bonds, and securitized derivatives quoted in EUR',
         'gettex / Boerse Muenchen official pages for shares, ETFs, funds, ETPs, and bonds; gettex generally quotes in EUR',
         'Tradegate Exchange official pages for shares, ETFs, ETPs, funds, and bonds quoted in EUR',
-        'Quotrix / Boerse Duesseldorf official pages for shares, ETFs, ETCs, funds, and bonds quoted in EUR',
+        'Quotrix / Boerse Duesseldorf official pages, including Boerse Duesseldorf ETF pages by ISIN, for shares, ETFs, ETCs, funds, and bonds quoted in EUR',
         'LS Exchange / Boerse Hamburg official pages for shares, ETFs, ETPs, and funds quoted in EUR',
         'European Investor Exchange / Boerse Hannover official pages for shares, ETFs, ETPs, and funds quoted in EUR',
         'Issuer or fund provider official pages for the exact ISIN, such as iShares, Vanguard, Xtrackers / DWS, Amundi, Invesco, VanEck, SPDR, UBS, or Lyxor; use only if the page clearly shows an EUR market price or EUR listing',
-        'justETF pages for ETFs only, using the listing table or quote only when it clearly matches the ISIN, venue, ticker, and EUR currency',
-        'finanzen.net ETF Kurs pages for ETFs when the result clearly matches the ISIN/WKN and shows a current EUR quote',
-        'Major finance portals as a last resort, such as onvista, ARIVA, boersennews.de, stockanalysis.com, wallstreet-online, or MarketScreener, only when the page clearly matches the ISIN/WKN, venue, ticker, and EUR currency',
+        'justETF Austria, Germany, or International ETF profile pages, and extraETF Austria ETF profile pages, especially /at/etf-profile.html?isin=... or /at/etf-profile/{ISIN}, for ETF listings; use quote data only when the ISIN, venue, ticker, EUR currency, and fresh quote timestamp are visible',
+        'finanzen.at ETF pages, especially /etf/boersenplaetze/... pages, finanzen.net ETF Kurs pages, and GOYAX ETF pages for ETFs when the result clearly matches the ISIN/WKN and shows a current EUR exchange quote with date/time',
+        'Major finance portals as a last resort, such as onvista ETF pages and Handelsplaetze pages, ARIVA, boersennews.de, stockanalysis.com, wallstreet-online, or MarketScreener, only when the page clearly matches the ISIN/WKN, venue, ticker, EUR currency, and fresh quote time',
     ];
 
     /**
@@ -85,14 +86,15 @@ class StockPriceLookupService
         $price = $this->decimalPrice(Arr::get($response, 'decimal_price'));
         $currency = $this->nullableCurrency(Arr::get($response, 'currency'));
         $asOf = $this->nullableString(Arr::get($response, 'as_of'));
+        $tradingTimes = $this->nullableString(Arr::get($response, 'trading_times'));
 
-        if ($price === null || $currency !== 'EUR' || $this->isStaleAsOf($asOf)) {
+        if ($price === null || $currency !== 'EUR' || ! $this->stockPriceFreshness->isFresh($asOf, $tradingTimes)) {
             return $this->unavailableResult(
                 fetchedAt: $fetchedAt,
                 source: $this->nullableString(Arr::get($response, 'source_name')) ?? 'AI SDK web search',
                 sourceUrl: $this->nullableUrl(Arr::get($response, 'source_url')),
                 asOf: $asOf,
-                tradingTimes: $this->nullableString(Arr::get($response, 'trading_times')),
+                tradingTimes: $tradingTimes,
             );
         }
 
@@ -103,7 +105,7 @@ class StockPriceLookupService
             'source' => $this->nullableString(Arr::get($response, 'source_name')) ?? 'AI SDK web search',
             'source_url' => $this->nullableUrl(Arr::get($response, 'source_url')),
             'as_of' => $asOf,
-            'trading_times' => $this->nullableString(Arr::get($response, 'trading_times')),
+            'trading_times' => $tradingTimes,
         ];
     }
 
@@ -149,6 +151,7 @@ class StockPriceLookupService
         $sourceOrder = collect(self::SOURCE_ORDER)
             ->map(fn (string $source, int $index): string => ($index + 1).". {$source}")
             ->implode("\n");
+        $currentDateTime = now()->format('Y-m-d H:i T').' / '.now('Europe/Vienna')->format('Y-m-d H:i T').' Europe/Vienna';
 
         $exhaustiveInstructions = $exhaustive
             ? "This is an exhaustive retry because the first attempt did not return a fresh EUR price. Search deeper, but keep the same source order. Do not return null until every ordered source has been checked for a matching fresh EUR quote.\n\n"
@@ -159,14 +162,17 @@ Find the latest available market price for this exact holding.
 
 {$details}
 
-{$exhaustiveInstructions}Latest means the latest visible trade, last price, or official close available from the source. If markets are closed, use the most recent official close or latest available price and include its date/time in as_of.
-Fresh means the visible price date is within the last 7 calendar days, or the source clearly shows a live/current quote without an old date. Reject stale quote pages, factsheets, PDFs, NAV-only pages, and ETF Capital pages unless the visible price date is fresh.
+Current date/time: {$currentDateTime}.
+
+{$exhaustiveInstructions}Latest means the latest visible trade, last price, or official close available from the source. If markets are closed or have not opened yet today, use the most recent official close or latest available price and include its date/time in as_of.
+Fresh means as_of is parseable and matches the current exchange trading day once that market has opened. Before the regular market open, the previous business day's official close is acceptable. Reject stale quote pages, factsheets, PDFs, NAV-only pages, timestamps outside regular trading times, article update times, and ETF Capital pages unless the visible price date/time is fresh for the current market clock.
 
 Check sources in this exact order every time:
 {$sourceOrder}
 
 Use the first source in that order that clearly identifies the exact same instrument and quotes a latest/current price in EUR. If a source has no matching EUR quote, continue to the next source.
 Also retrieve the regular exchange trading times for the exact listing when visible or verifiable. Return trading_times as a short string such as "Monday-Friday 09:00-17:30 Europe/Vienna". Use the exchange's local timezone.
+Return as_of as a parseable date/time from the quote itself, not a page publish time or article update time.
 Return null for decimal_price if a fresh current/latest EUR price cannot be verified for this exact instrument.
 Return null for decimal_price only after every ordered source has been checked and only stale, non-EUR, or unverifiable prices are available. Do not convert currencies.
 Set currency to EUR when returning a price.
@@ -225,35 +231,5 @@ PROMPT;
         }
 
         return Str::limit($value, 2048, '');
-    }
-
-    private function isStaleAsOf(?string $asOf): bool
-    {
-        if ($asOf === null) {
-            return false;
-        }
-
-        $date = $this->dateFromAsOf($asOf);
-
-        return $date !== null && $date->lt(now()->subDays(7));
-    }
-
-    private function dateFromAsOf(string $asOf): ?Carbon
-    {
-        if (preg_match('/\b(?<year>\d{4})-(?<month>\d{1,2})-(?<day>\d{1,2})\b/', $asOf, $matches)) {
-            return Carbon::create((int) $matches['year'], (int) $matches['month'], (int) $matches['day'])->startOfDay();
-        }
-
-        if (! preg_match('/\b(?<day>\d{1,2})[.\/-](?<month>\d{1,2})[.\/-](?<year>\d{2,4})\b/', $asOf, $matches)) {
-            return null;
-        }
-
-        $year = (int) $matches['year'];
-
-        if ($year < 100) {
-            $year += 2000;
-        }
-
-        return Carbon::create($year, (int) $matches['month'], (int) $matches['day'])->startOfDay();
     }
 }

@@ -23,6 +23,8 @@ Check sources in the exact order provided by the user prompt. Do not change the 
 Return a price only when the source clearly refers to the same instrument and quotes the price in EUR.
 If one source has no EUR quote, continue with the next source in the provided order.
 Use the latest visible trade or last price. If the market is closed, use the most recent official close or latest available price with its date/time.
+Return a price only when the quote has a parseable as_of date/time from the quote itself and that date/time is fresh for the current market clock. Before the regular market open, the previous business day's official close is acceptable.
+Reject stale quote pages, factsheets, NAV-only pages, page publish times, article update times, and source timestamps outside the regular trading session.
 Do not convert non-EUR prices to EUR. Return null values only after every ordered source has been checked and only non-EUR or unverifiable prices are available.
 Return decimal_price as a plain decimal string with a dot separator and no currency symbol.
 Return trading_times when the exact exchange or venue trading schedule is visible or can be verified for the matched instrument. Use the exchange's local timezone.
