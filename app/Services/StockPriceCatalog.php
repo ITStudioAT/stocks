@@ -46,7 +46,7 @@ class StockPriceCatalog
                 'validation_status' => $validatedQuote->validationStatus,
                 'validation_errors' => $validatedQuote->validationErrors,
                 'raw_text_hash' => $quote->rawTextHash,
-                'raw_payload' => (bool) config('market-data.store_raw_payloads') ? $quote->rawPayload : null,
+                'raw_payload' => $this->rawPayload($quote),
                 'trading_times' => $tradingTimes,
             ],
         );
@@ -130,6 +130,15 @@ class StockPriceCatalog
             'price_type' => $this->normalizedText($quote->priceType),
             'as_of' => $quote->asOf?->copy()->utc()->toIso8601String(),
         ], JSON_THROW_ON_ERROR));
+    }
+
+    private function rawPayload(ParsedQuote $quote): ?array
+    {
+        if (in_array($quote->sourceKey, EodhdMarketData::sourceKeys(), true)) {
+            return $quote->rawPayload;
+        }
+
+        return (bool) config('market-data.store_raw_payloads') ? $quote->rawPayload : null;
     }
 
     private function upperIdentifier(?string $value): ?string

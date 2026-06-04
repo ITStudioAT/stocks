@@ -16,8 +16,11 @@ const rolesStore = useRoleStore();
 
 const { user, loading, notice, error } = storeToRefs(auth);
 const {
+    activeDepot,
     depots,
     holdings,
+    transactions,
+    exchangeTradingTimes,
     priceRefresh,
     priceRefreshSettings,
     stockSearchResults,
@@ -25,9 +28,13 @@ const {
     holdingsPagination,
     loading: depotsLoading,
     holdingsLoading,
+    transactionsLoading,
+    exchangeTradingTimesLoading,
     stockSearchLoading,
     error: depotsError,
     holdingsError,
+    transactionsError,
+    exchangeTradingTimesError,
     stockSearchError,
 } = storeToRefs(depotsStore);
 const {
@@ -79,7 +86,10 @@ const depotMessage = ref('');
 const depotError = ref('');
 const isHoldingDialogOpen = ref(false);
 const isDeleteHoldingDialogOpen = ref(false);
+const isCashTransactionDialogOpen = ref(false);
+const isStockTransactionDialogOpen = ref(false);
 const selectedHolding = ref(null);
+const transactionHolding = ref(null);
 const holdingSearchQuery = ref('');
 const holdingSearchInput = ref(null);
 const holdingMessage = ref('');
@@ -90,6 +100,12 @@ const priceRefreshScheduleMessage = ref('');
 const priceRefreshScheduleError = ref('');
 const isPriceRefreshScheduleEditing = ref(false);
 const priceRefreshTimer = ref(null);
+const priceRefreshSettingsTimer = ref(null);
+const isPriceRefreshSettingsPolling = ref(false);
+const historicalPriceFetchTimer = ref(null);
+const isHistoricalPriceFetchPolling = ref(false);
+const cashTransactionForm = ref(emptyCashTransactionForm());
+const stockTransactionForm = ref(emptyStockTransactionForm());
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
@@ -105,9 +121,19 @@ const isPriceRefreshRunning = computed(() => {
 });
 const isAutomaticPriceRefreshUpdating = computed(() => isPriceRefreshRunning.value
     || priceRefreshSettings.value?.status === 'updating');
-const priceRefreshHeaderStatusLabel = computed(() => (
-    isAutomaticPriceRefreshUpdating.value ? 'Updating prices' : 'waiting'
-));
+const isHistoricalPriceFetchRunning = computed(() => holdings.value.some((holding) => holding.historical_prices_fetching));
+const isHeaderStatusUpdating = computed(() => isAutomaticPriceRefreshUpdating.value || isHistoricalPriceFetchRunning.value);
+const priceRefreshHeaderStatusLabel = computed(() => {
+    if (isAutomaticPriceRefreshUpdating.value) {
+        return 'Updating prices';
+    }
+
+    if (isHistoricalPriceFetchRunning.value) {
+        return 'fetching historical data';
+    }
+
+    return 'waiting';
+});
 const visibleHoldingMessage = computed(() => {
     if (priceRefresh.value && isFinishedPriceRefresh(priceRefresh.value)) {
         return '';
@@ -122,12 +148,22 @@ const priceRefreshProgressValue = computed(() => {
 
     return Math.round((priceRefresh.value.processed / priceRefresh.value.total) * 100);
 });
+const sessionHeaderDates = computed(() => ({
+    yesterday: formatSessionHeaderDate(1),
+    dayBeforeYesterday: formatSessionHeaderDate(2),
+}));
 
 const menuItems = computed(() => [
     {
         key: 'dashboard',
         label: 'Dashboard',
         icon: 'mdi-view-dashboard-outline',
+    },
+    {
+        key: 'depot',
+        label: 'Depot',
+        subtitle: activeDepot.value?.name ?? '–',
+        icon: 'mdi-briefcase-outline',
     },
     ...(canManageDashboardAdmin.value ? [
         {
@@ -190,6 +226,19 @@ watch(
     { immediate: true },
 );
 
+watch(
+    isHistoricalPriceFetchRunning,
+    (isRunning) => {
+        if (isRunning) {
+            startHistoricalPriceFetchPolling();
+
+            return;
+        }
+
+        stopHistoricalPriceFetchPolling();
+    },
+);
+
 onMounted(async () => {
     if (isLoginPage.value) {
         return;
@@ -199,7 +248,16 @@ onMounted(async () => {
     applyRouteFromPath();
 
     await depotsStore.loadActiveDepot();
-    await depotsStore.loadWatchlistHoldings();
+
+    if (activeSection.value === 'depot') {
+        depotsStore.loadTransactions();
+    }
+
+    await Promise.all([
+        depotsStore.loadWatchlistHoldings(),
+        depotsStore.loadWatchlistExchangeTradingTimes(),
+    ]);
+    startPriceRefreshSettingsPolling();
 
     await depotsStore.loadDepots();
 
@@ -215,6 +273,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
     stopPriceRefreshPolling();
+    stopPriceRefreshSettingsPolling();
+    stopHistoricalPriceFetchPolling();
     stopHoldingDialogKeyboardShortcuts();
     window.removeEventListener('popstate', applyRouteFromPath);
 });
@@ -230,6 +290,11 @@ function navigateSection(section) {
 
     if (section === 'roles') {
         rolesStore.loadRoles(rolePagination.value.current_page);
+    }
+
+    if (section === 'depot') {
+        depotsStore.loadActiveDepot();
+        depotsStore.loadTransactions();
     }
 
     if (section === 'depots') {
@@ -633,7 +698,10 @@ async function saveHolding(result) {
         holdingMessage.value = data.message;
         isHoldingDialogOpen.value = false;
         stopHoldingDialogKeyboardShortcuts();
-        await depotsStore.loadWatchlistHoldings(holdingsPagination.value.current_page);
+        await Promise.all([
+            depotsStore.loadWatchlistHoldings(holdingsPagination.value.current_page),
+            depotsStore.loadWatchlistExchangeTradingTimes(),
+        ]);
     } catch (err) {
         holdingError.value = err.message;
     }
@@ -669,6 +737,82 @@ async function refreshHoldingPrices() {
 
 function exportHoldingsPdf() {
     window.open('/admin/watchlist/holdings/pdf', '_blank', 'noopener');
+}
+
+function openCashTransactionDialog(type) {
+    cashTransactionForm.value = {
+        type,
+        total_amount: '',
+        note: '',
+    };
+    holdingError.value = '';
+    holdingMessage.value = '';
+    isCashTransactionDialogOpen.value = true;
+}
+
+function abortCashTransactionDialog() {
+    isCashTransactionDialogOpen.value = false;
+    cashTransactionForm.value = emptyCashTransactionForm();
+}
+
+async function bookCashTransaction() {
+    holdingError.value = '';
+    holdingMessage.value = '';
+
+    try {
+        const data = await depotsStore.bookCashTransaction({
+            type: cashTransactionForm.value.type,
+            total_amount: Number(cashTransactionForm.value.total_amount),
+            note: cashTransactionForm.value.note || null,
+        });
+
+        holdingMessage.value = data.message;
+        abortCashTransactionDialog();
+        await depotsStore.loadActiveDepot();
+    } catch (err) {
+        holdingError.value = err.message;
+    }
+}
+
+function openStockTransactionDialog(holding, type) {
+    transactionHolding.value = holding;
+    stockTransactionForm.value = {
+        type,
+        stock_holding_id: holding.id,
+        pieces: '',
+        total_amount: '',
+        note: '',
+    };
+    holdingError.value = '';
+    holdingMessage.value = '';
+    isStockTransactionDialogOpen.value = true;
+}
+
+function abortStockTransactionDialog() {
+    isStockTransactionDialogOpen.value = false;
+    transactionHolding.value = null;
+    stockTransactionForm.value = emptyStockTransactionForm();
+}
+
+async function bookStockTransaction() {
+    holdingError.value = '';
+    holdingMessage.value = '';
+
+    try {
+        const data = await depotsStore.bookStockTransaction({
+            type: stockTransactionForm.value.type,
+            stock_holding_id: stockTransactionForm.value.stock_holding_id,
+            pieces: Number(stockTransactionForm.value.pieces),
+            total_amount: Number(stockTransactionForm.value.total_amount),
+            note: stockTransactionForm.value.note || null,
+        });
+
+        holdingMessage.value = data.message;
+        abortStockTransactionDialog();
+        await depotsStore.loadWatchlistHoldings(holdingsPagination.value.current_page);
+    } catch (err) {
+        holdingError.value = err.message;
+    }
 }
 
 async function savePriceRefreshSchedule() {
@@ -712,6 +856,54 @@ async function loadPriceRefreshSettings() {
     }
 }
 
+function startPriceRefreshSettingsPolling() {
+    stopPriceRefreshSettingsPolling();
+    priceRefreshSettingsTimer.value = window.setInterval(pollPriceRefreshSettings, 5000);
+}
+
+function stopPriceRefreshSettingsPolling() {
+    if (!priceRefreshSettingsTimer.value) {
+        return;
+    }
+
+    window.clearInterval(priceRefreshSettingsTimer.value);
+    priceRefreshSettingsTimer.value = null;
+}
+
+async function pollPriceRefreshSettings() {
+    if (isPriceRefreshSettingsPolling.value) {
+        return;
+    }
+
+    isPriceRefreshSettingsPolling.value = true;
+
+    try {
+        const data = await depotsStore.loadPriceRefreshSettings();
+        const refresh = data.refresh;
+
+        if (!refresh || isFinishedPriceRefresh(refresh)) {
+            if (priceRefreshTimer.value) {
+                stopPriceRefreshPolling();
+            }
+
+            return;
+        }
+
+        const isPollingCurrentRefresh = priceRefreshTimer.value
+            && priceRefresh.value?.refresh_id === refresh.refresh_id;
+
+        if (!isPollingCurrentRefresh) {
+            startPriceRefreshPolling(refresh.refresh_id);
+        }
+    } catch (err) {
+        if (activeSection.value === 'updates') {
+            priceRefreshScheduleError.value = err.message;
+        }
+    } finally {
+        isPriceRefreshSettingsPolling.value = false;
+    }
+}
+
 function startPriceRefreshPolling(refreshId) {
     stopPriceRefreshPolling();
     pollPriceRefreshStatus(refreshId);
@@ -725,6 +917,38 @@ function stopPriceRefreshPolling() {
 
     window.clearInterval(priceRefreshTimer.value);
     priceRefreshTimer.value = null;
+}
+
+function startHistoricalPriceFetchPolling() {
+    if (historicalPriceFetchTimer.value) {
+        return;
+    }
+
+    historicalPriceFetchTimer.value = window.setInterval(pollHistoricalPriceFetches, 5000);
+}
+
+function stopHistoricalPriceFetchPolling() {
+    if (!historicalPriceFetchTimer.value) {
+        return;
+    }
+
+    window.clearInterval(historicalPriceFetchTimer.value);
+    historicalPriceFetchTimer.value = null;
+}
+
+async function pollHistoricalPriceFetches() {
+    if (isHistoricalPriceFetchPolling.value) {
+        return;
+    }
+
+    isHistoricalPriceFetchPolling.value = true;
+
+    try {
+        await depotsStore.loadWatchlistHoldings(holdingsPagination.value.current_page, { silent: true });
+    } catch {
+    } finally {
+        isHistoricalPriceFetchPolling.value = false;
+    }
 }
 
 async function pollPriceRefreshStatus(refreshId) {
@@ -784,10 +1008,36 @@ async function deleteHolding() {
         const data = await depotsStore.deleteWatchlistHolding(selectedHolding.value.id);
         holdingMessage.value = data.message;
         abortDeleteHoldingDialog();
-        await depotsStore.loadWatchlistHoldings(holdingsPagination.value.current_page);
+        await Promise.all([
+            depotsStore.loadWatchlistHoldings(holdingsPagination.value.current_page),
+            depotsStore.loadWatchlistExchangeTradingTimes(),
+        ]);
     } catch (err) {
         holdingError.value = err.message;
     }
+}
+
+function formatTransactionDate(isoString) {
+    if (!isoString) return '–';
+
+    return new Intl.DateTimeFormat('en-GB', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(new Date(isoString));
+}
+
+function transactionTypeColor(type) {
+    return { deposit: 'success', withdrawal: 'error', buy: 'warning', sell: 'teal' }[type] ?? 'default';
+}
+
+function formatCashDelta(value) {
+    const num = Number(value);
+    const prefix = num > 0 ? '+' : '';
+
+    return `${prefix}${formatAccountBalance(num)}`;
 }
 
 function formatAccountBalance(value) {
@@ -795,6 +1045,29 @@ function formatAccountBalance(value) {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
     }).format(Number(value ?? 0));
+}
+
+function formatDepotCashBalance() {
+    return `${formatAccountBalance(activeDepot.value?.account_balance)} EUR`;
+}
+
+function formatPositionPieces(holding) {
+    const pieces = Number(holding.position_pieces ?? 0);
+
+    if (Number.isNaN(pieces) || pieces === 0) {
+        return '0';
+    }
+
+    return new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 8,
+    }).format(pieces);
+}
+
+function hasPositionPieces(holding) {
+    const pieces = Number(holding.position_pieces ?? 0);
+
+    return !Number.isNaN(pieces) && pieces > 0;
 }
 
 function formatPriceValue(value, currency) {
@@ -849,6 +1122,45 @@ function formatLatestPriceChangePercent(holding) {
     return `${sign}${amount.toFixed(2)}%`;
 }
 
+function formatSessionPriceChangePercent(value, holding) {
+    if (
+        value === null
+        || value === undefined
+        || value === ''
+        || holding.latest_price === null
+        || holding.latest_price === undefined
+        || holding.latest_price === ''
+    ) {
+        return '';
+    }
+
+    const referencePrice = Number(value);
+    const latestPrice = Number(holding.latest_price);
+
+    if (Number.isNaN(referencePrice) || Number.isNaN(latestPrice) || referencePrice === 0) {
+        return '';
+    }
+
+    const amount = ((latestPrice - referencePrice) / referencePrice) * 100;
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${amount.toFixed(2)}%`;
+}
+
+function sessionPriceChangeClass(value, holding) {
+    const formattedChange = formatSessionPriceChangePercent(value, holding);
+
+    if (formattedChange.startsWith('+')) {
+        return 'text-success';
+    }
+
+    if (formattedChange.startsWith('-')) {
+        return 'text-error';
+    }
+
+    return 'text-medium-emphasis';
+}
+
 function toggleHoldingDetails(holding) {
     const holdingId = holding.id;
 
@@ -866,6 +1178,10 @@ function recentPricesForExpandedHolding(holding) {
         ...recentPrice,
         trend: recentStoredPriceTrend(recentPrice, recentPrices[recentPriceIndex - 1] ?? null),
     }));
+}
+
+function recentPriceTrendDots(holding) {
+    return recentPricesForExpandedHolding(holding).slice(-10);
 }
 
 function recentStoredPriceTrend(recentPrice, previousRecentPrice) {
@@ -899,6 +1215,24 @@ function recentStoredPriceTrendClass(recentPrice) {
         'text-error': recentPrice.trend === 'down',
         'text-medium-emphasis': recentPrice.trend === 'flat',
     };
+}
+
+function recentStoredPriceTrendDotClass(recentPrice) {
+    return {
+        'recent-price-trend-dot-up': recentPrice.trend === 'up',
+        'recent-price-trend-dot-down': recentPrice.trend === 'down',
+        'recent-price-trend-dot-flat': recentPrice.trend === 'flat',
+    };
+}
+
+function recentStoredPriceTrendLabel(recentPrice) {
+    const labels = {
+        up: 'Price increased',
+        down: 'Price decreased',
+        flat: 'Price unchanged',
+    };
+
+    return labels[recentPrice.trend] ?? labels.flat;
 }
 
 function latestPriceClass(holding) {
@@ -995,6 +1329,28 @@ function formatSourceDateTime(value) {
     }
 
     return formatDateTime(value);
+}
+
+function formatSessionHeaderDate(daysAgo) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Vienna',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).formatToParts(new Date());
+    const dateParts = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    const viennaDate = new Date(Date.UTC(
+        Number(dateParts.year),
+        Number(dateParts.month) - 1,
+        Number(dateParts.day) - daysAgo,
+    ));
+
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: 'UTC',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    }).format(viennaDate);
 }
 
 function parseSourceDateTime(value) {
@@ -1109,8 +1465,129 @@ function formatLatestPriceSource(holding) {
     return holding.latest_price_source || '-';
 }
 
-function formatTradingTimes(holding) {
-    return holding.trading_times || '-';
+function formatExchangeTradingTime(exchange) {
+    const open = formatClock(exchange.open);
+    const close = formatClock(exchange.close);
+
+    if (open === '-' || close === '-') {
+        return '-';
+    }
+
+    return [open, close].join('-');
+}
+
+function formatExchangeNextTradingText(exchange) {
+    if (exchange.error) {
+        return '-';
+    }
+
+    if (exchange.is_open) {
+        const close = formatClock(exchange.close);
+
+        return close === '-' ? '-' : `Trading closes: ${close}`;
+    }
+
+    const nextTradingDateTime = nextExchangeTradingDateTime(exchange);
+
+    return nextTradingDateTime === '-' ? '-' : `Next trading: ${nextTradingDateTime}`;
+}
+
+function nextExchangeTradingDateTime(exchange) {
+    const open = formatClock(exchange.open);
+
+    if (open === '-' || !exchange.timezone) {
+        return '-';
+    }
+
+    const workingDays = exchangeWorkingDays(exchange);
+    const exchangeToday = exchangeLocalDateParts(exchange.timezone);
+
+    if (!exchangeToday) {
+        return '-';
+    }
+
+    const currentMinutes = (exchangeToday.hour * 60) + exchangeToday.minute;
+    const [openHours, openMinutes] = open.split(':').map((value) => Number(value));
+    const openTotalMinutes = (openHours * 60) + openMinutes;
+
+    let daysToAdd = workingDays.includes(exchangeToday.weekday) && currentMinutes < openTotalMinutes ? 0 : 1;
+
+    while (!workingDays.includes(weekdayAfter(exchangeToday.weekday, daysToAdd))) {
+        daysToAdd += 1;
+    }
+
+    const nextDate = new Date(Date.UTC(exchangeToday.year, exchangeToday.month - 1, exchangeToday.day + daysToAdd));
+    const dateText = new Intl.DateTimeFormat('de-AT', {
+        timeZone: 'UTC',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    }).format(nextDate);
+
+    return `${dateText}, ${open}`;
+}
+
+function exchangeLocalDateParts(timezone) {
+    try {
+        const parts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: timezone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            weekday: 'short',
+            hourCycle: 'h23',
+        }).formatToParts(new Date());
+        const dateParts = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+
+        return {
+            year: Number(dateParts.year),
+            month: Number(dateParts.month),
+            day: Number(dateParts.day),
+            hour: Number(dateParts.hour),
+            minute: Number(dateParts.minute),
+            weekday: dateParts.weekday,
+        };
+    } catch {
+        return null;
+    }
+}
+
+function exchangeWorkingDays(exchange) {
+    if (!exchange.working_days) {
+        return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    }
+
+    return String(exchange.working_days)
+        .split(',')
+        .map((day) => day.trim())
+        .filter(Boolean);
+}
+
+function weekdayAfter(weekday, daysToAdd) {
+    const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const weekdayIndex = weekdays.indexOf(weekday);
+
+    if (weekdayIndex === -1) {
+        return weekday;
+    }
+
+    return weekdays[(weekdayIndex + daysToAdd) % weekdays.length];
+}
+
+function formatClock(value) {
+    if (!value) {
+        return '-';
+    }
+
+    const [hours, minutes] = String(value).split(':');
+
+    if (!hours || !minutes) {
+        return '-';
+    }
+
+    return `${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}`;
 }
 
 function formatScheduleDateTime(value) {
@@ -1198,6 +1675,24 @@ function emptyDepotForm() {
     return {
         name: '',
         account_balance: '0.00',
+    };
+}
+
+function emptyCashTransactionForm() {
+    return {
+        type: 'deposit',
+        total_amount: '',
+        note: '',
+    };
+}
+
+function emptyStockTransactionForm() {
+    return {
+        type: 'buy',
+        stock_holding_id: null,
+        pieces: '',
+        total_amount: '',
+        note: '',
     };
 }
 
@@ -1313,6 +1808,7 @@ function emptyPriceRefreshScheduleForm() {
                             :active="item.children ? item.children.some(c => activeSection === c.key) : activeSection === item.key"
                             :prepend-icon="item.icon"
                             :title="item.label"
+                            :subtitle="item.subtitle ?? undefined"
                             @click="item.children ? navigateSection(item.children[0].key) : navigateSection(item.key)"
                         />
                     </template>
@@ -1330,7 +1826,7 @@ function emptyPriceRefreshScheduleForm() {
                         <span v-if="priceRefreshSettings" class="d-inline-flex align-center ga-2 text-caption">
                             <span
                                 class="price-refresh-status-dot"
-                                :class="isAutomaticPriceRefreshUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
+                                :class="isHeaderStatusUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
                             />
                             {{ priceRefreshHeaderStatusLabel }}
                         </span>
@@ -1414,15 +1910,37 @@ function emptyPriceRefreshScheduleForm() {
                                     <th>Name</th>
                                     <th>Latest price</th>
                                     <th>Start price</th>
-                                    <th>End price</th>
+                                    <th>
+                                        <span class="d-inline-flex flex-column">
+                                            <span>End price</span>
+                                            <span class="text-caption text-medium-emphasis">
+                                                {{ sessionHeaderDates.yesterday }}
+                                            </span>
+                                        </span>
+                                    </th>
+                                    <th>
+                                        <span class="d-inline-flex flex-column">
+                                            <span>Start 24</span>
+                                            <span class="text-caption text-medium-emphasis">
+                                                {{ sessionHeaderDates.yesterday }}
+                                            </span>
+                                        </span>
+                                    </th>
+                                    <th>
+                                        <span class="d-inline-flex flex-column">
+                                            <span>Start 48</span>
+                                            <span class="text-caption text-medium-emphasis">
+                                                {{ sessionHeaderDates.dayBeforeYesterday }}
+                                            </span>
+                                        </span>
+                                    </th>
                                     <th>Source time</th>
-                                    <th>Trading times</th>
                                     <th class="text-right">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <tr v-if="!holdingsLoading && holdings.length === 0">
-                                    <td colspan="8">No stocks in the watch-list.</td>
+                                    <td colspan="9">No stocks in the watch-list.</td>
                                 </tr>
                                 <template v-for="holding in holdings" :key="holding.id">
                                     <tr
@@ -1437,13 +1955,26 @@ function emptyPriceRefreshScheduleForm() {
                                         <td>
                                             <div>{{ holding.name || '-' }}</div>
                                             <div class="text-caption text-medium-emphasis">
-                                                {{ holding.isin || '-' }}
-                                            </div>
-                                            <div class="text-caption text-medium-emphasis">
-                                                WKN: {{ holding.wkn || '-' }}
+                                                {{ holding.isin || '-' }} · WKN: {{ holding.wkn || '-' }}
                                             </div>
                                             <div class="text-caption text-medium-emphasis">
                                                 Exchange: {{ holding.exchange || '-' }}
+                                            </div>
+                                            <div class="text-caption text-medium-emphasis">
+                                                Pieces: {{ formatPositionPieces(holding) }}
+                                            </div>
+                                            <div
+                                                v-if="recentPriceTrendDots(holding).length"
+                                                class="recent-price-trend-dots"
+                                                aria-label="Recent price trends"
+                                            >
+                                                <span
+                                                    v-for="recentPrice in recentPriceTrendDots(holding)"
+                                                    :key="`trend-dot-${recentPrice.id}`"
+                                                    class="recent-price-trend-dot"
+                                                    :class="recentStoredPriceTrendDotClass(recentPrice)"
+                                                    :title="recentStoredPriceTrendLabel(recentPrice)"
+                                                />
                                             </div>
                                         </td>
                                         <td>
@@ -1470,6 +2001,30 @@ function emptyPriceRefreshScheduleForm() {
                                         <td>{{ formatSessionPrice(holding.start_price, holding) }}</td>
                                         <td>{{ formatSessionPrice(holding.end_price, holding) }}</td>
                                         <td>
+                                            <span class="d-inline-flex flex-column">
+                                                <span>{{ formatSessionPrice(holding.start_price_24, holding) }}</span>
+                                                <span
+                                                    v-if="formatSessionPriceChangePercent(holding.start_price_24, holding)"
+                                                    class="session-price-change"
+                                                    :class="sessionPriceChangeClass(holding.start_price_24, holding)"
+                                                >
+                                                    {{ formatSessionPriceChangePercent(holding.start_price_24, holding) }}
+                                                </span>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="d-inline-flex flex-column">
+                                                <span>{{ formatSessionPrice(holding.start_price_48, holding) }}</span>
+                                                <span
+                                                    v-if="formatSessionPriceChangePercent(holding.start_price_48, holding)"
+                                                    class="session-price-change"
+                                                    :class="sessionPriceChangeClass(holding.start_price_48, holding)"
+                                                >
+                                                    {{ formatSessionPriceChangePercent(holding.start_price_48, holding) }}
+                                                </span>
+                                            </span>
+                                        </td>
+                                        <td>
                                             <div>{{ formatSourceDateTime(holding.latest_price_as_of) }}</div>
                                             <div class="text-caption text-medium-emphasis">
                                                 <a
@@ -1484,8 +2039,27 @@ function emptyPriceRefreshScheduleForm() {
                                                 <span v-else>{{ formatLatestPriceSource(holding) }}</span>
                                             </div>
                                         </td>
-                                        <td>{{ formatTradingTimes(holding) }}</td>
                                         <td class="text-right">
+                                            <v-btn
+                                                icon
+                                                variant="text"
+                                                color="success"
+                                                aria-label="Buy stock"
+                                                :disabled="!activeDepot || holdingsLoading"
+                                                @click.stop="openStockTransactionDialog(holding, 'buy')"
+                                            >
+                                                <v-icon icon="mdi-cart-plus" />
+                                            </v-btn>
+                                            <v-btn
+                                                icon
+                                                variant="text"
+                                                color="warning"
+                                                aria-label="Sell stock"
+                                                :disabled="!activeDepot || holdingsLoading || !hasPositionPieces(holding)"
+                                                @click.stop="openStockTransactionDialog(holding, 'sell')"
+                                            >
+                                                <v-icon icon="mdi-cart-minus" />
+                                            </v-btn>
                                             <v-btn
                                                 icon
                                                 variant="text"
@@ -1499,7 +2073,7 @@ function emptyPriceRefreshScheduleForm() {
                                         </td>
                                     </tr>
                                     <tr v-if="isHoldingExpanded(holding)" class="stock-holding-detail-row">
-                                        <td colspan="8">
+                                        <td colspan="9">
                                             <div
                                                 v-if="holding.recent_prices?.length"
                                                 class="recent-price-strip d-flex flex-wrap ga-2"
@@ -1531,6 +2105,73 @@ function emptyPriceRefreshScheduleForm() {
                                 </template>
                             </tbody>
                         </v-table>
+
+                        <v-sheet
+                            v-if="exchangeTradingTimes.length || exchangeTradingTimesLoading || exchangeTradingTimesError"
+                            border
+                            rounded
+                            class="pa-4 mt-4"
+                        >
+                            <div class="d-flex align-center justify-space-between ga-4 mb-3">
+                                <div>
+                                    <div class="text-caption text-medium-emphasis">EODHD exchange details</div>
+                                    <div class="text-body-2 font-weight-medium">Exchange trading times</div>
+                                </div>
+                                <v-progress-circular
+                                    v-if="exchangeTradingTimesLoading"
+                                    color="primary"
+                                    indeterminate
+                                    size="20"
+                                    width="2"
+                                />
+                            </div>
+                            <v-alert
+                                v-if="exchangeTradingTimesError"
+                                type="warning"
+                                variant="tonal"
+                                density="compact"
+                                class="mb-3"
+                            >
+                                {{ exchangeTradingTimesError }}
+                            </v-alert>
+                            <v-table v-if="exchangeTradingTimes.length" density="compact">
+                                <thead>
+                                    <tr>
+                                        <th>Exchange</th>
+                                        <th>MIC</th>
+                                        <th>Local time</th>
+                                        <th>Next trading</th>
+                                        <th>Days</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="exchange in exchangeTradingTimes" :key="exchange.code">
+                                        <td>
+                                            <div>{{ exchange.code }}</div>
+                                            <div class="text-caption text-medium-emphasis">
+                                                {{ exchange.name || '-' }}
+                                            </div>
+                                            <div class="text-caption text-medium-emphasis">
+                                                {{ exchange.timezone || '-' }}
+                                            </div>
+                                        </td>
+                                        <td>{{ exchange.operating_mic || '-' }}</td>
+                                        <td>{{ formatExchangeTradingTime(exchange) }}</td>
+                                        <td>{{ formatExchangeNextTradingText(exchange) }}</td>
+                                        <td>{{ exchange.working_days || '-' }}</td>
+                                        <td>
+                                            <span v-if="exchange.error" class="text-warning">
+                                                Unavailable
+                                            </span>
+                                            <span v-else>
+                                                {{ exchange.is_open ? 'Open' : 'Closed' }}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </v-table>
+                        </v-sheet>
 
                         <v-progress-linear v-if="holdingsLoading" indeterminate color="primary" class="mt-4" />
 
@@ -1636,7 +2277,92 @@ function emptyPriceRefreshScheduleForm() {
                                 </v-card-actions>
                             </v-card>
                         </v-dialog>
+
                     </section>
+
+                    <v-dialog v-model="isCashTransactionDialogOpen" persistent max-width="480">
+                        <v-card>
+                            <v-card-title>
+                                {{ cashTransactionForm.type === 'deposit' ? 'Add cash' : 'Withdraw cash' }}
+                            </v-card-title>
+                            <v-card-text>
+                                <form id="cash-transaction-form" @submit.prevent="bookCashTransaction">
+                                    <v-text-field
+                                        v-model="cashTransactionForm.total_amount"
+                                        label="Amount"
+                                        min="0.01"
+                                        step="0.01"
+                                        suffix="EUR"
+                                        type="number"
+                                        required
+                                    />
+                                    <v-text-field
+                                        v-model="cashTransactionForm.note"
+                                        label="Note"
+                                        maxlength="255"
+                                    />
+                                </form>
+                            </v-card-text>
+                            <v-card-actions>
+                                <v-spacer />
+                                <v-btn type="button" variant="text" :disabled="holdingsLoading" @click="abortCashTransactionDialog">
+                                    Cancel
+                                </v-btn>
+                                <v-btn type="submit" form="cash-transaction-form" color="primary" variant="flat" :loading="holdingsLoading">
+                                    Book
+                                </v-btn>
+                            </v-card-actions>
+                        </v-card>
+                    </v-dialog>
+
+                    <v-dialog v-model="isStockTransactionDialogOpen" persistent max-width="520">
+                        <v-card>
+                            <v-card-title>
+                                {{ stockTransactionForm.type === 'buy' ? 'Buy stock' : 'Sell stock' }}
+                            </v-card-title>
+                            <v-card-text>
+                                <div class="mb-4">
+                                    <div class="font-weight-medium">{{ transactionHolding?.name || transactionHolding?.symbol }}</div>
+                                    <div class="text-caption text-medium-emphasis">
+                                        {{ transactionHolding?.isin || '-' }} · Pieces: {{ transactionHolding ? formatPositionPieces(transactionHolding) : '0' }}
+                                    </div>
+                                </div>
+                                <form id="stock-transaction-form" @submit.prevent="bookStockTransaction">
+                                    <v-text-field
+                                        v-model="stockTransactionForm.pieces"
+                                        label="Pieces"
+                                        min="0.00000001"
+                                        step="0.00000001"
+                                        type="number"
+                                        required
+                                    />
+                                    <v-text-field
+                                        v-model="stockTransactionForm.total_amount"
+                                        label="Sum price"
+                                        min="0.01"
+                                        step="0.01"
+                                        suffix="EUR"
+                                        type="number"
+                                        required
+                                    />
+                                    <v-text-field
+                                        v-model="stockTransactionForm.note"
+                                        label="Note"
+                                        maxlength="255"
+                                    />
+                                </form>
+                            </v-card-text>
+                            <v-card-actions>
+                                <v-spacer />
+                                <v-btn type="button" variant="text" :disabled="holdingsLoading" @click="abortStockTransactionDialog">
+                                    Cancel
+                                </v-btn>
+                                <v-btn type="submit" form="stock-transaction-form" color="primary" variant="flat" :loading="holdingsLoading">
+                                    Book
+                                </v-btn>
+                            </v-card-actions>
+                        </v-card>
+                    </v-dialog>
 
                     <v-tabs
                         v-if="(activeSection === 'depots' || activeSection === 'users' || activeSection === 'roles' || activeSection === 'updates') && canManageDashboardAdmin"
@@ -1780,6 +2506,104 @@ function emptyPriceRefreshScheduleForm() {
                         </v-alert>
                         <v-alert v-if="priceRefreshScheduleError" type="error" variant="tonal" density="compact" class="mb-4">
                             {{ priceRefreshScheduleError }}
+                        </v-alert>
+                    </section>
+
+                    <section v-if="activeSection === 'depot'">
+                        <div class="mb-4">
+                            <p class="text-overline text-primary mb-1">Depot</p>
+                            <h1 class="text-h4">{{ activeDepot?.name ?? '–' }}</h1>
+                        </div>
+
+                        <v-card v-if="activeDepot" variant="outlined" max-width="480">
+                            <v-table density="compact">
+                                <tbody>
+                                    <tr>
+                                        <td class="text-medium-emphasis text-caption">Name</td>
+                                        <td>{{ activeDepot.name }}</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="text-medium-emphasis text-caption">Account balance</td>
+                                        <td>{{ formatAccountBalance(activeDepot.account_balance) }} EUR</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="text-medium-emphasis text-caption">Status</td>
+                                        <td>
+                                            <v-chip color="success" density="comfortable" size="x-small" variant="tonal">Active</v-chip>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </v-table>
+                        </v-card>
+
+                        <v-sheet v-if="activeDepot" border rounded class="pa-4 mt-4">
+                            <div class="d-flex align-center justify-space-between flex-wrap ga-3">
+                                <div>
+                                    <div class="text-caption text-medium-emphasis">Depot cash</div>
+                                    <div class="text-h6">{{ formatDepotCashBalance() }}</div>
+                                </div>
+                                <div class="d-flex align-center ga-2">
+                                    <v-btn
+                                        color="success"
+                                        prepend-icon="mdi-cash-plus"
+                                        variant="tonal"
+                                        @click="openCashTransactionDialog('deposit')"
+                                    >
+                                        Add cash
+                                    </v-btn>
+                                    <v-btn
+                                        color="error"
+                                        prepend-icon="mdi-cash-minus"
+                                        variant="tonal"
+                                        @click="openCashTransactionDialog('withdrawal')"
+                                    >
+                                        Withdraw
+                                    </v-btn>
+                                </div>
+                            </div>
+                        </v-sheet>
+
+                        <div v-if="activeDepot" class="mt-6">
+                            <p class="text-overline text-medium-emphasis mb-2">Cash ledger</p>
+                            <v-progress-linear v-if="transactionsLoading" indeterminate class="mb-2" />
+                            <v-alert v-if="transactionsError" type="error" variant="tonal" density="compact" class="mb-2">
+                                {{ transactionsError }}
+                            </v-alert>
+                            <v-table v-if="transactions.length > 0" density="compact">
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Type</th>
+                                        <th>Stock</th>
+                                        <th class="text-right">Pieces</th>
+                                        <th class="text-right">Amount</th>
+                                        <th class="text-right">Cash effect</th>
+                                        <th class="text-right">Balance</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="tx in transactions" :key="tx.id">
+                                        <td class="text-caption text-medium-emphasis">{{ formatTransactionDate(tx.booked_at) }}</td>
+                                        <td>
+                                            <v-chip :color="transactionTypeColor(tx.type)" density="comfortable" size="x-small" variant="tonal">
+                                                {{ tx.type }}
+                                            </v-chip>
+                                        </td>
+                                        <td>{{ tx.stock_label ?? '–' }}</td>
+                                        <td class="text-right">{{ tx.pieces ?? '–' }}</td>
+                                        <td class="text-right">{{ formatAccountBalance(tx.total_amount) }}</td>
+                                        <td class="text-right" :class="Number(tx.cash_delta) >= 0 ? 'text-success' : 'text-error'">
+                                            {{ formatCashDelta(tx.cash_delta) }}
+                                        </td>
+                                        <td class="text-right">{{ formatAccountBalance(tx.balance_after) }}</td>
+                                    </tr>
+                                </tbody>
+                            </v-table>
+                            <p v-else-if="!transactionsLoading" class="text-medium-emphasis text-body-2 mt-2">No transactions yet.</p>
+                        </div>
+
+                        <v-alert v-else type="info" variant="tonal" density="compact" class="mt-4">
+                            No active depot found.
                         </v-alert>
                     </section>
 
@@ -2223,6 +3047,13 @@ function emptyPriceRefreshScheduleForm() {
     line-height: 1;
 }
 
+.session-price-change {
+    font-size: 0.6875rem;
+    font-weight: 700;
+    line-height: 1.1;
+    margin-top: 2px;
+}
+
 .stock-holding-row {
     cursor: pointer;
 }
@@ -2251,5 +3082,32 @@ function emptyPriceRefreshScheduleForm() {
     margin-left: auto;
     text-align: right;
     width: 12px;
+}
+
+.recent-price-trend-dots {
+    align-items: center;
+    display: flex;
+    gap: 4px;
+    margin-bottom: 6px;
+    margin-top: 3px;
+}
+
+.recent-price-trend-dot {
+    border-radius: 999px;
+    display: inline-block;
+    height: 8px;
+    width: 8px;
+}
+
+.recent-price-trend-dot-up {
+    background: rgba(var(--v-theme-success), 0.65);
+}
+
+.recent-price-trend-dot-down {
+    background: rgba(var(--v-theme-error), 0.65);
+}
+
+.recent-price-trend-dot-flat {
+    background: rgba(17, 17, 17, 0.55);
 }
 </style>

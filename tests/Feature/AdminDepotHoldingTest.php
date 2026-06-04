@@ -2,22 +2,26 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\FetchHistoricalSessionPrices;
+use App\Jobs\FetchHistoricalSessionStartPrice;
 use App\Jobs\RefreshDepotHoldingPrices;
-use App\Mail\WatchlistPriceRefreshReportMail;
 use App\Models\StockHolding;
 use App\Models\StockPrice;
 use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
+use App\Services\EodhdMarketData;
+use App\Services\HistoricalSessionStartPriceFetchStatus;
+use App\Services\HistoricalSessionStartPriceLookup;
 use App\Services\StockPriceCatalog;
-use App\Services\WatchlistPdfReport;
 use App\Services\WebMarketData\DTO\QuoteSelectionResult;
 use App\Services\WebMarketData\WebMarketDataOrchestrator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
 use Mockery\MockInterface;
-use RuntimeException;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -53,6 +57,10 @@ class AdminDepotHoldingTest extends TestCase
                         'latest_price',
                         'start_price',
                         'end_price',
+                        'start_price_24',
+                        'start_price_48',
+                        'historical_prices_fetching',
+                        'position_pieces',
                         'latest_price_trend',
                         'latest_price_change_pct',
                         'latest_price_tick_trend',
@@ -72,6 +80,63 @@ class AdminDepotHoldingTest extends TestCase
                     ],
                 ],
             ]);
+    }
+
+    public function test_admin_can_list_exchange_trading_times_from_eodhd(): void
+    {
+        Cache::flush();
+        config(['services.eodhd.key' => 'test-token']);
+
+        Http::fake([
+            'eodhd.com/api/exchange-details/XETRA*' => Http::response([
+                'Name' => 'XETRA Stock Exchange',
+                'Code' => 'XETRA',
+                'OperatingMIC' => 'XETR',
+                'Country' => 'Germany',
+                'Currency' => 'EUR',
+                'Timezone' => 'Europe/Berlin',
+                'isOpen' => false,
+                'TradingHours' => [
+                    'Open' => '09:00:00',
+                    'Close' => '17:30:00',
+                    'OpenUTC' => '07:00:00',
+                    'CloseUTC' => '15:30:00',
+                    'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
+                ],
+            ]),
+        ]);
+
+        $admin = $this->adminUser();
+        StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'country' => 'Germany',
+        ]);
+        StockHolding::factory()->create([
+            'symbol' => 'EXXX',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'country' => 'Germany',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/exchange-trading-times')
+            ->assertOk()
+            ->assertJsonCount(1, 'exchange_trading_times')
+            ->assertJsonPath('exchange_trading_times.0.code', 'XETRA')
+            ->assertJsonPath('exchange_trading_times.0.name', 'XETRA Stock Exchange')
+            ->assertJsonPath('exchange_trading_times.0.operating_mic', 'XETR')
+            ->assertJsonPath('exchange_trading_times.0.timezone', 'Europe/Berlin')
+            ->assertJsonPath('exchange_trading_times.0.open', '09:00:00')
+            ->assertJsonPath('exchange_trading_times.0.close', '17:30:00')
+            ->assertJsonPath('exchange_trading_times.0.open_utc', '07:00:00')
+            ->assertJsonPath('exchange_trading_times.0.close_utc', '15:30:00')
+            ->assertJsonPath('exchange_trading_times.0.working_days', 'Mon,Tue,Wed,Thu,Fri')
+            ->assertJsonPath('exchange_trading_times.0.is_open', false)
+            ->assertJsonPath('exchange_trading_times.0.error', null);
+
+        Http::assertSentCount(1);
     }
 
     public function test_admin_listing_hides_stale_holding_prices(): void
@@ -160,10 +225,12 @@ class AdminDepotHoldingTest extends TestCase
             'price_status' => 'closed_market',
             'latest_price_type' => 'last',
         ]);
-        // Berlin (CEST, +02:00): previous day 17:45 (end), today 08:30 (pre-open), today 09:10 (start).
-        $this->createMedianQuote($holding, '2026-06-03 15:45:00', '193.00');
+        // Berlin (CEST, +02:00): two days ago 09:08, previous day 09:05 / 17:45, today 08:30 (pre-open) / 09:10.
+        $this->createMedianQuote($holding, '2026-06-02 07:08:00', '189.00', 'historical_session_start');
+        $this->createMedianQuote($holding, '2026-06-03 07:05:00', '192.00', 'historical_session_start');
+        $this->createMedianQuote($holding, '2026-06-03 15:45:00', '193.00', 'historical_session_end');
         $this->createMedianQuote($holding, '2026-06-04 06:30:00', '190.00');
-        $this->createMedianQuote($holding, '2026-06-04 07:10:00', '191.00');
+        $this->createMedianQuote($holding, '2026-06-04 07:10:00', '191.00', 'historical_session_start');
         $this->createMedianQuote($holding, '2026-06-04 08:15:00', '191.50');
 
         $this->actingAs($admin)
@@ -172,8 +239,381 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.symbol', 'LYXIB')
             ->assertJsonPath('holdings.0.start_price', '191.00000000')
             ->assertJsonPath('holdings.0.end_price', '193.00000000')
+            ->assertJsonPath('holdings.0.start_price_24', '192.00000000')
+            ->assertJsonPath('holdings.0.start_price_48', '189.00000000')
+            ->assertJsonPath('holdings.0.historical_prices_fetching', false)
             ->assertJsonPath('holdings.0.latest_price_trend', 'up')
             ->assertJsonPath('holdings.0.latest_price_change_pct', '0.26');
+    }
+
+    public function test_admin_listing_does_not_queue_missing_historical_session_prices(): void
+    {
+        Queue::fake();
+        config(['services.eodhd.key' => 'test-token']);
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-04 10:00:00', 'Europe/Berlin'));
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'LYXIB',
+            'name' => 'Amundi IBEX 35 UCITS ETF Acc',
+            'isin' => 'FR0010655746',
+            'wkn' => 'A0REJT',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'currency' => 'EUR',
+            'latest_price' => '191.500000',
+            'latest_price_fetched_at' => '2026-06-04 08:20:00',
+            'latest_price_as_of' => '2026-06-04 08:15:00',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+            'price_status' => 'fresh',
+            'latest_price_type' => 'last',
+        ]);
+        $this->createMedianQuote($holding, '2026-06-04 07:10:00', '191.00', 'historical_session_start');
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.symbol', 'LYXIB')
+            ->assertJsonPath('holdings.0.start_price', '191.00000000')
+            ->assertJsonPath('holdings.0.start_price_24', null)
+            ->assertJsonPath('holdings.0.start_price_48', null)
+            ->assertJsonPath('holdings.0.historical_prices_fetching', false);
+
+        Queue::assertNothingPushed();
+    }
+
+    public function test_due_historical_session_price_command_dispatches_morning_bundle_by_exchange(): void
+    {
+        Queue::fake();
+        Cache::flush();
+        config(['services.eodhd.key' => 'test-token']);
+        $this->travelTo(Carbon::parse('2026-06-04 09:01:00', 'Europe/Berlin'));
+        Http::fake([
+            'eodhd.com/api/exchange-details/XETRA*' => Http::response([
+                'Name' => 'XETRA Stock Exchange',
+                'Code' => 'XETRA',
+                'OperatingMIC' => 'XETR',
+                'Timezone' => 'Europe/Berlin',
+                'TradingHours' => [
+                    'Open' => '09:00:00',
+                    'Close' => '17:30:00',
+                    'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
+                ],
+            ]),
+        ]);
+        $firstHolding = StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'country' => 'Germany',
+        ]);
+        $secondHolding = StockHolding::factory()->create([
+            'symbol' => 'EXXX',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'country' => 'Germany',
+        ]);
+
+        $this->artisan('historical-session-prices:dispatch-due')
+            ->assertExitCode(0);
+
+        Queue::assertPushedTimes(FetchHistoricalSessionPrices::class, 1);
+        Queue::assertPushed(FetchHistoricalSessionPrices::class, fn (FetchHistoricalSessionPrices $job): bool => $job->exchangeCode === 'XETRA'
+            && $job->stockHoldingIds === [$firstHolding->id, $secondHolding->id]
+            && $job->session['today_date'] === '2026-06-04'
+            && $job->session['today_open'] === '2026-06-04T07:00:00+00:00'
+            && $job->session['previous_date'] === '2026-06-03'
+            && $job->session['two_ago_date'] === '2026-06-02');
+
+        $this->assertTrue(app(HistoricalSessionStartPriceFetchStatus::class)->isFetching(
+            $firstHolding->id,
+            Carbon::parse('2026-06-04T07:00:00+00:00'),
+            Carbon::parse('2026-06-04T15:30:00+00:00'),
+            'start',
+        ));
+        $this->assertTrue(app(HistoricalSessionStartPriceFetchStatus::class)->isFetching(
+            $firstHolding->id,
+            Carbon::parse('2026-06-03T15:30:00+00:00'),
+            Carbon::parse('2026-06-04T07:00:00+00:00'),
+            'end',
+        ));
+    }
+
+    public function test_historical_session_price_bundle_job_stores_start_end_start24_and_start48_together(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        $this->travelTo(Carbon::parse('2026-06-04 09:10:00', 'Europe/Berlin'));
+        Http::fake([
+            'eodhd.com/api/intraday/AMES.XETRA*' => Http::response([
+                [
+                    'timestamp' => Carbon::parse('2026-06-04 07:01:00', 'UTC')->timestamp,
+                    'close' => 467.85,
+                ],
+            ]),
+            'eodhd.com/api/eod/AMES.XETRA*' => Http::sequence()
+                ->push([[
+                    'date' => '2026-06-03',
+                    'open' => 470.15,
+                    'close' => 466.80,
+                ]])
+                ->push([[
+                    'date' => '2026-06-02',
+                    'open' => 469.60,
+                    'close' => 468.00,
+                ]])
+                ->push([[
+                    'date' => '2026-06-03',
+                    'open' => 470.15,
+                    'close' => 466.80,
+                ]]),
+        ]);
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'country' => 'Germany',
+            'currency' => 'EUR',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+
+        (new FetchHistoricalSessionPrices(
+            exchangeCode: 'XETRA',
+            stockHoldingIds: [$holding->id],
+            session: $this->historicalSessionPayload(),
+        ))->handle(
+            app(EodhdMarketData::class),
+            app(HistoricalSessionStartPriceFetchStatus::class),
+        );
+
+        $this->assertDatabaseHas('stock_prices', [
+            'source_key' => 'eodhd_intraday',
+            'symbol' => 'AMES',
+            'price' => '467.85000000',
+            'price_type' => 'historical_session_start',
+            'as_of' => '2026-06-04 07:01:00',
+        ]);
+        $this->assertDatabaseHas('stock_prices', [
+            'source_key' => 'eodhd_eod',
+            'symbol' => 'AMES',
+            'price' => '466.80000000',
+            'price_type' => 'historical_session_end',
+            'as_of' => '2026-06-03 15:30:00',
+        ]);
+        $this->assertDatabaseHas('stock_prices', [
+            'source_key' => 'eodhd_eod',
+            'symbol' => 'AMES',
+            'price' => '470.15000000',
+            'price_type' => 'historical_session_start',
+            'as_of' => '2026-06-03 07:00:00',
+        ]);
+        $this->assertDatabaseHas('stock_prices', [
+            'source_key' => 'eodhd_eod',
+            'symbol' => 'AMES',
+            'price' => '469.60000000',
+            'price_type' => 'historical_session_start',
+            'as_of' => '2026-06-02 07:00:00',
+        ]);
+    }
+
+    public function test_historical_session_price_bundle_job_does_not_store_partial_prices(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        $this->travelTo(Carbon::parse('2026-06-04 09:10:00', 'Europe/Berlin'));
+        Http::fake([
+            'eodhd.com/api/intraday/AMES.XETRA*' => Http::response([
+                [
+                    'timestamp' => Carbon::parse('2026-06-04 07:01:00', 'UTC')->timestamp,
+                    'close' => 467.85,
+                ],
+            ]),
+            'eodhd.com/api/eod/AMES.XETRA*' => Http::sequence()
+                ->push([[
+                    'date' => '2026-06-03',
+                    'open' => 470.15,
+                    'close' => 466.80,
+                ]])
+                ->push([[
+                    'date' => '2026-06-02',
+                    'open' => null,
+                    'close' => 468.00,
+                ]])
+                ->push([[
+                    'date' => '2026-06-03',
+                    'open' => 470.15,
+                    'close' => 466.80,
+                ]]),
+        ]);
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'country' => 'Germany',
+            'currency' => 'EUR',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+
+        (new FetchHistoricalSessionPrices(
+            exchangeCode: 'XETRA',
+            stockHoldingIds: [$holding->id],
+            session: $this->historicalSessionPayload(),
+        ))->handle(
+            app(EodhdMarketData::class),
+            app(HistoricalSessionStartPriceFetchStatus::class),
+        );
+
+        $this->assertDatabaseCount('stock_prices', 0);
+    }
+
+    public function test_historical_session_start_price_job_fetches_and_stores_price_with_eodhd_intraday(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        $this->travelTo(Carbon::parse('2026-06-04 10:00:00', 'Europe/Berlin'));
+        Http::fake([
+            'eodhd.com/api/intraday/LYXIB.XETRA*' => Http::response([
+                [
+                    'timestamp' => Carbon::parse('2026-06-03 07:02:00', 'UTC')->timestamp,
+                    'close' => 192.25,
+                ],
+            ]),
+        ]);
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'LYXIB',
+            'name' => 'Amundi IBEX 35 UCITS ETF Acc',
+            'isin' => 'FR0010655746',
+            'wkn' => 'A0REJT',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'currency' => 'EUR',
+            'latest_price' => '193.000000',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+
+        (new FetchHistoricalSessionStartPrice(
+            $holding->id,
+            '2026-06-03T07:00:00+00:00',
+            '2026-06-03T15:30:00+00:00',
+        ))->handle(
+            app(HistoricalSessionStartPriceLookup::class),
+            app(StockPriceCatalog::class),
+            app(HistoricalSessionStartPriceFetchStatus::class),
+        );
+
+        $this->assertDatabaseHas('stock_prices', [
+            'source_key' => 'eodhd_intraday',
+            'source_name' => 'EODHD intraday',
+            'price' => '192.25000000',
+            'price_type' => 'historical_session_start',
+            'as_of' => '2026-06-03 07:02:00',
+        ]);
+    }
+
+    public function test_historical_session_start_price_job_stores_first_eodhd_intraday_price_in_window(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        $this->travelTo(Carbon::parse('2026-06-04 10:00:00', 'Europe/Berlin'));
+        Http::fake([
+            'eodhd.com/api/intraday/LYXIB.XETRA*' => Http::response([
+                [
+                    'timestamp' => Carbon::parse('2026-06-03 07:04:00', 'UTC')->timestamp,
+                    'close' => 192.05,
+                ],
+                [
+                    'timestamp' => Carbon::parse('2026-06-03 07:01:00', 'UTC')->timestamp,
+                    'close' => 191.95,
+                ],
+            ]),
+        ]);
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'LYXIB',
+            'name' => 'Amundi IBEX 35 UCITS ETF Acc',
+            'isin' => 'FR0010655746',
+            'wkn' => 'A0REJT',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'currency' => 'EUR',
+            'latest_price' => '193.000000',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+            'price_status' => 'fresh',
+        ]);
+
+        (new FetchHistoricalSessionStartPrice(
+            $holding->id,
+            '2026-06-03T07:00:00+00:00',
+            '2026-06-03T15:30:00+00:00',
+        ))->handle(
+            app(HistoricalSessionStartPriceLookup::class),
+            app(StockPriceCatalog::class),
+            app(HistoricalSessionStartPriceFetchStatus::class),
+        );
+
+        $storedPrice = StockPrice::query()
+            ->where('source_key', 'eodhd_intraday')
+            ->firstOrFail();
+
+        $this->assertSame('191.95000000', (string) $storedPrice->price);
+        $this->assertSame('historical_session_start', $storedPrice->price_type);
+        $this->assertSame('2026-06-03 07:01:00', $storedPrice->as_of?->format('Y-m-d H:i:s'));
+
+        Queue::fake();
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.start_price_24', '191.95000000');
+    }
+
+    public function test_historical_session_start_price_job_ignores_eodhd_rows_without_prices(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        $this->travelTo(Carbon::parse('2026-06-04 10:00:00', 'Europe/Berlin'));
+        $admin = $this->adminUser();
+        Http::fake([
+            'eodhd.com/api/intraday/SEC0.XETRA*' => Http::response([
+                [
+                    'timestamp' => Carbon::parse('2026-06-03 07:04:00', 'UTC')->timestamp,
+                    'close' => null,
+                ],
+            ]),
+        ]);
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'SEC0',
+            'name' => 'iShares MSCI Global Semiconductors UCITS ETF USD (Acc)',
+            'isin' => 'IE000I8KRLL9',
+            'wkn' => 'A3CVRA',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'currency' => 'EUR',
+            'latest_price' => '19.151000',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+            'price_status' => 'fresh',
+        ]);
+        $this->createMedianQuote($holding, '2026-06-02 07:00:00', '18.19', 'historical_session_start');
+
+        (new FetchHistoricalSessionStartPrice(
+            $holding->id,
+            '2026-06-03T07:00:00+00:00',
+            '2026-06-03T15:30:00+00:00',
+        ))->handle(
+            app(HistoricalSessionStartPriceLookup::class),
+            app(StockPriceCatalog::class),
+            app(HistoricalSessionStartPriceFetchStatus::class),
+        );
+
+        $this->assertDatabaseMissing('stock_prices', [
+            'source_key' => 'eodhd_intraday',
+            'symbol' => 'SEC0',
+        ]);
+
+        Queue::fake();
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.start_price_24', null)
+            ->assertJsonPath('holdings.0.start_price_48', '18.19000000')
+            ->assertJsonPath('holdings.0.historical_prices_fetching', false);
+
+        Queue::assertNothingPushed();
     }
 
     public function test_admin_listing_serializes_stored_stock_price_source_time_as_utc(): void
@@ -182,17 +622,17 @@ class AdminDepotHoldingTest extends TestCase
         $stockPrice = StockPrice::query()->create([
             'instrument_key' => 'isin:FR0010251744',
             'quote_hash' => hash('sha256', 'lyxib-source-time'),
-            'source_key' => 'calculated_median',
-            'source_name' => '4 quotes',
+            'source_key' => 'eodhd_realtime',
+            'source_name' => 'EODHD real-time',
             'source_url' => 'https://example.com/lyxib',
-            'source_quality' => 'calculated',
+            'source_quality' => 'market_data_vendor',
             'venue' => 'Madrid SIBE',
             'isin' => 'FR0010251744',
             'wkn' => 'LYX0A6',
             'symbol' => 'LYXIB',
             'currency' => 'EUR',
             'price' => '191.00000000',
-            'price_type' => 'calculated_median',
+            'price_type' => 'last',
             'as_of' => Carbon::parse('2026-06-03 15:35:00', 'UTC'),
             'fetched_at' => Carbon::parse('2026-06-03 17:10:00', 'UTC'),
             'freshness_status' => 'fresh',
@@ -346,7 +786,7 @@ class AdminDepotHoldingTest extends TestCase
             'latest_price_type' => 'last',
         ]);
         // Mid-session only (Berlin 09:10 and 14:00); the market has not closed yet.
-        $this->createMedianQuote($holding, '2026-06-03 07:10:00', '191.00');
+        $this->createMedianQuote($holding, '2026-06-03 07:10:00', '191.00', 'historical_session_start');
         $this->createMedianQuote($holding, '2026-06-03 12:00:00', '195.00');
 
         $this->actingAs($admin)
@@ -380,6 +820,32 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.end_price', '50.000000')
             ->assertJsonPath('holdings.0.latest_price_trend', 'flat')
             ->assertJsonPath('holdings.0.latest_price_change_pct', '0.00');
+    }
+
+    public function test_admin_listing_always_compares_latest_price_change_to_start_price(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-04 18:00:00', 'Europe/Berlin'));
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'LYXIB',
+            'currency' => 'EUR',
+            'latest_price' => '110.000000',
+            'latest_price_fetched_at' => '2026-06-04 16:00:00',
+            'latest_price_as_of' => '2026-06-04 15:55:00',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+            'price_status' => 'closed_market',
+            'latest_price_type' => 'last',
+        ]);
+        $this->createMedianQuote($holding, '2026-06-04 07:00:00', '100.00', 'historical_session_start');
+        $this->createMedianQuote($holding, '2026-06-03 15:30:00', '120.00', 'historical_session_end');
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.start_price', '100.00000000')
+            ->assertJsonPath('holdings.0.end_price', '120.00000000')
+            ->assertJsonPath('holdings.0.latest_price_trend', 'up')
+            ->assertJsonPath('holdings.0.latest_price_change_pct', '10.00');
     }
 
     public function test_admin_can_add_a_selected_stock_holding(): void
@@ -625,7 +1091,6 @@ class AdminDepotHoldingTest extends TestCase
         (new RefreshDepotHoldingPrices('refresh-test'))->handle(
             app(WebMarketDataOrchestrator::class),
             $progress,
-            app(WatchlistPdfReport::class),
         );
 
         $this->assertDatabaseHas('stock_holdings', [
@@ -652,7 +1117,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->assertSame('2/2', $progress->get('refresh-test')['step']);
     }
 
-    public function test_completed_manual_refresh_sends_watchlist_pdf_to_logged_in_admin(): void
+    public function test_completed_manual_refresh_does_not_send_watchlist_pdf_email(): void
     {
         Mail::fake();
         $admin = $this->adminUser();
@@ -674,18 +1139,12 @@ class AdminDepotHoldingTest extends TestCase
         (new RefreshDepotHoldingPrices('refresh-mail-test', $admin->id))->handle(
             app(WebMarketDataOrchestrator::class),
             $progress,
-            app(WatchlistPdfReport::class),
         );
 
-        Mail::assertSent(WatchlistPriceRefreshReportMail::class, function (WatchlistPriceRefreshReportMail $mail) use ($admin): bool {
-            return $mail->hasTo($admin->email)
-                && str_starts_with($mail->pdfContent, '%PDF')
-                && str_starts_with($mail->filename, 'watch-list-')
-            && str_ends_with($mail->filename, '.pdf');
-        });
+        Mail::assertNothingOutgoing();
     }
 
-    public function test_refresh_still_finishes_when_report_email_cannot_be_sent(): void
+    public function test_refresh_still_finishes_without_report_email_recipient(): void
     {
         $admin = $this->adminUser();
         StockHolding::factory()->create([
@@ -699,21 +1158,18 @@ class AdminDepotHoldingTest extends TestCase
                 ->once()
                 ->andReturn(new QuoteSelectionResult(null, [], [], status: 'fresh'));
         });
-        Mail::shouldReceive('to')
-            ->once()
-            ->with($admin->email)
-            ->andThrow(new RuntimeException('SMTP is down.'));
+        Mail::fake();
         $progress = app(DepotHoldingPriceRefreshProgress::class);
         $progress->start('refresh-mail-fail-test', 1);
 
         (new RefreshDepotHoldingPrices('refresh-mail-fail-test', $admin->id))->handle(
             app(WebMarketDataOrchestrator::class),
             $progress,
-            app(WatchlistPdfReport::class),
         );
 
         $this->assertSame('finished', $progress->get('refresh-mail-fail-test')['status']);
         $this->assertSame('1/1', $progress->get('refresh-mail-fail-test')['step']);
+        Mail::assertNothingOutgoing();
     }
 
     public function test_admin_must_provide_a_selected_symbol(): void
@@ -802,6 +1258,7 @@ class AdminDepotHoldingTest extends TestCase
     public function test_guest_cannot_manage_holdings(): void
     {
         $this->getJson('/admin/watchlist/holdings')->assertUnauthorized();
+        $this->getJson('/admin/watchlist/exchange-trading-times')->assertUnauthorized();
         $this->getJson('/admin/watchlist/holdings/pdf')->assertUnauthorized();
         $this->postJson('/admin/watchlist/holdings', ['symbol' => 'AAPL'])->assertUnauthorized();
         $this->postJson('/admin/watchlist/holdings/refresh-prices')->assertUnauthorized();
@@ -809,26 +1266,45 @@ class AdminDepotHoldingTest extends TestCase
         $this->deleteJson('/admin/watchlist/holdings/1')->assertUnauthorized();
     }
 
-    private function createMedianQuote(StockHolding $holding, string $asOf, string $price): StockPrice
+    private function createMedianQuote(StockHolding $holding, string $asOf, string $price, string $priceType = 'last'): StockPrice
     {
         return StockPrice::query()->create([
             'instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($holding),
-            'quote_hash' => hash('sha256', "{$holding->id}|{$asOf}|{$price}"),
-            'source_key' => 'calculated_median',
-            'source_name' => '2 quotes',
+            'quote_hash' => hash('sha256', "{$holding->id}|{$asOf}|{$price}|{$priceType}"),
+            'source_key' => 'eodhd_realtime',
+            'source_name' => 'EODHD real-time',
             'source_url' => 'https://example.com',
-            'source_quality' => 'calculated',
+            'source_quality' => 'market_data_vendor',
             'isin' => $holding->isin,
             'wkn' => $holding->wkn,
             'symbol' => $holding->symbol,
             'currency' => $holding->currency,
             'price' => $price,
-            'price_type' => 'indicative_mid',
+            'price_type' => $priceType,
             'as_of' => Carbon::parse($asOf, 'UTC'),
             'fetched_at' => Carbon::parse($asOf, 'UTC'),
             'freshness_status' => 'fresh',
             'validation_status' => 'valid',
         ]);
+    }
+
+    /**
+     * @return array{timezone: string, today_date: string, today_open: string, today_close: string, previous_date: string, previous_open: string, previous_close: string, two_ago_date: string, two_ago_open: string, two_ago_close: string}
+     */
+    private function historicalSessionPayload(): array
+    {
+        return [
+            'timezone' => 'Europe/Berlin',
+            'today_date' => '2026-06-04',
+            'today_open' => '2026-06-04T07:00:00+00:00',
+            'today_close' => '2026-06-04T15:30:00+00:00',
+            'previous_date' => '2026-06-03',
+            'previous_open' => '2026-06-03T07:00:00+00:00',
+            'previous_close' => '2026-06-03T15:30:00+00:00',
+            'two_ago_date' => '2026-06-02',
+            'two_ago_open' => '2026-06-02T07:00:00+00:00',
+            'two_ago_close' => '2026-06-02T15:30:00+00:00',
+        ];
     }
 
     private function adminUser(): User

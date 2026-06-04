@@ -6,6 +6,8 @@ export const useDepotStore = defineStore('depots', {
         activeDepot: null,
         depots: [],
         holdings: [],
+        transactions: [],
+        exchangeTradingTimes: [],
         priceRefresh: null,
         priceRefreshSettings: null,
         stockSearchResults: [],
@@ -27,9 +29,13 @@ export const useDepotStore = defineStore('depots', {
         },
         loading: false,
         holdingsLoading: false,
+        transactionsLoading: false,
+        exchangeTradingTimesLoading: false,
         stockSearchLoading: false,
         error: '',
         holdingsError: '',
+        transactionsError: '',
+        exchangeTradingTimesError: '',
         stockSearchError: '',
     }),
     actions: {
@@ -64,8 +70,13 @@ export const useDepotStore = defineStore('depots', {
                 this.loading = false;
             }
         },
-        async loadWatchlistHoldings(page = 1) {
-            this.holdingsLoading = true;
+        async loadWatchlistHoldings(page = 1, options = {}) {
+            const isSilent = options.silent === true;
+
+            if (!isSilent) {
+                this.holdingsLoading = true;
+            }
+
             this.holdingsError = '';
 
             try {
@@ -78,11 +89,34 @@ export const useDepotStore = defineStore('depots', {
                 this.holdingsError = error.message;
                 throw error;
             } finally {
-                this.holdingsLoading = false;
+                if (!isSilent) {
+                    this.holdingsLoading = false;
+                }
             }
         },
         async loadActiveDepotHoldings(page = 1) {
             return await this.loadWatchlistHoldings(page);
+        },
+        async loadWatchlistExchangeTradingTimes() {
+            this.exchangeTradingTimesLoading = true;
+            this.exchangeTradingTimesError = '';
+
+            try {
+                const data = await request('/admin/watchlist/exchange-trading-times');
+                this.exchangeTradingTimes = data.exchange_trading_times ?? [];
+
+                return data;
+            } catch (error) {
+                this.exchangeTradingTimes = [];
+                this.exchangeTradingTimesError = error.message;
+
+                return { exchange_trading_times: [] };
+            } finally {
+                this.exchangeTradingTimesLoading = false;
+            }
+        },
+        async loadActiveDepotExchangeTradingTimes() {
+            return await this.loadWatchlistExchangeTradingTimes();
         },
         async createWatchlistHolding(payload) {
             this.holdingsLoading = true;
@@ -189,11 +223,66 @@ export const useDepotStore = defineStore('depots', {
             try {
                 const data = await request('/admin/price-refresh-settings');
                 this.priceRefreshSettings = data.price_refresh_settings;
+                this.priceRefresh = data.refresh;
 
                 return data;
             } catch (error) {
                 this.holdingsError = error.message;
                 throw error;
+            }
+        },
+        async loadTransactions() {
+            this.transactionsLoading = true;
+            this.transactionsError = '';
+
+            try {
+                const data = await request('/admin/depot-transactions');
+                this.transactions = data.transactions;
+            } catch (error) {
+                this.transactionsError = error.message;
+                throw error;
+            } finally {
+                this.transactionsLoading = false;
+            }
+        },
+        async bookCashTransaction(payload) {
+            this.holdingsLoading = true;
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/depot-transactions/cash', {
+                    method: 'POST',
+                    body: JSON.stringify(payload),
+                });
+                this.activeDepot = data.depot;
+                this.transactions = [data.transaction, ...this.transactions];
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            } finally {
+                this.holdingsLoading = false;
+            }
+        },
+        async bookStockTransaction(payload) {
+            this.holdingsLoading = true;
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/depot-transactions/stocks', {
+                    method: 'POST',
+                    body: JSON.stringify(payload),
+                });
+                this.activeDepot = data.depot;
+                this.transactions = [data.transaction, ...this.transactions];
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            } finally {
+                this.holdingsLoading = false;
             }
         },
         async searchStocks(query) {

@@ -54,7 +54,7 @@ class WatchlistPdfReport
     }
 
     /**
-     * @return array<int, array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, start_price: ?string, end_price: ?string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, validation_errors: array<int, string>, created_at: ?string}>
+     * @return array<int, array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, start_price: ?string, end_price: ?string, start_price_24: ?string, start_price_48: ?string, historical_prices_fetching: bool, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, validation_errors: array<int, string>, created_at: ?string}>
      */
     private function holdings(): array
     {
@@ -89,7 +89,7 @@ class WatchlistPdfReport
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, start_price: ?string, end_price: ?string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, validation_errors: array<int, string>, created_at: ?string}
+     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, start_price: ?string, end_price: ?string, start_price_24: ?string, start_price_48: ?string, historical_prices_fetching: bool, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, validation_errors: array<int, string>, created_at: ?string}
      */
     private function holdingPayload(StockHolding $holding): array
     {
@@ -102,9 +102,7 @@ class WatchlistPdfReport
             ? $this->storedStockPriceTimestamp($latestStockPrice, 'as_of')
             : $holding->latest_price_as_of;
         $tradingTimes = $latestStockPrice?->trading_times ?? $holding->trading_times;
-        $latestPriceReference = $this->tradingSessionPriceResolver->isTradingTime($tradingTimes)
-            ? $sessionPrices['start_price']
-            : $sessionPrices['end_price'];
+        $latestPriceReference = $sessionPrices['start_price'];
 
         return [
             'id' => $holding->id,
@@ -120,6 +118,9 @@ class WatchlistPdfReport
             'latest_price' => $latestPrice,
             'start_price' => $sessionPrices['start_price'],
             'end_price' => $sessionPrices['end_price'],
+            'start_price_24' => $sessionPrices['start_price_24'],
+            'start_price_48' => $sessionPrices['start_price_48'],
+            'historical_prices_fetching' => $sessionPrices['historical_prices_fetching'],
             'latest_price_trend' => $this->latestPriceTrend($latestPrice, $latestPriceReference),
             'latest_price_change_pct' => $this->latestPriceChangePercent($latestPrice, $latestPriceReference),
             'latest_price_tick_trend' => $this->latestPriceTrend($latestPrice, $this->previousStoredPrice($holding, $latestStockPrice)),
@@ -218,7 +219,7 @@ class WatchlistPdfReport
         $query = $this->stockPriceCatalog
             ->pricesForHolding($holding)
             ->whereKeyNot($latestStockPrice->id)
-            ->where('source_key', 'calculated_median')
+            ->whereIn('source_key', EodhdMarketData::sourceKeys())
             ->whereNotNull('price');
 
         if ($latestStockPrice->as_of !== null) {
@@ -246,7 +247,7 @@ class WatchlistPdfReport
     {
         return $this->stockPriceCatalog
             ->pricesForHolding($holding)
-            ->where('source_key', 'calculated_median')
+            ->whereIn('source_key', EodhdMarketData::sourceKeys())
             ->whereNotNull('price')
             ->whereNotNull('as_of')
             ->where('as_of', '>=', now()->subDay())

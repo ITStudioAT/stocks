@@ -11,3 +11,7 @@ Artisan::command('inspire', function () {
 Schedule::command('price-refresh:dispatch-due')
     ->everyMinute()
     ->withoutOverlapping(10);
+
+Schedule::command('historical-session-prices:dispatch-due')
+    ->everyMinute()
+    ->withoutOverlapping(10);

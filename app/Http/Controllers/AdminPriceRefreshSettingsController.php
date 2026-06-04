@@ -13,6 +13,7 @@ class AdminPriceRefreshSettingsController extends Controller
     {
         return response()->json([
             'price_refresh_settings' => $scheduler->payload(),
+            'refresh' => $scheduler->activeRefreshProgress(),
         ]);
     }
 
@@ -39,7 +40,7 @@ class AdminPriceRefreshSettingsController extends Controller
         return response()->json([
             'message' => 'Price refresh schedule updated.',
             'price_refresh_settings' => $scheduler->payload(),
-            'refresh' => $updatedRefreshSchedule['refresh'],
+            'refresh' => $updatedRefreshSchedule['refresh'] ?? $scheduler->activeRefreshProgress(),
         ]);
     }
 }

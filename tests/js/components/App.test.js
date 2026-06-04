@@ -40,6 +40,28 @@ function priceRefreshSettings(overrides = {}) {
     };
 }
 
+function sessionHeaderDate(daysAgo) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Vienna',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).formatToParts(new Date());
+    const dateParts = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    const viennaDate = new Date(Date.UTC(
+        Number(dateParts.year),
+        Number(dateParts.month) - 1,
+        Number(dateParts.day) - daysAgo,
+    ));
+
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: 'UTC',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    }).format(viennaDate);
+}
+
 describe('App', () => {
     it('renders the admin login screen without loading authenticated data', () => {
         window.history.pushState({}, '', '/admin/login');
@@ -166,6 +188,70 @@ describe('App', () => {
                                     price: '304.00000000',
                                     currency: 'EUR',
                                     as_of: '2026-06-03T15:50:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 14,
+                                    price: '304.50000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T15:55:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 15,
+                                    price: '304.50000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:00:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 16,
+                                    price: '303.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:05:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 17,
+                                    price: '305.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:10:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 18,
+                                    price: '306.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:15:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 19,
+                                    price: '306.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:20:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 20,
+                                    price: '302.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:25:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 21,
+                                    price: '303.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:30:00+00:00',
                                     source_name: 'Tradegate Exchange',
                                     price_type: 'calculated_median',
                                 },
@@ -354,6 +440,9 @@ describe('App', () => {
                             latest_price: '306.320010',
                             start_price: '300.100000',
                             end_price: '305.900000',
+                            start_price_24: '299.500000',
+                            start_price_48: '298.750000',
+                            historical_prices_fetching: true,
                             latest_price_trend: 'up',
                             latest_price_change_pct: '0.14',
                             latest_price_tick_trend: 'up',
@@ -400,6 +489,70 @@ describe('App', () => {
                                     source_name: 'Tradegate Exchange',
                                     price_type: 'calculated_median',
                                 },
+                                {
+                                    id: 14,
+                                    price: '304.50000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T15:55:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 15,
+                                    price: '304.50000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:00:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 16,
+                                    price: '303.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:05:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 17,
+                                    price: '305.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:10:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 18,
+                                    price: '306.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:15:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 19,
+                                    price: '306.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:20:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 20,
+                                    price: '302.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:25:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 21,
+                                    price: '303.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T16:30:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
                             ],
                             validation_errors: [],
                         },
@@ -414,6 +567,8 @@ describe('App', () => {
                             latest_price: '190.000000',
                             start_price: '185.000000',
                             end_price: '195.000000',
+                            start_price_24: '184.000000',
+                            start_price_48: '183.000000',
                             latest_price_trend: 'down',
                             latest_price_change_pct: '-2.56',
                             latest_price_tick_trend: 'down',
@@ -441,6 +596,8 @@ describe('App', () => {
                             latest_price: '100.000000',
                             start_price: '100.000000',
                             end_price: '100.000000',
+                            start_price_24: '100.000000',
+                            start_price_48: '100.000000',
                             latest_price_trend: 'flat',
                             latest_price_change_pct: '0.00',
                             latest_price_tick_trend: 'flat',
@@ -510,6 +667,28 @@ describe('App', () => {
                         to: 5,
                     },
                     price_refresh_settings: currentPriceRefreshSettings,
+                }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({
+                    exchange_trading_times: [
+                        {
+                            code: 'XETRA',
+                            name: 'XETRA Stock Exchange',
+                            operating_mic: 'XETR',
+                            country: 'Germany',
+                            currency: 'EUR',
+                            timezone: 'Europe/Berlin',
+                            is_open: false,
+                            open: '09:00:00',
+                            close: '17:30:00',
+                            open_utc: '07:00:00',
+                            close_utc: '15:30:00',
+                            working_days: 'Mon,Tue,Wed,Thu,Fri',
+                            error: null,
+                        },
+                    ],
                 }));
             }
 
@@ -658,28 +837,41 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
-        const dashboardHeaders = wrapper.findAll('thead th').map((header) => header.text());
+        const dashboardHeaders = wrapper.find('table').findAll('thead th').map((header) => header.text());
+        const yesterday = sessionHeaderDate(1);
+        const dayBeforeYesterday = sessionHeaderDate(2);
 
-        expect(dashboardHeaders).toEqual([
-            'Symbol',
-            'Name',
-            'Latest price',
-            'Start price',
-            'End price',
-            'Source time',
-            'Trading times',
-            'Actions',
-        ]);
+        expect(dashboardHeaders[0]).toBe('Symbol');
+        expect(dashboardHeaders[1]).toBe('Name');
+        expect(dashboardHeaders[2]).toBe('Latest price');
+        expect(dashboardHeaders[3]).toBe('Start price');
+        expect(dashboardHeaders[4]).toContain('End price');
+        expect(dashboardHeaders[4]).toContain(yesterday);
+        expect(dashboardHeaders[4]).not.toContain('Yesterday');
+        expect(dashboardHeaders[5]).toContain('Start 24');
+        expect(dashboardHeaders[5]).toContain(yesterday);
+        expect(dashboardHeaders[5]).not.toContain('Yesterday');
+        expect(dashboardHeaders[6]).toContain('Start 48');
+        expect(dashboardHeaders[6]).toContain(dayBeforeYesterday);
+        expect(dashboardHeaders[6]).not.toContain('Day before yesterday');
+        expect(dashboardHeaders[7]).toBe('Source time');
+        expect(dashboardHeaders[8]).toBe('Actions');
         expect(wrapper.text()).toContain('Watch-list');
-        expect(wrapper.text()).not.toContain('Long term depot');
+        expect(wrapper.text()).toContain('Depot');
+        expect(wrapper.text()).toContain('Long term depot');
         expect(wrapper.text()).toContain('AAPL');
         expect(wrapper.text()).toContain('Apple');
         expect(wrapper.text()).toContain('US0378331005');
         expect(wrapper.text()).toContain('865985');
+        expect(wrapper.text()).toContain('US0378331005 · WKN: 865985');
         expect(wrapper.text()).toContain('306.32001');
         expect(wrapper.text()).not.toContain('306.32001 EUR');
         expect(wrapper.text()).toContain('300.1');
         expect(wrapper.text()).toContain('305.9');
+        expect(wrapper.text()).toContain('299.5');
+        expect(wrapper.text()).toContain('298.75');
+        expect(wrapper.text()).toContain('+2.28%');
+        expect(wrapper.text()).toContain('+2.53%');
         expect(wrapper.text()).toContain('DOWN');
         expect(wrapper.text()).toContain('190');
         expect(wrapper.text()).toContain('FLAT');
@@ -700,6 +892,11 @@ describe('App', () => {
         expect(wrapper.text()).toContain('↑');
         expect(wrapper.text()).toContain('↓');
         expect(wrapper.text()).toContain('=');
+        const recentPriceTrendDots = holdingRows[0].findAll('.recent-price-trend-dot');
+        expect(recentPriceTrendDots).toHaveLength(10);
+        expect(recentPriceTrendDots[0].classes()).toContain('recent-price-trend-dot-flat');
+        expect(recentPriceTrendDots[1].classes()).toContain('recent-price-trend-dot-down');
+        expect(recentPriceTrendDots[2].classes()).toContain('recent-price-trend-dot-up');
 
         expect(wrapper.text()).not.toContain('305.55');
 
@@ -735,7 +932,16 @@ describe('App', () => {
 
         expect(wrapper.text()).not.toContain('305.55');
         expect(wrapper.text()).toContain('03.06.2026, 17:35');
-        expect(wrapper.text()).toContain('Monday-Friday 08:00-22:00 Europe/Berlin');
+        expect(wrapper.text()).not.toContain('Monday-Friday 08:00-22:00 Europe/Berlin');
+        expect(wrapper.text()).toContain('Exchange trading times');
+        expect(wrapper.text()).toContain('XETRA');
+        expect(wrapper.text()).toContain('XETRA Stock Exchange');
+        expect(wrapper.text()).toContain('09:00-17:30');
+        expect(wrapper.findAll('table')[1].findAll('thead th').map((header) => header.text())).toContain('Next trading');
+        expect(wrapper.text()).toContain('Next trading:');
+        expect(wrapper.text()).toContain('Mon,Tue,Wed,Thu,Fri');
+        expect(wrapper.text()).toContain('Closed');
+        expect(wrapper.text()).not.toContain('07:00-15:30 UTC');
         expect(wrapper.text()).toContain('Tradegate Exchange');
         expect(wrapper.text()).toContain('EXXX');
         expect(wrapper.text()).toContain('DE000A0D8Q23');
@@ -746,7 +952,7 @@ describe('App', () => {
         expect(wrapper.text()).not.toContain('250.50');
         expect(wrapper.text()).toContain('Last: 02.06.2026, 14:20');
         expect(wrapper.text()).toContain('Next: 02.06.2026, 14:40');
-        expect(wrapper.text()).toContain('waiting');
+        expect(wrapper.text()).toContain('fetching historical data');
         expect(wrapper.text()).not.toContain('Automatic price refresh');
 
         wrapper.vm.navigateSection('updates');
@@ -1032,5 +1238,533 @@ describe('App', () => {
         await flushPromises();
 
         expect(openMock).toHaveBeenCalledWith('/admin/watchlist/holdings/pdf', '_blank', 'noopener');
+    });
+
+    it('books depot cash transaction from the depot page', async () => {
+        window.history.pushState({}, '', '/admin/menu/depot');
+        const depot = {
+            id: 1,
+            name: 'Main depot',
+            account_balance: '1000.00',
+            is_active: true,
+        };
+        const fetchMock = vi.fn((path, options) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/depot-transactions') {
+                return Promise.resolve(jsonResponse({ transactions: [] }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null },
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [depot],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 1, from: 1, to: 1 },
+                }));
+            }
+
+            if (path === '/admin/depot-transactions/cash' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Cash transaction booked.',
+                    depot: {
+                        ...depot,
+                        account_balance: '1250.00',
+                    },
+                    transaction: {
+                        id: 1,
+                        type: 'deposit',
+                    },
+                }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const addCashButton = wrapper.findAll('button').find((button) => button.text().includes('Add cash'));
+        await addCashButton.trigger('click');
+        await flushPromises();
+
+        const cashAmountInput = document.body.querySelector('#cash-transaction-form input[type="number"]');
+        cashAmountInput.value = '250';
+        cashAmountInput.dispatchEvent(new Event('input', { bubbles: true }));
+        document.body.querySelector('#cash-transaction-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/depot-transactions/cash', expect.objectContaining({
+            method: 'POST',
+            body: JSON.stringify({
+                type: 'deposit',
+                total_amount: 250,
+                note: null,
+            }),
+        }));
+    });
+
+    it('books stock transaction from the dashboard', async () => {
+        window.history.pushState({}, '', '/admin/dashboard');
+        const emptyPagination = {
+            current_page: 1,
+            last_page: 1,
+            per_page: 10,
+            total: 1,
+            from: 1,
+            to: 1,
+        };
+        const depot = {
+            id: 1,
+            name: 'Main depot',
+            account_balance: '1000.00',
+            is_active: true,
+        };
+        const holding = {
+            id: 1,
+            symbol: 'AAPL',
+            name: 'Apple',
+            isin: 'US0378331005',
+            wkn: '865985',
+            exchange: 'NASDAQ',
+            currency: 'EUR',
+            latest_price: '100.000000',
+            start_price: '100.000000',
+            end_price: '100.000000',
+            start_price_24: null,
+            start_price_48: null,
+            historical_prices_fetching: false,
+            position_pieces: '0.00000000',
+            latest_price_status: 'fresh',
+            price_status: 'fresh',
+            latest_price_fetched_at: '2026-06-02T12:00:00+00:00',
+            latest_price_source: 'Tradegate Exchange',
+            latest_price_source_url: null,
+            latest_price_as_of: '2026-06-03T15:35:00+00:00',
+            trading_times: 'Monday-Friday 08:00-22:00 Europe/Berlin',
+            venue: 'Tradegate',
+            price_type: 'indicative_mid',
+            price_spread_pct: null,
+            recent_prices: [],
+            validation_errors: [],
+        };
+        const fetchMock = vi.fn((path, options) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [holding],
+                    meta: emptyPagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [depot],
+                    meta: emptyPagination,
+                }));
+            }
+
+            if (path === '/admin/depot-transactions/stocks' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Stock transaction booked.',
+                    depot: {
+                        ...depot,
+                        account_balance: '750.00',
+                    },
+                    transaction: {
+                        id: 2,
+                        type: 'buy',
+                    },
+                }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const buyStockButton = wrapper.find('[aria-label="Buy stock"]');
+        await buyStockButton.trigger('click');
+        await flushPromises();
+
+        const stockInputs = document.body.querySelectorAll('#stock-transaction-form input[type="number"]');
+        stockInputs[0].value = '3';
+        stockInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+        stockInputs[1].value = '300';
+        stockInputs[1].dispatchEvent(new Event('input', { bubbles: true }));
+        document.body.querySelector('#stock-transaction-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/depot-transactions/stocks', expect.objectContaining({
+            method: 'POST',
+            body: JSON.stringify({
+                type: 'buy',
+                stock_holding_id: 1,
+                pieces: 3,
+                total_amount: 300,
+                note: null,
+            }),
+        }));
+    });
+
+    it('shows the cash ledger table on the depot page', async () => {
+        window.history.pushState({}, '', '/admin/menu/depot');
+        const depot = {
+            id: 1,
+            name: 'Main depot',
+            account_balance: '650.00',
+            is_active: true,
+        };
+        const transactions = [
+            {
+                id: 2,
+                type: 'buy',
+                stock_holding_id: 1,
+                stock_label: 'Apple Inc.',
+                pieces: '2.00000000',
+                total_amount: '350.00',
+                unit_price: '175.00000000',
+                cash_delta: '-350.00',
+                balance_after: '650.00',
+                booked_at: '2026-06-04T10:00:00+00:00',
+                note: null,
+            },
+            {
+                id: 1,
+                type: 'deposit',
+                stock_holding_id: null,
+                stock_label: null,
+                pieces: null,
+                total_amount: '1000.00',
+                unit_price: null,
+                cash_delta: '1000.00',
+                balance_after: '1000.00',
+                booked_at: '2026-06-04T09:00:00+00:00',
+                note: 'Initial funding',
+            },
+        ];
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/depot-transactions') {
+                return Promise.resolve(jsonResponse({ transactions }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null },
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [depot],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 1, from: 1, to: 1 },
+                }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        expect(wrapper.text()).toContain('Cash ledger');
+        expect(wrapper.text()).toContain('buy');
+        expect(wrapper.text()).toContain('Apple Inc.');
+        expect(wrapper.text()).toContain('deposit');
+        expect(wrapper.text()).toContain('+1,000.00');
+        expect(wrapper.text()).toContain('-350.00');
+    });
+
+    it('clears the historical fetching app bar status after the queued job finishes', async () => {
+        vi.useFakeTimers();
+        window.history.pushState({}, '', '/admin/dashboard');
+
+        const emptyPagination = {
+            current_page: 1,
+            last_page: 1,
+            per_page: 10,
+            total: 1,
+            from: 1,
+            to: 1,
+        };
+        let holdingsLoaded = 0;
+        const holding = {
+            id: 1,
+            symbol: 'AAPL',
+            name: 'Apple',
+            isin: 'US0378331005',
+            wkn: '865985',
+            exchange: 'NASDAQ',
+            currency: 'EUR',
+            latest_price: '100.000000',
+            start_price: '100.000000',
+            end_price: '100.000000',
+            start_price_24: null,
+            start_price_48: null,
+            latest_price_status: 'fresh',
+            price_status: 'fresh',
+            latest_price_fetched_at: '2026-06-02T12:00:00+00:00',
+            latest_price_source: 'Tradegate Exchange',
+            latest_price_source_url: null,
+            latest_price_as_of: '2026-06-03T15:35:00+00:00',
+            trading_times: 'Monday-Friday 08:00-22:00 Europe/Berlin',
+            venue: 'Tradegate',
+            price_type: 'indicative_mid',
+            price_spread_pct: null,
+            recent_prices: [],
+            validation_errors: [],
+        };
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                holdingsLoaded += 1;
+
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    holdings: [
+                        {
+                            ...holding,
+                            historical_prices_fetching: holdingsLoaded === 1,
+                            position_pieces: '0.00000000',
+                        },
+                    ],
+                    meta: emptyPagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [],
+                    meta: emptyPagination,
+                }));
+            }
+
+            if (path === '/admin/price-refresh-settings') {
+                return Promise.resolve(jsonResponse({
+                    price_refresh_settings: priceRefreshSettings(),
+                    refresh: null,
+                }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        try {
+            const wrapper = mountApp();
+            await flushPromises();
+
+            expect(wrapper.text()).toContain('fetching historical data');
+
+            await vi.advanceTimersByTimeAsync(5000);
+            await flushPromises();
+
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1')).toHaveLength(2);
+            expect(wrapper.text()).toContain('waiting');
+            expect(wrapper.text()).not.toContain('fetching historical data');
+
+            wrapper.unmount();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('updates the app bar status when a scheduled queue refresh starts', async () => {
+        vi.useFakeTimers();
+        window.history.pushState({}, '', '/admin/dashboard');
+
+        const emptyPagination = {
+            current_page: 1,
+            last_page: 1,
+            per_page: 10,
+            total: 0,
+            from: null,
+            to: null,
+        };
+        const scheduledRefresh = {
+            refresh_id: 'scheduled-refresh-1',
+            status: 'queued',
+            processed: 0,
+            total: 1,
+            step: '0/1',
+            message: '1 stock price queued for refresh.',
+            current: null,
+            started_at: '2026-06-02T12:21:00+00:00',
+            finished_at: null,
+            error: null,
+        };
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    holdings: [],
+                    meta: emptyPagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [],
+                    meta: emptyPagination,
+                }));
+            }
+
+            if (path === '/admin/price-refresh-settings') {
+                return Promise.resolve(jsonResponse({
+                    price_refresh_settings: priceRefreshSettings({
+                        status: 'updating',
+                        status_label: 'Updating prices',
+                    }),
+                    refresh: scheduledRefresh,
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/refresh-prices/scheduled-refresh-1') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Refreshing stock prices...',
+                    refresh: {
+                        ...scheduledRefresh,
+                        status: 'running',
+                        message: 'Refreshing stock prices...',
+                    },
+                }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        try {
+            const wrapper = mountApp();
+            await flushPromises();
+
+            expect(wrapper.text()).toContain('waiting');
+
+            await vi.advanceTimersByTimeAsync(5000);
+            await flushPromises();
+
+            expect(fetchMock).toHaveBeenCalledWith('/admin/price-refresh-settings', expect.any(Object));
+            expect(fetchMock).toHaveBeenCalledWith(
+                '/admin/watchlist/holdings/refresh-prices/scheduled-refresh-1',
+                expect.any(Object),
+            );
+            expect(wrapper.text()).toContain('Updating prices');
+
+            wrapper.unmount();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

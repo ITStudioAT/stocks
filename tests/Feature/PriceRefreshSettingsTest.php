@@ -35,7 +35,8 @@ class PriceRefreshSettingsTest extends TestCase
             ->assertJsonPath('price_refresh_settings.closed_interval_minutes', 60)
             ->assertJsonPath('price_refresh_settings.status', 'waiting')
             ->assertJsonPath('price_refresh_settings.is_trading_time', true)
-            ->assertJsonPath('price_refresh_settings.current_interval_minutes', 20);
+            ->assertJsonPath('price_refresh_settings.current_interval_minutes', 20)
+            ->assertJsonPath('refresh', null);
 
         $this->actingAs($admin)
             ->patchJson('/admin/price-refresh-settings', [
@@ -53,6 +54,7 @@ class PriceRefreshSettingsTest extends TestCase
             ->assertJsonPath('price_refresh_settings.closed_refresh_enabled', false)
             ->assertJsonPath('price_refresh_settings.closed_interval_minutes', 45)
             ->assertJsonPath('price_refresh_settings.current_interval_minutes', 15)
+            ->assertJsonPath('price_refresh_settings.status', 'updating')
             ->assertJsonPath('refresh.status', 'queued')
             ->assertJsonPath('refresh.total', 1);
 
@@ -146,6 +148,7 @@ class PriceRefreshSettingsTest extends TestCase
     public function test_due_price_refresh_command_dispatches_the_watchlist_refresh_job(): void
     {
         Queue::fake();
+        $admin = $this->adminUser();
         $this->travelTo(Carbon::parse('2026-06-03 18:00:00', 'Europe/Vienna'));
         StockHolding::factory()->create([
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
@@ -175,6 +178,14 @@ class PriceRefreshSettingsTest extends TestCase
 
         $this->assertSame('2026-06-03T18:00:00+02:00', $config->value['last_refreshed_at']);
         $this->assertSame('2026-06-03T19:00:00+02:00', $config->value['next_refresh_at']);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/price-refresh-settings')
+            ->assertOk()
+            ->assertJsonPath('price_refresh_settings.status', 'updating')
+            ->assertJsonPath('refresh.status', 'queued')
+            ->assertJsonPath('refresh.total', 2)
+            ->assertJsonPath('refresh.step', '0/2');
     }
 
     public function test_due_price_refresh_command_recalculates_the_next_refresh_from_current_settings(): void

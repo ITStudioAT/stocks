@@ -6,6 +6,7 @@ use Database\Factories\DepotFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 #[Fillable(['name', 'account_balance', 'is_active', 'provider', 'account_number', 'description'])]
 class Depot extends Model
@@ -22,5 +23,13 @@ class Depot extends Model
             'account_balance' => 'decimal:2',
             'is_active' => 'boolean',
         ];
+    }
+
+    /**
+     * @return HasMany<DepotTransaction, $this>
+     */
+    public function transactions(): HasMany
+    {
+        return $this->hasMany(DepotTransaction::class);
     }
 }

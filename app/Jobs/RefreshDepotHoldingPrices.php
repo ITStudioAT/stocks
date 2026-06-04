@@ -2,19 +2,13 @@
 
 namespace App\Jobs;
 
-use App\Mail\WatchlistPriceRefreshReportMail;
 use App\Models\StockHolding;
 use App\Models\StockPriceRefreshItem;
 use App\Models\StockPriceRefreshRun;
-use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
-use App\Services\WatchlistPdfReport;
 use App\Services\WebMarketData\WebMarketDataOrchestrator;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
-use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 use Throwable;
 
 class RefreshDepotHoldingPrices implements ShouldQueue
@@ -36,7 +30,6 @@ class RefreshDepotHoldingPrices implements ShouldQueue
     public function handle(
         WebMarketDataOrchestrator $marketData,
         DepotHoldingPriceRefreshProgress $progress,
-        WatchlistPdfReport $watchlistPdfReport,
     ): void {
         $progress->markRunning($this->refreshId);
         $run = StockPriceRefreshRun::query()->find($this->refreshId);
@@ -88,8 +81,6 @@ class RefreshDepotHoldingPrices implements ShouldQueue
             'status' => $this->runStatus($run),
             'finished_at' => now(),
         ]);
-
-        $this->sendReport($watchlistPdfReport);
     }
 
     public function failed(?Throwable $exception): void
@@ -152,54 +143,5 @@ class RefreshDepotHoldingPrices implements ShouldQueue
         }
 
         return 'failed';
-    }
-
-    private function sendReport(WatchlistPdfReport $watchlistPdfReport): void
-    {
-        $recipients = $this->reportRecipients();
-
-        if ($recipients->isEmpty()) {
-            return;
-        }
-
-        $report = $watchlistPdfReport->render();
-
-        $recipients
-            ->unique('email')
-            ->each(function (User $user) use ($report): void {
-                try {
-                    Mail::to($user->email)->send(
-                        new WatchlistPriceRefreshReportMail($report['content'], $report['filename']),
-                    );
-                } catch (Throwable $exception) {
-                    Log::warning('Watch-list price refresh report email could not be sent.', [
-                        'refresh_id' => $this->refreshId,
-                        'recipient_user_id' => $user->id,
-                        'recipient_email' => $user->email,
-                        'exception' => $exception::class,
-                        'message' => $exception->getMessage(),
-                    ]);
-                }
-            });
-    }
-
-    /**
-     * @return Collection<int, User>
-     */
-    private function reportRecipients(): Collection
-    {
-        if ($this->recipientUserId !== null) {
-            return User::query()
-                ->whereKey($this->recipientUserId)
-                ->whereNotNull('email')
-                ->get();
-        }
-
-        return User::query()
-            ->whereHas('roles', function ($query): void {
-                $query->whereIn('name', ['admin', 'super_admin']);
-            })
-            ->whereNotNull('email')
-            ->get();
     }
 }

@@ -14,6 +14,7 @@ class PriceRefreshScheduler
 
     public function __construct(
         private DepotHoldingPriceRefreshDispatcher $dispatcher,
+        private DepotHoldingPriceRefreshProgress $refreshProgress,
     ) {}
 
     /**
@@ -43,7 +44,7 @@ class PriceRefreshScheduler
     {
         $settings = $this->settings();
         $isTradingTime = $this->isAnyHoldingWithinTradingTimes(settings: $settings);
-        $isUpdating = $this->hasRunningRefresh();
+        $isUpdating = $this->activeRefreshProgress() !== null;
 
         return [
             'trading_interval_minutes' => $settings['trading_interval_minutes'],
@@ -57,6 +58,43 @@ class PriceRefreshScheduler
             'status_label' => $isUpdating ? 'Updating prices' : 'waiting',
             'is_trading_time' => $isTradingTime,
             'current_interval_minutes' => $this->currentIntervalMinutes($settings, $isTradingTime),
+        ];
+    }
+
+    /**
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
+     */
+    public function activeRefreshProgress(): ?array
+    {
+        $run = StockPriceRefreshRun::query()
+            ->whereIn('status', ['queued', 'running'])
+            ->whereNull('finished_at')
+            ->orderByDesc('started_at')
+            ->first();
+
+        if (! $run) {
+            return null;
+        }
+
+        $progress = $this->refreshProgress->get((string) $run->id);
+
+        if ($progress !== null) {
+            return $progress;
+        }
+
+        return [
+            'refresh_id' => (string) $run->id,
+            'status' => $run->status,
+            'processed' => $run->processed_count,
+            'total' => $run->total_count,
+            'step' => "{$run->processed_count}/{$run->total_count}",
+            'message' => $run->status === 'queued'
+                ? trans_choice('{1} 1 stock price queued for refresh.|[2,*] :count stock prices queued for refresh.', $run->total_count)
+                : "Refreshing stock prices ({$run->processed_count}/{$run->total_count})...",
+            'current' => null,
+            'started_at' => $run->started_at?->toIso8601String() ?? now()->toIso8601String(),
+            'finished_at' => null,
+            'error' => is_array($run->error_summary) ? ($run->error_summary['message'] ?? null) : null,
         ];
     }
 

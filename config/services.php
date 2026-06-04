@@ -44,6 +44,13 @@ return [
         'model' => env('STOCK_PRICE_AI_MODEL', env('STOCK_IDENTIFIER_AI_MODEL', 'gpt-4.1-mini')),
     ],
 
+    'eodhd' => [
+        'key' => env('EODHD_API'),
+        'base_url' => env('EODHD_BASE_URL', 'https://eodhd.com/api'),
+        'connect_timeout' => env('EODHD_CONNECT_TIMEOUT', 5),
+        'timeout' => env('EODHD_TIMEOUT', 20),
+    ],
+
     'slack' => [
         'notifications' => [
             'bot_user_oauth_token' => env('SLACK_BOT_USER_OAUTH_TOKEN'),
