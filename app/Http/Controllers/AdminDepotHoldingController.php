@@ -8,6 +8,7 @@ use App\Models\StockPrice;
 use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\DepotTransactionBooker;
+use App\Services\EodhdApiUsage;
 use App\Services\EodhdMarketData;
 use App\Services\PriceRefreshScheduler;
 use App\Services\StockPriceCatalog;
@@ -32,6 +33,7 @@ class AdminDepotHoldingController extends Controller
         private WatchlistPdfReport $watchlistPdfReport,
         private DepotTransactionBooker $depotTransactionBooker,
         private EodhdMarketData $eodhdMarketData,
+        private EodhdApiUsage $eodhdApiUsage,
     ) {}
 
     public function index(): JsonResponse
@@ -47,6 +49,7 @@ class AdminDepotHoldingController extends Controller
         return response()->json([
             'depot' => $activeDepot ? $this->depotPayload($activeDepot) : null,
             'price_refresh_settings' => $this->priceRefreshScheduler->payload(),
+            'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
             'holdings' => $holdings->items(),
             'meta' => [
                 'current_page' => $holdings->currentPage(),
@@ -74,6 +77,7 @@ class AdminDepotHoldingController extends Controller
 
         return response()->json([
             'exchange_trading_times' => $this->eodhdMarketData->exchangeTradingTimes($holdings),
+            'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
         ]);
     }
 
@@ -98,6 +102,7 @@ class AdminDepotHoldingController extends Controller
 
         return response()->json([
             'message' => 'Stock added to watch-list.',
+            'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
             'holding' => $this->holdingPayload($holding, $this->activeDepot()),
         ], 201);
     }
@@ -113,12 +118,14 @@ class AdminDepotHoldingController extends Controller
             return response()->json([
                 'message' => $message,
                 'refresh' => null,
+                'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
             ], 202);
         }
 
         return response()->json([
             'message' => $message,
             'refresh' => $this->refreshPayload($progress),
+            'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
         ], 202);
     }
 
@@ -135,6 +142,7 @@ class AdminDepotHoldingController extends Controller
         return response()->json([
             'message' => $progress['message'],
             'refresh' => $this->refreshPayload($progress),
+            'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
         ]);
     }
 

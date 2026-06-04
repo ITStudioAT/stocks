@@ -8,6 +8,7 @@ export const useDepotStore = defineStore('depots', {
         holdings: [],
         transactions: [],
         exchangeTradingTimes: [],
+        eodhdApiUsage: null,
         priceRefresh: null,
         priceRefreshSettings: null,
         stockSearchResults: [],
@@ -47,6 +48,7 @@ export const useDepotStore = defineStore('depots', {
                 const data = await request('/admin/depots/active');
                 this.activeDepot = data.depot;
                 this.priceRefreshSettings = data.price_refresh_settings;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
             } catch (error) {
                 this.error = error.message;
@@ -83,6 +85,7 @@ export const useDepotStore = defineStore('depots', {
                 const data = await request(`/admin/watchlist/holdings?page=${page}`);
                 this.activeDepot = data.depot ?? this.activeDepot;
                 this.priceRefreshSettings = data.price_refresh_settings;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
                 this.holdings = data.holdings;
                 this.holdingsPagination = data.meta;
             } catch (error) {
@@ -104,6 +107,7 @@ export const useDepotStore = defineStore('depots', {
             try {
                 const data = await request('/admin/watchlist/exchange-trading-times');
                 this.exchangeTradingTimes = data.exchange_trading_times ?? [];
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
                 return data;
             } catch (error) {
@@ -164,6 +168,7 @@ export const useDepotStore = defineStore('depots', {
                     method: 'POST',
                 });
                 this.priceRefresh = data.refresh;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
                 this.priceRefreshSettings = {
                     ...(this.priceRefreshSettings ?? {}),
                     status: 'updating',
@@ -187,6 +192,7 @@ export const useDepotStore = defineStore('depots', {
             try {
                 const data = await request(`/admin/watchlist/holdings/refresh-prices/${refreshId}`);
                 this.priceRefresh = data.refresh;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
                 return data;
             } catch (error) {
@@ -210,6 +216,7 @@ export const useDepotStore = defineStore('depots', {
                 });
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.priceRefresh = data.refresh ?? this.priceRefresh;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
                 return data;
             } catch (error) {
@@ -224,6 +231,7 @@ export const useDepotStore = defineStore('depots', {
                 const data = await request('/admin/price-refresh-settings');
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.priceRefresh = data.refresh;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
                 return data;
             } catch (error) {
@@ -292,6 +300,7 @@ export const useDepotStore = defineStore('depots', {
             try {
                 const data = await request(`/admin/stocks/search?query=${encodeURIComponent(query)}`);
                 this.stockSearchResults = data.results;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
             } catch (error) {
                 this.stockSearchError = error.message;
                 throw error;

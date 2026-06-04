@@ -15,7 +15,6 @@ use Illuminate\Http\Client\Response;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -31,6 +30,7 @@ class EodhdMarketData
         private StockPriceCatalog $stockPriceCatalog,
         private WebQuoteValidator $validator,
         private MarketHours $marketHours,
+        private EodhdApiClient $apiClient,
     ) {}
 
     public function resolve(StockHolding $holding): QuoteSelectionResult
@@ -439,24 +439,14 @@ class EodhdMarketData
 
     private function get(string $path, array $query, array &$errors): ?Response
     {
-        $apiToken = config('services.eodhd.key');
-
-        if (! is_string($apiToken) || trim($apiToken) === '') {
+        if (! $this->apiClient->configured()) {
             $errors[] = 'EODHD API token is not configured.';
 
             return null;
         }
 
         try {
-            $response = Http::baseUrl((string) config('services.eodhd.base_url', 'https://eodhd.com/api'))
-                ->acceptJson()
-                ->connectTimeout((int) config('services.eodhd.connect_timeout', 5))
-                ->timeout((int) config('services.eodhd.timeout', 20))
-                ->retry(2, 250, null, false)
-                ->get($path, [
-                    ...$query,
-                    'api_token' => $apiToken,
-                ]);
+            $response = $this->apiClient->get($path, $query);
         } catch (Throwable $exception) {
             $errors[] = "EODHD request failed: {$exception->getMessage()}";
 

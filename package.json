@@ -5,6 +5,7 @@
     "type": "module",
     "scripts": {
         "build": "vite build",
+        "predev": "node scripts/dev-stop-stale-vite.mjs",
         "dev": "vite",
         "test:frontend": "vitest run --reporter verbose",
         "test:frontend:watch": "vitest"

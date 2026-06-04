@@ -667,6 +667,20 @@ describe('App', () => {
                         to: 5,
                     },
                     price_refresh_settings: currentPriceRefreshSettings,
+                    eodhd_api_usage: {
+                        hour: {
+                            used: 12,
+                            limit: 1000,
+                            remaining: 988,
+                            reset_at: '2026-06-03T13:00:00+02:00',
+                        },
+                        day: {
+                            used: 1195,
+                            limit: 100000,
+                            remaining: 98805,
+                            reset_at: '2026-06-04T00:00:00+02:00',
+                        },
+                    },
                 }));
             }
 
@@ -857,6 +871,9 @@ describe('App', () => {
         expect(dashboardHeaders[7]).toBe('Source time');
         expect(dashboardHeaders[8]).toBe('Actions');
         expect(wrapper.text()).toContain('Watch-list');
+        expect(wrapper.text()).toContain('EODHD API');
+        expect(wrapper.text()).toContain('988 / 1,000');
+        expect(wrapper.text()).toContain('98,805 / 100,000');
         expect(wrapper.text()).toContain('Depot');
         expect(wrapper.text()).toContain('Long term depot');
         expect(wrapper.text()).toContain('AAPL');

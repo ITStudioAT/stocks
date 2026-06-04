@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Depot;
+use App\Services\EodhdApiUsage;
 use App\Services\PriceRefreshScheduler;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -31,7 +32,7 @@ class AdminDepotController extends Controller
         ]);
     }
 
-    public function active(PriceRefreshScheduler $priceRefreshScheduler): JsonResponse
+    public function active(PriceRefreshScheduler $priceRefreshScheduler, EodhdApiUsage $eodhdApiUsage): JsonResponse
     {
         $depot = Depot::query()
             ->where('is_active', true)
@@ -40,6 +41,7 @@ class AdminDepotController extends Controller
         return response()->json([
             'depot' => $depot ? $this->depotPayload($depot) : null,
             'price_refresh_settings' => $priceRefreshScheduler->payload(),
+            'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
     }
 

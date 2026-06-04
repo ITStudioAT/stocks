@@ -2,6 +2,7 @@
 
 namespace Tests\Unit;
 
+use App\Services\EodhdApiUsage;
 use App\Services\StockSearchQueryResolver;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
@@ -20,7 +21,12 @@ class StockSearchQueryResolverTest extends TestCase
     public function test_it_resolves_portfolio_ready_candidates_with_eodhd(): void
     {
         Cache::flush();
-        config(['services.eodhd.key' => 'test-token']);
+        config([
+            'services.eodhd.key' => 'test-token',
+            'services.eodhd.calls_per_hour' => 1000,
+            'services.eodhd.calls_per_day' => 100000,
+            'services.eodhd.calls_used_today' => 0,
+        ]);
         Http::fake([
             'eodhd.com/api/search/Microsoft*' => Http::response([
                 [
@@ -48,8 +54,17 @@ class StockSearchQueryResolverTest extends TestCase
         $this->assertSame('USA', $candidates[0]['country']);
         $this->assertSame('USD', $candidates[0]['currency']);
         $this->assertSame(['Microsoft', 'US5949181045', 'MSFT'], $candidates[0]['search_terms']);
+        $this->assertSame(1, app(EodhdApiUsage::class)->payload()['hour']['used']);
 
-        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://eodhd.com/api/search/Microsoft?api_token=test-token&fmt=json&limit=15&type=all');
+        Http::assertSent(function (Request $request): bool {
+            parse_str((string) parse_url($request->url(), PHP_URL_QUERY), $query);
+
+            return str_starts_with($request->url(), 'https://eodhd.com/api/search/Microsoft?')
+                && $query['api_token'] === 'test-token'
+                && $query['fmt'] === 'json'
+                && $query['limit'] === '15'
+                && $query['type'] === 'all';
+        });
     }
 
     public function test_it_returns_no_candidates_for_blank_queries_without_requesting_eodhd(): void

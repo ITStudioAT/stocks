@@ -33,6 +33,9 @@ return [
         'base_url' => env('EODHD_BASE_URL', 'https://eodhd.com/api'),
         'connect_timeout' => env('EODHD_CONNECT_TIMEOUT', 5),
         'timeout' => env('EODHD_TIMEOUT', 20),
+        'calls_per_hour' => env('EODHD_CALLS_PER_HOUR', 1000),
+        'calls_per_day' => env('EODHD_CALLS_PER_DAY', 100000),
+        'calls_used_today' => env('EODHD_CALLS_USED_TODAY', 0),
     ],
 
     'slack' => [

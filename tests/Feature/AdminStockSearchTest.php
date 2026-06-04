@@ -23,7 +23,12 @@ class AdminStockSearchTest extends TestCase
     public function test_admin_can_search_stocks_with_eodhd(): void
     {
         Cache::flush();
-        config(['services.eodhd.key' => 'test-token']);
+        config([
+            'services.eodhd.key' => 'test-token',
+            'services.eodhd.calls_per_hour' => 1000,
+            'services.eodhd.calls_per_day' => 100000,
+            'services.eodhd.calls_used_today' => 0,
+        ]);
         Http::fake([
             'eodhd.com/api/search/Apple*' => Http::response(
                 collect(range(1, 12))
@@ -53,7 +58,11 @@ class AdminStockSearchTest extends TestCase
             ->assertJsonPath('results.0.mic_code', 'XNAS')
             ->assertJsonPath('results.0.instrument_type', 'Common Stock')
             ->assertJsonPath('results.0.country', 'USA')
-            ->assertJsonPath('results.0.currency', 'USD');
+            ->assertJsonPath('results.0.currency', 'USD')
+            ->assertJsonPath('eodhd_api_usage.hour.used', 1)
+            ->assertJsonPath('eodhd_api_usage.hour.remaining', 999)
+            ->assertJsonPath('eodhd_api_usage.day.used', 1)
+            ->assertJsonPath('eodhd_api_usage.day.remaining', 99999);
 
         Http::assertSentCount(1);
     }
@@ -61,7 +70,12 @@ class AdminStockSearchTest extends TestCase
     public function test_admin_can_search_by_isin_with_eodhd(): void
     {
         Cache::flush();
-        config(['services.eodhd.key' => 'test-token']);
+        config([
+            'services.eodhd.key' => 'test-token',
+            'services.eodhd.calls_per_hour' => 1000,
+            'services.eodhd.calls_per_day' => 100000,
+            'services.eodhd.calls_used_today' => 0,
+        ]);
         Http::fake([
             'eodhd.com/api/search/DE000A0D8Q23*' => Http::response([
                 [

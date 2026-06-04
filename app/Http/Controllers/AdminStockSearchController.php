@@ -2,13 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\EodhdApiUsage;
 use App\Services\StockSearchQueryResolver;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class AdminStockSearchController extends Controller
 {
-    public function index(Request $request, StockSearchQueryResolver $queryResolver): JsonResponse
+    public function index(Request $request, StockSearchQueryResolver $queryResolver, EodhdApiUsage $eodhdApiUsage): JsonResponse
     {
         $validated = $request->validate([
             'query' => ['required', 'string', 'min:2', 'max:120'],
@@ -28,6 +29,7 @@ class AdminStockSearchController extends Controller
                 ->take(10)
                 ->values()
                 ->all(),
+            'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
     }
 

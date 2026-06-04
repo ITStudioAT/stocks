@@ -4,12 +4,15 @@ namespace App\Services;
 
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Throwable;
 
 class StockSearchQueryResolver
 {
+    public function __construct(
+        private EodhdApiClient $apiClient,
+    ) {}
+
     /**
      * @return array<int, string>
      */
@@ -83,23 +86,16 @@ class StockSearchQueryResolver
      */
     private function resolveFreshCandidates(string $query): array
     {
-        $apiToken = config('services.eodhd.key');
-
-        if (! is_string($apiToken) || trim($apiToken) === '') {
+        if (! $this->apiClient->configured()) {
             return [];
         }
 
         try {
-            $response = Http::baseUrl((string) config('services.eodhd.base_url', 'https://eodhd.com/api'))
-                ->acceptJson()
-                ->connectTimeout((int) config('services.eodhd.connect_timeout', 5))
-                ->timeout((int) config('services.eodhd.timeout', 20))
-                ->get('search/'.rawurlencode($query), [
-                    'api_token' => $apiToken,
-                    'fmt' => 'json',
-                    'limit' => 15,
-                    'type' => 'all',
-                ]);
+            $response = $this->apiClient->get('search/'.rawurlencode($query), [
+                'fmt' => 'json',
+                'limit' => 15,
+                'type' => 'all',
+            ]);
 
             if (! $response->ok()) {
                 return [];

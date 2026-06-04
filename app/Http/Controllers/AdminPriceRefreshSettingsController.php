@@ -3,21 +3,23 @@
 namespace App\Http\Controllers;
 
 use App\Models\User;
+use App\Services\EodhdApiUsage;
 use App\Services\PriceRefreshScheduler;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class AdminPriceRefreshSettingsController extends Controller
 {
-    public function show(PriceRefreshScheduler $scheduler): JsonResponse
+    public function show(PriceRefreshScheduler $scheduler, EodhdApiUsage $eodhdApiUsage): JsonResponse
     {
         return response()->json([
             'price_refresh_settings' => $scheduler->payload(),
             'refresh' => $scheduler->activeRefreshProgress(),
+            'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
     }
 
-    public function update(Request $request, PriceRefreshScheduler $scheduler): JsonResponse
+    public function update(Request $request, PriceRefreshScheduler $scheduler, EodhdApiUsage $eodhdApiUsage): JsonResponse
     {
         $validated = $request->validate([
             'trading_interval_minutes' => ['required', 'integer', 'min:1', 'max:1440'],
@@ -41,6 +43,7 @@ class AdminPriceRefreshSettingsController extends Controller
             'message' => 'Price refresh schedule updated.',
             'price_refresh_settings' => $scheduler->payload(),
             'refresh' => $updatedRefreshSchedule['refresh'] ?? $scheduler->activeRefreshProgress(),
+            'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
     }
 }

@@ -21,6 +21,7 @@ const {
     holdings,
     transactions,
     exchangeTradingTimes,
+    eodhdApiUsage,
     priceRefresh,
     priceRefreshSettings,
     stockSearchResults,
@@ -152,6 +153,24 @@ const sessionHeaderDates = computed(() => ({
     yesterday: formatSessionHeaderDate(1),
     dayBeforeYesterday: formatSessionHeaderDate(2),
 }));
+const eodhdUsageItems = computed(() => {
+    if (!eodhdApiUsage.value) {
+        return [];
+    }
+
+    return [
+        {
+            key: 'hour',
+            label: 'Hour',
+            usage: eodhdApiUsage.value.hour,
+        },
+        {
+            key: 'day',
+            label: 'Day',
+            usage: eodhdApiUsage.value.day,
+        },
+    ].filter(item => item.usage);
+});
 
 const menuItems = computed(() => [
     {
@@ -1047,6 +1066,14 @@ function formatAccountBalance(value) {
     }).format(Number(value ?? 0));
 }
 
+function formatInteger(value) {
+    return new Intl.NumberFormat('en-US').format(Number(value ?? 0));
+}
+
+function formatEodhdUsageReset(value) {
+    return formatScheduleDateTime(value);
+}
+
 function formatDepotCashBalance() {
     return `${formatAccountBalance(activeDepot.value?.account_balance)} EUR`;
 }
@@ -1903,6 +1930,34 @@ function emptyPriceRefreshScheduleForm() {
                         <v-alert v-if="holdingError || holdingsError" type="error" variant="tonal" density="compact" class="mb-4">
                             {{ holdingError || holdingsError }}
                         </v-alert>
+                        <v-sheet
+                            v-if="eodhdUsageItems.length"
+                            border
+                            rounded
+                            class="pa-4 mb-4"
+                        >
+                            <div class="d-flex align-center justify-space-between flex-wrap ga-3">
+                                <div>
+                                    <div class="text-caption text-medium-emphasis">EODHD API</div>
+                                    <div class="text-body-2 font-weight-medium">Free calls remaining</div>
+                                </div>
+                                <div class="d-flex flex-wrap ga-4">
+                                    <div
+                                        v-for="item in eodhdUsageItems"
+                                        :key="item.key"
+                                        class="d-flex flex-column"
+                                    >
+                                        <span class="text-caption text-medium-emphasis">{{ item.label }}</span>
+                                        <span class="text-body-2 font-weight-medium">
+                                            {{ formatInteger(item.usage.remaining) }} / {{ formatInteger(item.usage.limit) }}
+                                        </span>
+                                        <span class="text-caption text-medium-emphasis">
+                                            Used {{ formatInteger(item.usage.used) }} · Reset {{ formatEodhdUsageReset(item.usage.reset_at) }}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </v-sheet>
                         <v-table>
                             <thead>
                                 <tr>
