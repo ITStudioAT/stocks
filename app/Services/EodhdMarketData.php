@@ -402,7 +402,6 @@ class EodhdMarketData
                     'latest_price_source' => null,
                     'latest_price_source_url' => null,
                     'latest_price_as_of' => null,
-                    'latest_quote_id' => null,
                     'price_status' => 'unavailable_now',
                     'latest_price_type' => null,
                     'price_spread_pct' => null,
@@ -432,7 +431,6 @@ class EodhdMarketData
         $holding->update([
             'currency' => $quote->currency ?? $holding->currency,
             'latest_stock_price_id' => $selectedPrice->id,
-            'latest_quote_id' => null,
             'price_status' => $result->status,
             'source_verified_at' => now(),
             'trading_times' => $selectedPrice->trading_times,

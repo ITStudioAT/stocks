@@ -59,7 +59,7 @@ class WatchlistPdfReport
     private function holdings(): array
     {
         return StockHolding::query()
-            ->with(['latestQuote', 'latestStockPrice'])
+            ->with('latestStockPrice')
             ->orderBy('name')
             ->orderBy('isin')
             ->get()
@@ -131,11 +131,11 @@ class WatchlistPdfReport
             'latest_price_source_url' => $latestStockPrice?->source_url ?? $holding->latest_price_source_url,
             'latest_price_as_of' => $this->sourceDateTimePayload($latestPriceAsOf, $hasCurrentPrice),
             'trading_times' => $tradingTimes,
-            'venue' => $hasCurrentPrice ? ($latestStockPrice?->venue ?? $holding->latestQuote?->venue) : null,
+            'venue' => $hasCurrentPrice ? $latestStockPrice?->venue : null,
             'price_type' => $hasCurrentPrice ? ($latestStockPrice?->price_type ?? $holding->latest_price_type) : null,
             'price_spread_pct' => $hasCurrentPrice ? ($latestStockPrice?->spread_pct ?? $holding->price_spread_pct) : null,
             'recent_prices' => $this->recentStoredPrices($holding),
-            'validation_errors' => $hasCurrentPrice ? ($latestStockPrice?->validation_errors ?? $holding->latestQuote?->validation_errors ?? []) : [],
+            'validation_errors' => $hasCurrentPrice ? ($latestStockPrice?->validation_errors ?? []) : [],
             'created_at' => $holding->created_at?->toIso8601String(),
         ];
     }

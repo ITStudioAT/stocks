@@ -7,7 +7,7 @@ class QuoteSelectionResult
     /**
      * @param  array<int, ValidatedQuote>  $quotes
      * @param  array<int, WebSourceCandidate>  $attemptedSources
-     * @param  array<int, ParserDiagnostics>  $diagnostics
+     * @param  array<int, mixed>  $diagnostics
      * @param  array<int, string>  $errors
      */
     public function __construct(

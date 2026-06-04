@@ -3,7 +3,6 @@
 namespace Tests\Feature;
 
 use App\Jobs\FetchHistoricalSessionPrices;
-use App\Jobs\FetchHistoricalSessionStartPrice;
 use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\StockHolding;
 use App\Models\StockPrice;
@@ -11,10 +10,8 @@ use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\EodhdMarketData;
 use App\Services\HistoricalSessionStartPriceFetchStatus;
-use App\Services\HistoricalSessionStartPriceLookup;
 use App\Services\StockPriceCatalog;
 use App\Services\WebMarketData\DTO\QuoteSelectionResult;
-use App\Services\WebMarketData\WebMarketDataOrchestrator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -463,159 +460,6 @@ class AdminDepotHoldingTest extends TestCase
         $this->assertDatabaseCount('stock_prices', 0);
     }
 
-    public function test_historical_session_start_price_job_fetches_and_stores_price_with_eodhd_intraday(): void
-    {
-        config(['services.eodhd.key' => 'test-token']);
-        $this->travelTo(Carbon::parse('2026-06-04 10:00:00', 'Europe/Berlin'));
-        Http::fake([
-            'eodhd.com/api/intraday/LYXIB.XETRA*' => Http::response([
-                [
-                    'timestamp' => Carbon::parse('2026-06-03 07:02:00', 'UTC')->timestamp,
-                    'close' => 192.25,
-                ],
-            ]),
-        ]);
-        $holding = StockHolding::factory()->create([
-            'symbol' => 'LYXIB',
-            'name' => 'Amundi IBEX 35 UCITS ETF Acc',
-            'isin' => 'FR0010655746',
-            'wkn' => 'A0REJT',
-            'exchange' => 'Xetra',
-            'mic_code' => 'XETR',
-            'currency' => 'EUR',
-            'latest_price' => '193.000000',
-            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
-        ]);
-
-        (new FetchHistoricalSessionStartPrice(
-            $holding->id,
-            '2026-06-03T07:00:00+00:00',
-            '2026-06-03T15:30:00+00:00',
-        ))->handle(
-            app(HistoricalSessionStartPriceLookup::class),
-            app(StockPriceCatalog::class),
-            app(HistoricalSessionStartPriceFetchStatus::class),
-        );
-
-        $this->assertDatabaseHas('stock_prices', [
-            'source_key' => 'eodhd_intraday',
-            'source_name' => 'EODHD intraday',
-            'price' => '192.25000000',
-            'price_type' => 'historical_session_start',
-            'as_of' => '2026-06-03 07:02:00',
-        ]);
-    }
-
-    public function test_historical_session_start_price_job_stores_first_eodhd_intraday_price_in_window(): void
-    {
-        config(['services.eodhd.key' => 'test-token']);
-        $this->travelTo(Carbon::parse('2026-06-04 10:00:00', 'Europe/Berlin'));
-        Http::fake([
-            'eodhd.com/api/intraday/LYXIB.XETRA*' => Http::response([
-                [
-                    'timestamp' => Carbon::parse('2026-06-03 07:04:00', 'UTC')->timestamp,
-                    'close' => 192.05,
-                ],
-                [
-                    'timestamp' => Carbon::parse('2026-06-03 07:01:00', 'UTC')->timestamp,
-                    'close' => 191.95,
-                ],
-            ]),
-        ]);
-        $admin = $this->adminUser();
-        $holding = StockHolding::factory()->create([
-            'symbol' => 'LYXIB',
-            'name' => 'Amundi IBEX 35 UCITS ETF Acc',
-            'isin' => 'FR0010655746',
-            'wkn' => 'A0REJT',
-            'exchange' => 'Xetra',
-            'mic_code' => 'XETR',
-            'currency' => 'EUR',
-            'latest_price' => '193.000000',
-            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
-            'price_status' => 'fresh',
-        ]);
-
-        (new FetchHistoricalSessionStartPrice(
-            $holding->id,
-            '2026-06-03T07:00:00+00:00',
-            '2026-06-03T15:30:00+00:00',
-        ))->handle(
-            app(HistoricalSessionStartPriceLookup::class),
-            app(StockPriceCatalog::class),
-            app(HistoricalSessionStartPriceFetchStatus::class),
-        );
-
-        $storedPrice = StockPrice::query()
-            ->where('source_key', 'eodhd_intraday')
-            ->firstOrFail();
-
-        $this->assertSame('191.95000000', (string) $storedPrice->price);
-        $this->assertSame('historical_session_start', $storedPrice->price_type);
-        $this->assertSame('2026-06-03 07:01:00', $storedPrice->as_of?->format('Y-m-d H:i:s'));
-
-        Queue::fake();
-
-        $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
-            ->assertOk()
-            ->assertJsonPath('holdings.0.start_price_24', '191.95000000');
-    }
-
-    public function test_historical_session_start_price_job_ignores_eodhd_rows_without_prices(): void
-    {
-        config(['services.eodhd.key' => 'test-token']);
-        $this->travelTo(Carbon::parse('2026-06-04 10:00:00', 'Europe/Berlin'));
-        $admin = $this->adminUser();
-        Http::fake([
-            'eodhd.com/api/intraday/SEC0.XETRA*' => Http::response([
-                [
-                    'timestamp' => Carbon::parse('2026-06-03 07:04:00', 'UTC')->timestamp,
-                    'close' => null,
-                ],
-            ]),
-        ]);
-        $holding = StockHolding::factory()->create([
-            'symbol' => 'SEC0',
-            'name' => 'iShares MSCI Global Semiconductors UCITS ETF USD (Acc)',
-            'isin' => 'IE000I8KRLL9',
-            'wkn' => 'A3CVRA',
-            'exchange' => 'Xetra',
-            'mic_code' => 'XETR',
-            'currency' => 'EUR',
-            'latest_price' => '19.151000',
-            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
-            'price_status' => 'fresh',
-        ]);
-        $this->createMedianQuote($holding, '2026-06-02 07:00:00', '18.19', 'historical_session_start');
-
-        (new FetchHistoricalSessionStartPrice(
-            $holding->id,
-            '2026-06-03T07:00:00+00:00',
-            '2026-06-03T15:30:00+00:00',
-        ))->handle(
-            app(HistoricalSessionStartPriceLookup::class),
-            app(StockPriceCatalog::class),
-            app(HistoricalSessionStartPriceFetchStatus::class),
-        );
-
-        $this->assertDatabaseMissing('stock_prices', [
-            'source_key' => 'eodhd_intraday',
-            'symbol' => 'SEC0',
-        ]);
-
-        Queue::fake();
-
-        $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
-            ->assertOk()
-            ->assertJsonPath('holdings.0.start_price_24', null)
-            ->assertJsonPath('holdings.0.start_price_48', '18.19000000')
-            ->assertJsonPath('holdings.0.historical_prices_fetching', false);
-
-        Queue::assertNothingPushed();
-    }
-
     public function test_admin_listing_serializes_stored_stock_price_source_time_as_utc(): void
     {
         $admin = $this->adminUser();
@@ -852,7 +696,7 @@ class AdminDepotHoldingTest extends TestCase
     {
         $admin = $this->adminUser();
         $this->travelTo(Carbon::parse('2026-06-02 12:00:00'));
-        $this->mock(WebMarketDataOrchestrator::class, function (MockInterface $mock): void {
+        $this->mock(EodhdMarketData::class, function (MockInterface $mock): void {
             $mock
                 ->shouldReceive('resolve')
                 ->once()
@@ -922,7 +766,7 @@ class AdminDepotHoldingTest extends TestCase
     {
         $admin = $this->adminUser();
         $this->travelTo(Carbon::parse('2026-06-02 13:00:00'));
-        $this->mock(WebMarketDataOrchestrator::class, function (MockInterface $mock): void {
+        $this->mock(EodhdMarketData::class, function (MockInterface $mock): void {
             $mock
                 ->shouldReceive('resolve')
                 ->once()
@@ -1061,7 +905,7 @@ class AdminDepotHoldingTest extends TestCase
             'latest_price_as_of' => '2026-06-02 14:29 UTC',
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
         ]);
-        $this->mock(WebMarketDataOrchestrator::class, function (MockInterface $mock): void {
+        $this->mock(EodhdMarketData::class, function (MockInterface $mock): void {
             $mock
                 ->shouldReceive('resolve')
                 ->once()
@@ -1089,7 +933,7 @@ class AdminDepotHoldingTest extends TestCase
         $progress->start('refresh-test', 2);
 
         (new RefreshDepotHoldingPrices('refresh-test'))->handle(
-            app(WebMarketDataOrchestrator::class),
+            app(EodhdMarketData::class),
             $progress,
         );
 
@@ -1127,7 +971,7 @@ class AdminDepotHoldingTest extends TestCase
             'price_status' => 'fresh',
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
         ]);
-        $this->mock(WebMarketDataOrchestrator::class, function (MockInterface $mock): void {
+        $this->mock(EodhdMarketData::class, function (MockInterface $mock): void {
             $mock
                 ->shouldReceive('resolve')
                 ->once()
@@ -1137,7 +981,7 @@ class AdminDepotHoldingTest extends TestCase
         $progress->start('refresh-mail-test', 1);
 
         (new RefreshDepotHoldingPrices('refresh-mail-test', $admin->id))->handle(
-            app(WebMarketDataOrchestrator::class),
+            app(EodhdMarketData::class),
             $progress,
         );
 
@@ -1152,7 +996,7 @@ class AdminDepotHoldingTest extends TestCase
             'currency' => 'EUR',
             'price_status' => 'fresh',
         ]);
-        $this->mock(WebMarketDataOrchestrator::class, function (MockInterface $mock): void {
+        $this->mock(EodhdMarketData::class, function (MockInterface $mock): void {
             $mock
                 ->shouldReceive('resolve')
                 ->once()
@@ -1163,7 +1007,7 @@ class AdminDepotHoldingTest extends TestCase
         $progress->start('refresh-mail-fail-test', 1);
 
         (new RefreshDepotHoldingPrices('refresh-mail-fail-test', $admin->id))->handle(
-            app(WebMarketDataOrchestrator::class),
+            app(EodhdMarketData::class),
             $progress,
         );
 

@@ -6,7 +6,7 @@ use App\Models\StockHolding;
 use App\Models\StockPriceRefreshItem;
 use App\Models\StockPriceRefreshRun;
 use App\Services\DepotHoldingPriceRefreshProgress;
-use App\Services\WebMarketData\WebMarketDataOrchestrator;
+use App\Services\EodhdMarketData;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
@@ -28,7 +28,7 @@ class RefreshDepotHoldingPrices implements ShouldQueue
     ) {}
 
     public function handle(
-        WebMarketDataOrchestrator $marketData,
+        EodhdMarketData $marketData,
         DepotHoldingPriceRefreshProgress $progress,
     ): void {
         $progress->markRunning($this->refreshId);

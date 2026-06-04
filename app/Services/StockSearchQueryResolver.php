@@ -2,9 +2,9 @@
 
 namespace App\Services;
 
-use App\Ai\Agents\StockIdentifierResolver;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -83,11 +83,33 @@ class StockSearchQueryResolver
      */
     private function resolveFreshCandidates(string $query): array
     {
+        $apiToken = config('services.eodhd.key');
+
+        if (! is_string($apiToken) || trim($apiToken) === '') {
+            return [];
+        }
+
         try {
-            $response = StockIdentifierResolver::make()->prompt($this->prompt($query), timeout: 30);
-            $candidates = is_array($response['candidates'] ?? null)
-                ? $response['candidates']
-                : [];
+            $response = Http::baseUrl((string) config('services.eodhd.base_url', 'https://eodhd.com/api'))
+                ->acceptJson()
+                ->connectTimeout((int) config('services.eodhd.connect_timeout', 5))
+                ->timeout((int) config('services.eodhd.timeout', 20))
+                ->get('search/'.rawurlencode($query), [
+                    'api_token' => $apiToken,
+                    'fmt' => 'json',
+                    'limit' => 15,
+                    'type' => 'all',
+                ]);
+
+            if (! $response->ok()) {
+                return [];
+            }
+
+            $candidates = $response->json();
+
+            if (! is_array($candidates) || Arr::get($candidates, 'status') === 'error') {
+                return [];
+            }
 
             return collect($candidates)
                 ->map(fn (array $candidate): array => $this->candidatePayload($query, $candidate))
@@ -105,16 +127,16 @@ class StockSearchQueryResolver
     private function candidatePayload(string $query, array $candidate): array
     {
         $payload = [
-            'name' => $this->nullableString(Arr::get($candidate, 'name')),
-            'isin' => $this->nullableUpperString(Arr::get($candidate, 'isin')),
-            'wkn' => $this->nullableUpperString(Arr::get($candidate, 'wkn')),
-            'valor' => $this->nullableUpperString(Arr::get($candidate, 'valor')),
-            'symbol' => $this->nullableUpperString(Arr::get($candidate, 'symbol')),
-            'exchange' => $this->nullableString(Arr::get($candidate, 'exchange')),
-            'mic_code' => $this->nullableUpperString(Arr::get($candidate, 'mic_code')),
-            'instrument_type' => $this->nullableString(Arr::get($candidate, 'instrument_type')),
-            'country' => $this->nullableString(Arr::get($candidate, 'country')),
-            'currency' => $this->nullableUpperString(Arr::get($candidate, 'currency')),
+            'name' => $this->nullableString(Arr::get($candidate, 'Name', Arr::get($candidate, 'name'))),
+            'isin' => $this->nullableUpperString(Arr::get($candidate, 'ISIN', Arr::get($candidate, 'isin'))),
+            'wkn' => $this->nullableUpperString(Arr::get($candidate, 'WKN', Arr::get($candidate, 'wkn'))),
+            'valor' => $this->nullableUpperString(Arr::get($candidate, 'Valor', Arr::get($candidate, 'valor'))),
+            'symbol' => $this->nullableUpperString(Arr::get($candidate, 'Code', Arr::get($candidate, 'symbol'))),
+            'exchange' => $this->nullableUpperString(Arr::get($candidate, 'Exchange', Arr::get($candidate, 'exchange'))),
+            'mic_code' => $this->micCodeForExchange(Arr::get($candidate, 'Exchange', Arr::get($candidate, 'mic_code'))),
+            'instrument_type' => $this->nullableString(Arr::get($candidate, 'Type', Arr::get($candidate, 'instrument_type'))),
+            'country' => $this->nullableString(Arr::get($candidate, 'Country', Arr::get($candidate, 'country'))),
+            'currency' => $this->nullableUpperString(Arr::get($candidate, 'Currency', Arr::get($candidate, 'currency'))),
         ];
 
         $identifierTerms = collect([
@@ -154,52 +176,26 @@ class StockSearchQueryResolver
         return $value === null ? null : Str::upper($value);
     }
 
-    private function prompt(string $query): string
+    private function micCodeForExchange(mixed $value): ?string
     {
-        $queryContext = implode("\n", $this->queryContext($query));
+        $exchange = $this->nullableUpperString($value);
 
-        return <<<PROMPT
-Resolve this stock, ETF, or fund search query to portfolio-ready instrument identifiers using public web sources.
-
-Query: {$query}
-Detected query context:
-{$queryContext}
-
-Search exact identifier queries with their identifier label:
-- WKN: six-character German security code.
-- ISIN: twelve-character international security identifier.
-- Valor: Swiss numeric security identifier.
-- Symbol or name: local ticker or instrument name.
-
-Return likely identifiers for the exact same instrument only. Find the matching ISIN, WKN, Valor when available, exchange ticker symbols, exchanges, MIC codes, currency, country, instrument type, and official instrument name.
-PROMPT;
-    }
-
-    /**
-     * @return array<int, string>
-     */
-    private function queryContext(string $query): array
-    {
-        $normalizedQuery = Str::upper(trim($query));
-        $context = [];
-
-        if (preg_match('/^[A-Z]{2}[A-Z0-9]{9}[0-9]$/', $normalizedQuery) === 1) {
-            $context[] = "- {$normalizedQuery} looks like an ISIN.";
+        if ($exchange === null) {
+            return null;
         }
 
-        if (preg_match('/^[A-Z0-9]{6}$/', $normalizedQuery) === 1) {
-            $context[] = "- {$normalizedQuery} looks like a WKN or local ticker.";
-        }
-
-        if (preg_match('/^[0-9]{1,9}$/', $normalizedQuery) === 1) {
-            $context[] = "- {$normalizedQuery} looks like a Valor number; if it is six digits, also check WKN.";
-        }
-
-        if ($context === []) {
-            $context[] = '- Treat this as a ticker symbol or instrument name and resolve exact matching instruments.';
-        }
-
-        return $context;
+        return match ($exchange) {
+            'XETRA' => 'XETR',
+            'NYSE' => 'XNYS',
+            'NASDAQ' => 'XNAS',
+            'SW' => 'XSWX',
+            'VX' => 'XVTX',
+            'VI' => 'XVIE',
+            'PA' => 'XPAR',
+            'MI' => 'XMIL',
+            'MC' => 'XMAD',
+            default => null,
+        };
     }
 
     private function cacheKey(string $query): string
