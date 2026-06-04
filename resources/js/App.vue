@@ -88,6 +88,7 @@ const expandedHoldingIds = ref([]);
 const priceRefreshScheduleForm = ref(emptyPriceRefreshScheduleForm());
 const priceRefreshScheduleMessage = ref('');
 const priceRefreshScheduleError = ref('');
+const isPriceRefreshScheduleEditing = ref(false);
 const priceRefreshTimer = ref(null);
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
@@ -180,6 +181,9 @@ watch(
     (settings) => {
         priceRefreshScheduleForm.value = {
             trading_interval_minutes: settings?.trading_interval_minutes ?? 20,
+            trading_starts_before_minutes: settings?.trading_starts_before_minutes ?? 0,
+            trading_ends_after_minutes: settings?.trading_ends_after_minutes ?? 0,
+            closed_refresh_enabled: settings?.closed_refresh_enabled ?? true,
             closed_interval_minutes: settings?.closed_interval_minutes ?? 60,
         };
     },
@@ -674,13 +678,28 @@ async function savePriceRefreshSchedule() {
     try {
         const data = await depotsStore.updatePriceRefreshSettings({
             trading_interval_minutes: Number(priceRefreshScheduleForm.value.trading_interval_minutes),
+            trading_starts_before_minutes: Number(priceRefreshScheduleForm.value.trading_starts_before_minutes),
+            trading_ends_after_minutes: Number(priceRefreshScheduleForm.value.trading_ends_after_minutes),
+            closed_refresh_enabled: Boolean(priceRefreshScheduleForm.value.closed_refresh_enabled),
             closed_interval_minutes: Number(priceRefreshScheduleForm.value.closed_interval_minutes),
         });
 
         priceRefreshScheduleMessage.value = data.message;
+        isPriceRefreshScheduleEditing.value = false;
+
+        if (data.refresh) {
+            holdingMessage.value = data.refresh.message;
+            startPriceRefreshPolling(data.refresh.refresh_id);
+        }
     } catch (err) {
         priceRefreshScheduleError.value = err.message;
     }
+}
+
+function editPriceRefreshSchedule() {
+    priceRefreshScheduleMessage.value = '';
+    priceRefreshScheduleError.value = '';
+    isPriceRefreshScheduleEditing.value = true;
 }
 
 async function loadPriceRefreshSettings() {
@@ -840,6 +859,46 @@ function toggleHoldingDetails(holding) {
 
 function isHoldingExpanded(holding) {
     return expandedHoldingIds.value.includes(holding.id);
+}
+
+function recentPricesForExpandedHolding(holding) {
+    return (holding.recent_prices ?? []).map((recentPrice, recentPriceIndex, recentPrices) => ({
+        ...recentPrice,
+        trend: recentStoredPriceTrend(recentPrice, recentPrices[recentPriceIndex - 1] ?? null),
+    }));
+}
+
+function recentStoredPriceTrend(recentPrice, previousRecentPrice) {
+    if (!previousRecentPrice) {
+        return 'flat';
+    }
+
+    const price = Number(recentPrice.price);
+    const previousPrice = Number(previousRecentPrice.price);
+
+    if (Number.isNaN(price) || Number.isNaN(previousPrice) || price === previousPrice) {
+        return 'flat';
+    }
+
+    return price > previousPrice ? 'up' : 'down';
+}
+
+function recentStoredPriceTrendSymbol(recentPrice) {
+    const symbols = {
+        up: '\u2191',
+        down: '\u2193',
+        flat: '=',
+    };
+
+    return symbols[recentPrice.trend] ?? '=';
+}
+
+function recentStoredPriceTrendClass(recentPrice) {
+    return {
+        'text-success': recentPrice.trend === 'up',
+        'text-error': recentPrice.trend === 'down',
+        'text-medium-emphasis': recentPrice.trend === 'flat',
+    };
 }
 
 function latestPriceClass(holding) {
@@ -1113,6 +1172,7 @@ function clearSectionMessages() {
     holdingError.value = '';
     priceRefreshScheduleMessage.value = '';
     priceRefreshScheduleError.value = '';
+    isPriceRefreshScheduleEditing.value = false;
     userMessage.value = '';
     userError.value = '';
     roleMessage.value = '';
@@ -1144,6 +1204,9 @@ function emptyDepotForm() {
 function emptyPriceRefreshScheduleForm() {
     return {
         trading_interval_minutes: 20,
+        trading_starts_before_minutes: 0,
+        trading_ends_after_minutes: 0,
+        closed_refresh_enabled: true,
         closed_interval_minutes: 60,
     };
 }
@@ -1442,7 +1505,7 @@ function emptyPriceRefreshScheduleForm() {
                                                 class="recent-price-strip d-flex flex-wrap ga-2"
                                             >
                                                 <span
-                                                    v-for="recentPrice in holding.recent_prices"
+                                                    v-for="recentPrice in recentPricesForExpandedHolding(holding)"
                                                     :key="recentPrice.id"
                                                     class="recent-price-item"
                                                 >
@@ -1451,6 +1514,12 @@ function emptyPriceRefreshScheduleForm() {
                                                     </span>
                                                     <span class="text-caption text-medium-emphasis">
                                                         {{ formatRecentStoredPriceTime(recentPrice) }}
+                                                    </span>
+                                                    <span
+                                                        class="recent-price-trend text-caption font-weight-bold"
+                                                        :class="recentStoredPriceTrendClass(recentPrice)"
+                                                    >
+                                                        {{ recentStoredPriceTrendSymbol(recentPrice) }}
                                                     </span>
                                                 </span>
                                             </div>
@@ -1595,29 +1664,104 @@ function emptyPriceRefreshScheduleForm() {
                                 @submit.prevent="savePriceRefreshSchedule"
                             >
                                 <div class="text-subtitle-2 mr-2">Automatic price refresh</div>
-                                <v-text-field
-                                    v-model="priceRefreshScheduleForm.trading_interval_minutes"
-                                    density="compact"
-                                    hide-details
-                                    label="During trading"
-                                    min="1"
-                                    max="1440"
-                                    suffix="min"
-                                    type="number"
-                                    style="max-width: 180px"
-                                />
-                                <v-text-field
-                                    v-model="priceRefreshScheduleForm.closed_interval_minutes"
-                                    density="compact"
-                                    hide-details
-                                    label="Outside trading"
-                                    min="1"
-                                    max="1440"
-                                    suffix="min"
-                                    type="number"
-                                    style="max-width: 190px"
-                                />
+                                <template v-if="!isPriceRefreshScheduleEditing">
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">During trading</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ priceRefreshScheduleForm.trading_interval_minutes }} min
+                                        </div>
+                                    </div>
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">Start before trading</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ priceRefreshScheduleForm.trading_starts_before_minutes }} min
+                                        </div>
+                                    </div>
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">End after trading</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ priceRefreshScheduleForm.trading_ends_after_minutes }} min
+                                        </div>
+                                    </div>
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">Outside trading</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ priceRefreshScheduleForm.closed_refresh_enabled ? 'On' : 'Off' }}
+                                        </div>
+                                    </div>
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">Outside trading interval</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ priceRefreshScheduleForm.closed_interval_minutes }} min
+                                        </div>
+                                    </div>
+                                </template>
+                                <template v-else>
+                                    <v-text-field
+                                        v-model="priceRefreshScheduleForm.trading_interval_minutes"
+                                        density="compact"
+                                        hide-details
+                                        label="During trading"
+                                        min="1"
+                                        max="1440"
+                                        suffix="min"
+                                        type="number"
+                                        style="max-width: 180px"
+                                    />
+                                    <v-text-field
+                                        v-model="priceRefreshScheduleForm.trading_starts_before_minutes"
+                                        density="compact"
+                                        hide-details
+                                        label="Start before trading"
+                                        min="0"
+                                        max="1440"
+                                        suffix="min"
+                                        type="number"
+                                        style="max-width: 210px"
+                                    />
+                                    <v-text-field
+                                        v-model="priceRefreshScheduleForm.trading_ends_after_minutes"
+                                        density="compact"
+                                        hide-details
+                                        label="End after trading"
+                                        min="0"
+                                        max="1440"
+                                        suffix="min"
+                                        type="number"
+                                        style="max-width: 200px"
+                                    />
+                                    <v-switch
+                                        v-model="priceRefreshScheduleForm.closed_refresh_enabled"
+                                        color="primary"
+                                        density="compact"
+                                        hide-details
+                                        label="Outside trading"
+                                    />
+                                    <v-text-field
+                                        v-model="priceRefreshScheduleForm.closed_interval_minutes"
+                                        density="compact"
+                                        hide-details
+                                        label="Outside trading interval"
+                                        min="1"
+                                        max="1440"
+                                        :disabled="!priceRefreshScheduleForm.closed_refresh_enabled"
+                                        suffix="min"
+                                        type="number"
+                                        style="max-width: 220px"
+                                    />
+                                </template>
                                 <v-btn
+                                    v-if="!isPriceRefreshScheduleEditing"
+                                    type="button"
+                                    color="primary"
+                                    prepend-icon="mdi-pencil-outline"
+                                    variant="tonal"
+                                    @click="editPriceRefreshSchedule"
+                                >
+                                    Edit
+                                </v-btn>
+                                <v-btn
+                                    v-else
                                     type="submit"
                                     color="primary"
                                     prepend-icon="mdi-content-save-outline"
@@ -2099,6 +2243,13 @@ function emptyPriceRefreshScheduleForm() {
     border-radius: 4px;
     display: inline-flex;
     gap: 6px;
+    min-width: 118px;
     padding: 4px 6px;
+}
+
+.recent-price-trend {
+    margin-left: auto;
+    text-align: right;
+    width: 12px;
 }
 </style>

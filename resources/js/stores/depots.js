@@ -175,6 +175,7 @@ export const useDepotStore = defineStore('depots', {
                     body: JSON.stringify(payload),
                 });
                 this.priceRefreshSettings = data.price_refresh_settings;
+                this.priceRefresh = data.refresh ?? this.priceRefresh;
 
                 return data;
             } catch (error) {

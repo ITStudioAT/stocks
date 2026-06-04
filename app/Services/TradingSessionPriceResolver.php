@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\StockHolding;
 use Illuminate\Support\Carbon;
-use Throwable;
 
 class TradingSessionPriceResolver
 {
@@ -15,8 +14,8 @@ class TradingSessionPriceResolver
     ) {}
 
     /**
-     * Resolve the first price after the trading session opened (start) and the
-     * first price after it closed (end) for the holding's most recent session.
+     * Resolve the first price after today's trading session opened (start) and
+     * the first price after the previous trading day's session closed (end).
      *
      * When no end price is recorded yet, the actual latest price is used. When
      * no start price is recorded, the end price is used.
@@ -34,34 +33,29 @@ class TradingSessionPriceResolver
             ];
         }
 
-        [$dayStartUtc, $nextDayStartUtc, $openMinute, $closeMinute, $marketTimezone] = $session;
+        [$todayOpenUtc, $todayCloseUtc, $previousCloseUtc] = $session;
 
-        $quotes = $this->stockPriceCatalog
+        $startPrice = $this->stockPriceCatalog
             ->pricesForHolding($holding)
             ->where('source_key', 'calculated_median')
             ->whereNotNull('price')
             ->whereNotNull('as_of')
-            ->where('as_of', '>=', $dayStartUtc)
-            ->where('as_of', '<', $nextDayStartUtc)
+            ->where('as_of', '>=', $todayOpenUtc)
+            ->where('as_of', '<', $todayCloseUtc)
             ->orderBy('as_of')
-            ->get(['price', 'as_of']);
+            ->first(['price'])
+            ?->price;
 
-        $startPrice = null;
-        $endPrice = null;
-
-        foreach ($quotes as $quote) {
-            $minuteOfDay = $this->minuteOfDay($quote->as_of, $marketTimezone);
-
-            if ($startPrice === null && $minuteOfDay >= $openMinute) {
-                $startPrice = (string) $quote->price;
-            }
-
-            if ($minuteOfDay >= $closeMinute) {
-                $endPrice = (string) $quote->price;
-
-                break;
-            }
-        }
+        $endPrice = $this->stockPriceCatalog
+            ->pricesForHolding($holding)
+            ->where('source_key', 'calculated_median')
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->where('as_of', '>=', $previousCloseUtc)
+            ->where('as_of', '<', $todayOpenUtc)
+            ->orderBy('as_of')
+            ->first(['price'])
+            ?->price;
 
         $endPrice ??= $latestPrice;
         $startPrice ??= $endPrice;
@@ -96,7 +90,7 @@ class TradingSessionPriceResolver
     }
 
     /**
-     * @return array{0: Carbon, 1: Carbon, 2: int, 3: int, 4: string}|null
+     * @return array{0: Carbon, 1: Carbon, 2: Carbon}|null
      */
     private function session(StockHolding $holding): ?array
     {
@@ -113,20 +107,13 @@ class TradingSessionPriceResolver
         }
 
         $marketTimezone = $this->marketTimezone($tradingTimes);
-        $referenceDate = $this->referenceDate($holding, $marketTimezone);
-
-        if ($referenceDate === null) {
-            return null;
-        }
-
-        $dayStart = $referenceDate->copy()->startOfDay();
+        $today = now()->setTimezone($marketTimezone)->startOfDay();
+        $previousTradingDay = $this->previousTradingDay($today);
 
         return [
-            $dayStart->copy()->utc(),
-            $dayStart->copy()->addDay()->utc(),
-            $window[0],
-            $window[1],
-            $marketTimezone,
+            $today->copy()->addMinutes($window[0])->utc(),
+            $today->copy()->addMinutes($window[1])->utc(),
+            $previousTradingDay->copy()->addMinutes($window[1])->utc(),
         ];
     }
 
@@ -154,34 +141,14 @@ class TradingSessionPriceResolver
         return self::DefaultMarketTimezone;
     }
 
-    private function referenceDate(StockHolding $holding, string $marketTimezone): ?Carbon
+    private function previousTradingDay(Carbon $today): Carbon
     {
-        $latestStockPrice = $holding->latestStockPrice;
+        $previousTradingDay = $today->copy()->subDay();
 
-        if ($latestStockPrice?->as_of !== null) {
-            return $this->storedUtcDate($latestStockPrice->as_of)->setTimezone($marketTimezone);
+        while ($previousTradingDay->isWeekend()) {
+            $previousTradingDay->subDay();
         }
 
-        if (! $holding->latest_price_as_of) {
-            return null;
-        }
-
-        try {
-            return Carbon::parse($holding->latest_price_as_of)->setTimezone($marketTimezone);
-        } catch (Throwable) {
-            return null;
-        }
-    }
-
-    private function minuteOfDay(Carbon $asOf, string $marketTimezone): int
-    {
-        $local = $this->storedUtcDate($asOf)->setTimezone($marketTimezone);
-
-        return ($local->hour * 60) + $local->minute;
-    }
-
-    private function storedUtcDate(Carbon $date): Carbon
-    {
-        return Carbon::createFromFormat('Y-m-d H:i:s', $date->format('Y-m-d H:i:s'), 'UTC');
+        return $previousTradingDay;
     }
 }

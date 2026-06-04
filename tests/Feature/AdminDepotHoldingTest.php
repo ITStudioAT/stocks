@@ -3,17 +3,21 @@
 namespace Tests\Feature;
 
 use App\Jobs\RefreshDepotHoldingPrices;
+use App\Mail\WatchlistPriceRefreshReportMail;
 use App\Models\StockHolding;
 use App\Models\StockPrice;
 use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\StockPriceCatalog;
+use App\Services\WatchlistPdfReport;
 use App\Services\WebMarketData\DTO\QuoteSelectionResult;
 use App\Services\WebMarketData\WebMarketDataOrchestrator;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Queue;
 use Mockery\MockInterface;
+use RuntimeException;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -145,22 +149,22 @@ class AdminDepotHoldingTest extends TestCase
     public function test_admin_listing_includes_trading_session_start_and_end_prices(): void
     {
         $admin = $this->adminUser();
-        $this->travelTo(Carbon::parse('2026-06-03 20:00:00'));
+        $this->travelTo(Carbon::parse('2026-06-04 10:00:00', 'Europe/Berlin'));
         $holding = StockHolding::factory()->create([
             'symbol' => 'LYXIB',
             'currency' => 'EUR',
             'latest_price' => '191.500000',
-            'latest_price_fetched_at' => '2026-06-03 17:50:00',
-            'latest_price_as_of' => '2026-06-03 17:45:00',
+            'latest_price_fetched_at' => '2026-06-04 08:20:00',
+            'latest_price_as_of' => '2026-06-04 08:15:00',
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
             'price_status' => 'closed_market',
             'latest_price_type' => 'last',
         ]);
-        // Berlin (CEST, +02:00): 08:30 (pre-open), 09:10 (start), 14:00, 17:45 (after close).
-        $this->createMedianQuote($holding, '2026-06-03 06:30:00', '190.00');
-        $this->createMedianQuote($holding, '2026-06-03 07:10:00', '191.00');
-        $this->createMedianQuote($holding, '2026-06-03 12:00:00', '195.00');
+        // Berlin (CEST, +02:00): previous day 17:45 (end), today 08:30 (pre-open), today 09:10 (start).
         $this->createMedianQuote($holding, '2026-06-03 15:45:00', '193.00');
+        $this->createMedianQuote($holding, '2026-06-04 06:30:00', '190.00');
+        $this->createMedianQuote($holding, '2026-06-04 07:10:00', '191.00');
+        $this->createMedianQuote($holding, '2026-06-04 08:15:00', '191.50');
 
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
@@ -168,8 +172,8 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.symbol', 'LYXIB')
             ->assertJsonPath('holdings.0.start_price', '191.00000000')
             ->assertJsonPath('holdings.0.end_price', '193.00000000')
-            ->assertJsonPath('holdings.0.latest_price_trend', 'down')
-            ->assertJsonPath('holdings.0.latest_price_change_pct', '-0.78');
+            ->assertJsonPath('holdings.0.latest_price_trend', 'up')
+            ->assertJsonPath('holdings.0.latest_price_change_pct', '0.26');
     }
 
     public function test_admin_listing_serializes_stored_stock_price_source_time_as_utc(): void
@@ -296,6 +300,7 @@ class AdminDepotHoldingTest extends TestCase
 
         $this->createMedianQuote($holding, '2026-06-02 17:50:00', '98.00');
         $this->createMedianQuote($holding, '2026-06-03 12:00:00', '100.00');
+        $this->createMedianQuote($holding, '2026-06-03 12:00:00', '100.25');
         StockPrice::query()->create([
             'instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($holding),
             'quote_hash' => hash('sha256', "{$holding->id}|raw-source|2026-06-03 13:00:00"),
@@ -320,9 +325,10 @@ class AdminDepotHoldingTest extends TestCase
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
-            ->assertJsonPath('holdings.0.recent_prices.0.price', '101.00000000')
-            ->assertJsonPath('holdings.0.recent_prices.1.price', '100.00000000')
-            ->assertJsonMissingPath('holdings.0.recent_prices.2');
+            ->assertJsonPath('holdings.0.recent_prices.0.price', '100.00000000')
+            ->assertJsonPath('holdings.0.recent_prices.1.price', '100.25000000')
+            ->assertJsonPath('holdings.0.recent_prices.2.price', '101.00000000')
+            ->assertJsonMissingPath('holdings.0.recent_prices.3');
     }
 
     public function test_admin_listing_falls_back_to_latest_price_when_session_has_no_close_quote(): void
@@ -523,7 +529,8 @@ class AdminDepotHoldingTest extends TestCase
         $refreshId = $response->json('refresh.refresh_id');
 
         Queue::assertPushedTimes(RefreshDepotHoldingPrices::class, 1);
-        Queue::assertPushed(RefreshDepotHoldingPrices::class, fn (RefreshDepotHoldingPrices $job): bool => $job->refreshId === $refreshId);
+        Queue::assertPushed(RefreshDepotHoldingPrices::class, fn (RefreshDepotHoldingPrices $job): bool => $job->refreshId === $refreshId
+            && $job->recipientUserId === $admin->id);
 
         $this->actingAs($admin)
             ->getJson("/admin/watchlist/holdings/refresh-prices/{$refreshId}")
@@ -558,6 +565,7 @@ class AdminDepotHoldingTest extends TestCase
 
     public function test_queued_job_refreshes_watchlist_prices_and_tracks_progress(): void
     {
+        Mail::fake();
         $apple = StockHolding::factory()->create([
             'symbol' => 'AAPL',
             'name' => 'Apple Inc.',
@@ -617,6 +625,7 @@ class AdminDepotHoldingTest extends TestCase
         (new RefreshDepotHoldingPrices('refresh-test'))->handle(
             app(WebMarketDataOrchestrator::class),
             $progress,
+            app(WatchlistPdfReport::class),
         );
 
         $this->assertDatabaseHas('stock_holdings', [
@@ -641,6 +650,70 @@ class AdminDepotHoldingTest extends TestCase
         ]);
         $this->assertSame('finished', $progress->get('refresh-test')['status']);
         $this->assertSame('2/2', $progress->get('refresh-test')['step']);
+    }
+
+    public function test_completed_manual_refresh_sends_watchlist_pdf_to_logged_in_admin(): void
+    {
+        Mail::fake();
+        $admin = $this->adminUser();
+        StockHolding::factory()->create([
+            'symbol' => 'MAILPDF',
+            'currency' => 'EUR',
+            'price_status' => 'fresh',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+        $this->mock(WebMarketDataOrchestrator::class, function (MockInterface $mock): void {
+            $mock
+                ->shouldReceive('resolve')
+                ->once()
+                ->andReturn(new QuoteSelectionResult(null, [], [], status: 'fresh'));
+        });
+        $progress = app(DepotHoldingPriceRefreshProgress::class);
+        $progress->start('refresh-mail-test', 1);
+
+        (new RefreshDepotHoldingPrices('refresh-mail-test', $admin->id))->handle(
+            app(WebMarketDataOrchestrator::class),
+            $progress,
+            app(WatchlistPdfReport::class),
+        );
+
+        Mail::assertSent(WatchlistPriceRefreshReportMail::class, function (WatchlistPriceRefreshReportMail $mail) use ($admin): bool {
+            return $mail->hasTo($admin->email)
+                && str_starts_with($mail->pdfContent, '%PDF')
+                && str_starts_with($mail->filename, 'watch-list-')
+            && str_ends_with($mail->filename, '.pdf');
+        });
+    }
+
+    public function test_refresh_still_finishes_when_report_email_cannot_be_sent(): void
+    {
+        $admin = $this->adminUser();
+        StockHolding::factory()->create([
+            'symbol' => 'MAILFAIL',
+            'currency' => 'EUR',
+            'price_status' => 'fresh',
+        ]);
+        $this->mock(WebMarketDataOrchestrator::class, function (MockInterface $mock): void {
+            $mock
+                ->shouldReceive('resolve')
+                ->once()
+                ->andReturn(new QuoteSelectionResult(null, [], [], status: 'fresh'));
+        });
+        Mail::shouldReceive('to')
+            ->once()
+            ->with($admin->email)
+            ->andThrow(new RuntimeException('SMTP is down.'));
+        $progress = app(DepotHoldingPriceRefreshProgress::class);
+        $progress->start('refresh-mail-fail-test', 1);
+
+        (new RefreshDepotHoldingPrices('refresh-mail-fail-test', $admin->id))->handle(
+            app(WebMarketDataOrchestrator::class),
+            $progress,
+            app(WatchlistPdfReport::class),
+        );
+
+        $this->assertSame('finished', $progress->get('refresh-mail-fail-test')['status']);
+        $this->assertSame('1/1', $progress->get('refresh-mail-fail-test')['step']);
     }
 
     public function test_admin_must_provide_a_selected_symbol(): void

@@ -1,133 +1,70 @@
 <?php
 
-namespace App\Http\Controllers;
+namespace App\Services;
 
 use App\Models\Depot;
 use App\Models\StockHolding;
 use App\Models\StockPrice;
-use App\Models\User;
-use App\Services\DepotHoldingPriceRefreshProgress;
-use App\Services\PriceRefreshScheduler;
-use App\Services\StockPriceCatalog;
-use App\Services\StockPriceFreshness;
-use App\Services\TradingSessionPriceResolver;
-use App\Services\WatchlistPdfReport;
-use App\Services\WebMarketData\WebMarketDataOrchestrator;
-use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
+use Barryvdh\DomPDF\Facade\Pdf;
+use Barryvdh\DomPDF\PDF as DomPdfDocument;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Str;
-use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
 
-class AdminDepotHoldingController extends Controller
+class WatchlistPdfReport
 {
     public function __construct(
         private StockPriceFreshness $stockPriceFreshness,
-        private PriceRefreshScheduler $priceRefreshScheduler,
         private TradingSessionPriceResolver $tradingSessionPriceResolver,
         private StockPriceCatalog $stockPriceCatalog,
-        private WatchlistPdfReport $watchlistPdfReport,
     ) {}
 
-    public function index(): JsonResponse
+    public function download(): Response
     {
-        $holdings = StockHolding::query()
+        $generatedAt = Carbon::now();
+
+        return $this->pdf($generatedAt)->download($this->filename($generatedAt));
+    }
+
+    /**
+     * @return array{filename: string, content: string}
+     */
+    public function render(): array
+    {
+        $generatedAt = Carbon::now();
+
+        return [
+            'filename' => $this->filename($generatedAt),
+            'content' => $this->pdf($generatedAt)->output(),
+        ];
+    }
+
+    public function pdf(Carbon $generatedAt): DomPdfDocument
+    {
+        return Pdf::loadView('pdf.watchlist', [
+            'holdings' => $this->holdings(),
+            'depot' => $this->activeDepotPayload(),
+            'generatedAt' => $generatedAt,
+        ])->setPaper('a4', 'portrait');
+    }
+
+    private function filename(Carbon $generatedAt): string
+    {
+        return 'watch-list-'.$generatedAt->format('Y-m-d-His').'.pdf';
+    }
+
+    /**
+     * @return array<int, array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, start_price: ?string, end_price: ?string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, validation_errors: array<int, string>, created_at: ?string}>
+     */
+    private function holdings(): array
+    {
+        return StockHolding::query()
             ->with(['latestQuote', 'latestStockPrice'])
             ->orderBy('name')
             ->orderBy('isin')
-            ->paginate(10)
-            ->through(fn (StockHolding $holding): array => $this->holdingPayload($holding));
-
-        return response()->json([
-            'depot' => $this->activeDepotPayload(),
-            'price_refresh_settings' => $this->priceRefreshScheduler->payload(),
-            'holdings' => $holdings->items(),
-            'meta' => [
-                'current_page' => $holdings->currentPage(),
-                'last_page' => $holdings->lastPage(),
-                'per_page' => $holdings->perPage(),
-                'total' => $holdings->total(),
-                'from' => $holdings->firstItem(),
-                'to' => $holdings->lastItem(),
-            ],
-        ]);
-    }
-
-    public function exportPdf(): Response
-    {
-        return $this->watchlistPdfReport->download();
-    }
-
-    public function store(Request $request, WebMarketDataOrchestrator $marketData): JsonResponse
-    {
-        $validated = $this->validatedHoldingData($request);
-
-        $holding = StockHolding::query()->create([
-            'symbol' => $validated['symbol'],
-            'name' => $validated['name'] ?? null,
-            'isin' => $validated['isin'] ?? null,
-            'wkn' => $validated['wkn'] ?? null,
-            'exchange' => $validated['exchange'] ?? null,
-            'mic_code' => $validated['mic_code'] ?? null,
-            'instrument_type' => $validated['instrument_type'] ?? null,
-            'country' => $validated['country'] ?? null,
-            'currency' => $validated['currency'] ?? null,
-        ]);
-
-        $marketData->resolve($holding);
-        $holding->refresh();
-
-        return response()->json([
-            'message' => 'Stock added to watch-list.',
-            'holding' => $this->holdingPayload($holding),
-        ], 201);
-    }
-
-    public function refreshPrices(Request $request): JsonResponse
-    {
-        $user = $request->user();
-        $dispatchedRefresh = $this->priceRefreshScheduler->dispatchWatchlist($user instanceof User ? $user : null);
-        $progress = $dispatchedRefresh['progress'];
-        $message = trans_choice('{0} No stock prices queued for refresh.|{1} 1 stock price queued for refresh.|[2,*] :count stock prices queued for refresh.', $dispatchedRefresh['total_holdings']);
-
-        if ($progress === null) {
-            return response()->json([
-                'message' => $message,
-                'refresh' => null,
-            ], 202);
-        }
-
-        return response()->json([
-            'message' => $message,
-            'refresh' => $this->refreshPayload($progress),
-        ], 202);
-    }
-
-    public function refreshPriceStatus(string $refreshId, DepotHoldingPriceRefreshProgress $refreshProgress): JsonResponse
-    {
-        $progress = $refreshProgress->get($refreshId);
-
-        if ($progress === null) {
-            return response()->json([
-                'message' => 'Stock price refresh not found.',
-            ], 404);
-        }
-
-        return response()->json([
-            'message' => $progress['message'],
-            'refresh' => $this->refreshPayload($progress),
-        ]);
-    }
-
-    public function destroy(StockHolding $holding): JsonResponse
-    {
-        $holding->delete();
-
-        return response()->json([
-            'message' => 'Stock deleted.',
-        ]);
+            ->get()
+            ->map(fn (StockHolding $holding): array => $this->holdingPayload($holding))
+            ->all();
     }
 
     /**
@@ -143,14 +80,6 @@ class AdminDepotHoldingController extends Controller
             return null;
         }
 
-        return $this->depotPayload($depot);
-    }
-
-    /**
-     * @return array{id: int, name: string, account_balance: string, is_active: bool}
-     */
-    private function depotPayload(Depot $depot): array
-    {
         return [
             'id' => $depot->id,
             'name' => $depot->name,
@@ -357,65 +286,5 @@ class AdminDepotHoldingController extends Controller
         }
 
         return Carbon::parse((string) $value, 'UTC')->toIso8601String();
-    }
-
-    /**
-     * @return array{symbol: string, name?: string, isin?: string, wkn?: string, exchange?: string, mic_code?: string, instrument_type?: string, country?: string, currency?: string}
-     */
-    private function validatedHoldingData(Request $request): array
-    {
-        $request->merge([
-            'symbol' => $request->filled('symbol') ? Str::upper(trim((string) $request->input('symbol'))) : null,
-            'name' => $request->filled('name') ? trim((string) $request->input('name')) : null,
-            'isin' => $request->filled('isin') ? Str::upper(trim((string) $request->input('isin'))) : null,
-            'wkn' => $request->filled('wkn') ? Str::upper(trim((string) $request->input('wkn'))) : null,
-            'exchange' => $request->filled('exchange') ? trim((string) $request->input('exchange')) : null,
-            'mic_code' => $request->filled('mic_code') ? Str::upper(trim((string) $request->input('mic_code'))) : null,
-            'instrument_type' => $request->filled('instrument_type') ? trim((string) $request->input('instrument_type')) : null,
-            'country' => $request->filled('country') ? trim((string) $request->input('country')) : null,
-            'currency' => $request->filled('currency') ? Str::upper(trim((string) $request->input('currency'))) : null,
-        ]);
-
-        return $request->validate([
-            'symbol' => ['required', 'string', 'max:32'],
-            'name' => ['nullable', 'string', 'max:255'],
-            'isin' => [
-                'nullable',
-                'string',
-                'size:12',
-                Rule::unique(StockHolding::class, 'isin'),
-            ],
-            'wkn' => [
-                'nullable',
-                'string',
-                'size:6',
-                Rule::unique(StockHolding::class, 'wkn'),
-            ],
-            'exchange' => ['nullable', 'string', 'max:255'],
-            'mic_code' => ['nullable', 'string', 'max:32'],
-            'instrument_type' => ['nullable', 'string', 'max:255'],
-            'country' => ['nullable', 'string', 'max:255'],
-            'currency' => ['nullable', 'string', 'max:8'],
-        ]);
-    }
-
-    /**
-     * @param  array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}  $progress
-     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}
-     */
-    private function refreshPayload(array $progress): array
-    {
-        return [
-            'refresh_id' => $progress['refresh_id'],
-            'status' => $progress['status'],
-            'processed' => $progress['processed'],
-            'total' => $progress['total'],
-            'step' => $progress['step'],
-            'message' => $progress['message'],
-            'current' => $progress['current'],
-            'started_at' => $progress['started_at'],
-            'finished_at' => $progress['finished_at'],
-            'error' => $progress['error'],
-        ];
     }
 }

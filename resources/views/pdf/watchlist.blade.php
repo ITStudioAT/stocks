@@ -57,7 +57,7 @@
     <title>Watch-list Report</title>
     <style>
         @page {
-            margin: 118px 34px 64px 34px;
+            margin: 34px;
         }
 
         * {
@@ -72,11 +72,7 @@
         }
 
         header {
-            position: fixed;
-            top: -94px;
-            left: 0;
-            right: 0;
-            height: 86px;
+            margin-bottom: 12px;
         }
 
         .masthead {
@@ -107,11 +103,7 @@
         }
 
         footer {
-            position: fixed;
-            bottom: -46px;
-            left: 0;
-            right: 0;
-            height: 30px;
+            margin-top: 18px;
             color: #94a3b8;
             font-size: 8px;
             border-top: 1px solid #e2e8f0;
@@ -120,18 +112,6 @@
 
         footer .left {
             float: left;
-        }
-
-        footer .right {
-            float: right;
-        }
-
-        .pagenum:before {
-            content: counter(page);
-        }
-
-        .pagecount:before {
-            content: counter(pages);
         }
 
         .summary {
@@ -150,43 +130,46 @@
 
         .card {
             border: 1px solid #e2e8f0;
-            border-radius: 6px;
             margin-bottom: 12px;
             page-break-inside: avoid;
-            overflow: hidden;
         }
 
-        .card-head {
-            width: 100%;
-            border-collapse: collapse;
+        .instrument-row {
             background: #f8fafc;
             border-bottom: 1px solid #e2e8f0;
+            padding: 9px 12px;
         }
 
-        .card-head td {
-            padding: 9px 14px;
-            vertical-align: top;
+        .instrument-main {
+            float: left;
+            width: 70%;
         }
 
-        .card-head .symbol {
+        .latest-price-cell {
+            float: right;
+            width: 28%;
+            text-align: right;
+        }
+
+        .clear {
+            clear: both;
+        }
+
+        .symbol {
             font-size: 15px;
             font-weight: 700;
             color: #0f172a;
         }
 
-        .card-head .name {
+        .name {
             font-size: 10px;
             color: #475569;
         }
 
-        .card-head .ids {
+        .ids {
             font-size: 8px;
             color: #94a3b8;
             margin-top: 2px;
-        }
-
-        .card-head .price-cell {
-            text-align: right;
         }
 
         .price-value {
@@ -229,19 +212,21 @@
             color: #3730a3;
         }
 
-        table.facts {
-            width: 100%;
-            border-collapse: collapse;
-        }
-
-        table.facts td {
-            padding: 5px 14px;
+        .fact-cell {
+            display: inline-block;
+            padding: 5px 10px;
             border-top: 1px solid #f1f5f9;
-            vertical-align: top;
-            width: 25%;
+            width: 22.8%;
         }
 
-        table.facts .label {
+        .fact-wide {
+            display: inline-block;
+            padding: 5px 10px;
+            border-top: 1px solid #f1f5f9;
+            width: 47.8%;
+        }
+
+        .label {
             display: block;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -250,29 +235,29 @@
             margin-bottom: 1px;
         }
 
-        table.facts .value {
+        .value {
             font-size: 9px;
             color: #1f2933;
         }
 
         .prices {
-            padding: 8px 14px 10px;
             border-top: 1px solid #e2e8f0;
             background: #fbfcfe;
+            padding: 8px 10px 10px;
         }
 
-        .prices .section-title {
+        .section-title {
             text-transform: uppercase;
             letter-spacing: 1px;
             font-size: 7px;
             color: #0f766e;
             font-weight: 700;
-            margin-bottom: 5px;
         }
 
         table.price-history {
             width: 100%;
             border-collapse: collapse;
+            margin-top: 5px;
         }
 
         table.price-history th {
@@ -291,8 +276,11 @@
             border-bottom: 1px solid #f1f5f9;
         }
 
-        table.price-history td.num {
+        table.price-history .num {
             text-align: right;
+        }
+
+        table.price-history td.num {
             font-weight: 700;
             color: #0f172a;
         }
@@ -301,6 +289,7 @@
             font-size: 9px;
             color: #94a3b8;
             font-style: italic;
+            background: #fbfcfe;
         }
 
         .no-holdings {
@@ -325,11 +314,6 @@
             </div>
         </div>
     </header>
-
-    <footer>
-        <span class="left">Watch-list Report · {{ $generatedAt->copy()->setTimezone('Europe/Vienna')->format('d.m.Y H:i') }}</span>
-        <span class="right">Page <span class="pagenum"></span> / <span class="pagecount"></span></span>
-    </footer>
 
     <main>
         <div class="summary">
@@ -356,55 +340,44 @@
                 $recentPrices = $holding['recent_prices'] ?? [];
             @endphp
             <div class="card">
-                <table class="card-head">
-                    <tr>
-                        <td>
-                            <span class="symbol">{{ $holding['symbol'] ?: '–' }}</span>
-                            @if ($statusLabel)
-                                &nbsp;<span class="status-pill">{{ $statusLabel }}</span>
-                            @endif
-                            <div class="name">{{ $holding['name'] ?: '—' }}</div>
-                            <div class="ids">
-                                ISIN: {{ $holding['isin'] ?: '–' }} &nbsp;·&nbsp;
-                                WKN: {{ $holding['wkn'] ?: '–' }}
-                            </div>
-                        </td>
-                        <td class="price-cell">
-                            <div class="price-value">{{ $formatPrice($holding['latest_price'] ?? null, $holding['currency'] ?? null) }}</div>
-                            @if ($badgeClass && $changeLabel)
-                                <span class="badge {{ $badgeClass }}">{{ $changeLabel }}</span>
-                            @endif
-                        </td>
-                    </tr>
-                </table>
+                <div class="instrument-row">
+                    <div class="instrument-main">
+                        <span class="symbol">{{ $holding['symbol'] ?: '–' }}</span>
+                        @if ($statusLabel)
+                            &nbsp;<span class="status-pill">{{ $statusLabel }}</span>
+                        @endif
+                        <div class="name">{{ $holding['name'] ?: '—' }}</div>
+                        <div class="ids">
+                            ISIN: {{ $holding['isin'] ?: '–' }} &nbsp;·&nbsp;
+                            WKN: {{ $holding['wkn'] ?: '–' }}
+                        </div>
+                    </div>
+                    <div class="latest-price-cell">
+                        <div class="price-value">{{ $formatPrice($holding['latest_price'] ?? null, $holding['currency'] ?? null) }}</div>
+                        @if ($badgeClass && $changeLabel)
+                            <span class="badge {{ $badgeClass }}">{{ $changeLabel }}</span>
+                        @endif
+                    </div>
+                    <div class="clear"></div>
+                </div>
 
-                <table class="facts">
-                    <tr>
-                        <td><span class="label">Exchange</span><span class="value">{{ $holding['exchange'] ?: '–' }}</span></td>
-                        <td><span class="label">Venue</span><span class="value">{{ $holding['venue'] ?: '–' }}</span></td>
-                        <td><span class="label">MIC</span><span class="value">{{ $holding['mic_code'] ?: '–' }}</span></td>
-                        <td><span class="label">Currency</span><span class="value">{{ $holding['currency'] ?: '–' }}</span></td>
-                    </tr>
-                    <tr>
-                        <td><span class="label">Instrument type</span><span class="value">{{ $holding['instrument_type'] ?: '–' }}</span></td>
-                        <td><span class="label">Country</span><span class="value">{{ $holding['country'] ?: '–' }}</span></td>
-                        <td><span class="label">Price type</span><span class="value">{{ $holding['price_type'] ?: '–' }}</span></td>
-                        <td><span class="label">Spread %</span><span class="value">{{ $holding['price_spread_pct'] !== null ? number_format((float) $holding['price_spread_pct'], 4).'%' : '–' }}</span></td>
-                    </tr>
-                    <tr>
-                        <td><span class="label">Start price</span><span class="value">{{ $formatPrice($holding['start_price'] ?? null, $holding['currency'] ?? null) }}</span></td>
-                        <td><span class="label">End price</span><span class="value">{{ $formatPrice($holding['end_price'] ?? null, $holding['currency'] ?? null) }}</span></td>
-                        <td><span class="label">Source time</span><span class="value">{{ $formatDateTime($holding['latest_price_as_of'] ?? null) }}</span></td>
-                        <td><span class="label">Fetched</span><span class="value">{{ $formatDateTime($holding['latest_price_fetched_at'] ?? null) }}</span></td>
-                    </tr>
-                    <tr>
-                        <td colspan="2"><span class="label">Source</span><span class="value">{{ $holding['latest_price_source'] ?: '–' }}</span></td>
-                        <td colspan="2"><span class="label">Trading times</span><span class="value">{{ $holding['trading_times'] ?: '–' }}</span></td>
-                    </tr>
-                </table>
+                <div class="fact-cell"><span class="label">Exchange</span><span class="value">{{ $holding['exchange'] ?: '–' }}</span></div>
+                <div class="fact-cell"><span class="label">Venue</span><span class="value">{{ $holding['venue'] ?: '–' }}</span></div>
+                <div class="fact-cell"><span class="label">MIC</span><span class="value">{{ $holding['mic_code'] ?: '–' }}</span></div>
+                <div class="fact-cell"><span class="label">Currency</span><span class="value">{{ $holding['currency'] ?: '–' }}</span></div>
+                <div class="fact-cell"><span class="label">Instrument type</span><span class="value">{{ $holding['instrument_type'] ?: '–' }}</span></div>
+                <div class="fact-cell"><span class="label">Country</span><span class="value">{{ $holding['country'] ?: '–' }}</span></div>
+                <div class="fact-cell"><span class="label">Price type</span><span class="value">{{ $holding['price_type'] ?: '–' }}</span></div>
+                <div class="fact-cell"><span class="label">Spread %</span><span class="value">{{ $holding['price_spread_pct'] !== null ? number_format((float) $holding['price_spread_pct'], 4).'%' : '–' }}</span></div>
+                <div class="fact-cell"><span class="label">Start price</span><span class="value">{{ $formatPrice($holding['start_price'] ?? null, $holding['currency'] ?? null) }}</span></div>
+                <div class="fact-cell"><span class="label">End price</span><span class="value">{{ $formatPrice($holding['end_price'] ?? null, $holding['currency'] ?? null) }}</span></div>
+                <div class="fact-cell"><span class="label">Source time</span><span class="value">{{ $formatDateTime($holding['latest_price_as_of'] ?? null) }}</span></div>
+                <div class="fact-cell"><span class="label">Fetched</span><span class="value">{{ $formatDateTime($holding['latest_price_fetched_at'] ?? null) }}</span></div>
+                <div class="fact-wide"><span class="label">Source</span><span class="value">{{ $holding['latest_price_source'] ?: '–' }}</span></div>
+                <div class="fact-wide"><span class="label">Trading times</span><span class="value">{{ $holding['trading_times'] ?: '–' }}</span></div>
 
                 <div class="prices">
-                    <div class="section-title">Prices · last 24 hours ({{ count($recentPrices) }})</div>
+                    <span class="section-title">Prices · last 24 hours ({{ count($recentPrices) }})</span>
                     @if (count($recentPrices) > 0)
                         <table class="price-history">
                             <thead>
@@ -412,7 +385,7 @@
                                     <th style="width: 30%;">Time (Europe/Vienna)</th>
                                     <th style="width: 30%;">Source</th>
                                     <th style="width: 20%;">Type</th>
-                                    <th style="width: 20%; text-align: right;">Price</th>
+                                    <th class="num" style="width: 20%;">Price</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -427,7 +400,7 @@
                             </tbody>
                         </table>
                     @else
-                        <span class="empty-prices">No stored prices in the last 24 hours.</span>
+                        <div class="empty-prices">No stored prices in the last 24 hours.</div>
                     @endif
                 </div>
             </div>
@@ -435,5 +408,9 @@
             <div class="no-holdings">No stocks in the watch-list.</div>
         @endforelse
     </main>
+
+    <footer>
+        <span class="left">Watch-list Report · {{ $generatedAt->copy()->setTimezone('Europe/Vienna')->format('d.m.Y H:i') }}</span>
+    </footer>
 </body>
 </html>

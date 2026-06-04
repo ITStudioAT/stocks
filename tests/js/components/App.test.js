@@ -26,6 +26,9 @@ function jsonResponse(data) {
 function priceRefreshSettings(overrides = {}) {
     return {
         trading_interval_minutes: 20,
+        trading_starts_before_minutes: 5,
+        trading_ends_after_minutes: 10,
+        closed_refresh_enabled: true,
         closed_interval_minutes: 60,
         last_refreshed_at: '2026-06-02T12:20:00+00:00',
         next_refresh_at: '2026-06-02T12:40:00+00:00',
@@ -135,6 +138,14 @@ describe('App', () => {
                             price_spread_pct: '0.050000',
                             recent_prices: [
                                 {
+                                    id: 10,
+                                    price: '305.55000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T15:10:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
                                     id: 11,
                                     price: '306.32001000',
                                     currency: 'EUR',
@@ -143,10 +154,18 @@ describe('App', () => {
                                     price_type: 'calculated_median',
                                 },
                                 {
-                                    id: 10,
-                                    price: '305.55000000',
+                                    id: 12,
+                                    price: '306.32001000',
                                     currency: 'EUR',
-                                    as_of: '2026-06-03T15:10:00+00:00',
+                                    as_of: '2026-06-03T15:45:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 13,
+                                    price: '304.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T15:50:00+00:00',
                                     source_name: 'Tradegate Exchange',
                                     price_type: 'calculated_median',
                                 },
@@ -264,6 +283,7 @@ describe('App', () => {
 
     it('shows the watch-list stocks on the dashboard', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
+        let currentPriceRefreshSettings = priceRefreshSettings();
         const fetchMock = vi.fn((path, options) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -349,6 +369,14 @@ describe('App', () => {
                             price_spread_pct: '0.050000',
                             recent_prices: [
                                 {
+                                    id: 10,
+                                    price: '305.55000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T15:10:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
                                     id: 11,
                                     price: '306.32001000',
                                     currency: 'EUR',
@@ -357,10 +385,18 @@ describe('App', () => {
                                     price_type: 'calculated_median',
                                 },
                                 {
-                                    id: 10,
-                                    price: '305.55000000',
+                                    id: 12,
+                                    price: '306.32001000',
                                     currency: 'EUR',
-                                    as_of: '2026-06-03T15:10:00+00:00',
+                                    as_of: '2026-06-03T15:45:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 13,
+                                    price: '304.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-03T15:50:00+00:00',
                                     source_name: 'Tradegate Exchange',
                                     price_type: 'calculated_median',
                                 },
@@ -473,25 +509,42 @@ describe('App', () => {
                         from: 1,
                         to: 5,
                     },
-                    price_refresh_settings: priceRefreshSettings(),
+                    price_refresh_settings: currentPriceRefreshSettings,
                 }));
             }
 
             if (path === '/admin/price-refresh-settings' && options?.method === 'PATCH') {
+                currentPriceRefreshSettings = priceRefreshSettings({
+                    trading_interval_minutes: 15,
+                    trading_starts_before_minutes: 8,
+                    trading_ends_after_minutes: 12,
+                    closed_refresh_enabled: true,
+                    closed_interval_minutes: 45,
+                    next_refresh_at: '2026-06-02T12:35:00+00:00',
+                    current_interval_minutes: 15,
+                });
+
                 return Promise.resolve(jsonResponse({
                     message: 'Price refresh schedule updated.',
-                    price_refresh_settings: priceRefreshSettings({
-                        trading_interval_minutes: 15,
-                        closed_interval_minutes: 45,
-                        next_refresh_at: '2026-06-02T12:35:00+00:00',
-                        current_interval_minutes: 15,
-                    }),
+                    price_refresh_settings: currentPriceRefreshSettings,
+                    refresh: {
+                        refresh_id: 'settings-refresh-1',
+                        status: 'queued',
+                        processed: 0,
+                        total: 2,
+                        step: '0/2',
+                        message: '2 stock prices queued for refresh.',
+                        current: null,
+                        started_at: '2026-06-02T12:15:00+00:00',
+                        finished_at: null,
+                        error: null,
+                    },
                 }));
             }
 
             if (path === '/admin/price-refresh-settings') {
                 return Promise.resolve(jsonResponse({
-                    price_refresh_settings: priceRefreshSettings(),
+                    price_refresh_settings: currentPriceRefreshSettings,
                 }));
             }
 
@@ -545,6 +598,24 @@ describe('App', () => {
                     refresh: {
                         refresh_id: 'refresh-1',
                         status: 'running',
+                        processed: 2,
+                        total: 2,
+                        step: '2/2',
+                        message: '2 stock prices refreshed.',
+                        current: null,
+                        started_at: '2026-06-02T12:15:00+00:00',
+                        finished_at: '2026-06-02T12:20:00+00:00',
+                        error: null,
+                    },
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/refresh-prices/settings-refresh-1') {
+                return Promise.resolve(jsonResponse({
+                    message: '2 stock prices refreshed.',
+                    refresh: {
+                        refresh_id: 'settings-refresh-1',
+                        status: 'finished',
                         processed: 2,
                         total: 2,
                         step: '2/2',
@@ -639,6 +710,25 @@ describe('App', () => {
         const recentPriceStrip = wrapper.find('.recent-price-strip');
         expect(recentPriceStrip.text()).toContain('17:10');
         expect(recentPriceStrip.text()).not.toContain('03.06.2026');
+        const expandedRecentPriceItems = recentPriceStrip.findAll('.recent-price-item');
+        expect(expandedRecentPriceItems[0].text()).toContain('305.55');
+        expect(expandedRecentPriceItems[0].text()).toContain('17:10');
+        expect(expandedRecentPriceItems[1].text()).toContain('306.32001');
+        expect(expandedRecentPriceItems[1].text()).toContain('17:35');
+        expect(expandedRecentPriceItems[2].text()).toContain('306.32001');
+        expect(expandedRecentPriceItems[2].text()).toContain('17:45');
+        expect(expandedRecentPriceItems[3].text()).toContain('304');
+        expect(expandedRecentPriceItems[3].text()).toContain('17:50');
+        expect(expandedRecentPriceItems[0].find('.recent-price-trend').text()).toBe('=');
+        expect(expandedRecentPriceItems[0].find('.recent-price-trend').classes()).toContain('text-medium-emphasis');
+        expect(expandedRecentPriceItems[1].find('.recent-price-trend').text()).toBe('↑');
+        expect(expandedRecentPriceItems[1].find('.recent-price-trend').classes()).toContain('text-success');
+        expect(expandedRecentPriceItems[1].text().indexOf('17:35')).toBeLessThan(
+            expandedRecentPriceItems[1].text().indexOf('↑'),
+        );
+        expect(expandedRecentPriceItems[2].find('.recent-price-trend').text()).toBe('=');
+        expect(expandedRecentPriceItems[3].find('.recent-price-trend').text()).toBe('↓');
+        expect(expandedRecentPriceItems[3].find('.recent-price-trend').classes()).toContain('text-error');
 
         await wrapper.find('.stock-holding-row').trigger('click');
         await flushPromises();
@@ -666,10 +756,27 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Updates');
         expect(wrapper.text()).toContain('Automatic price refresh');
         expect(wrapper.text()).toContain('Current interval: 20 min');
+        expect(wrapper.text()).toContain('Edit');
+        expect(wrapper.text()).toContain('During trading');
+        expect(wrapper.text()).toContain('Start before trading');
+        expect(wrapper.text()).toContain('End after trading');
+        expect(wrapper.text()).toContain('Outside trading');
+        expect(wrapper.text()).toContain('Outside trading interval');
 
-        const scheduleInputs = wrapper.find('#price-refresh-schedule-form').findAll('input');
+        expect(wrapper.find('#price-refresh-schedule-form').findAll('input')).toHaveLength(0);
+
+        const editScheduleButton = wrapper.findAll('button').find((button) => button.text().includes('Edit'));
+        await editScheduleButton.trigger('click');
+        await flushPromises();
+
+        const scheduleInputs = wrapper.find('#price-refresh-schedule-form').findAll('input[type="number"]');
+        expect(scheduleInputs).toHaveLength(4);
+        expect(wrapper.text()).toContain('Save');
+
         await scheduleInputs[0].setValue('15');
-        await scheduleInputs[1].setValue('45');
+        await scheduleInputs[1].setValue('8');
+        await scheduleInputs[2].setValue('12');
+        await scheduleInputs[3].setValue('45');
         await wrapper.find('#price-refresh-schedule-form').trigger('submit');
         await flushPromises();
 
@@ -677,11 +784,16 @@ describe('App', () => {
             method: 'PATCH',
             body: JSON.stringify({
                 trading_interval_minutes: 15,
+                trading_starts_before_minutes: 8,
+                trading_ends_after_minutes: 12,
+                closed_refresh_enabled: true,
                 closed_interval_minutes: 45,
             }),
         }));
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/refresh-prices/settings-refresh-1', expect.any(Object));
         expect(wrapper.text()).toContain('Price refresh schedule updated.');
         expect(wrapper.text()).toContain('Current interval: 15 min');
+        expect(wrapper.text()).toContain('Edit');
 
         wrapper.vm.navigateSection('dashboard');
         await flushPromises();
@@ -694,7 +806,7 @@ describe('App', () => {
             method: 'POST',
         }));
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/refresh-prices/refresh-1', expect.any(Object));
-        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1')).toHaveLength(2);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1')).toHaveLength(3);
         expect(wrapper.text()).not.toContain('2 stock prices refreshed.');
         expect(wrapper.text()).not.toContain('Price refresh: 2/2');
 
