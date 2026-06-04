@@ -17,6 +17,8 @@ class StockHoldingFactory extends Factory
      */
     public function definition(): array
     {
+        $latestPrice = $this->faker->randomFloat(6, 10, 500);
+
         return [
             'symbol' => strtoupper($this->faker->unique()->bothify('???')),
             'name' => $this->faker->company(),
@@ -27,7 +29,8 @@ class StockHoldingFactory extends Factory
             'instrument_type' => 'Common Stock',
             'country' => 'United States',
             'currency' => 'USD',
-            'latest_price' => $this->faker->randomFloat(6, 10, 500),
+            'latest_price' => $latestPrice,
+            'flatex_price' => $latestPrice,
             'latest_price_fetched_at' => now(),
             'latest_price_source' => 'AI SDK web search',
             'latest_price_source_url' => 'https://example.com/market-data',

@@ -870,10 +870,13 @@ describe('App', () => {
         expect(dashboardHeaders[6]).not.toContain('Day before yesterday');
         expect(dashboardHeaders[7]).toBe('Source time');
         expect(dashboardHeaders[8]).toBe('Actions');
+        const appBarStatusText = wrapper.get('.app-bar-status').text();
+        expect(appBarStatusText).toContain('EODHD API');
+        expect(appBarStatusText).toContain('Hour 988 / 1,000 Used 12');
+        expect(appBarStatusText).toContain('Day 98,805 / 100,000 Used 1,195');
         expect(wrapper.text()).toContain('Watch-list');
-        expect(wrapper.text()).toContain('EODHD API');
-        expect(wrapper.text()).toContain('988 / 1,000');
-        expect(wrapper.text()).toContain('98,805 / 100,000');
+        expect(wrapper.html().indexOf('EODHD API')).toBeLessThan(wrapper.html().indexOf('Watch-list'));
+        expect(wrapper.text()).not.toContain('Free calls remaining');
         expect(wrapper.text()).toContain('Depot');
         expect(wrapper.text()).toContain('Long term depot');
         expect(wrapper.text()).toContain('AAPL');
@@ -1509,7 +1512,21 @@ describe('App', () => {
                 note: 'Initial funding',
             },
         ];
-        const fetchMock = vi.fn((path) => {
+        const depotHoldings = [
+            {
+                id: 1,
+                symbol: 'AAPL',
+                name: 'Apple Inc.',
+                currency: 'USD',
+                latest_price: '191.500000',
+                flatex_price: '191.500000',
+                year_start_price: '175.00000000',
+                latest_price_fetched_at: '2026-06-04T10:00:00+00:00',
+                latest_price_status: 'fresh',
+                position_pieces: '2.00000000',
+            },
+        ];
+        const fetchMock = vi.fn((path, options = {}) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
                     user: {
@@ -1529,7 +1546,17 @@ describe('App', () => {
             }
 
             if (path === '/admin/depot-transactions') {
-                return Promise.resolve(jsonResponse({ transactions }));
+                return Promise.resolve(jsonResponse({ depot_holdings: depotHoldings, transactions }));
+            }
+
+            if (path === '/admin/watchlist/holdings/1/flatex-price' && options.method === 'PATCH') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Flatex price updated.',
+                    holding: {
+                        id: 1,
+                        flatex_price: '180.250000',
+                    },
+                }));
             }
 
             if (path === '/admin/watchlist/holdings?page=1') {
@@ -1559,12 +1586,84 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
+        expect(wrapper.text()).toContain('Depot stocks');
+        expect(wrapper.text()).toContain('Depot balance');
+        expect(wrapper.text()).toContain('383.00 EUR');
+        expect(wrapper.text()).toContain('Cash balance');
+        expect(wrapper.text()).toContain('650.00 EUR');
+        expect(wrapper.text()).toContain('Account balance');
+        expect(wrapper.text()).toContain('1,033.00 EUR');
+        expect(wrapper.text()).toContain('Balance 01.01.');
+        expect(wrapper.text()).toContain('1,000.00 EUR');
+        expect(wrapper.text()).toContain('Balance 04.06.');
+        expect(wrapper.text()).toContain('+3.30% · +33.00 EUR');
+        expect(wrapper.text()).toContain('Symbol');
+        expect(wrapper.text()).toContain('Name');
+        expect(wrapper.text()).toContain('Amount');
+        expect(wrapper.text()).toContain('Value');
+        expect(wrapper.text()).toContain('Latest price');
+        expect(wrapper.text()).toContain('Flatex price');
+        expect(wrapper.text()).toContain('1.1.');
+        expect(wrapper.text()).toContain('Change');
+        expect(wrapper.text()).toContain('+/- EUR');
+        expect(wrapper.text()).toContain('Actions');
+        const rightAlignedDepotHeaders = wrapper
+            .findAll('th.text-right')
+            .map((header) => header.text());
+        expect(rightAlignedDepotHeaders).toContain('Latest price');
+        expect(rightAlignedDepotHeaders).toContain('Value');
+        expect(rightAlignedDepotHeaders).toContain('Flatex price');
+        expect(rightAlignedDepotHeaders).toContain('1.1.');
+        expect(rightAlignedDepotHeaders).toContain('Change');
+        expect(rightAlignedDepotHeaders).toContain('+/- EUR');
+        expect(wrapper.text()).toContain('AAPL');
+        expect(wrapper.text()).toContain('2');
+        expect(wrapper.text()).toContain('383.00 USD');
+        expect(wrapper.text()).toContain('191.50 USD');
+        expect(wrapper.text()).toContain('175.00 USD');
+        expect(wrapper.text()).toContain('↑');
+        expect(wrapper.text()).toContain('+9.43%');
+        expect(wrapper.text()).toContain('+33.00');
+        expect(wrapper.text()).toContain('Sum');
         expect(wrapper.text()).toContain('Cash ledger');
-        expect(wrapper.text()).toContain('buy');
+        expect(wrapper.text()).toContain('Buy');
         expect(wrapper.text()).toContain('Apple Inc.');
-        expect(wrapper.text()).toContain('deposit');
+        expect(wrapper.text()).toContain('Add cash');
         expect(wrapper.text()).toContain('+1,000.00');
         expect(wrapper.text()).toContain('-350.00');
+
+        const flatexPriceButton = wrapper.findAll('button').find((button) => button.text() === '191.50 USD');
+        expect(flatexPriceButton).toBeTruthy();
+
+        await flatexPriceButton.trigger('click');
+        await flushPromises();
+
+        const flatexPriceInput = wrapper.find('input.flatex-price-input');
+        expect(flatexPriceInput.exists()).toBe(true);
+
+        await flatexPriceInput.setValue('180.25');
+        await flatexPriceInput.trigger('keydown.enter');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/1/flatex-price', expect.objectContaining({
+            method: 'PATCH',
+            body: JSON.stringify({ flatex_price: 180.25 }),
+        }));
+        expect(wrapper.text()).toContain('180.25 USD');
+
+        const updatedFlatexPriceButton = wrapper.findAll('button').find((button) => button.text() === '180.25 USD');
+        expect(updatedFlatexPriceButton).toBeTruthy();
+
+        await updatedFlatexPriceButton.trigger('click');
+        await flushPromises();
+
+        const abortedFlatexPriceInput = wrapper.find('input.flatex-price-input');
+        await abortedFlatexPriceInput.setValue('170.25');
+        await abortedFlatexPriceInput.trigger('keydown.esc');
+        await flushPromises();
+
+        expect(wrapper.text()).toContain('180.25 USD');
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings/1/flatex-price')).toHaveLength(1);
     });
 
     it('clears the historical fetching app bar status after the queued job finishes', async () => {

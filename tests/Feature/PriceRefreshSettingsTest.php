@@ -145,6 +145,34 @@ class PriceRefreshSettingsTest extends TestCase
         Queue::assertNothingPushed();
     }
 
+    public function test_next_refresh_uses_next_trading_window_when_outside_trading_is_disabled(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-04 19:13:00', 'Europe/Vienna'));
+        StockHolding::factory()->create([
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
+        ]);
+        AppConfig::query()->create([
+            'key' => 'price_refresh.schedule',
+            'value' => [
+                'trading_interval_minutes' => 10,
+                'trading_starts_before_minutes' => 60,
+                'trading_ends_after_minutes' => 60,
+                'closed_refresh_enabled' => false,
+                'closed_interval_minutes' => 120,
+                'last_refreshed_at' => '2026-06-04T19:13:00+02:00',
+                'next_refresh_at' => '2026-06-04T21:13:00+02:00',
+            ],
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/price-refresh-settings')
+            ->assertOk()
+            ->assertJsonPath('price_refresh_settings.is_trading_time', false)
+            ->assertJsonPath('price_refresh_settings.closed_refresh_enabled', false)
+            ->assertJsonPath('price_refresh_settings.next_refresh_at', '2026-06-05T08:00:00+02:00');
+    }
+
     public function test_due_price_refresh_command_dispatches_the_watchlist_refresh_job(): void
     {
         Queue::fake();

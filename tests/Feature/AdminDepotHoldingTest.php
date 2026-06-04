@@ -82,7 +82,12 @@ class AdminDepotHoldingTest extends TestCase
     public function test_admin_can_list_exchange_trading_times_from_eodhd(): void
     {
         Cache::flush();
-        config(['services.eodhd.key' => 'test-token']);
+        config([
+            'services.eodhd.key' => 'test-token',
+            'services.eodhd.calls_per_hour' => 1000,
+            'services.eodhd.calls_per_day' => 100000,
+            'services.eodhd.calls_used_today' => 0,
+        ]);
 
         Http::fake([
             'eodhd.com/api/exchange-details/XETRA*' => Http::response([
@@ -131,7 +136,11 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('exchange_trading_times.0.close_utc', '15:30:00')
             ->assertJsonPath('exchange_trading_times.0.working_days', 'Mon,Tue,Wed,Thu,Fri')
             ->assertJsonPath('exchange_trading_times.0.is_open', false)
-            ->assertJsonPath('exchange_trading_times.0.error', null);
+            ->assertJsonPath('exchange_trading_times.0.error', null)
+            ->assertJsonPath('eodhd_api_usage.hour.used', 1)
+            ->assertJsonPath('eodhd_api_usage.hour.remaining', 999)
+            ->assertJsonPath('eodhd_api_usage.day.used', 1)
+            ->assertJsonPath('eodhd_api_usage.day.remaining', 99999);
 
         Http::assertSentCount(1);
     }
@@ -1026,6 +1035,43 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonValidationErrors('symbol');
     }
 
+    public function test_admin_can_update_a_holding_flatex_price(): void
+    {
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create([
+            'latest_price' => '191.500000',
+            'flatex_price' => '191.500000',
+        ]);
+
+        $this->actingAs($admin)
+            ->patchJson("/admin/watchlist/holdings/{$holding->id}/flatex-price", [
+                'flatex_price' => '180.250000',
+            ])
+            ->assertOk()
+            ->assertJsonPath('message', 'Flatex price updated.')
+            ->assertJsonPath('holding.id', $holding->id)
+            ->assertJsonPath('holding.flatex_price', '180.250000');
+
+        $this->assertSame('180.250000', $holding->refresh()->flatex_price);
+    }
+
+    public function test_admin_must_provide_a_valid_flatex_price(): void
+    {
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create([
+            'flatex_price' => '191.500000',
+        ]);
+
+        $this->actingAs($admin)
+            ->patchJson("/admin/watchlist/holdings/{$holding->id}/flatex-price", [
+                'flatex_price' => -1,
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('flatex_price');
+
+        $this->assertSame('191.500000', $holding->refresh()->flatex_price);
+    }
+
     public function test_admin_can_delete_a_watchlist_holding(): void
     {
         $admin = $this->adminUser();
@@ -1107,6 +1153,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->postJson('/admin/watchlist/holdings', ['symbol' => 'AAPL'])->assertUnauthorized();
         $this->postJson('/admin/watchlist/holdings/refresh-prices')->assertUnauthorized();
         $this->getJson('/admin/watchlist/holdings/refresh-prices/example')->assertUnauthorized();
+        $this->patchJson('/admin/watchlist/holdings/1/flatex-price', ['flatex_price' => '180.25'])->assertUnauthorized();
         $this->deleteJson('/admin/watchlist/holdings/1')->assertUnauthorized();
     }
 

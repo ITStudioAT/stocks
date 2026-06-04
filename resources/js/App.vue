@@ -19,6 +19,7 @@ const {
     activeDepot,
     depots,
     holdings,
+    depotHoldings,
     transactions,
     exchangeTradingTimes,
     eodhdApiUsage,
@@ -107,6 +108,9 @@ const historicalPriceFetchTimer = ref(null);
 const isHistoricalPriceFetchPolling = ref(false);
 const cashTransactionForm = ref(emptyCashTransactionForm());
 const stockTransactionForm = ref(emptyStockTransactionForm());
+const editingFlatexHoldingId = ref(null);
+const flatexPriceEditValue = ref('');
+const flatexPriceEditInput = ref(null);
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
@@ -1052,6 +1056,10 @@ function transactionTypeColor(type) {
     return { deposit: 'success', withdrawal: 'error', buy: 'warning', sell: 'teal' }[type] ?? 'default';
 }
 
+function transactionTypeLabel(type) {
+    return { deposit: 'Add cash', withdrawal: 'Withdraw', buy: 'Buy', sell: 'Sell' }[type] ?? type;
+}
+
 function formatCashDelta(value) {
     const num = Number(value);
     const prefix = num > 0 ? '+' : '';
@@ -1076,6 +1084,101 @@ function formatEodhdUsageReset(value) {
 
 function formatDepotCashBalance() {
     return `${formatAccountBalance(activeDepot.value?.account_balance)} EUR`;
+}
+
+function depotStockBalance() {
+    return depotHoldings.value.reduce((sum, holding) => {
+        const latestPrice = Number(holding.latest_price);
+        const pieces = Number(holding.position_pieces ?? 0);
+
+        if (Number.isNaN(latestPrice) || Number.isNaN(pieces)) {
+            return sum;
+        }
+
+        return sum + (latestPrice * pieces);
+    }, 0);
+}
+
+function depotYearStartStockBalance() {
+    return depotHoldings.value.reduce((sum, holding) => {
+        const yearStartPrice = Number(holding.year_start_price);
+        const pieces = Number(holding.position_pieces ?? 0);
+
+        if (Number.isNaN(yearStartPrice) || Number.isNaN(pieces)) {
+            return sum;
+        }
+
+        return sum + (yearStartPrice * pieces);
+    }, 0);
+}
+
+function formatDepotStockBalance() {
+    return `${formatAccountBalance(depotStockBalance())} EUR`;
+}
+
+function depotCashBalance() {
+    return Number(activeDepot.value?.account_balance ?? 0);
+}
+
+function formatDepotAccountBalance() {
+    return `${formatAccountBalance(depotCashBalance() + depotStockBalance())} EUR`;
+}
+
+function depotYearStartBalance() {
+    return depotCashBalance() + depotYearStartStockBalance();
+}
+
+function depotCurrentBalance() {
+    return depotCashBalance() + depotStockBalance();
+}
+
+function formatDepotYearStartBalance() {
+    return `${formatAccountBalance(depotYearStartBalance())} EUR`;
+}
+
+function formatDepotCurrentBalance() {
+    return `${formatAccountBalance(depotCurrentBalance())} EUR`;
+}
+
+function depotBalanceChangeAmount() {
+    return depotCurrentBalance() - depotYearStartBalance();
+}
+
+function formatDepotBalanceChangeAmount() {
+    const amount = depotBalanceChangeAmount();
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${formatAccountBalance(amount)} EUR`;
+}
+
+function formatDepotBalanceChangePercent() {
+    const yearStartBalance = depotYearStartBalance();
+
+    if (yearStartBalance === 0) {
+        return '-';
+    }
+
+    const amount = (depotBalanceChangeAmount() / yearStartBalance) * 100;
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${amount.toFixed(2)}%`;
+}
+
+function depotBalanceChangeClass() {
+    const amount = depotBalanceChangeAmount();
+
+    return {
+        'text-success': amount > 0,
+        'text-error': amount < 0,
+        'text-medium-emphasis': amount === 0,
+    };
+}
+
+function formatCurrentDayMonth() {
+    return new Intl.DateTimeFormat('de-AT', {
+        day: '2-digit',
+        month: '2-digit',
+    }).format(new Date());
 }
 
 function formatPositionPieces(holding) {
@@ -1117,6 +1220,59 @@ function formatPriceValue(value, currency) {
     return `${formattedAmount} ${currency}`;
 }
 
+function isEditingFlatexPrice(holding) {
+    return editingFlatexHoldingId.value === holding.id;
+}
+
+function activeFlatexPriceEditInput() {
+    if (Array.isArray(flatexPriceEditInput.value)) {
+        return flatexPriceEditInput.value[0] ?? null;
+    }
+
+    return flatexPriceEditInput.value;
+}
+
+async function startFlatexPriceEdit(holding) {
+    editingFlatexHoldingId.value = holding.id;
+    flatexPriceEditValue.value = holding.flatex_price ?? '';
+    transactionsError.value = '';
+
+    await nextTick();
+
+    const input = activeFlatexPriceEditInput();
+
+    input?.focus();
+    input?.select();
+}
+
+function abortFlatexPriceEdit() {
+    editingFlatexHoldingId.value = null;
+    flatexPriceEditValue.value = '';
+    flatexPriceEditInput.value = null;
+}
+
+async function saveFlatexPriceEdit(holding) {
+    if (!isEditingFlatexPrice(holding)) {
+        return;
+    }
+
+    const rawValue = String(flatexPriceEditValue.value).trim();
+    const flatexPrice = rawValue === '' ? null : Number(rawValue);
+
+    if (flatexPrice !== null && (Number.isNaN(flatexPrice) || flatexPrice < 0)) {
+        transactionsError.value = 'Please enter a valid Flatex price.';
+
+        return;
+    }
+
+    try {
+        await depotsStore.updateHoldingFlatexPrice(holding.id, flatexPrice);
+        abortFlatexPriceEdit();
+    } catch (error) {
+        transactionsError.value = error.message;
+    }
+}
+
 function formatLatestPrice(holding) {
     if (holding.latest_price === null || holding.latest_price === undefined || holding.latest_price === '') {
         if (holding.latest_price_status === 'stale') {
@@ -1127,6 +1283,27 @@ function formatLatestPrice(holding) {
     }
 
     return formatPriceValue(holding.latest_price, holding.currency);
+}
+
+function stockHoldingValue(holding) {
+    const latestPrice = Number(holding.latest_price);
+    const pieces = Number(holding.position_pieces ?? 0);
+
+    if (Number.isNaN(latestPrice) || Number.isNaN(pieces)) {
+        return null;
+    }
+
+    return latestPrice * pieces;
+}
+
+function formatStockHoldingValue(holding) {
+    const value = stockHoldingValue(holding);
+
+    if (value === null) {
+        return '-';
+    }
+
+    return formatPriceValue(value, holding.currency);
 }
 
 function formatLatestPriceChangePercent(holding) {
@@ -1172,6 +1349,136 @@ function formatSessionPriceChangePercent(value, holding) {
     const sign = amount > 0 ? '+' : '';
 
     return `${sign}${amount.toFixed(2)}%`;
+}
+
+function yearStartChangePercent(holding) {
+    if (
+        holding.year_start_price === null
+        || holding.year_start_price === undefined
+        || holding.year_start_price === ''
+        || holding.latest_price === null
+        || holding.latest_price === undefined
+        || holding.latest_price === ''
+    ) {
+        return null;
+    }
+
+    const yearStartPrice = Number(holding.year_start_price);
+    const latestPrice = Number(holding.latest_price);
+
+    if (Number.isNaN(yearStartPrice) || Number.isNaN(latestPrice) || yearStartPrice === 0) {
+        return null;
+    }
+
+    return ((latestPrice - yearStartPrice) / yearStartPrice) * 100;
+}
+
+function yearStartChangeAmount(holding) {
+    if (
+        holding.year_start_price === null
+        || holding.year_start_price === undefined
+        || holding.year_start_price === ''
+        || holding.latest_price === null
+        || holding.latest_price === undefined
+        || holding.latest_price === ''
+    ) {
+        return null;
+    }
+
+    const yearStartPrice = Number(holding.year_start_price);
+    const latestPrice = Number(holding.latest_price);
+    const pieces = Number(holding.position_pieces ?? 0);
+
+    if (Number.isNaN(yearStartPrice) || Number.isNaN(latestPrice) || Number.isNaN(pieces)) {
+        return null;
+    }
+
+    return (latestPrice - yearStartPrice) * pieces;
+}
+
+function formatYearStartChangeAmount(holding) {
+    const amount = yearStartChangeAmount(holding);
+
+    if (amount === null) {
+        return '-';
+    }
+
+    const sign = amount > 0 ? '+' : '';
+    const formattedAmount = new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+    }).format(amount);
+
+    return `${sign}${formattedAmount}`;
+}
+
+function depotHoldingsChangeAmountTotal() {
+    return depotHoldings.value.reduce((sum, holding) => {
+        const amount = yearStartChangeAmount(holding);
+
+        if (amount === null) {
+            return sum;
+        }
+
+        return sum + amount;
+    }, 0);
+}
+
+function formatDepotHoldingsChangeAmountTotal() {
+    const amount = depotHoldingsChangeAmountTotal();
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${formatAccountBalance(amount)}`;
+}
+
+function depotHoldingsChangeAmountTotalClass() {
+    const amount = depotHoldingsChangeAmountTotal();
+
+    return {
+        'text-success': amount > 0,
+        'text-error': amount < 0,
+        'text-medium-emphasis': amount === 0,
+    };
+}
+
+function formatYearStartChangePercent(holding) {
+    const amount = yearStartChangePercent(holding);
+
+    if (amount === null) {
+        return '-';
+    }
+
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${amount.toFixed(2)}%`;
+}
+
+function yearStartChangeSymbol(holding) {
+    const amount = yearStartChangePercent(holding);
+
+    if (amount === null) {
+        return '';
+    }
+
+    if (amount > 0) {
+        return '\u2191';
+    }
+
+    if (amount < 0) {
+        return '\u2193';
+    }
+
+    return '=';
+}
+
+function yearStartChangeClass(holding) {
+    const amount = yearStartChangeAmount(holding);
+
+    return {
+        'text-success': amount !== null && amount > 0,
+        'text-error': amount !== null && amount < 0,
+        'text-medium-emphasis': amount === null || amount === 0,
+    };
 }
 
 function sessionPriceChangeClass(value, holding) {
@@ -1857,6 +2164,19 @@ function emptyPriceRefreshScheduleForm() {
                             />
                             {{ priceRefreshHeaderStatusLabel }}
                         </span>
+                        <span
+                            v-if="eodhdUsageItems.length"
+                            class="d-inline-flex align-center flex-wrap ga-2 text-caption text-medium-emphasis eodhd-header-usage"
+                        >
+                            <span class="font-weight-medium">EODHD API</span>
+                            <span
+                                v-for="item in eodhdUsageItems"
+                                :key="item.key"
+                            >
+                                {{ item.label }} {{ formatInteger(item.usage.remaining) }} / {{ formatInteger(item.usage.limit) }}
+                                Used {{ formatInteger(item.usage.used) }} · Reset {{ formatEodhdUsageReset(item.usage.reset_at) }}
+                            </span>
+                        </span>
                     </div>
                 </v-app-bar-title>
                 <v-spacer />
@@ -1930,34 +2250,6 @@ function emptyPriceRefreshScheduleForm() {
                         <v-alert v-if="holdingError || holdingsError" type="error" variant="tonal" density="compact" class="mb-4">
                             {{ holdingError || holdingsError }}
                         </v-alert>
-                        <v-sheet
-                            v-if="eodhdUsageItems.length"
-                            border
-                            rounded
-                            class="pa-4 mb-4"
-                        >
-                            <div class="d-flex align-center justify-space-between flex-wrap ga-3">
-                                <div>
-                                    <div class="text-caption text-medium-emphasis">EODHD API</div>
-                                    <div class="text-body-2 font-weight-medium">Free calls remaining</div>
-                                </div>
-                                <div class="d-flex flex-wrap ga-4">
-                                    <div
-                                        v-for="item in eodhdUsageItems"
-                                        :key="item.key"
-                                        class="d-flex flex-column"
-                                    >
-                                        <span class="text-caption text-medium-emphasis">{{ item.label }}</span>
-                                        <span class="text-body-2 font-weight-medium">
-                                            {{ formatInteger(item.usage.remaining) }} / {{ formatInteger(item.usage.limit) }}
-                                        </span>
-                                        <span class="text-caption text-medium-emphasis">
-                                            Used {{ formatInteger(item.usage.used) }} · Reset {{ formatEodhdUsageReset(item.usage.reset_at) }}
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                        </v-sheet>
                         <v-table>
                             <thead>
                                 <tr>
@@ -2570,33 +2862,160 @@ function emptyPriceRefreshScheduleForm() {
                             <h1 class="text-h4">{{ activeDepot?.name ?? '–' }}</h1>
                         </div>
 
-                        <v-card v-if="activeDepot" variant="outlined" max-width="480">
-                            <v-table density="compact">
+                        <div v-if="activeDepot" class="d-flex flex-wrap align-start ga-4">
+                            <v-card variant="outlined" width="100%" max-width="480">
+                                <v-table density="compact">
+                                    <tbody>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">Depot balance</td>
+                                            <td>{{ formatDepotStockBalance() }}</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">Cash balance</td>
+                                            <td>{{ formatDepotCashBalance() }}</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">Account balance</td>
+                                            <td>{{ formatDepotAccountBalance() }}</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">Status</td>
+                                            <td>
+                                                <v-chip color="success" density="comfortable" size="x-small" variant="tonal">Active</v-chip>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </v-table>
+                            </v-card>
+
+                            <v-card variant="outlined" width="100%" max-width="480">
+                                <v-table density="compact">
+                                    <tbody>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">Balance 01.01.</td>
+                                            <td>{{ formatDepotYearStartBalance() }}</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">Balance {{ formatCurrentDayMonth() }}</td>
+                                            <td>{{ formatDepotCurrentBalance() }}</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">+/-</td>
+                                            <td>
+                                                <span :class="depotBalanceChangeClass()">
+                                                    {{ formatDepotBalanceChangePercent() }} · {{ formatDepotBalanceChangeAmount() }}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </v-table>
+                            </v-card>
+                        </div>
+
+                        <div v-if="activeDepot" class="mt-6">
+                            <p class="text-overline text-medium-emphasis mb-2">Depot stocks</p>
+                            <v-progress-linear v-if="transactionsLoading" indeterminate class="mb-2" />
+                            <v-alert v-if="transactionsError" type="error" variant="tonal" density="compact" class="mb-2">
+                                {{ transactionsError }}
+                            </v-alert>
+                            <v-table v-if="depotHoldings.length > 0" density="compact">
+                                <thead>
+                                    <tr>
+                                        <th>Symbol</th>
+                                        <th>Name</th>
+                                        <th class="text-right">Amount</th>
+                                        <th class="text-right">Value</th>
+                                        <th class="text-right">Latest price</th>
+                                        <th class="text-right">Flatex price</th>
+                                        <th class="text-right">1.1.</th>
+                                        <th class="text-right">Change</th>
+                                        <th class="text-right">+/- EUR</th>
+                                        <th class="text-right">Actions</th>
+                                    </tr>
+                                </thead>
                                 <tbody>
-                                    <tr>
-                                        <td class="text-medium-emphasis text-caption">Name</td>
-                                        <td>{{ activeDepot.name }}</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="text-medium-emphasis text-caption">Account balance</td>
-                                        <td>{{ formatAccountBalance(activeDepot.account_balance) }} EUR</td>
-                                    </tr>
-                                    <tr>
-                                        <td class="text-medium-emphasis text-caption">Status</td>
-                                        <td>
-                                            <v-chip color="success" density="comfortable" size="x-small" variant="tonal">Active</v-chip>
+                                    <tr v-for="holding in depotHoldings" :key="holding.id">
+                                        <td>{{ holding.symbol || '-' }}</td>
+                                        <td>{{ holding.name || '-' }}</td>
+                                        <td class="text-right">{{ formatPositionPieces(holding) }}</td>
+                                        <td class="text-right">{{ formatStockHoldingValue(holding) }}</td>
+                                        <td class="text-right">{{ formatLatestPrice(holding) }}</td>
+                                        <td class="text-right">
+                                            <input
+                                                v-if="isEditingFlatexPrice(holding)"
+                                                ref="flatexPriceEditInput"
+                                                v-model="flatexPriceEditValue"
+                                                aria-label="Flatex price"
+                                                class="flatex-price-input"
+                                                min="0"
+                                                step="0.000001"
+                                                type="number"
+                                                @keydown.enter.prevent="saveFlatexPriceEdit(holding)"
+                                                @keydown.esc.prevent="abortFlatexPriceEdit"
+                                            >
+                                            <button
+                                                v-else
+                                                type="button"
+                                                class="flatex-price-button"
+                                                @click="startFlatexPriceEdit(holding)"
+                                            >
+                                                {{ formatPriceValue(holding.flatex_price, holding.currency) }}
+                                            </button>
+                                        </td>
+                                        <td class="text-right">{{ formatPriceValue(holding.year_start_price, holding.currency) }}</td>
+                                        <td class="text-right">
+                                            <span class="d-inline-flex align-center justify-end ga-1 font-weight-medium" :class="yearStartChangeClass(holding)">
+                                                <span>{{ yearStartChangeSymbol(holding) }}</span>
+                                                <span>{{ formatYearStartChangePercent(holding) }}</span>
+                                            </span>
+                                        </td>
+                                        <td class="text-right">
+                                            <span class="font-weight-medium" :class="yearStartChangeClass(holding)">
+                                                {{ formatYearStartChangeAmount(holding) }}
+                                            </span>
+                                        </td>
+                                        <td class="text-right">
+                                            <v-btn
+                                                icon
+                                                variant="text"
+                                                color="success"
+                                                aria-label="Buy stock"
+                                                :disabled="!activeDepot || holdingsLoading"
+                                                @click.stop="openStockTransactionDialog(holding, 'buy')"
+                                            >
+                                                <v-icon icon="mdi-cart-plus" />
+                                            </v-btn>
+                                            <v-btn
+                                                icon
+                                                variant="text"
+                                                color="warning"
+                                                aria-label="Sell stock"
+                                                :disabled="!activeDepot || holdingsLoading"
+                                                @click.stop="openStockTransactionDialog(holding, 'sell')"
+                                            >
+                                                <v-icon icon="mdi-cart-minus" />
+                                            </v-btn>
                                         </td>
                                     </tr>
                                 </tbody>
+                                <tfoot>
+                                    <tr>
+                                        <td colspan="8" class="text-right font-weight-bold">Sum</td>
+                                        <td class="text-right">
+                                            <span class="font-weight-bold" :class="depotHoldingsChangeAmountTotalClass()">
+                                                {{ formatDepotHoldingsChangeAmountTotal() }}
+                                            </span>
+                                        </td>
+                                        <td />
+                                    </tr>
+                                </tfoot>
                             </v-table>
-                        </v-card>
+                            <p v-else-if="!transactionsLoading" class="text-medium-emphasis text-body-2 mt-2">No stocks in this depot.</p>
+                        </div>
 
-                        <v-sheet v-if="activeDepot" border rounded class="pa-4 mt-4">
-                            <div class="d-flex align-center justify-space-between flex-wrap ga-3">
-                                <div>
-                                    <div class="text-caption text-medium-emphasis">Depot cash</div>
-                                    <div class="text-h6">{{ formatDepotCashBalance() }}</div>
-                                </div>
+                        <div v-if="activeDepot" class="mt-6">
+                            <div class="d-flex align-center justify-space-between flex-wrap ga-3 mb-2">
+                                <p class="text-overline text-medium-emphasis mb-0">Cash ledger</p>
                                 <div class="d-flex align-center ga-2">
                                     <v-btn
                                         color="success"
@@ -2616,10 +3035,6 @@ function emptyPriceRefreshScheduleForm() {
                                     </v-btn>
                                 </div>
                             </div>
-                        </v-sheet>
-
-                        <div v-if="activeDepot" class="mt-6">
-                            <p class="text-overline text-medium-emphasis mb-2">Cash ledger</p>
                             <v-progress-linear v-if="transactionsLoading" indeterminate class="mb-2" />
                             <v-alert v-if="transactionsError" type="error" variant="tonal" density="compact" class="mb-2">
                                 {{ transactionsError }}
@@ -2641,7 +3056,7 @@ function emptyPriceRefreshScheduleForm() {
                                         <td class="text-caption text-medium-emphasis">{{ formatTransactionDate(tx.booked_at) }}</td>
                                         <td>
                                             <v-chip :color="transactionTypeColor(tx.type)" density="comfortable" size="x-small" variant="tonal">
-                                                {{ tx.type }}
+                                                {{ transactionTypeLabel(tx.type) }}
                                             </v-chip>
                                         </td>
                                         <td>{{ tx.stock_label ?? '–' }}</td>
@@ -3069,6 +3484,11 @@ function emptyPriceRefreshScheduleForm() {
     line-height: 1.3;
 }
 
+.eodhd-header-usage {
+    border-left: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    padding-left: 16px;
+}
+
 .price-refresh-status-dot {
     width: 10px;
     height: 10px;
@@ -3082,6 +3502,23 @@ function emptyPriceRefreshScheduleForm() {
 
 .price-refresh-status-dot--waiting {
     background: #2e7d32;
+}
+
+.flatex-price-button {
+    color: inherit;
+    font: inherit;
+    text-align: right;
+    width: 100%;
+}
+
+.flatex-price-input {
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 4px;
+    font: inherit;
+    max-width: 130px;
+    padding: 2px 6px;
+    text-align: right;
+    width: 100%;
 }
 
 .latest-price-tick {

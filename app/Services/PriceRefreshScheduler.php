@@ -184,9 +184,15 @@ class PriceRefreshScheduler
      */
     private function nextRefreshAt(Carbon $from, array $settings): string
     {
+        $isTradingTime = $this->isAnyHoldingWithinTradingTimes($from, $settings);
+
+        if (! $isTradingTime && ! $settings['closed_refresh_enabled']) {
+            return $this->nextTradingRefreshAt($from, $settings)->toIso8601String();
+        }
+
         return $from
             ->copy()
-            ->addMinutes($this->currentIntervalMinutes($settings, $this->isAnyHoldingWithinTradingTimes($from, $settings)))
+            ->addMinutes($this->currentIntervalMinutes($settings, $isTradingTime))
             ->toIso8601String();
     }
 
@@ -239,6 +245,12 @@ class PriceRefreshScheduler
      */
     private function recalculatedNextRefreshAt(Carbon $from, array $settings): string
     {
+        $isTradingTime = $this->isAnyHoldingWithinTradingTimes($from, $settings);
+
+        if (! $isTradingTime && ! $settings['closed_refresh_enabled']) {
+            return $this->nextTradingRefreshAt($from, $settings)->toIso8601String();
+        }
+
         $lastRefreshedAt = $this->carbon($settings['last_refreshed_at']);
 
         if ($lastRefreshedAt !== null) {
@@ -246,12 +258,64 @@ class PriceRefreshScheduler
                 ->copy()
                 ->addMinutes($this->currentIntervalMinutes(
                     $settings,
-                    $this->isAnyHoldingWithinTradingTimes($from, $settings),
+                    $isTradingTime,
                 ))
                 ->toIso8601String();
         }
 
         return $settings['next_refresh_at'] ?? $this->nextRefreshAt($from, $settings);
+    }
+
+    /**
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     */
+    private function nextTradingRefreshAt(Carbon $from, array $settings): Carbon
+    {
+        $nextTradingStartsAt = null;
+
+        foreach (StockHolding::query()->whereNotNull('trading_times')->cursor() as $holding) {
+            $holdingTradingStartsAt = $this->nextTradingStartsAt((string) $holding->trading_times, $from, $settings);
+
+            if ($holdingTradingStartsAt === null) {
+                continue;
+            }
+
+            if ($nextTradingStartsAt === null || $holdingTradingStartsAt->lessThan($nextTradingStartsAt)) {
+                $nextTradingStartsAt = $holdingTradingStartsAt;
+            }
+        }
+
+        return $nextTradingStartsAt ?? $from->copy()->addMinutes($settings['trading_interval_minutes']);
+    }
+
+    /**
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     */
+    private function nextTradingStartsAt(string $tradingTimes, Carbon $from, array $settings): ?Carbon
+    {
+        $window = $this->tradingWindow($tradingTimes, $settings);
+
+        if ($window === null) {
+            return null;
+        }
+
+        $localTime = $from->copy()->setTimezone($window['timezone']);
+
+        for ($daysToAdd = 0; $daysToAdd <= 7; $daysToAdd++) {
+            $candidateDay = $localTime->copy()->startOfDay()->addDays($daysToAdd);
+
+            if ($candidateDay->isWeekend()) {
+                continue;
+            }
+
+            $candidate = $candidateDay->copy()->addMinutes($window['open_minute']);
+
+            if ($candidate->greaterThan($localTime)) {
+                return $candidate->setTimezone($from->timezone);
+            }
+        }
+
+        return null;
     }
 
     private function hasRunningRefresh(): bool
@@ -281,24 +345,42 @@ class PriceRefreshScheduler
      */
     private function isTradingTime(string $tradingTimes, Carbon $at, array $settings): bool
     {
-        if (! preg_match('/(?<open_hour>\d{1,2}):(?<open_minute>\d{2})\s*(?:-|to|until|bis)\s*(?<close_hour>\d{1,2}):(?<close_minute>\d{2})/i', $tradingTimes, $matches)) {
+        $window = $this->tradingWindow($tradingTimes, $settings);
+
+        if ($window === null) {
             return false;
         }
 
-        $timezone = preg_match('/\bEurope\/[A-Za-z_]+\b/', $tradingTimes, $timezoneMatches)
-            ? $timezoneMatches[0]
-            : config('app.timezone', 'UTC');
-        $localTime = $at->copy()->setTimezone($timezone);
+        $localTime = $at->copy()->setTimezone($window['timezone']);
 
         if ($localTime->isWeekend()) {
             return false;
         }
 
         $currentMinute = ($localTime->hour * 60) + $localTime->minute;
-        $openMinute = (((int) $matches['open_hour'] * 60) + (int) $matches['open_minute']) - $settings['trading_starts_before_minutes'];
-        $closeMinute = (((int) $matches['close_hour'] * 60) + (int) $matches['close_minute']) + $settings['trading_ends_after_minutes'];
 
-        return $currentMinute >= $openMinute && $currentMinute < $closeMinute;
+        return $currentMinute >= $window['open_minute'] && $currentMinute < $window['close_minute'];
+    }
+
+    /**
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     * @return array{timezone: string, open_minute: int, close_minute: int}|null
+     */
+    private function tradingWindow(string $tradingTimes, array $settings): ?array
+    {
+        if (! preg_match('/(?<open_hour>\d{1,2}):(?<open_minute>\d{2})\s*(?:-|to|until|bis)\s*(?<close_hour>\d{1,2}):(?<close_minute>\d{2})/i', $tradingTimes, $matches)) {
+            return null;
+        }
+
+        $timezone = preg_match('/\bEurope\/[A-Za-z_]+\b/', $tradingTimes, $timezoneMatches)
+            ? $timezoneMatches[0]
+            : config('app.timezone', 'UTC');
+
+        return [
+            'timezone' => $timezone,
+            'open_minute' => (((int) $matches['open_hour'] * 60) + (int) $matches['open_minute']) - $settings['trading_starts_before_minutes'],
+            'close_minute' => (((int) $matches['close_hour'] * 60) + (int) $matches['close_minute']) + $settings['trading_ends_after_minutes'],
+        ];
     }
 
     /**

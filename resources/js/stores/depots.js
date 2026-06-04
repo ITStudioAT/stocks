@@ -6,6 +6,7 @@ export const useDepotStore = defineStore('depots', {
         activeDepot: null,
         depots: [],
         holdings: [],
+        depotHoldings: [],
         transactions: [],
         exchangeTradingTimes: [],
         eodhdApiUsage: null,
@@ -127,10 +128,13 @@ export const useDepotStore = defineStore('depots', {
             this.holdingsError = '';
 
             try {
-                return await request('/admin/watchlist/holdings', {
+                const data = await request('/admin/watchlist/holdings', {
                     method: 'POST',
                     body: JSON.stringify(payload),
                 });
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
             } catch (error) {
                 this.holdingsError = error.message;
                 throw error;
@@ -158,6 +162,43 @@ export const useDepotStore = defineStore('depots', {
         },
         async deleteActiveDepotHolding(id) {
             return await this.deleteWatchlistHolding(id);
+        },
+        async updateHoldingFlatexPrice(id, flatexPrice) {
+            this.transactionsError = '';
+
+            try {
+                const data = await request(`/admin/watchlist/holdings/${id}/flatex-price`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ flatex_price: flatexPrice }),
+                });
+                const updatedHolding = data.holding;
+
+                this.depotHoldings = this.depotHoldings.map((holding) => {
+                    if (holding.id !== updatedHolding.id) {
+                        return holding;
+                    }
+
+                    return {
+                        ...holding,
+                        flatex_price: updatedHolding.flatex_price,
+                    };
+                });
+                this.holdings = this.holdings.map((holding) => {
+                    if (holding.id !== updatedHolding.id) {
+                        return holding;
+                    }
+
+                    return {
+                        ...holding,
+                        flatex_price: updatedHolding.flatex_price,
+                    };
+                });
+
+                return data;
+            } catch (error) {
+                this.transactionsError = error.message;
+                throw error;
+            }
         },
         async refreshWatchlistPrices() {
             this.holdingsLoading = true;
@@ -245,6 +286,7 @@ export const useDepotStore = defineStore('depots', {
 
             try {
                 const data = await request('/admin/depot-transactions');
+                this.depotHoldings = data.depot_holdings ?? [];
                 this.transactions = data.transactions;
             } catch (error) {
                 this.transactionsError = error.message;
@@ -263,6 +305,7 @@ export const useDepotStore = defineStore('depots', {
                     body: JSON.stringify(payload),
                 });
                 this.activeDepot = data.depot;
+                this.depotHoldings = data.depot_holdings ?? this.depotHoldings;
                 this.transactions = [data.transaction, ...this.transactions];
 
                 return data;
