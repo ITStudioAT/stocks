@@ -12,6 +12,7 @@ use App\Services\WebMarketData\DTO\ValidatedQuote;
 use App\Services\WebMarketData\DTO\WebSourceCandidate;
 use App\Services\WebMarketData\MarketHours;
 use App\Services\WebMarketData\WebQuoteValidator;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
@@ -54,7 +55,47 @@ class EodhdMarketData
         $this->persistResult($holding, $result);
         $this->persistHistoricalQuotes($holding, $historicalQuotes);
 
+        $this->refreshSessionPriceFields($holding->refresh(), $validatedQuote);
+
         return $result;
+    }
+
+    public function refreshSessionPriceFields(StockHolding $holding, ?ValidatedQuote $latestQuote = null): void
+    {
+        $session = $this->sessionPriceWindow($holding, $latestQuote?->quote);
+
+        if ($session === null) {
+            return;
+        }
+
+        $startQuote = $session['is_current_trading_day']
+            ? $this->intradayStartQuote($holding, $session['open'], $session['close'])
+            : $this->dailyOpenQuote($holding, $session['date'], $session['open']);
+        $endQuote = $session['is_open']
+            ? null
+            : $this->dailyCloseQuote($holding, $session['date'], $session['close']);
+        $end24Quote = $this->dailyCloseQuote($holding, $session['previous_date'], $session['previous_close']);
+        $end48Quote = $this->dailyCloseQuote($holding, $session['two_ago_date'], $session['two_ago_close']);
+
+        collect([$startQuote, $endQuote, $end24Quote, $end48Quote])
+            ->filter()
+            ->each(fn (ValidatedQuote $quote): StockPrice => $this->storeHistoricalQuote($holding, $quote));
+
+        $holding->update([
+            ...$this->latestPriceAttributes($latestQuote, $session['is_open']),
+            'start_price' => $this->quotePrice($startQuote)
+                ?? $this->storedSessionStartPrice($holding, $session['open'], $session['close']),
+            'end_price' => $session['is_open']
+                ? null
+                : $this->quotePrice($endQuote)
+                    ?? $this->quotePriceWithinWindow($latestQuote, $session['open'], $session['close']->copy()->addDay())
+                    ?? $this->storedSessionLatestRealtimePrice($holding, $session['open'], $session['close']->copy()->addDay())
+                    ?? $this->storedSessionEndPrice($holding, $session['open'], $session['close']->copy()->addDay()),
+            'end_price_24' => $this->quotePrice($end24Quote)
+                ?? $this->storedSessionEndPrice($holding, $session['previous_open'], $session['today_open']),
+            'end_price_48' => $this->quotePrice($end48Quote)
+                ?? $this->storedSessionEndPrice($holding, $session['two_ago_open'], $session['previous_open']),
+        ]);
     }
 
     public function startPrice(StockHolding $holding, Carbon $from, Carbon $until): ?string
@@ -490,7 +531,7 @@ class EodhdMarketData
      */
     private function tradingWindow(string $tradingTimes): ?array
     {
-        if (! preg_match('/(?<open_hour>\d{1,2}):(?<open_minute>\d{2})\s*(?:-|to|until|bis)\s*(?<close_hour>\d{1,2}):(?<close_minute>\d{2})/i', $tradingTimes, $matches)) {
+        if (! preg_match('/(?<![:\d])(?<open_hour>\d{1,2}):(?<open_minute>\d{2})(?::\d{2})?\s*(?:-|to|until|bis)\s*(?<close_hour>\d{1,2}):(?<close_minute>\d{2})(?::\d{2})?/i', $tradingTimes, $matches)) {
             return null;
         }
 
@@ -597,6 +638,149 @@ class EodhdMarketData
             'source_verified_at' => now(),
             'trading_times' => $selectedPrice->trading_times,
         ]);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function latestPriceAttributes(?ValidatedQuote $latestQuote, bool $exchangeIsOpen): array
+    {
+        if (! $latestQuote?->isSelectable()) {
+            return [];
+        }
+
+        if (! $exchangeIsOpen) {
+            return [
+                'latest_price' => null,
+            ];
+        }
+
+        $quote = $latestQuote->quote;
+
+        return [
+            'latest_price' => $quote->price,
+            'latest_price_fetched_at' => $quote->fetchedAt?->copy()->utc(),
+            'latest_price_source' => $quote->sourceName,
+            'latest_price_source_url' => $quote->sourceUrl,
+            'latest_price_as_of' => $quote->asOf?->copy()->utc(),
+            'latest_price_type' => $quote->priceType,
+            'price_spread_pct' => $latestQuote->spreadPct,
+        ];
+    }
+
+    /**
+     * @return array{date: Carbon, today_open: Carbon, open: Carbon, close: Carbon, previous_date: Carbon, previous_open: Carbon, previous_close: Carbon, two_ago_date: Carbon, two_ago_open: Carbon, two_ago_close: Carbon, is_open: bool, is_current_trading_day: bool}|null
+     */
+    private function sessionPriceWindow(StockHolding $holding, ?ParsedQuote $quote): ?array
+    {
+        $tradingTimes = $holding->trading_times ?? ($quote ? $this->marketHours->tradingTimes($quote) : null);
+
+        if ($tradingTimes === null) {
+            return null;
+        }
+
+        $window = $this->tradingWindow($tradingTimes);
+
+        if ($window === null) {
+            return null;
+        }
+
+        $timezone = $this->marketTimezone($tradingTimes) ?? ($quote ? $this->marketHours->timezone($quote) : 'Europe/Berlin');
+        $localNow = now()->setTimezone($timezone);
+        $today = $localNow->copy()->startOfDay();
+        $currentMinute = ($localNow->hour * 60) + $localNow->minute;
+        $isWorkingDay = ! $today->isWeekend();
+        $isOpen = $isWorkingDay && $currentMinute >= $window[0] && $currentMinute < $window[1];
+        $isCurrentTradingDay = $isWorkingDay && $currentMinute >= $window[0];
+        $sessionDate = $isCurrentTradingDay
+            ? $today
+            : $this->previousTradingDay($today);
+        $previousDate = $this->previousTradingDay($sessionDate);
+        $twoAgoDate = $this->previousTradingDay($previousDate);
+
+        return [
+            'date' => $sessionDate,
+            'today_open' => $sessionDate->copy()->addMinutes($window[0])->utc(),
+            'open' => $sessionDate->copy()->addMinutes($window[0])->utc(),
+            'close' => $sessionDate->copy()->addMinutes($window[1])->utc(),
+            'previous_date' => $previousDate,
+            'previous_open' => $previousDate->copy()->addMinutes($window[0])->utc(),
+            'previous_close' => $previousDate->copy()->addMinutes($window[1])->utc(),
+            'two_ago_date' => $twoAgoDate,
+            'two_ago_open' => $twoAgoDate->copy()->addMinutes($window[0])->utc(),
+            'two_ago_close' => $twoAgoDate->copy()->addMinutes($window[1])->utc(),
+            'is_open' => $isOpen,
+            'is_current_trading_day' => $isCurrentTradingDay,
+        ];
+    }
+
+    private function quotePrice(?ValidatedQuote $quote): ?string
+    {
+        return $quote?->quote->price;
+    }
+
+    private function quotePriceWithinWindow(?ValidatedQuote $quote, Carbon $from, Carbon $until): ?string
+    {
+        if (! $quote?->isSelectable() || $quote->quote->asOf === null) {
+            return null;
+        }
+
+        if ($quote->quote->asOf->lt($from) || $quote->quote->asOf->gte($until)) {
+            return null;
+        }
+
+        return $quote->quote->price;
+    }
+
+    private function storedSessionStartPrice(StockHolding $holding, Carbon $from, Carbon $until): ?string
+    {
+        return $this->storedSessionPriceQuery($holding, $from, $until)
+            ->where('price_type', 'historical_session_start')
+            ->orderBy('as_of')
+            ->orderBy('id')
+            ->value('price')
+            ?? $this->storedSessionPriceQuery($holding, $from, $until)
+                ->orderBy('as_of')
+                ->orderBy('id')
+                ->value('price');
+    }
+
+    private function storedSessionEndPrice(StockHolding $holding, Carbon $from, Carbon $until): ?string
+    {
+        return $this->storedSessionPriceQuery($holding, $from, $until)
+            ->where('price_type', 'historical_session_end')
+            ->orderByDesc('as_of')
+            ->orderByDesc('id')
+            ->value('price')
+            ?? $this->storedSessionPriceQuery($holding, $from, $until)
+                ->orderByDesc('as_of')
+                ->orderByDesc('id')
+                ->value('price');
+    }
+
+    private function storedSessionLatestRealtimePrice(StockHolding $holding, Carbon $from, Carbon $until): ?string
+    {
+        return $this->storedSessionPriceQuery($holding, $from, $until)
+            ->where('source_key', self::RealtimeSourceKey)
+            ->where('price_type', 'last')
+            ->orderByDesc('as_of')
+            ->orderByDesc('id')
+            ->value('price');
+    }
+
+    /**
+     * @return Builder<StockPrice>
+     */
+    private function storedSessionPriceQuery(StockHolding $holding, Carbon $from, Carbon $until): Builder
+    {
+        return $this->stockPriceCatalog
+            ->pricesForHolding($holding)
+            ->whereIn('source_key', self::sourceKeys())
+            ->where('validation_status', 'valid')
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->where('as_of', '>=', $from->copy()->utc())
+            ->where('as_of', '<', $until->copy()->utc());
     }
 
     /**

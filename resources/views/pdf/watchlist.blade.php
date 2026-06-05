@@ -371,6 +371,8 @@
                 <div class="fact-cell"><span class="label">Spread %</span><span class="value">{{ $holding['price_spread_pct'] !== null ? number_format((float) $holding['price_spread_pct'], 4).'%' : '–' }}</span></div>
                 <div class="fact-cell"><span class="label">Start price</span><span class="value">{{ $formatPrice($holding['start_price'] ?? null, $holding['currency'] ?? null) }}</span></div>
                 <div class="fact-cell"><span class="label">End price</span><span class="value">{{ $formatPrice($holding['end_price'] ?? null, $holding['currency'] ?? null) }}</span></div>
+                <div class="fact-cell"><span class="label">End 24</span><span class="value">{{ $formatPrice($holding['end_price_24'] ?? null, $holding['currency'] ?? null) }}</span></div>
+                <div class="fact-cell"><span class="label">End 48</span><span class="value">{{ $formatPrice($holding['end_price_48'] ?? null, $holding['currency'] ?? null) }}</span></div>
                 <div class="fact-cell"><span class="label">Source time</span><span class="value">{{ $formatDateTime($holding['latest_price_as_of'] ?? null) }}</span></div>
                 <div class="fact-cell"><span class="label">Fetched</span><span class="value">{{ $formatDateTime($holding['latest_price_fetched_at'] ?? null) }}</span></div>
                 <div class="fact-wide"><span class="label">Source</span><span class="value">{{ $holding['latest_price_source'] ?: '–' }}</span></div>

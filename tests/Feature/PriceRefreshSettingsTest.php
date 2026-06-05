@@ -181,7 +181,37 @@ class PriceRefreshSettingsTest extends TestCase
             ->getJson('/admin/price-refresh-settings')
             ->assertOk()
             ->assertJsonPath('index_price_refresh_settings.is_trading_time', false)
-            ->assertJsonPath('index_price_refresh_settings.current_interval_minutes', 120);
+            ->assertJsonPath('index_price_refresh_settings.current_interval_minutes', 20)
+            ->assertJsonPath('index_price_refresh_settings.next_refresh_at', '2026-06-05T08:55:00+02:00');
+    }
+
+    public function test_index_next_refresh_waits_for_the_next_trading_day_when_exchange_is_closed(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-06 02:32:12', 'Europe/Vienna'));
+        IndexWatchItem::factory()->create([
+            'symbol' => 'ATX',
+            'trading_times' => 'Monday-Friday 08:55:00-17:35:00 Europe/Vienna',
+        ]);
+        AppConfig::query()->create([
+            'key' => 'index_price_refresh.schedule',
+            'value' => [
+                'trading_interval_minutes' => 20,
+                'trading_starts_before_minutes' => 20,
+                'trading_ends_after_minutes' => 20,
+                'closed_refresh_enabled' => true,
+                'closed_interval_minutes' => 120,
+                'last_refreshed_at' => '2026-06-06T00:32:12+02:00',
+                'next_refresh_at' => '2026-06-06T02:32:12+02:00',
+            ],
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/price-refresh-settings')
+            ->assertOk()
+            ->assertJsonPath('index_price_refresh_settings.is_trading_time', false)
+            ->assertJsonPath('index_price_refresh_settings.current_interval_minutes', 20)
+            ->assertJsonPath('index_price_refresh_settings.next_refresh_at', '2026-06-08T08:35:00+02:00');
     }
 
     public function test_trading_refresh_window_can_start_before_market_open(): void

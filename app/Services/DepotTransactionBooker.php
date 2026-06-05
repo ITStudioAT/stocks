@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Depot;
 use App\Models\DepotTransaction;
 use App\Models\StockHolding;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -35,6 +36,7 @@ class DepotTransactionBooker
         string $pieces,
         string $totalAmount,
         ?string $note = null,
+        ?Carbon $bookedAt = null,
     ): DepotTransaction {
         if (! in_array($type, ['buy', 'sell'], true)) {
             throw ValidationException::withMessages([
@@ -49,6 +51,7 @@ class DepotTransactionBooker
             stockHolding: $holding,
             pieces: $pieces,
             note: $note,
+            bookedAt: $bookedAt,
         );
     }
 
@@ -77,8 +80,9 @@ class DepotTransactionBooker
         ?StockHolding $stockHolding,
         ?string $pieces,
         ?string $note,
+        ?Carbon $bookedAt = null,
     ): DepotTransaction {
-        return DB::transaction(function () use ($depot, $type, $totalAmount, $stockHolding, $pieces, $note): DepotTransaction {
+        return DB::transaction(function () use ($depot, $type, $totalAmount, $stockHolding, $pieces, $note, $bookedAt): DepotTransaction {
             $lockedDepot = Depot::query()
                 ->whereKey($depot->id)
                 ->lockForUpdate()
@@ -117,7 +121,7 @@ class DepotTransactionBooker
                 'unit_price' => $piecesAmount === null ? null : $this->decimal($amount / $piecesAmount, 8),
                 'cash_delta' => $this->decimal($cashDelta, 2),
                 'balance_after' => $this->decimal($balanceAfter, 2),
-                'booked_at' => now(),
+                'booked_at' => $bookedAt ?? now(),
                 'note' => $note,
             ]);
         }, attempts: 3);

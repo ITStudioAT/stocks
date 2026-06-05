@@ -122,10 +122,14 @@ class HistoricalSessionPriceScheduler
      */
     private function hasCompleteMorningBundle(StockHolding $holding, array $session): bool
     {
+        $hasTodayEnd = now()->setTimezone($session['timezone'])->greaterThanOrEqualTo($session['today_close'])
+            ? $this->hasHistoricalPrice($holding, $session['today_close'], $session['today_close']->copy()->addDay(), 'historical_session_end')
+            : true;
+
         return $this->hasHistoricalPrice($holding, $session['today_open'], $session['today_close'], 'historical_session_start')
-            && $this->hasHistoricalPrice($holding, $session['previous_open'], $session['previous_close'], 'historical_session_start')
-            && $this->hasHistoricalPrice($holding, $session['two_ago_open'], $session['two_ago_close'], 'historical_session_start')
-            && $this->hasHistoricalPrice($holding, $session['previous_close'], $session['today_open'], 'historical_session_end');
+            && $hasTodayEnd
+            && $this->hasHistoricalPrice($holding, $session['previous_close'], $session['today_open'], 'historical_session_end')
+            && $this->hasHistoricalPrice($holding, $session['two_ago_close'], $session['previous_open'], 'historical_session_end');
     }
 
     private function hasHistoricalPrice(StockHolding $holding, Carbon $from, Carbon $until, string $priceType): bool
@@ -147,9 +151,13 @@ class HistoricalSessionPriceScheduler
     private function markQueued(StockHolding $holding, array $session): void
     {
         $this->fetchStatus->queued($holding->id, $session['today_open'], $session['today_close'], 'start');
-        $this->fetchStatus->queued($holding->id, $session['previous_open'], $session['previous_close'], 'start');
-        $this->fetchStatus->queued($holding->id, $session['two_ago_open'], $session['two_ago_close'], 'start');
+
+        if (now()->setTimezone($session['timezone'])->greaterThanOrEqualTo($session['today_close'])) {
+            $this->fetchStatus->queued($holding->id, $session['today_close'], $session['today_close']->copy()->addDay(), 'end');
+        }
+
         $this->fetchStatus->queued($holding->id, $session['previous_close'], $session['today_open'], 'end');
+        $this->fetchStatus->queued($holding->id, $session['two_ago_close'], $session['previous_open'], 'end');
     }
 
     /**

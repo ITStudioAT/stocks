@@ -58,8 +58,12 @@ class AdminDepotHoldingTest extends TestCase
                         'latest_price',
                         'start_price',
                         'end_price',
-                        'start_price_24',
-                        'start_price_48',
+                        'end_price_24',
+                        'end_price_48',
+                        'start_price_date',
+                        'end_price_date',
+                        'end_price_24_date',
+                        'end_price_48_date',
                         'historical_prices_fetching',
                         'position_pieces',
                         'latest_price_trend',
@@ -379,7 +383,7 @@ class AdminDepotHoldingTest extends TestCase
             'mic_code' => 'XETR',
             'country' => 'France',
             'currency' => 'EUR',
-            'latest_price' => '465.637500',
+            'latest_price' => '469.200000',
             'latest_price_as_of' => '2026-06-03 17:24:53',
             'price_status' => 'stale',
         ]);
@@ -410,13 +414,13 @@ class AdminDepotHoldingTest extends TestCase
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
             ->assertJsonPath('holdings.0.symbol', 'AMES')
-            ->assertJsonPath('holdings.0.latest_price', '469.200000')
+            ->assertJsonPath('holdings.0.latest_price', null)
             ->assertJsonPath('holdings.0.latest_price_status', 'closed_market')
             ->assertJsonPath('holdings.0.price_status', 'closed_market')
-            ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-04T15:35:00+00:00')
-            ->assertJsonPath('holdings.0.latest_price_source', 'EODHD real-time')
-            ->assertJsonPath('holdings.0.venue', 'Xetra')
-            ->assertJsonPath('holdings.0.price_type', 'last');
+            ->assertJsonPath('holdings.0.latest_price_as_of', null)
+            ->assertJsonPath('holdings.0.latest_price_source', null)
+            ->assertJsonPath('holdings.0.venue', null)
+            ->assertJsonPath('holdings.0.price_type', null);
     }
 
     public function test_admin_listing_hides_source_time_for_unavailable_holding_prices(): void
@@ -451,8 +455,12 @@ class AdminDepotHoldingTest extends TestCase
             'latest_price' => '191.500000',
             'latest_price_fetched_at' => '2026-06-04 08:20:00',
             'latest_price_as_of' => '2026-06-04 08:15:00',
+            'start_price' => '191.00000000',
+            'end_price' => '193.00000000',
+            'end_price_24' => '194.00000000',
+            'end_price_48' => '189.50000000',
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
-            'price_status' => 'closed_market',
+            'price_status' => 'fresh',
             'latest_price_type' => 'last',
         ]);
         // Berlin (CEST, +02:00): two days ago 09:08, previous day 09:05 / 17:45, today 08:30 (pre-open) / 09:10.
@@ -467,13 +475,17 @@ class AdminDepotHoldingTest extends TestCase
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
             ->assertJsonPath('holdings.0.symbol', 'LYXIB')
-            ->assertJsonPath('holdings.0.start_price', '191.00000000')
-            ->assertJsonPath('holdings.0.end_price', '193.00000000')
-            ->assertJsonPath('holdings.0.start_price_24', '192.00000000')
-            ->assertJsonPath('holdings.0.start_price_48', '189.00000000')
+            ->assertJsonPath('holdings.0.start_price', '191.000000')
+            ->assertJsonPath('holdings.0.end_price', '193.000000')
+            ->assertJsonPath('holdings.0.end_price_24', '194.000000')
+            ->assertJsonPath('holdings.0.end_price_48', '189.500000')
+            ->assertJsonPath('holdings.0.start_price_date', '2026-06-04')
+            ->assertJsonPath('holdings.0.end_price_date', '2026-06-04')
+            ->assertJsonPath('holdings.0.end_price_24_date', '2026-06-03')
+            ->assertJsonPath('holdings.0.end_price_48_date', '2026-06-02')
             ->assertJsonPath('holdings.0.historical_prices_fetching', false)
             ->assertJsonPath('holdings.0.latest_price_trend', 'down')
-            ->assertJsonPath('holdings.0.latest_price_change_pct', '-0.78');
+            ->assertJsonPath('holdings.0.latest_price_change_pct', '-1.29');
     }
 
     public function test_admin_listing_does_not_queue_missing_historical_session_prices(): void
@@ -493,6 +505,7 @@ class AdminDepotHoldingTest extends TestCase
             'latest_price' => '191.500000',
             'latest_price_fetched_at' => '2026-06-04 08:20:00',
             'latest_price_as_of' => '2026-06-04 08:15:00',
+            'start_price' => '191.00000000',
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
             'price_status' => 'fresh',
             'latest_price_type' => 'last',
@@ -503,9 +516,9 @@ class AdminDepotHoldingTest extends TestCase
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
             ->assertJsonPath('holdings.0.symbol', 'LYXIB')
-            ->assertJsonPath('holdings.0.start_price', '191.00000000')
-            ->assertJsonPath('holdings.0.start_price_24', null)
-            ->assertJsonPath('holdings.0.start_price_48', null)
+            ->assertJsonPath('holdings.0.start_price', '191.000000')
+            ->assertJsonPath('holdings.0.end_price_24', null)
+            ->assertJsonPath('holdings.0.end_price_48', null)
             ->assertJsonPath('holdings.0.historical_prices_fetching', false);
 
         Queue::assertNothingPushed();
@@ -566,6 +579,12 @@ class AdminDepotHoldingTest extends TestCase
             Carbon::parse('2026-06-04T07:00:00+00:00'),
             'end',
         ));
+        $this->assertFalse(app(HistoricalSessionStartPriceFetchStatus::class)->isFetching(
+            $firstHolding->id,
+            Carbon::parse('2026-06-04T15:30:00+00:00'),
+            Carbon::parse('2026-06-05T15:30:00+00:00'),
+            'end',
+        ));
     }
 
     public function test_due_historical_session_price_command_dispatches_missed_bundle_after_exchange_close(): void
@@ -603,7 +622,7 @@ class AdminDepotHoldingTest extends TestCase
             && $job->session['today_date'] === '2026-06-04');
     }
 
-    public function test_historical_session_price_bundle_job_stores_start_end_start24_and_start48_together(): void
+    public function test_historical_session_price_bundle_job_stores_start_end24_and_end48_while_exchange_is_open(): void
     {
         config(['services.eodhd.key' => 'test-token']);
         $this->travelTo(Carbon::parse('2026-06-04 09:10:00', 'Europe/Berlin'));
@@ -617,18 +636,11 @@ class AdminDepotHoldingTest extends TestCase
             'eodhd.com/api/eod/AMES.XETRA*' => Http::sequence()
                 ->push([[
                     'date' => '2026-06-03',
-                    'open' => 470.15,
                     'close' => 466.80,
                 ]])
                 ->push([[
                     'date' => '2026-06-02',
-                    'open' => 469.60,
                     'close' => 468.00,
-                ]])
-                ->push([[
-                    'date' => '2026-06-03',
-                    'open' => 470.15,
-                    'close' => 466.80,
                 ]]),
         ]);
         $holding = StockHolding::factory()->create([
@@ -666,16 +678,16 @@ class AdminDepotHoldingTest extends TestCase
         $this->assertDatabaseHas('stock_prices', [
             'source_key' => 'eodhd_eod',
             'symbol' => 'AMES',
-            'price' => '470.15000000',
-            'price_type' => 'historical_session_start',
-            'as_of' => '2026-06-03 07:00:00',
+            'price' => '468.00000000',
+            'price_type' => 'historical_session_end',
+            'as_of' => '2026-06-02 15:30:00',
         ]);
-        $this->assertDatabaseHas('stock_prices', [
-            'source_key' => 'eodhd_eod',
-            'symbol' => 'AMES',
-            'price' => '469.60000000',
-            'price_type' => 'historical_session_start',
-            'as_of' => '2026-06-02 07:00:00',
+        $this->assertDatabaseHas('stock_holdings', [
+            'id' => $holding->id,
+            'start_price' => '467.85000000',
+            'end_price' => null,
+            'end_price_24' => '466.80000000',
+            'end_price_48' => '468.00000000',
         ]);
     }
 
@@ -693,18 +705,11 @@ class AdminDepotHoldingTest extends TestCase
             'eodhd.com/api/eod/AMES.XETRA*' => Http::sequence()
                 ->push([[
                     'date' => '2026-06-03',
-                    'open' => 470.15,
                     'close' => 466.80,
                 ]])
                 ->push([[
                     'date' => '2026-06-02',
-                    'open' => null,
-                    'close' => 468.00,
-                ]])
-                ->push([[
-                    'date' => '2026-06-03',
-                    'open' => 470.15,
-                    'close' => 466.80,
+                    'close' => null,
                 ]]),
         ]);
         $holding = StockHolding::factory()->create([
@@ -783,7 +788,10 @@ class AdminDepotHoldingTest extends TestCase
         ]);
         $this->createMedianQuote($upHolding, '2026-06-03 10:00:00', '100.00');
         $upLatestPrice = $this->createMedianQuote($upHolding, '2026-06-03 10:20:00', '101.00');
-        $upHolding->update(['latest_stock_price_id' => $upLatestPrice->id]);
+        $upHolding->update([
+            'latest_price' => '101.000000',
+            'latest_stock_price_id' => $upLatestPrice->id,
+        ]);
 
         $downHolding = StockHolding::factory()->create([
             'name' => 'B Down',
@@ -794,7 +802,10 @@ class AdminDepotHoldingTest extends TestCase
         ]);
         $this->createMedianQuote($downHolding, '2026-06-03 10:00:00', '100.00');
         $downLatestPrice = $this->createMedianQuote($downHolding, '2026-06-03 10:20:00', '99.00');
-        $downHolding->update(['latest_stock_price_id' => $downLatestPrice->id]);
+        $downHolding->update([
+            'latest_price' => '99.000000',
+            'latest_stock_price_id' => $downLatestPrice->id,
+        ]);
 
         $flatHolding = StockHolding::factory()->create([
             'name' => 'C Flat',
@@ -805,7 +816,10 @@ class AdminDepotHoldingTest extends TestCase
         ]);
         $this->createMedianQuote($flatHolding, '2026-06-03 10:00:00', '100.00');
         $flatLatestPrice = $this->createMedianQuote($flatHolding, '2026-06-03 10:20:00', '100.00');
-        $flatHolding->update(['latest_stock_price_id' => $flatLatestPrice->id]);
+        $flatHolding->update([
+            'latest_price' => '100.000000',
+            'latest_stock_price_id' => $flatLatestPrice->id,
+        ]);
 
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
@@ -829,7 +843,10 @@ class AdminDepotHoldingTest extends TestCase
 
         $this->createMedianQuote($holding, '2026-06-03 15:35:00', '191.00');
         $latestPrice = $this->createMedianQuote($holding, '2026-06-03 15:35:00', '191.04');
-        $holding->update(['latest_stock_price_id' => $latestPrice->id]);
+        $holding->update([
+            'latest_price' => '191.040000',
+            'latest_stock_price_id' => $latestPrice->id,
+        ]);
 
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
@@ -891,6 +908,8 @@ class AdminDepotHoldingTest extends TestCase
             'symbol' => 'LYXIB',
             'currency' => 'EUR',
             'latest_price' => '195.250000',
+            'start_price' => '191.00000000',
+            'end_price_24' => '191.00000000',
             'latest_price_fetched_at' => '2026-06-03 12:30:00',
             'latest_price_as_of' => '2026-06-03 12:00:00',
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
@@ -904,8 +923,8 @@ class AdminDepotHoldingTest extends TestCase
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
-            ->assertJsonPath('holdings.0.start_price', '191.00000000')
-            ->assertJsonPath('holdings.0.end_price', '195.250000')
+            ->assertJsonPath('holdings.0.start_price', '191.000000')
+            ->assertJsonPath('holdings.0.end_price', null)
             ->assertJsonPath('holdings.0.latest_price_trend', 'up')
             ->assertJsonPath('holdings.0.latest_price_change_pct', '2.23');
     }
@@ -918,6 +937,9 @@ class AdminDepotHoldingTest extends TestCase
             'symbol' => 'LYXIB',
             'currency' => 'EUR',
             'latest_price' => '50.000000',
+            'start_price' => '50.00000000',
+            'end_price' => '50.00000000',
+            'end_price_24' => '50.00000000',
             'latest_price_fetched_at' => '2026-06-03 12:30:00',
             'latest_price_as_of' => '2026-06-03 12:00:00',
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
@@ -934,7 +956,7 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.latest_price_change_pct', '0.00');
     }
 
-    public function test_admin_listing_compares_latest_price_change_to_previous_day_end_price(): void
+    public function test_admin_listing_compares_end_price_to_end24_after_exchange_close(): void
     {
         $admin = $this->adminUser();
         $this->travelTo(Carbon::parse('2026-06-04 18:00:00', 'Europe/Berlin'));
@@ -942,6 +964,9 @@ class AdminDepotHoldingTest extends TestCase
             'symbol' => 'LYXIB',
             'currency' => 'EUR',
             'latest_price' => '110.000000',
+            'start_price' => '100.00000000',
+            'end_price' => '120.00000000',
+            'end_price_24' => '100.00000000',
             'latest_price_fetched_at' => '2026-06-04 16:00:00',
             'latest_price_as_of' => '2026-06-04 15:55:00',
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
@@ -954,10 +979,11 @@ class AdminDepotHoldingTest extends TestCase
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
-            ->assertJsonPath('holdings.0.start_price', '100.00000000')
-            ->assertJsonPath('holdings.0.end_price', '120.00000000')
-            ->assertJsonPath('holdings.0.latest_price_trend', 'down')
-            ->assertJsonPath('holdings.0.latest_price_change_pct', '-8.33');
+            ->assertJsonPath('holdings.0.start_price', '100.000000')
+            ->assertJsonPath('holdings.0.end_price', '120.000000')
+            ->assertJsonPath('holdings.0.latest_price', null)
+            ->assertJsonPath('holdings.0.latest_price_trend', null)
+            ->assertJsonPath('holdings.0.latest_price_change_pct', null);
     }
 
     public function test_admin_can_add_a_selected_stock_holding(): void

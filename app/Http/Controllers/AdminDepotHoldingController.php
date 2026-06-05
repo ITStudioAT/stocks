@@ -284,22 +284,23 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, start_price_24: ?string, start_price_48: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, currency: ?string}>, validation_errors: array<int, string>, created_at: ?string}
+     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, end_price_24: ?string, end_price_48: ?string, start_price_date: ?string, end_price_date: ?string, end_price_24_date: ?string, end_price_48_date: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, currency: ?string}>, validation_errors: array<int, string>, created_at: ?string}
      */
     private function holdingPayload(StockHolding $holding, ?Depot $activeDepot): array
     {
         $latestStockPrice = $holding->latestStockPrice;
         $latestPriceStatus = $this->latestPriceStatus($holding);
-        $hasCurrentPrice = in_array($latestPriceStatus, ['realtime', 'fresh', 'delayed', 'closed_market', 'suspicious', 'unavailable_now'], true);
-        $latestPrice = $hasCurrentPrice ? $this->pricePayload($latestStockPrice?->price ?? $holding->latest_price) : null;
+        $hasCurrentPrice = in_array($latestPriceStatus, ['realtime', 'fresh', 'delayed', 'suspicious', 'unavailable_now'], true);
+        $latestPrice = $hasCurrentPrice ? $this->pricePayload($holding->latest_price) : null;
+        $startPrice = $this->pricePayload($holding->start_price);
+        $endPrice = $this->pricePayload($holding->end_price);
+        $end24Price = $this->pricePayload($holding->end_price_24);
         $sessionPrices = $this->tradingSessionPriceResolver->resolve($holding, $latestPrice);
+        $sessionPriceDates = $this->sessionPriceDates($holding);
         $latestPriceAsOf = $latestStockPrice
             ? $this->storedStockPriceTimestamp($latestStockPrice, 'as_of')
             : $holding->latest_price_as_of;
         $tradingTimes = $latestStockPrice?->trading_times ?? $holding->trading_times;
-        $latestPriceReference = $sessionPrices['end_price_is_fallback']
-            ? $sessionPrices['start_price']
-            : $sessionPrices['end_price'];
 
         return [
             'id' => $holding->id,
@@ -314,22 +315,26 @@ class AdminDepotHoldingController extends Controller
             'currency' => $holding->currency,
             'latest_price' => $latestPrice,
             'flatex_price' => $this->pricePayload($holding->flatex_price),
-            'start_price' => $sessionPrices['start_price'],
-            'end_price' => $sessionPrices['end_price'],
-            'start_price_24' => $sessionPrices['start_price_24'],
-            'start_price_48' => $sessionPrices['start_price_48'],
+            'start_price' => $startPrice,
+            'end_price' => $endPrice,
+            'end_price_24' => $end24Price,
+            'end_price_48' => $this->pricePayload($holding->end_price_48),
+            'start_price_date' => $sessionPriceDates['start_price_date'],
+            'end_price_date' => $sessionPriceDates['end_price_date'],
+            'end_price_24_date' => $sessionPriceDates['end_price_24_date'],
+            'end_price_48_date' => $sessionPriceDates['end_price_48_date'],
             'historical_prices_fetching' => $sessionPrices['historical_prices_fetching'],
             'position_pieces' => $activeDepot
                 ? $this->depotTransactionBooker->positionPieces($activeDepot, $holding)
                 : '0.00000000',
-            'latest_price_trend' => $this->latestPriceTrend($latestPrice, $latestPriceReference),
-            'latest_price_change_pct' => $this->latestPriceChangePercent($latestPrice, $latestPriceReference),
+            'latest_price_trend' => $this->latestPriceTrend($latestPrice, $end24Price),
+            'latest_price_change_pct' => $this->latestPriceChangePercent($latestPrice, $end24Price),
             'latest_price_tick_trend' => $this->latestPriceTrend($latestPrice, $this->previousStoredPrice($holding, $latestStockPrice)),
             'latest_price_status' => $latestPriceStatus,
             'price_status' => $latestPriceStatus,
             'latest_price_fetched_at' => $latestStockPrice?->fetched_at?->toIso8601String() ?? $holding->latest_price_fetched_at?->toIso8601String(),
-            'latest_price_source' => $latestStockPrice?->source_name ?? $holding->latest_price_source,
-            'latest_price_source_url' => $latestStockPrice?->source_url ?? $holding->latest_price_source_url,
+            'latest_price_source' => $hasCurrentPrice ? ($latestStockPrice?->source_name ?? $holding->latest_price_source) : null,
+            'latest_price_source_url' => $hasCurrentPrice ? ($latestStockPrice?->source_url ?? $holding->latest_price_source_url) : null,
             'latest_price_as_of' => $this->sourceDateTimePayload($latestPriceAsOf, $hasCurrentPrice),
             'trading_times' => $tradingTimes,
             'venue' => $hasCurrentPrice ? $latestStockPrice?->venue : null,
@@ -393,6 +398,76 @@ class AdminDepotHoldingController extends Controller
         }
 
         return number_format((float) $price, 6, '.', '');
+    }
+
+    /**
+     * @return array{start_price_date: ?string, end_price_date: ?string, end_price_24_date: ?string, end_price_48_date: ?string}
+     */
+    private function sessionPriceDates(StockHolding $holding): array
+    {
+        $tradingTimes = $holding->trading_times;
+        $window = $tradingTimes === null ? null : $this->tradingWindow($tradingTimes);
+
+        if ($window === null) {
+            return [
+                'start_price_date' => null,
+                'end_price_date' => null,
+                'end_price_24_date' => null,
+                'end_price_48_date' => null,
+            ];
+        }
+
+        $timezone = $this->marketTimezone($tradingTimes);
+        $localNow = now()->setTimezone($timezone);
+        $today = $localNow->copy()->startOfDay();
+        $currentMinute = ($localNow->hour * 60) + $localNow->minute;
+        $sessionDate = ! $today->isWeekend() && $currentMinute >= $window[0]
+            ? $today
+            : $this->previousTradingDay($today);
+        $previousDate = $this->previousTradingDay($sessionDate);
+        $twoAgoDate = $this->previousTradingDay($previousDate);
+
+        return [
+            'start_price_date' => $sessionDate->toDateString(),
+            'end_price_date' => $sessionDate->toDateString(),
+            'end_price_24_date' => $previousDate->toDateString(),
+            'end_price_48_date' => $twoAgoDate->toDateString(),
+        ];
+    }
+
+    /**
+     * @return array{0: int, 1: int}|null
+     */
+    private function tradingWindow(string $tradingTimes): ?array
+    {
+        if (! preg_match('/(?<open_hour>\d{1,2}):(?<open_minute>\d{2})\s*(?:-|to|until|bis)\s*(?<close_hour>\d{1,2}):(?<close_minute>\d{2})/i', $tradingTimes, $matches)) {
+            return null;
+        }
+
+        return [
+            ((int) $matches['open_hour'] * 60) + (int) $matches['open_minute'],
+            ((int) $matches['close_hour'] * 60) + (int) $matches['close_minute'],
+        ];
+    }
+
+    private function marketTimezone(string $tradingTimes): string
+    {
+        if (preg_match('/\bEurope\/[A-Za-z_]+\b/', $tradingTimes, $matches)) {
+            return $matches[0];
+        }
+
+        return 'Europe/Berlin';
+    }
+
+    private function previousTradingDay(Carbon $date): Carbon
+    {
+        $previousTradingDay = $date->copy()->subDay();
+
+        while ($previousTradingDay->isWeekend()) {
+            $previousTradingDay->subDay();
+        }
+
+        return $previousTradingDay;
     }
 
     private function latestPriceTrend(?string $latestPrice, ?string $referencePrice): ?string

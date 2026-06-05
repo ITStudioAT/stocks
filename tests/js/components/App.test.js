@@ -870,11 +870,15 @@ describe('App', () => {
                             latest_price: '306.320010',
                             start_price: '300.100000',
                             end_price: '305.900000',
-                            start_price_24: '299.500000',
-                            start_price_48: '298.750000',
+                            end_price_24: '299.500000',
+                            end_price_48: '298.750000',
+                            start_price_date: '2026-06-05',
+                            end_price_date: '2026-06-05',
+                            end_price_24_date: '2026-06-04',
+                            end_price_48_date: '2026-06-03',
                             historical_prices_fetching: true,
                             latest_price_trend: 'up',
-                            latest_price_change_pct: '0.14',
+                            latest_price_change_pct: '2.28',
                             latest_price_tick_trend: 'up',
                             latest_price_status: 'fresh',
                             price_status: 'fresh',
@@ -994,14 +998,14 @@ describe('App', () => {
                             wkn: 'DOWN01',
                             exchange: 'XETR',
                             currency: 'EUR',
-                            latest_price: '190.000000',
-                            start_price: '185.000000',
+                            latest_price: null,
+                            start_price: '183.000000',
                             end_price: '195.000000',
-                            start_price_24: '184.000000',
-                            start_price_48: '183.000000',
-                            latest_price_trend: 'down',
-                            latest_price_change_pct: '-2.56',
-                            latest_price_tick_trend: 'down',
+                            end_price_24: '184.000000',
+                            end_price_48: '185.000000',
+                            latest_price_trend: null,
+                            latest_price_change_pct: null,
+                            latest_price_tick_trend: null,
                             latest_price_status: 'closed_market',
                             price_status: 'closed_market',
                             latest_price_fetched_at: '2026-06-03T18:10:00+00:00',
@@ -1026,8 +1030,8 @@ describe('App', () => {
                             latest_price: '100.000000',
                             start_price: '100.000000',
                             end_price: '100.000000',
-                            start_price_24: '100.000000',
-                            start_price_48: '100.000000',
+                            end_price_24: '100.000000',
+                            end_price_48: '100.000000',
                             latest_price_trend: 'flat',
                             latest_price_change_pct: '0.00',
                             latest_price_tick_trend: 'flat',
@@ -1368,25 +1372,23 @@ describe('App', () => {
         await flushPromises();
 
         const dashboardHeaders = wrapper.find('table').findAll('thead th').map((header) => header.text());
-        const yesterday = sessionHeaderDate(1);
-        const dayBeforeYesterday = sessionHeaderDate(2);
-
         expect(dashboardHeaders[0]).toBe('Symbol');
         expect(dashboardHeaders[1]).toBe('Name');
         expect(dashboardHeaders[2]).toBe('Latest price');
-        expect(dashboardHeaders[3]).toBe('Start price');
+        expect(dashboardHeaders[3]).toContain('Start price');
+        expect(dashboardHeaders[3]).toContain('05.06.2026');
         expect(dashboardHeaders[4]).toContain('End price');
-        expect(dashboardHeaders[4]).toContain(yesterday);
+        expect(dashboardHeaders[4]).toContain('05.06.2026');
         expect(dashboardHeaders[4]).not.toContain('Yesterday');
-        expect(dashboardHeaders[5]).toContain('Start 24');
-        expect(dashboardHeaders[5]).toContain(yesterday);
+        expect(dashboardHeaders[5]).toContain('End 24');
+        expect(dashboardHeaders[5]).toContain('04.06.2026');
         expect(dashboardHeaders[5]).not.toContain('Yesterday');
-        expect(dashboardHeaders[6]).toContain('Start 48');
-        expect(dashboardHeaders[6]).toContain(dayBeforeYesterday);
+        expect(dashboardHeaders[6]).toContain('End 48');
+        expect(dashboardHeaders[6]).toContain('03.06.2026');
         expect(dashboardHeaders[6]).not.toContain('Day before yesterday');
         expect(dashboardHeaders[7]).toBe('Source time');
         expect(dashboardHeaders[8]).toBe('Actions');
-        const appBarStatusText = wrapper.get('.app-bar-status').text();
+        const appBarStatusText = wrapper.get('.app-bar-row').text();
         expect(appBarStatusText).toContain('Stocks Last:');
         expect(appBarStatusText).toContain('Indices Last:');
         expect(appBarStatusText).toContain('EODHD API');
@@ -1394,10 +1396,7 @@ describe('App', () => {
         expect(appBarStatusText).toContain('Day 98,805 / 100,000 Used 1,195');
         expect(appBarStatusText).toContain('fetching historical data');
         expect(appBarStatusText.match(/waiting/g)).toHaveLength(1);
-        const eodhdHeaderUsage = wrapper.get('.eodhd-header-usage');
         expect(wrapper.find('[aria-label="Minify dashboard menu"]').exists()).toBe(true);
-        expect(eodhdHeaderUsage.find('[aria-label="Minify dashboard menu"]').exists()).toBe(true);
-        expect(eodhdHeaderUsage.html().indexOf('Minify dashboard menu')).toBeLessThan(eodhdHeaderUsage.html().indexOf('EODHD API'));
         expect(wrapper.text()).toContain('Watch-list');
         expect(wrapper.html().indexOf('EODHD API')).toBeLessThan(wrapper.html().indexOf('Watch-list'));
         expect(wrapper.text()).not.toContain('Free calls remaining');
@@ -1425,26 +1424,63 @@ describe('App', () => {
         expect(wrapper.text()).toContain('299.5');
         expect(wrapper.text()).toContain('298.75');
         expect(wrapper.text()).toContain('+2.28%');
-        expect(wrapper.text()).toContain('+2.53%');
+        expect(wrapper.text()).toContain('+2.14%');
         expect(wrapper.text()).toContain('DOWN');
-        expect(wrapper.text()).toContain('190');
+        expect(wrapper.text()).toContain('195');
         expect(wrapper.text()).toContain('FLAT');
         expect(wrapper.text()).toContain('100');
 
         const holdingRows = wrapper.findAll('tbody tr');
         const upPriceValue = holdingRows[0].findAll('td')[2].find('.latest-price-value');
         const downPriceValue = holdingRows[1].findAll('td')[2].find('.latest-price-value');
+        const upEndPriceCell = holdingRows[0].findAll('td')[4];
+        const downEndPriceCell = holdingRows[1].findAll('td')[4];
+        const upEndPriceValue = upEndPriceCell.find('.latest-price-value');
+        const downEndPriceValue = downEndPriceCell.find('.latest-price-value');
+        const upStartPriceTick = holdingRows[0].findAll('td')[3].find('[aria-label="Start price higher than End 24 price"]');
+        const downStartPriceTick = holdingRows[1].findAll('td')[3].find('[aria-label="Start price lower than End 24 price"]');
+        expect(holdingRows[0].findAll('td')[0].text()).toContain('Exchange: NASDAQ');
+        expect(holdingRows[0].findAll('td')[0].text()).toContain('Pieces: 0');
+        expect(holdingRows[0].findAll('td')[1].text()).not.toContain('Exchange: NASDAQ');
+        expect(holdingRows[0].findAll('td')[1].text()).not.toContain('Pieces: 0');
+        expect(holdingRows[0].findAll('td')[1].text()).toContain('US0378331005 · WKN: 865985');
         expect(holdingRows[0].findAll('td')[2].classes()).not.toContain('bg-success');
         expect(holdingRows[1].findAll('td')[2].classes()).not.toContain('bg-error');
         expect(upPriceValue.classes()).toContain('bg-success');
         expect(upPriceValue.classes()).toContain('text-white');
-        expect(downPriceValue.classes()).toContain('bg-error');
-        expect(downPriceValue.classes()).toContain('text-white');
-        expect(upPriceValue.text()).toContain('+0.14%');
-        expect(downPriceValue.text()).toContain('-2.56%');
+        expect(downPriceValue.classes()).not.toContain('bg-success');
+        expect(downPriceValue.classes()).not.toContain('bg-error');
+        expect(downPriceValue.text()).toBe('-');
+        expect(upPriceValue.text()).toContain('+2.28%');
+        expect(downPriceValue.text()).not.toContain('+5.98%');
+        expect(upEndPriceCell.text()).toContain('+2.14%');
+        expect(upEndPriceCell.classes()).not.toContain('bg-success');
+        expect(upEndPriceValue.classes()).toContain('bg-success');
+        expect(upEndPriceValue.classes()).toContain('text-white');
+        expect(downEndPriceCell.text()).toContain('+5.98%');
+        expect(downEndPriceCell.classes()).not.toContain('bg-success');
+        expect(downEndPriceValue.classes()).toContain('bg-success');
+        expect(downEndPriceValue.classes()).toContain('text-white');
+        expect(upStartPriceTick.exists()).toBe(true);
+        expect(upStartPriceTick.text()).toBe('↑');
+        expect(upStartPriceTick.classes()).toContain('text-success');
+        expect(downStartPriceTick.exists()).toBe(true);
+        expect(downStartPriceTick.text()).toBe('↓');
+        expect(downStartPriceTick.classes()).toContain('text-error');
+        expect(holdingRows[2].findAll('td')[3].find('.latest-price-tick').exists()).toBe(false);
+        const upEnd24Tick = holdingRows[0].findAll('td')[5].find('[aria-label="End 24 price higher than End 48 price"]');
+        const downEnd24Tick = holdingRows[1].findAll('td')[5].find('[aria-label="End 24 price lower than End 48 price"]');
+        expect(upEnd24Tick.exists()).toBe(true);
+        expect(upEnd24Tick.text()).toBe('↑');
+        expect(upEnd24Tick.classes()).toContain('text-success');
+        expect(downEnd24Tick.exists()).toBe(true);
+        expect(downEnd24Tick.text()).toBe('↓');
+        expect(downEnd24Tick.classes()).toContain('text-error');
+        expect(holdingRows[2].findAll('td')[5].find('.latest-price-tick').exists()).toBe(false);
+        expect(holdingRows[0].findAll('td')[5].text()).not.toContain('%');
+        expect(holdingRows[0].findAll('td')[6].text()).not.toContain('%');
         expect(wrapper.html()).toContain('latest-price-tick');
         expect(wrapper.text()).toContain('↑');
-        expect(wrapper.text()).toContain('↓');
         expect(wrapper.text()).toContain('=');
         const recentPriceTrendDots = holdingRows[0].findAll('.recent-price-trend-dot');
         expect(recentPriceTrendDots).toHaveLength(10);
@@ -1491,7 +1527,14 @@ describe('App', () => {
         expect(wrapper.text()).toContain('XETRA');
         expect(wrapper.text()).toContain('XETRA Stock Exchange');
         expect(wrapper.text()).toContain('09:00-17:30');
-        expect(wrapper.findAll('table')[1].findAll('thead th').map((header) => header.text())).toContain('Next trading');
+        const exchangeDetailsTable = wrapper.findAll('table')[1];
+        expect(exchangeDetailsTable.findAll('thead th').map((header) => header.text())).toContain('Next trading');
+        const exchangeDetailsCells = exchangeDetailsTable.find('tbody tr').findAll('td');
+        expect(exchangeDetailsCells[0].text()).toContain('XETRA');
+        expect(exchangeDetailsCells[0].text()).toContain('XETRA Stock Exchange');
+        expect(exchangeDetailsCells[0].text()).not.toContain('Europe/Berlin');
+        expect(exchangeDetailsCells[1].text()).toContain('XETR');
+        expect(exchangeDetailsCells[1].text()).toContain('Europe/Berlin');
         expect(wrapper.text()).toContain('Next trading:');
         expect(wrapper.text()).toContain('Mon,Tue,Wed,Thu,Fri');
         expect(wrapper.text()).toContain('Closed');
@@ -1759,7 +1802,7 @@ describe('App', () => {
         const holdingWithPieces = {
             id: 1, symbol: 'AAPL', name: 'Apple', isin: 'US0378331005', wkn: '865985',
             exchange: 'NASDAQ', currency: 'EUR', latest_price: '100.000000',
-            start_price: null, end_price: null, start_price_24: null, start_price_48: null,
+            start_price: null, end_price: null, end_price_24: null, end_price_48: null,
             historical_prices_fetching: false, position_pieces: '3.00000000',
             latest_price_status: 'fresh', price_status: 'fresh',
             latest_price_fetched_at: '2026-06-02T12:00:00+00:00',
@@ -2373,8 +2416,8 @@ describe('App', () => {
             latest_price: '100.000000',
             start_price: '100.000000',
             end_price: '100.000000',
-            start_price_24: null,
-            start_price_48: null,
+            end_price_24: null,
+            end_price_48: null,
             historical_prices_fetching: false,
             position_pieces: '0.00000000',
             latest_price_status: 'fresh',
@@ -2443,6 +2486,15 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ indexes: [] }));
             }
 
+            if (path === '/admin/queue/status') {
+                return Promise.resolve(jsonResponse({
+                    queue: {
+                        ok: true,
+                        status: 'ok',
+                    },
+                }));
+            }
+
             return Promise.reject(new Error(`Unexpected request: ${path}`));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -2459,6 +2511,9 @@ describe('App', () => {
         stockInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
         stockInputs[1].value = '300';
         stockInputs[1].dispatchEvent(new Event('input', { bubbles: true }));
+        const stockDateInput = document.body.querySelector('#stock-transaction-form input[type="date"]');
+        stockDateInput.value = '2026-06-05';
+        stockDateInput.dispatchEvent(new Event('input', { bubbles: true }));
         document.body.querySelector('#stock-transaction-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
         await flushPromises();
 
@@ -2469,6 +2524,7 @@ describe('App', () => {
                 stock_holding_id: 1,
                 pieces: 3,
                 total_amount: 300,
+                booked_at: '2026-06-05',
                 note: null,
             }),
         }));
@@ -2731,8 +2787,8 @@ describe('App', () => {
             latest_price: '100.000000',
             start_price: '100.000000',
             end_price: '100.000000',
-            start_price_24: null,
-            start_price_48: null,
+            end_price_24: null,
+            end_price_48: null,
             latest_price_status: 'fresh',
             price_status: 'fresh',
             latest_price_fetched_at: '2026-06-02T12:00:00+00:00',
@@ -2816,7 +2872,7 @@ describe('App', () => {
             await flushPromises();
 
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1')).toHaveLength(2);
-            expect(wrapper.get('.app-bar-status').text().match(/waiting/g)).toHaveLength(2);
+            expect(wrapper.get('.app-bar-row').text().match(/waiting/g)).toHaveLength(2);
             expect(wrapper.text()).not.toContain('fetching historical data');
 
             wrapper.unmount();
@@ -3015,7 +3071,7 @@ describe('App', () => {
             const wrapper = mountApp();
             await flushPromises();
 
-            const appBarStatusText = wrapper.get('.app-bar-status').text();
+            const appBarStatusText = wrapper.get('.app-bar-row').text();
 
             expect(appBarStatusText).toContain('Stocks Last:');
             expect(appBarStatusText).toContain('waiting');

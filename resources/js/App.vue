@@ -224,10 +224,16 @@ const stockHistoricalPriceFetchProgressValue = computed(() => {
 
     return Math.round((stockHistoricalPriceRefresh.value.processed / stockHistoricalPriceRefresh.value.total) * 100);
 });
-const sessionHeaderDates = computed(() => ({
-    yesterday: formatSessionHeaderDate(1),
-    dayBeforeYesterday: formatSessionHeaderDate(2),
-}));
+const sessionHeaderDates = computed(() => {
+    const datedHolding = holdings.value.find((holding) => holding.start_price_date || holding.end_price_date);
+
+    return {
+        start: formatSessionHeaderDateValue(datedHolding?.start_price_date) ?? formatSessionHeaderDate(0),
+        end: formatSessionHeaderDateValue(datedHolding?.end_price_date) ?? formatSessionHeaderDate(0),
+        end24: formatSessionHeaderDateValue(datedHolding?.end_price_24_date) ?? formatSessionHeaderDate(1),
+        end48: formatSessionHeaderDateValue(datedHolding?.end_price_48_date) ?? formatSessionHeaderDate(2),
+    };
+});
 const selectedIndexRecentPrices = computed(() => selectedIndexWatchItem.value?.recent_prices ?? []);
 const selectedIndexChart = computed(() => buildIndexPriceChart(selectedIndexRecentPrices.value));
 const selectedAnalyzeHolding = computed(() => holdings.value.find((holding) => holding.id === selectedAnalyzeHoldingId.value) ?? null);
@@ -1159,6 +1165,7 @@ function openStockTransactionDialog(holding, type) {
         stock_holding_id: holding.id,
         pieces: '',
         total_amount: '',
+        booked_at: localDateInputValue(),
         note: '',
     };
     holdingError.value = '';
@@ -1182,6 +1189,7 @@ async function bookStockTransaction() {
             stock_holding_id: stockTransactionForm.value.stock_holding_id,
             pieces: Number(stockTransactionForm.value.pieces),
             total_amount: Number(stockTransactionForm.value.total_amount),
+            booked_at: stockTransactionForm.value.booked_at || null,
             note: stockTransactionForm.value.note || null,
         });
 
@@ -1767,11 +1775,7 @@ async function saveFlatexPriceEdit(holding) {
 
 function formatLatestPrice(holding) {
     if (holding.latest_price === null || holding.latest_price === undefined || holding.latest_price === '') {
-        if (holding.latest_price_status === 'stale') {
-            return 'Stale';
-        }
-
-        return holding.latest_price_fetched_at ? 'Unavailable' : '-';
+        return '-';
     }
 
     return formatPriceValue(holding.latest_price, holding.currency);
@@ -2284,26 +2288,26 @@ function indexChangeClass(indexItem) {
     return 'is-flat';
 }
 
-function formatSessionPriceChangePercent(value, holding) {
+function formatEndPriceChangePercent(holding) {
     if (
-        value === null
-        || value === undefined
-        || value === ''
-        || holding.latest_price === null
-        || holding.latest_price === undefined
-        || holding.latest_price === ''
+        holding.end_price === null
+        || holding.end_price === undefined
+        || holding.end_price === ''
+        || holding.end_price_24 === null
+        || holding.end_price_24 === undefined
+        || holding.end_price_24 === ''
     ) {
         return '';
     }
 
-    const referencePrice = Number(value);
-    const latestPrice = Number(holding.latest_price);
+    const referencePrice = Number(holding.end_price_24);
+    const endPrice = Number(holding.end_price);
 
-    if (Number.isNaN(referencePrice) || Number.isNaN(latestPrice) || referencePrice === 0) {
+    if (Number.isNaN(referencePrice) || Number.isNaN(endPrice) || referencePrice === 0) {
         return '';
     }
 
-    const amount = ((latestPrice - referencePrice) / referencePrice) * 100;
+    const amount = ((endPrice - referencePrice) / referencePrice) * 100;
     const sign = amount > 0 ? '+' : '';
 
     return `${sign}${amount.toFixed(2)}%`;
@@ -2448,18 +2452,18 @@ function depotHoldingRowClass(holding) {
     };
 }
 
-function sessionPriceChangeClass(value, holding) {
-    const formattedChange = formatSessionPriceChangePercent(value, holding);
+function endPriceValueClass(holding) {
+    const formattedChange = formatEndPriceChangePercent(holding);
 
     if (formattedChange.startsWith('+')) {
-        return 'text-success';
+        return 'bg-success text-white';
     }
 
     if (formattedChange.startsWith('-')) {
-        return 'text-error';
+        return 'bg-error text-white';
     }
 
-    return 'text-medium-emphasis';
+    return '';
 }
 
 function toggleHoldingDetails(holding) {
@@ -2563,6 +2567,100 @@ function latestPriceTickLabel(holding) {
     return labels[holding.latest_price_tick_trend] ?? null;
 }
 
+function startPriceTrend(holding) {
+    if (
+        holding.start_price === null
+        || holding.start_price === undefined
+        || holding.start_price === ''
+        || holding.end_price_24 === null
+        || holding.end_price_24 === undefined
+        || holding.end_price_24 === ''
+    ) {
+        return null;
+    }
+
+    const startPrice = Number(holding.start_price);
+    const end24Price = Number(holding.end_price_24);
+
+    if (Number.isNaN(startPrice) || Number.isNaN(end24Price) || startPrice === end24Price) {
+        return null;
+    }
+
+    return startPrice > end24Price ? 'up' : 'down';
+}
+
+function startPriceTickSymbol(holding) {
+    const symbols = {
+        up: '\u2191',
+        down: '\u2193',
+    };
+
+    return symbols[startPriceTrend(holding)] ?? null;
+}
+
+function startPriceTickLabel(holding) {
+    const labels = {
+        up: 'Start price higher than End 24 price',
+        down: 'Start price lower than End 24 price',
+    };
+
+    return labels[startPriceTrend(holding)] ?? null;
+}
+
+function startPriceTickClass(holding) {
+    return {
+        'text-success': startPriceTrend(holding) === 'up',
+        'text-error': startPriceTrend(holding) === 'down',
+    };
+}
+
+function end24PriceTrend(holding) {
+    if (
+        holding.end_price_24 === null
+        || holding.end_price_24 === undefined
+        || holding.end_price_24 === ''
+        || holding.end_price_48 === null
+        || holding.end_price_48 === undefined
+        || holding.end_price_48 === ''
+    ) {
+        return null;
+    }
+
+    const end24Price = Number(holding.end_price_24);
+    const end48Price = Number(holding.end_price_48);
+
+    if (Number.isNaN(end24Price) || Number.isNaN(end48Price) || end24Price === end48Price) {
+        return null;
+    }
+
+    return end24Price > end48Price ? 'up' : 'down';
+}
+
+function end24PriceTickSymbol(holding) {
+    const symbols = {
+        up: '\u2191',
+        down: '\u2193',
+    };
+
+    return symbols[end24PriceTrend(holding)] ?? null;
+}
+
+function end24PriceTickLabel(holding) {
+    const labels = {
+        up: 'End 24 price higher than End 48 price',
+        down: 'End 24 price lower than End 48 price',
+    };
+
+    return labels[end24PriceTrend(holding)] ?? null;
+}
+
+function end24PriceTickClass(holding) {
+    return {
+        'text-success': end24PriceTrend(holding) === 'up',
+        'text-error': end24PriceTrend(holding) === 'down',
+    };
+}
+
 function formatSessionPrice(value, holding) {
     return formatPriceValue(value, holding.currency);
 }
@@ -2652,6 +2750,25 @@ function formatSessionHeaderDate(daysAgo) {
         month: '2-digit',
         year: 'numeric',
     }).format(viennaDate);
+}
+
+function formatSessionHeaderDateValue(value) {
+    if (!value) {
+        return null;
+    }
+
+    const date = new Date(`${value}T00:00:00Z`);
+
+    if (Number.isNaN(date.getTime())) {
+        return null;
+    }
+
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: 'UTC',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    }).format(date);
 }
 
 function parseSourceDateTime(value) {
@@ -3122,8 +3239,17 @@ function emptyStockTransactionForm() {
         stock_holding_id: null,
         pieces: '',
         total_amount: '',
+        booked_at: localDateInputValue(),
         note: '',
     };
+}
+
+function localDateInputValue(date = new Date()) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
 }
 
 function emptyPriceRefreshScheduleForm() {
@@ -3265,6 +3391,19 @@ function priceRefreshScheduleFormFromSettings(settings) {
 
             <v-app-bar flat border>
                 <div class="app-bar-row">
+                    <v-btn
+                        class="dashboard-menu-toggle"
+                        density="comfortable"
+                        icon
+                        size="small"
+                        type="button"
+                        variant="text"
+                        :aria-label="dashboardMenuToggleLabel"
+                        :title="dashboardMenuToggleLabel"
+                        @click="toggleDashboardMenuCompact"
+                    >
+                        <v-icon :icon="isDashboardMenuCompact ? 'mdi-chevron-right' : 'mdi-chevron-left'" />
+                    </v-btn>
                     <span v-if="priceRefreshSettings" class="app-bar-group text-caption text-medium-emphasis">
                         Stocks Last: {{ formatScheduleDateTime(priceRefreshSettings.last_refreshed_at) }}
                         · Next: {{ formatScheduleDateTime(priceRefreshSettings.next_refresh_at) }}
@@ -3297,19 +3436,6 @@ function priceRefreshScheduleFormFromSettings(settings) {
                         v-if="eodhdUsageItems.length"
                         class="app-bar-group text-caption text-medium-emphasis eodhd-header-usage"
                     >
-                        <v-btn
-                            class="dashboard-menu-toggle"
-                            density="comfortable"
-                            icon
-                            size="small"
-                            type="button"
-                            variant="text"
-                            :aria-label="dashboardMenuToggleLabel"
-                            :title="dashboardMenuToggleLabel"
-                            @click="toggleDashboardMenuCompact"
-                        >
-                            <v-icon :icon="isDashboardMenuCompact ? 'mdi-chevron-right' : 'mdi-chevron-left'" />
-                        </v-btn>
                         <span class="font-weight-medium">EODHD API</span>
                         <span v-for="item in eodhdUsageItems" :key="item.key">
                             {{ item.label }} {{ formatInteger(item.usage.remaining) }} / {{ formatInteger(item.usage.limit) }}
@@ -3429,28 +3555,35 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                     <th>Symbol</th>
                                     <th>Name</th>
                                     <th>Latest price</th>
-                                    <th>Start price</th>
+                                    <th>
+                                        <span class="d-inline-flex flex-column">
+                                            <span>Start price</span>
+                                            <span class="text-caption text-medium-emphasis">
+                                                {{ sessionHeaderDates.start }}
+                                            </span>
+                                        </span>
+                                    </th>
                                     <th>
                                         <span class="d-inline-flex flex-column">
                                             <span>End price</span>
                                             <span class="text-caption text-medium-emphasis">
-                                                {{ sessionHeaderDates.yesterday }}
+                                                {{ sessionHeaderDates.end }}
                                             </span>
                                         </span>
                                     </th>
                                     <th>
                                         <span class="d-inline-flex flex-column">
-                                            <span>Start 24</span>
+                                            <span>End 24</span>
                                             <span class="text-caption text-medium-emphasis">
-                                                {{ sessionHeaderDates.yesterday }}
+                                                {{ sessionHeaderDates.end24 }}
                                             </span>
                                         </span>
                                     </th>
                                     <th>
                                         <span class="d-inline-flex flex-column">
-                                            <span>Start 48</span>
+                                            <span>End 48</span>
                                             <span class="text-caption text-medium-emphasis">
-                                                {{ sessionHeaderDates.dayBeforeYesterday }}
+                                                {{ sessionHeaderDates.end48 }}
                                             </span>
                                         </span>
                                     </th>
@@ -3471,17 +3604,19 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         @keydown.enter.prevent="toggleHoldingDetails(holding)"
                                         @keydown.space.prevent="toggleHoldingDetails(holding)"
                                     >
-                                        <td>{{ holding.symbol || '-' }}</td>
                                         <td>
-                                            <div>{{ holding.name || '-' }}</div>
-                                            <div class="text-caption text-medium-emphasis">
-                                                {{ holding.isin || '-' }} · WKN: {{ holding.wkn || '-' }}
-                                            </div>
+                                            <div>{{ holding.symbol || '-' }}</div>
                                             <div class="text-caption text-medium-emphasis">
                                                 Exchange: {{ holding.exchange || '-' }}
                                             </div>
                                             <div class="text-caption text-medium-emphasis">
                                                 Pieces: {{ formatPositionPieces(holding) }}
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <div>{{ holding.name || '-' }}</div>
+                                            <div class="text-caption text-medium-emphasis">
+                                                {{ holding.isin || '-' }} · WKN: {{ holding.wkn || '-' }}
                                             </div>
                                             <div
                                                 v-if="recentPriceTrendDots(holding).length"
@@ -3518,30 +3653,50 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                                 </span>
                                             </span>
                                         </td>
-                                        <td>{{ formatSessionPrice(holding.start_price, holding) }}</td>
-                                        <td>{{ formatSessionPrice(holding.end_price, holding) }}</td>
                                         <td>
-                                            <span class="d-inline-flex flex-column">
-                                                <span>{{ formatSessionPrice(holding.start_price_24, holding) }}</span>
+                                            <span class="d-inline-flex align-center ga-1">
+                                                <span>{{ formatSessionPrice(holding.start_price, holding) }}</span>
                                                 <span
-                                                    v-if="formatSessionPriceChangePercent(holding.start_price_24, holding)"
-                                                    class="session-price-change"
-                                                    :class="sessionPriceChangeClass(holding.start_price_24, holding)"
+                                                    v-if="startPriceTickSymbol(holding)"
+                                                    class="latest-price-tick"
+                                                    :class="startPriceTickClass(holding)"
+                                                    :aria-label="startPriceTickLabel(holding)"
+                                                    :title="startPriceTickLabel(holding)"
                                                 >
-                                                    {{ formatSessionPriceChangePercent(holding.start_price_24, holding) }}
+                                                    {{ startPriceTickSymbol(holding) }}
+                                                </span>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="latest-price-value d-inline-flex flex-column" :class="endPriceValueClass(holding)">
+                                                <span>{{ formatSessionPrice(holding.end_price, holding) }}</span>
+                                                <span
+                                                    v-if="formatEndPriceChangePercent(holding)"
+                                                    class="session-price-change"
+                                                >
+                                                    {{ formatEndPriceChangePercent(holding) }}
                                                 </span>
                                             </span>
                                         </td>
                                         <td>
                                             <span class="d-inline-flex flex-column">
-                                                <span>{{ formatSessionPrice(holding.start_price_48, holding) }}</span>
-                                                <span
-                                                    v-if="formatSessionPriceChangePercent(holding.start_price_48, holding)"
-                                                    class="session-price-change"
-                                                    :class="sessionPriceChangeClass(holding.start_price_48, holding)"
-                                                >
-                                                    {{ formatSessionPriceChangePercent(holding.start_price_48, holding) }}
+                                                <span class="d-inline-flex align-center ga-1">
+                                                    <span>{{ formatSessionPrice(holding.end_price_24, holding) }}</span>
+                                                    <span
+                                                        v-if="end24PriceTickSymbol(holding)"
+                                                        class="latest-price-tick"
+                                                        :class="end24PriceTickClass(holding)"
+                                                        :aria-label="end24PriceTickLabel(holding)"
+                                                        :title="end24PriceTickLabel(holding)"
+                                                    >
+                                                        {{ end24PriceTickSymbol(holding) }}
+                                                    </span>
                                                 </span>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <span class="d-inline-flex flex-column">
+                                                <span>{{ formatSessionPrice(holding.end_price_48, holding) }}</span>
                                             </span>
                                         </td>
                                         <td>
@@ -3672,11 +3827,13 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                             <div class="text-caption text-medium-emphasis">
                                                 {{ exchange.name || '-' }}
                                             </div>
+                                        </td>
+                                        <td>
+                                            <div>{{ exchange.operating_mic || '-' }}</div>
                                             <div class="text-caption text-medium-emphasis">
                                                 {{ exchange.timezone || '-' }}
                                             </div>
                                         </td>
-                                        <td>{{ exchange.operating_mic || '-' }}</td>
                                         <td>{{ formatExchangeTradingTime(exchange) }}</td>
                                         <td>{{ formatExchangeNextTradingText(exchange) }}</td>
                                         <td>{{ exchange.working_days || '-' }}</td>
@@ -4407,6 +4564,12 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         step="0.01"
                                         suffix="EUR"
                                         type="number"
+                                        required
+                                    />
+                                    <v-text-field
+                                        v-model="stockTransactionForm.booked_at"
+                                        label="Date"
+                                        type="date"
                                         required
                                     />
                                     <v-text-field

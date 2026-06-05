@@ -74,9 +74,13 @@ class AdminDepotTransactionController extends Controller
             'stock_holding_id' => ['required', Rule::exists(StockHolding::class, 'id')],
             'pieces' => ['required', 'numeric', 'min:0.00000001', 'max:999999999999.99999999'],
             'total_amount' => ['required', 'numeric', 'min:0.01', 'max:9999999999999.99'],
+            'booked_at' => ['nullable', 'date'],
             'note' => ['nullable', 'string', 'max:255'],
         ]);
         $holding = StockHolding::query()->findOrFail($validated['stock_holding_id']);
+        $bookedAt = isset($validated['booked_at'])
+            ? $request->date('booked_at')->startOfDay()
+            : null;
 
         $transaction = $booker->bookStock(
             depot: $depot,
@@ -85,6 +89,7 @@ class AdminDepotTransactionController extends Controller
             pieces: (string) $validated['pieces'],
             totalAmount: (string) $validated['total_amount'],
             note: $validated['note'] ?? null,
+            bookedAt: $bookedAt,
         );
 
         return response()->json([

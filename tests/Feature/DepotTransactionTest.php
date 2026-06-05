@@ -67,12 +67,13 @@ class DepotTransactionTest extends TestCase
             'name' => 'Apple Inc.',
         ]);
 
-        $this->actingAs($admin)
+        $response = $this->actingAs($admin)
             ->postJson('/admin/depot-transactions/stocks', [
                 'type' => 'buy',
                 'stock_holding_id' => $holding->id,
                 'pieces' => '2.5',
                 'total_amount' => '500.00',
+                'booked_at' => '2026-06-05',
             ])
             ->assertCreated()
             ->assertJsonPath('message', 'Stock transaction booked.')
@@ -81,6 +82,10 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('transaction.pieces', '2.50000000')
             ->assertJsonPath('transaction.unit_price', '200.00000000')
             ->assertJsonPath('transaction.cash_delta', '-500.00');
+
+        $this->assertSame('2026-06-05', $response->json('transaction.booked_at')
+            ? substr($response->json('transaction.booked_at'), 0, 10)
+            : null);
 
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
@@ -133,6 +138,17 @@ class DepotTransactionTest extends TestCase
             ])
             ->assertUnprocessable()
             ->assertJsonValidationErrors('pieces');
+
+        $this->actingAs($admin)
+            ->postJson('/admin/depot-transactions/stocks', [
+                'type' => 'buy',
+                'stock_holding_id' => $holding->id,
+                'pieces' => '1',
+                'total_amount' => '50.00',
+                'booked_at' => 'not-a-date',
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('booked_at');
 
         $this->assertSame('100.00', $depot->refresh()->account_balance);
     }

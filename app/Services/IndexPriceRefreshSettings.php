@@ -24,6 +24,8 @@ class IndexPriceRefreshSettings
         );
         $settings = $this->normalizeSettings($config->value);
 
+        $settings = $this->recalculateRefreshTimes($settings);
+
         if ($settings !== $config->value) {
             $config->update(['value' => $settings]);
         }
@@ -116,9 +118,7 @@ class IndexPriceRefreshSettings
      */
     private function currentIntervalMinutes(array $settings, bool $isTradingTime): int
     {
-        return $isTradingTime
-            ? $settings['trading_interval_minutes']
-            : $settings['closed_interval_minutes'];
+        return $settings['trading_interval_minutes'];
     }
 
     /**
@@ -128,7 +128,7 @@ class IndexPriceRefreshSettings
     {
         $isTradingTime = $this->isAnyIndexWithinTradingTimes($from, $settings);
 
-        if (! $isTradingTime && ! $settings['closed_refresh_enabled']) {
+        if (! $isTradingTime) {
             return $this->nextTradingRefreshAt($from, $settings)->toIso8601String();
         }
 
@@ -136,6 +136,47 @@ class IndexPriceRefreshSettings
             ->copy()
             ->addMinutes($this->currentIntervalMinutes($settings, $isTradingTime))
             ->toIso8601String();
+    }
+
+    /**
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}
+     */
+    private function recalculateRefreshTimes(array $settings): array
+    {
+        $nextRefreshAt = $this->recalculatedNextRefreshAt(now(), $settings);
+
+        if ($settings['next_refresh_at'] === $nextRefreshAt) {
+            return $settings;
+        }
+
+        return [
+            ...$settings,
+            'next_refresh_at' => $nextRefreshAt,
+        ];
+    }
+
+    /**
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     */
+    private function recalculatedNextRefreshAt(Carbon $from, array $settings): string
+    {
+        $isTradingTime = $this->isAnyIndexWithinTradingTimes($from, $settings);
+
+        if (! $isTradingTime) {
+            return $this->nextTradingRefreshAt($from, $settings)->toIso8601String();
+        }
+
+        $lastRefreshedAt = $this->carbon($settings['last_refreshed_at']);
+
+        if ($lastRefreshedAt !== null) {
+            return $lastRefreshedAt
+                ->copy()
+                ->addMinutes($settings['trading_interval_minutes'])
+                ->toIso8601String();
+        }
+
+        return $settings['next_refresh_at'] ?? $this->nextRefreshAt($from, $settings);
     }
 
     /**
@@ -275,7 +316,7 @@ class IndexPriceRefreshSettings
      */
     private function tradingWindow(string $tradingTimes, array $settings): ?array
     {
-        if (! preg_match('/(?<open_hour>\d{1,2}):(?<open_minute>\d{2})\s*(?:-|to|until|bis)\s*(?<close_hour>\d{1,2}):(?<close_minute>\d{2})/i', $tradingTimes, $matches)) {
+        if (! preg_match('/(?<![:\d])(?<open_hour>\d{1,2}):(?<open_minute>\d{2})(?::\d{2})?\s*(?:-|to|until|bis)\s*(?<close_hour>\d{1,2}):(?<close_minute>\d{2})(?::\d{2})?/i', $tradingTimes, $matches)) {
             return null;
         }
 

@@ -51,33 +51,45 @@ class FetchHistoricalSessionPrices implements ShouldBeUnique, ShouldQueue
                     $windows['today_start']['from'],
                     $windows['today_start']['until'],
                 );
-                $previousStartQuote = $eodhdMarketData->dailyOpenQuote(
-                    $holding,
-                    Carbon::parse($this->session['previous_date'], $this->session['timezone']),
-                    $windows['previous_start']['from'],
-                );
-                $twoAgoStartQuote = $eodhdMarketData->dailyOpenQuote(
-                    $holding,
-                    Carbon::parse($this->session['two_ago_date'], $this->session['timezone']),
-                    $windows['two_ago_start']['from'],
-                );
+                $todayEndQuote = $this->isAfterTodayClose()
+                    ? $eodhdMarketData->dailyCloseQuote(
+                        $holding,
+                        Carbon::parse($this->session['today_date'], $this->session['timezone']),
+                        $windows['today_end']['from'],
+                    )
+                    : null;
                 $previousEndQuote = $eodhdMarketData->dailyCloseQuote(
                     $holding,
                     Carbon::parse($this->session['previous_date'], $this->session['timezone']),
                     $windows['previous_end']['from'],
                 );
+                $twoAgoEndQuote = $eodhdMarketData->dailyCloseQuote(
+                    $holding,
+                    Carbon::parse($this->session['two_ago_date'], $this->session['timezone']),
+                    $windows['two_ago_end']['from'],
+                );
 
-                if (! $todayStartQuote || ! $previousStartQuote || ! $twoAgoStartQuote || ! $previousEndQuote) {
+                if (! $todayStartQuote || ! $previousEndQuote || ! $twoAgoEndQuote || ($this->isAfterTodayClose() && ! $todayEndQuote)) {
                     $this->markFailed($fetchStatus, $holding, $windows);
 
                     return;
                 }
 
-                DB::transaction(function () use ($eodhdMarketData, $holding, $todayStartQuote, $previousStartQuote, $twoAgoStartQuote, $previousEndQuote): void {
+                DB::transaction(function () use ($eodhdMarketData, $holding, $todayStartQuote, $todayEndQuote, $previousEndQuote, $twoAgoEndQuote): void {
                     $eodhdMarketData->storeHistoricalQuote($holding, $todayStartQuote);
                     $eodhdMarketData->storeHistoricalQuote($holding, $previousEndQuote);
-                    $eodhdMarketData->storeHistoricalQuote($holding, $previousStartQuote);
-                    $eodhdMarketData->storeHistoricalQuote($holding, $twoAgoStartQuote);
+                    $eodhdMarketData->storeHistoricalQuote($holding, $twoAgoEndQuote);
+
+                    if ($todayEndQuote) {
+                        $eodhdMarketData->storeHistoricalQuote($holding, $todayEndQuote);
+                    }
+
+                    $holding->update([
+                        'start_price' => $todayStartQuote->quote->price,
+                        'end_price' => $todayEndQuote?->quote->price,
+                        'end_price_24' => $previousEndQuote->quote->price,
+                        'end_price_48' => $twoAgoEndQuote->quote->price,
+                    ]);
                 });
 
                 $this->markFinished($fetchStatus, $holding, $windows);
@@ -95,22 +107,27 @@ class FetchHistoricalSessionPrices implements ShouldBeUnique, ShouldQueue
                 'until' => Carbon::parse($this->session['today_close'])->utc(),
                 'type' => 'start',
             ],
-            'previous_start' => [
-                'from' => Carbon::parse($this->session['previous_open'])->utc(),
-                'until' => Carbon::parse($this->session['previous_close'])->utc(),
-                'type' => 'start',
-            ],
-            'two_ago_start' => [
-                'from' => Carbon::parse($this->session['two_ago_open'])->utc(),
-                'until' => Carbon::parse($this->session['two_ago_close'])->utc(),
-                'type' => 'start',
+            'today_end' => [
+                'from' => Carbon::parse($this->session['today_close'])->utc(),
+                'until' => Carbon::parse($this->session['today_close'])->utc()->addDay(),
+                'type' => 'end',
             ],
             'previous_end' => [
                 'from' => Carbon::parse($this->session['previous_close'])->utc(),
                 'until' => Carbon::parse($this->session['today_open'])->utc(),
                 'type' => 'end',
             ],
+            'two_ago_end' => [
+                'from' => Carbon::parse($this->session['two_ago_close'])->utc(),
+                'until' => Carbon::parse($this->session['previous_open'])->utc(),
+                'type' => 'end',
+            ],
         ];
+    }
+
+    private function isAfterTodayClose(): bool
+    {
+        return now()->greaterThanOrEqualTo(Carbon::parse($this->session['today_close']));
     }
 
     /**
@@ -119,6 +136,10 @@ class FetchHistoricalSessionPrices implements ShouldBeUnique, ShouldQueue
     private function markRunning(HistoricalSessionStartPriceFetchStatus $fetchStatus, StockHolding $holding, array $windows): void
     {
         foreach ($windows as $window) {
+            if (! $this->shouldTrackWindow($window)) {
+                continue;
+            }
+
             $fetchStatus->running($holding->id, $window['from'], $window['until'], $window['type']);
         }
     }
@@ -129,6 +150,10 @@ class FetchHistoricalSessionPrices implements ShouldBeUnique, ShouldQueue
     private function markFinished(HistoricalSessionStartPriceFetchStatus $fetchStatus, StockHolding $holding, array $windows): void
     {
         foreach ($windows as $window) {
+            if (! $this->shouldTrackWindow($window)) {
+                continue;
+            }
+
             $fetchStatus->finished($holding->id, $window['from'], $window['until'], $window['type']);
         }
     }
@@ -139,8 +164,22 @@ class FetchHistoricalSessionPrices implements ShouldBeUnique, ShouldQueue
     private function markFailed(HistoricalSessionStartPriceFetchStatus $fetchStatus, StockHolding $holding, array $windows): void
     {
         foreach ($windows as $window) {
+            if (! $this->shouldTrackWindow($window)) {
+                continue;
+            }
+
             $fetchStatus->failed($holding->id, $window['from'], $window['until'], $window['type']);
         }
+    }
+
+    /**
+     * @param  array{from: Carbon, until: Carbon, type: string}  $window
+     */
+    private function shouldTrackWindow(array $window): bool
+    {
+        $todayClose = Carbon::parse($this->session['today_close'])->utc();
+
+        return ! ($window['type'] === 'end' && $window['from']->equalTo($todayClose) && ! $this->isAfterTodayClose());
     }
 
     public function uniqueId(): string
