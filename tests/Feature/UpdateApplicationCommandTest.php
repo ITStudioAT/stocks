@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
@@ -137,6 +138,12 @@ return new class extends Migration
 };
 PHP);
 
+        $this->markCurrentMigrationsAsRanExcept([$obsoleteMigration]);
+
+        Schema::create('personal_access_tokens', function (Blueprint $table): void {
+            $table->id();
+        });
+
         Process::fake([
             'composer install --no-interaction --prefer-dist' => Process::result(),
             'php artisan optimize:clear' => Process::result(),
@@ -145,7 +152,7 @@ PHP);
 
         try {
             $this->artisan('app:update --skip-npm --skip-build')
-                ->expectsOutputToContain('Retired obsolete duplicate migration: 2019_12_14_000001_create_personal_access_tokens_table.php')
+                ->expectsOutputToContain('Retired already-applied duplicate migration: 2019_12_14_000001_create_personal_access_tokens_table.php')
                 ->doesntExpectOutputToContain('Migration preflight failed')
                 ->expectsOutputToContain('Application update complete.')
                 ->assertSuccessful();
@@ -156,6 +163,64 @@ PHP);
         } finally {
             if (file_exists($obsoleteMigration)) {
                 unlink($obsoleteMigration);
+            }
+        }
+
+        Process::assertRan('composer install --no-interaction --prefer-dist');
+        Process::assertRan('php artisan optimize:clear');
+        Process::assertRan('php artisan migrate --force --no-interaction');
+    }
+
+    public function test_update_command_retires_legacy_default_migrations_that_create_existing_tables(): void
+    {
+        Process::preventStrayProcesses();
+
+        $legacyMigrations = [
+            database_path('migrations/2014_10_12_000000_create_users_table.php') => 'users',
+            database_path('migrations/2014_10_12_100000_create_password_reset_tokens_table.php') => 'password_reset_tokens',
+            database_path('migrations/2019_08_19_000000_create_failed_jobs_table.php') => 'failed_jobs',
+        ];
+
+        foreach ($legacyMigrations as $migration => $table) {
+            file_put_contents($migration, $this->createTableMigrationContent($table));
+        }
+
+        $this->markCurrentMigrationsAsRanExcept(array_keys($legacyMigrations));
+
+        Schema::create('users', function (Blueprint $table): void {
+            $table->id();
+        });
+        Schema::create('password_reset_tokens', function (Blueprint $table): void {
+            $table->string('email')->primary();
+        });
+        Schema::create('failed_jobs', function (Blueprint $table): void {
+            $table->id();
+        });
+
+        Process::fake([
+            'composer install --no-interaction --prefer-dist' => Process::result(),
+            'php artisan optimize:clear' => Process::result(),
+            'php artisan migrate --force --no-interaction' => Process::result(),
+        ]);
+
+        try {
+            $this->artisan('app:update --skip-npm --skip-build')
+                ->expectsOutputToContain('Retired already-applied duplicate migration: 2014_10_12_000000_create_users_table.php')
+                ->expectsOutputToContain('Retired already-applied duplicate migration: 2014_10_12_100000_create_password_reset_tokens_table.php')
+                ->expectsOutputToContain('Retired already-applied duplicate migration: 2019_08_19_000000_create_failed_jobs_table.php')
+                ->doesntExpectOutputToContain('Migration preflight failed')
+                ->expectsOutputToContain('Application update complete.')
+                ->assertSuccessful();
+
+            foreach ($legacyMigrations as $migration => $table) {
+                $this->assertStringContainsString('Retired duplicate migration', file_get_contents($migration));
+                $this->assertStringNotContainsString("Schema::create('{$table}'", file_get_contents($migration));
+            }
+        } finally {
+            foreach (array_keys($legacyMigrations) as $migration) {
+                if (file_exists($migration)) {
+                    unlink($migration);
+                }
             }
         }
 
@@ -191,5 +256,59 @@ PHP);
         Process::assertDidntRun('composer install --no-interaction --prefer-dist');
         Process::assertDidntRun('php artisan optimize:clear');
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
+    }
+
+    /**
+     * @param  array<int, string>  $migrationFiles
+     */
+    private function markCurrentMigrationsAsRanExcept(array $migrationFiles): void
+    {
+        $except = collect($migrationFiles)
+            ->map(fn (string $migrationFile): string => pathinfo($migrationFile, PATHINFO_FILENAME))
+            ->flip();
+
+        Schema::create('migrations', function (Blueprint $table): void {
+            $table->id();
+            $table->string('migration');
+            $table->integer('batch');
+        });
+
+        $migrations = collect(glob(database_path('migrations/*.php')) ?: [])
+            ->map(fn (string $migrationFile): string => pathinfo($migrationFile, PATHINFO_FILENAME))
+            ->reject(fn (string $migration): bool => $except->has($migration))
+            ->values()
+            ->map(fn (string $migration): array => [
+                'migration' => $migration,
+                'batch' => 1,
+            ])
+            ->all();
+
+        DB::table('migrations')->insert($migrations);
+    }
+
+    private function createTableMigrationContent(string $table): string
+    {
+        return <<<PHP
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('{$table}', function (Blueprint \$table): void {
+            \$table->id();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('{$table}');
+    }
+};
+PHP;
     }
 }

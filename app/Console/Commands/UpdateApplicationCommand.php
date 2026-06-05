@@ -22,19 +22,12 @@ class UpdateApplicationCommand extends Command
 {
     private const MIGRATION_STEP = 'Running database migrations';
 
-    private const OBSOLETE_DUPLICATE_MIGRATIONS = [
-        [
-            'obsolete' => '2019_12_14_000001_create_personal_access_tokens_table.php',
-            'replacement' => '2026_05_23_153233_create_personal_access_tokens_table.php',
-        ],
-    ];
-
     public function handle(): int
     {
         $this->components->info('Updating application');
 
         if (! $this->option('dry-run') && ! $this->option('skip-migrate')) {
-            if (! $this->retireObsoleteDuplicateMigrations()) {
+            if (! $this->retireAlreadyAppliedDuplicateCreateMigrations()) {
                 return self::FAILURE;
             }
 
@@ -98,30 +91,68 @@ class UpdateApplicationCommand extends Command
         return $commands;
     }
 
-    private function retireObsoleteDuplicateMigrations(): bool
+    private function retireAlreadyAppliedDuplicateCreateMigrations(): bool
     {
-        foreach (self::OBSOLETE_DUPLICATE_MIGRATIONS as $migration) {
-            $obsoletePath = database_path("migrations/{$migration['obsolete']}");
-            $replacementPath = database_path("migrations/{$migration['replacement']}");
+        $tableCreateCounts = $this->tableCreateCounts();
 
-            if (! File::exists($obsoletePath) || ! File::exists($replacementPath)) {
+        foreach ($this->pendingMigrationFiles() as $migrationFile) {
+            $createdTables = $this->createdTablesInMigration($migrationFile);
+
+            if ($createdTables === []) {
                 continue;
             }
 
-            if (File::put($obsoletePath, $this->obsoleteDuplicateMigrationNoopContent($migration['obsolete'])) === false) {
-                $this->components->error("Could not retire obsolete duplicate migration: {$migration['obsolete']}");
+            $createsOnlyDuplicateTables = collect($createdTables)
+                ->every(fn (string $table): bool => ($tableCreateCounts[$table] ?? 0) > 1);
+
+            if (! $createsOnlyDuplicateTables) {
+                continue;
+            }
+
+            $allTablesAlreadyExist = collect($createdTables)
+                ->every(fn (string $table): bool => Schema::hasTable($table));
+
+            if (! $allTablesAlreadyExist) {
+                continue;
+            }
+
+            $migration = basename($migrationFile);
+
+            if (File::put($migrationFile, $this->retiredCreateMigrationNoopContent($migration, $createdTables)) === false) {
+                $this->components->error("Could not retire already-applied duplicate migration: {$migration}");
 
                 return false;
             }
 
-            $this->components->info("Retired obsolete duplicate migration: {$migration['obsolete']}");
+            $this->components->info("Retired already-applied duplicate migration: {$migration}");
         }
 
         return true;
     }
 
-    private function obsoleteDuplicateMigrationNoopContent(string $migration): string
+    /**
+     * @return array<string, int>
+     */
+    private function tableCreateCounts(): array
     {
+        $tableCreateCounts = [];
+
+        foreach ($this->migrationFiles() as $migrationFile) {
+            foreach ($this->createdTablesInMigration($migrationFile) as $table) {
+                $tableCreateCounts[$table] = ($tableCreateCounts[$table] ?? 0) + 1;
+            }
+        }
+
+        return $tableCreateCounts;
+    }
+
+    /**
+     * @param  array<int, string>  $tables
+     */
+    private function retiredCreateMigrationNoopContent(string $migration, array $tables): string
+    {
+        $tableList = implode(', ', $tables);
+
         return <<<PHP
 <?php
 
@@ -132,8 +163,9 @@ use Illuminate\Database\Migrations\Migration;
 | Retired duplicate migration
 |--------------------------------------------------------------------------
 |
-| app:update replaces {$migration} with this no-op because this project
-| keeps the real personal_access_tokens schema in the 2026 migration.
+| app:update replaced {$migration} with this no-op because it only creates
+| tables that already exist and are also created by another migration:
+| {$tableList}
 |
 */
 return new class extends Migration
@@ -203,8 +235,7 @@ PHP;
      */
     private function pendingMigrationFiles(): array
     {
-        $migrationFiles = File::glob(database_path('migrations/*.php')) ?: [];
-        sort($migrationFiles);
+        $migrationFiles = $this->migrationFiles();
 
         $migrationRepositoryTable = config('database.migrations.table', 'migrations');
 
@@ -220,6 +251,17 @@ PHP;
             $migrationFiles,
             fn (string $migrationFile): bool => ! $ranMigrations->has(pathinfo($migrationFile, PATHINFO_FILENAME)),
         ));
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function migrationFiles(): array
+    {
+        $migrationFiles = File::glob(database_path('migrations/*.php')) ?: [];
+        sort($migrationFiles);
+
+        return $migrationFiles;
     }
 
     /**
