@@ -26,6 +26,7 @@ class DepotTransactionTest extends TestCase
             ->postJson('/admin/depot-transactions/cash', [
                 'type' => 'deposit',
                 'total_amount' => '250.25',
+                'booked_at' => '2026-06-05',
                 'note' => 'Funding',
             ])
             ->assertCreated()
@@ -35,6 +36,15 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('transaction.total_amount', '250.25')
             ->assertJsonPath('transaction.cash_delta', '250.25')
             ->assertJsonPath('transaction.balance_after', '1250.25');
+
+        $this->assertDatabaseHas('depot_transactions', [
+            'depot_id' => $depot->id,
+            'type' => 'deposit',
+            'total_amount' => '250.25',
+            'balance_after' => '1250.25',
+            'booked_at' => '2026-06-05 00:00:00',
+            'note' => 'Funding',
+        ]);
 
         $this->actingAs($admin)
             ->postJson('/admin/depot-transactions/cash', [
@@ -46,13 +56,6 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('transaction.cash_delta', '-100.00');
 
         $this->assertSame('1150.25', $depot->refresh()->account_balance);
-        $this->assertDatabaseHas('depot_transactions', [
-            'depot_id' => $depot->id,
-            'type' => 'deposit',
-            'total_amount' => '250.25',
-            'balance_after' => '1250.25',
-            'note' => 'Funding',
-        ]);
     }
 
     public function test_admin_can_book_stock_buy_and_sell_transactions(): void
@@ -144,6 +147,15 @@ class DepotTransactionTest extends TestCase
                 'type' => 'buy',
                 'stock_holding_id' => $holding->id,
                 'pieces' => '1',
+                'total_amount' => '50.00',
+                'booked_at' => 'not-a-date',
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('booked_at');
+
+        $this->actingAs($admin)
+            ->postJson('/admin/depot-transactions/cash', [
+                'type' => 'deposit',
                 'total_amount' => '50.00',
                 'booked_at' => 'not-a-date',
             ])

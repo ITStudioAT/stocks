@@ -2344,6 +2344,15 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/queue/status') {
+                return Promise.resolve(jsonResponse({
+                    queue: {
+                        ok: true,
+                        status: 'ok',
+                    },
+                }));
+            }
+
             if (path === '/admin/depot-transactions/cash' && options?.method === 'POST') {
                 return Promise.resolve(jsonResponse({
                     message: 'Cash transaction booked.',
@@ -2376,6 +2385,9 @@ describe('App', () => {
         const cashAmountInput = document.body.querySelector('#cash-transaction-form input[type="number"]');
         cashAmountInput.value = '250';
         cashAmountInput.dispatchEvent(new Event('input', { bubbles: true }));
+        const cashDateInput = document.body.querySelector('#cash-transaction-form input[type="date"]');
+        cashDateInput.value = '2026-06-05';
+        cashDateInput.dispatchEvent(new Event('input', { bubbles: true }));
         document.body.querySelector('#cash-transaction-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
         await flushPromises();
 
@@ -2384,6 +2396,7 @@ describe('App', () => {
             body: JSON.stringify({
                 type: 'deposit',
                 total_amount: 250,
+                booked_at: '2026-06-05',
                 note: null,
             }),
         }));

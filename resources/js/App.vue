@@ -1127,6 +1127,7 @@ function openCashTransactionDialog(type) {
     cashTransactionForm.value = {
         type,
         total_amount: '',
+        booked_at: localDateInputValue(),
         note: '',
     };
     holdingError.value = '';
@@ -1147,6 +1148,7 @@ async function bookCashTransaction() {
         const data = await depotsStore.bookCashTransaction({
             type: cashTransactionForm.value.type,
             total_amount: Number(cashTransactionForm.value.total_amount),
+            booked_at: cashTransactionForm.value.booked_at || null,
             note: cashTransactionForm.value.note || null,
         });
 
@@ -3229,6 +3231,7 @@ function emptyCashTransactionForm() {
     return {
         type: 'deposit',
         total_amount: '',
+        booked_at: localDateInputValue(),
         note: '',
     };
 }
@@ -4515,6 +4518,12 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         step="0.01"
                                         suffix="EUR"
                                         type="number"
+                                        required
+                                    />
+                                    <v-text-field
+                                        v-model="cashTransactionForm.booked_at"
+                                        label="Date"
+                                        type="date"
                                         required
                                     />
                                     <v-text-field

@@ -49,14 +49,19 @@ class AdminDepotTransactionController extends Controller
         $validated = $request->validate([
             'type' => ['required', Rule::in(['deposit', 'withdrawal'])],
             'total_amount' => ['required', 'numeric', 'min:0.01', 'max:9999999999999.99'],
+            'booked_at' => ['nullable', 'date'],
             'note' => ['nullable', 'string', 'max:255'],
         ]);
+        $bookedAt = isset($validated['booked_at'])
+            ? $request->date('booked_at')->startOfDay()
+            : null;
 
         $transaction = $booker->bookCash(
             depot: $depot,
             type: $validated['type'],
             totalAmount: (string) $validated['total_amount'],
             note: $validated['note'] ?? null,
+            bookedAt: $bookedAt,
         );
 
         return response()->json([

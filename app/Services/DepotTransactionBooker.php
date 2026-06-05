@@ -11,8 +11,13 @@ use Illuminate\Validation\ValidationException;
 
 class DepotTransactionBooker
 {
-    public function bookCash(Depot $depot, string $type, string $totalAmount, ?string $note = null): DepotTransaction
-    {
+    public function bookCash(
+        Depot $depot,
+        string $type,
+        string $totalAmount,
+        ?string $note = null,
+        ?Carbon $bookedAt = null,
+    ): DepotTransaction {
         if (! in_array($type, ['deposit', 'withdrawal'], true)) {
             throw ValidationException::withMessages([
                 'type' => 'Unknown cash transaction type.',
@@ -26,6 +31,7 @@ class DepotTransactionBooker
             stockHolding: null,
             pieces: null,
             note: $note,
+            bookedAt: $bookedAt,
         );
     }
 
