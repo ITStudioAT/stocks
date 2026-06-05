@@ -129,7 +129,7 @@ class AdminIndexWatchItemController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, start_price: ?string, latest_price: ?string, last_price: ?string, latest_price_change_pct: ?string, latest_price_as_of: ?string, latest_price_source: ?string, trading_times: ?string, recent_prices: array<int, array{trading_date: ?string, start_price: ?string, actual_price: ?string, last_price: ?string, actual_price_as_of: ?string, last_price_as_of: ?string}>, created_at: ?string}
+     * @return array{id: int, symbol: string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, eodhd_code: string, start_price: ?string, latest_price: ?string, last_price: ?string, latest_price_change_pct: ?string, latest_price_as_of: ?string, latest_price_source: ?string, trading_times: ?string, recent_prices: array<int, array{trading_date: ?string, start_price: ?string, actual_price: ?string, last_price: ?string, actual_price_as_of: ?string, last_price_as_of: ?string}>, created_at: ?string}
      */
     private function indexWatchItemPayload(IndexWatchItem $item): array
     {
@@ -149,6 +149,7 @@ class AdminIndexWatchItemController extends Controller
             'instrument_type' => $item->instrument_type,
             'country' => $item->country,
             'currency' => $item->currency,
+            'eodhd_code' => $this->eodhdCode($item),
             'start_price' => $this->pricePayload($item->start_price),
             'latest_price' => $this->pricePayload($item->latest_price),
             'last_price' => $this->pricePayload($item->last_price),
@@ -168,6 +169,14 @@ class AdminIndexWatchItemController extends Controller
                 ->all(),
             'created_at' => $item->created_at?->toIso8601String(),
         ];
+    }
+
+    private function eodhdCode(IndexWatchItem $item): string
+    {
+        $symbol = Str::upper((string) $item->symbol);
+        $exchange = Str::upper((string) $item->exchange);
+
+        return $symbol.'.'.($exchange !== '' ? $exchange : 'INDX');
     }
 
     /**

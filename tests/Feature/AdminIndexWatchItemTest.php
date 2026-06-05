@@ -61,6 +61,7 @@ class AdminIndexWatchItemTest extends TestCase
             ->assertJsonCount(2, 'indexes')
             ->assertJsonPath('indexes.0.symbol', 'ATX')
             ->assertJsonPath('indexes.0.name', 'Austrian Traded Index in EUR')
+            ->assertJsonPath('indexes.0.eodhd_code', 'ATX.INDX')
             ->assertJsonPath('indexes.0.latest_price', '6116.529800')
             ->assertJsonPath('indexes.0.last_price', '6096.169900')
             ->assertJsonPath('indexes.0.latest_price_change_pct', '0.09')
@@ -220,6 +221,7 @@ class AdminIndexWatchItemTest extends TestCase
             ->assertJsonPath('index.name', 'S&P 500 Index')
             ->assertJsonPath('index.isin', 'US78378X1072')
             ->assertJsonPath('index.wkn', 'A0AET0')
+            ->assertJsonPath('index.eodhd_code', 'SPX.INDX')
             ->assertJsonPath('index.mic_code', 'XNAS')
             ->assertJsonPath('index.currency', 'USD');
 

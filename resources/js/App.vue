@@ -3297,6 +3297,9 @@ function emptyPriceRefreshScheduleForm() {
                                 <span class="index-watch-card-header">
                                     <span class="index-watch-card-symbol">{{ indexItem.symbol }}</span>
                                     <span class="index-watch-card-country">{{ indexItem.country || '-' }}</span>
+                                    <span v-if="indexItem.eodhd_code" class="index-watch-card-code">
+                                        Code {{ indexItem.eodhd_code }}
+                                    </span>
                                 </span>
                                 <span class="index-watch-card-label">{{ indexItem.name || 'Index' }}</span>
                                 <span class="index-watch-card-price" :class="indexChangeClass(indexItem)">
@@ -5306,9 +5309,9 @@ function emptyPriceRefreshScheduleForm() {
     cursor: pointer;
     display: inline-flex;
     flex-direction: column;
-    height: 100px;
+    height: 116px;
     justify-content: center;
-    width: 100px;
+    width: 112px;
 }
 
 .index-watch-card {
@@ -5321,11 +5324,11 @@ function emptyPriceRefreshScheduleForm() {
     display: inline-flex;
     flex-direction: column;
     font: inherit;
-    height: 100px;
+    height: 116px;
     justify-content: space-between;
     padding: 7px 6px;
     text-align: center;
-    width: 100px;
+    width: 112px;
 }
 
 .index-watch-card:focus-visible,
@@ -5369,6 +5372,17 @@ function emptyPriceRefreshScheduleForm() {
     color: rgba(var(--v-theme-on-surface), 0.7);
     font-size: 0.625rem;
     font-weight: 600;
+    line-height: 1;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.index-watch-card-code {
+    color: rgba(var(--v-theme-on-surface), 0.58);
+    font-size: 0.5625rem;
+    font-weight: 700;
     line-height: 1;
     max-width: 100%;
     overflow: hidden;
