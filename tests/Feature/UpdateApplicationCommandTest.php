@@ -95,6 +95,7 @@ PHP);
         try {
             $this->artisan('app:update --skip-npm --skip-build')
                 ->expectsOutputToContain('Migration preflight failed: multiple pending migrations create the same table.')
+                ->expectsOutputToContain('Resolve the duplicate migration before app:update changes Composer or frontend packages.')
                 ->expectsOutputToContain('users')
                 ->doesntExpectOutputToContain('Application update complete.')
                 ->assertFailed();
@@ -102,8 +103,8 @@ PHP);
             unlink($duplicateMigration);
         }
 
-        Process::assertRan('composer install --no-interaction --prefer-dist');
-        Process::assertRan('php artisan optimize:clear');
+        Process::assertDidntRun('composer install --no-interaction --prefer-dist');
+        Process::assertDidntRun('php artisan optimize:clear');
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
     }
 
@@ -123,6 +124,7 @@ PHP);
         try {
             $this->artisan('app:update --skip-npm --skip-build')
                 ->expectsOutputToContain('Migration preflight failed: pending migrations would create tables that already exist.')
+                ->expectsOutputToContain('Resolve the duplicate migration before app:update changes Composer or frontend packages.')
                 ->expectsOutputToContain('users')
                 ->doesntExpectOutputToContain('Application update complete.')
                 ->assertFailed();
@@ -130,8 +132,8 @@ PHP);
             Schema::dropIfExists('users');
         }
 
-        Process::assertRan('composer install --no-interaction --prefer-dist');
-        Process::assertRan('php artisan optimize:clear');
+        Process::assertDidntRun('composer install --no-interaction --prefer-dist');
+        Process::assertDidntRun('php artisan optimize:clear');
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
     }
 }

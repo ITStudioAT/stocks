@@ -26,6 +26,10 @@ class UpdateApplicationCommand extends Command
     {
         $this->components->info('Updating application');
 
+        if (! $this->option('dry-run') && ! $this->option('skip-migrate') && ! $this->ensureMigrationsCanRun()) {
+            return self::FAILURE;
+        }
+
         foreach ($this->commands() as $label => $command) {
             if ($this->option('dry-run')) {
                 $this->line("Would run: {$command}");
@@ -36,12 +40,6 @@ class UpdateApplicationCommand extends Command
             $successful = true;
 
             $this->components->task($label, function () use ($command, &$successful): bool {
-                if ($command === 'php artisan migrate --force --no-interaction' && ! $this->ensureMigrationsCanRun()) {
-                    $successful = false;
-
-                    return false;
-                }
-
                 $successful = $this->runShellCommand($command);
 
                 return $successful;
@@ -178,6 +176,7 @@ class UpdateApplicationCommand extends Command
     private function reportUnsafeMigrations(string $reason, array $tables): void
     {
         $this->components->error("Migration preflight failed: {$reason}.");
+        $this->line('Resolve the duplicate migration before app:update changes Composer or frontend packages.');
 
         foreach ($tables as $table => $migrations) {
             $this->line(" - {$table}: ".implode(', ', $migrations));
