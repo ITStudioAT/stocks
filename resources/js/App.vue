@@ -3237,85 +3237,73 @@ function emptyPriceRefreshScheduleForm() {
             </v-navigation-drawer>
 
             <v-app-bar flat border>
-                <v-app-bar-title>
-                    <div class="d-flex align-center flex-wrap ga-4 app-bar-status">
-                        <span v-if="priceRefreshSettings" class="d-inline-flex align-center flex-wrap ga-2 text-caption text-medium-emphasis">
-                            <span v-show="!mdAndDown">
-                                Stocks Last: {{ formatScheduleDateTime(priceRefreshSettings.last_refreshed_at) }}
-                                · Next: {{ formatScheduleDateTime(priceRefreshSettings.next_refresh_at) }}
-                            </span>
-                            <span
-                                class="d-inline-flex align-center ga-2"
-                                :class="isHeaderStatusUpdating ? 'text-error' : 'text-medium-emphasis'"
-                            >
-                                <span
-                                    class="price-refresh-status-dot"
-                                    :class="isHeaderStatusUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
-                                />
-                                <span v-show="!smAndDown">Stocks</span>
-                                {{ priceRefreshHeaderStatusLabel }}
-                            </span>
-                        </span>
-                        <span v-if="indexPriceRefreshSettings" class="d-inline-flex align-center flex-wrap ga-2 text-caption text-medium-emphasis">
-                            <span v-show="!mdAndDown">
-                                Indices Last: {{ formatScheduleDateTime(indexPriceRefreshSettings.last_refreshed_at) }}
-                                · Next: {{ formatScheduleDateTime(indexPriceRefreshSettings.next_refresh_at) }}
-                            </span>
-                            <span
-                                class="d-inline-flex align-center ga-2"
-                                :class="isAutomaticIndexPriceRefreshUpdating ? 'text-error' : 'text-medium-emphasis'"
-                            >
-                                <span
-                                    class="price-refresh-status-dot"
-                                    :class="isAutomaticIndexPriceRefreshUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
-                                />
-                                <span v-show="!smAndDown">Indices</span>
-                                {{ indexPriceRefreshHeaderStatusLabel }}
-                            </span>
-                        </span>
+                <div class="app-bar-row">
+                    <span v-if="priceRefreshSettings" class="app-bar-group text-caption text-medium-emphasis">
+                        Stocks Last: {{ formatScheduleDateTime(priceRefreshSettings.last_refreshed_at) }}
+                        · Next: {{ formatScheduleDateTime(priceRefreshSettings.next_refresh_at) }}
                         <span
-                            v-if="eodhdUsageItems.length"
-                            class="d-inline-flex align-center flex-wrap ga-2 text-caption text-medium-emphasis eodhd-header-usage"
-                        >
-                            <v-btn
-                                class="dashboard-menu-toggle"
-                                density="comfortable"
-                                icon
-                                size="small"
-                                type="button"
-                                variant="text"
-                                :aria-label="dashboardMenuToggleLabel"
-                                :title="dashboardMenuToggleLabel"
-                                @click="toggleDashboardMenuCompact"
-                            >
-                                <v-icon :icon="isDashboardMenuCompact ? 'mdi-chevron-right' : 'mdi-chevron-left'" />
-                            </v-btn>
-                            <span v-show="!smAndDown" class="font-weight-medium">EODHD API</span>
-                            <span
-                                v-for="item in eodhdUsageItems"
-                                :key="item.key"
-                            >
-                                {{ item.label }} {{ formatInteger(item.usage.remaining) }} / {{ formatInteger(item.usage.limit) }}
-                                <span v-show="!lgAndDown">Used {{ formatInteger(item.usage.used) }} · Reset {{ formatEodhdUsageReset(item.usage.reset_at) }}</span>
-                            </span>
-                        </span>
-                        <span
-                            class="d-inline-flex align-center flex-wrap ga-2 text-caption queue-header-status"
-                            :class="queueStatusClass"
-                            :title="queueStatusTitle"
+                            class="d-inline-flex align-center ga-1 ml-1"
+                            :class="isHeaderStatusUpdating ? 'text-error' : 'text-medium-emphasis'"
                         >
                             <span
                                 class="price-refresh-status-dot"
-                                :class="queueStatus?.status === 'ok' && !queueStatusError ? 'price-refresh-status-dot--waiting' : 'price-refresh-status-dot--updating'"
+                                :class="isHeaderStatusUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
                             />
-                            {{ queueStatusLabel }}
+                            {{ priceRefreshHeaderStatusLabel }}
                         </span>
-                    </div>
-                </v-app-bar-title>
-                <v-spacer />
-                <v-btn href="/admin/logout" prepend-icon="mdi-logout" variant="text">
-                    Logout
-                </v-btn>
+                    </span>
+                    <span v-if="indexPriceRefreshSettings" class="app-bar-group text-caption text-medium-emphasis">
+                        Indices Last: {{ formatScheduleDateTime(indexPriceRefreshSettings.last_refreshed_at) }}
+                        · Next: {{ formatScheduleDateTime(indexPriceRefreshSettings.next_refresh_at) }}
+                        <span
+                            class="d-inline-flex align-center ga-1 ml-1"
+                            :class="isAutomaticIndexPriceRefreshUpdating ? 'text-error' : 'text-medium-emphasis'"
+                        >
+                            <span
+                                class="price-refresh-status-dot"
+                                :class="isAutomaticIndexPriceRefreshUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
+                            />
+                            {{ indexPriceRefreshHeaderStatusLabel }}
+                        </span>
+                    </span>
+                    <span
+                        v-if="eodhdUsageItems.length"
+                        class="app-bar-group text-caption text-medium-emphasis eodhd-header-usage"
+                    >
+                        <v-btn
+                            class="dashboard-menu-toggle"
+                            density="comfortable"
+                            icon
+                            size="small"
+                            type="button"
+                            variant="text"
+                            :aria-label="dashboardMenuToggleLabel"
+                            :title="dashboardMenuToggleLabel"
+                            @click="toggleDashboardMenuCompact"
+                        >
+                            <v-icon :icon="isDashboardMenuCompact ? 'mdi-chevron-right' : 'mdi-chevron-left'" />
+                        </v-btn>
+                        <span class="font-weight-medium">EODHD API</span>
+                        <span v-for="item in eodhdUsageItems" :key="item.key">
+                            {{ item.label }} {{ formatInteger(item.usage.remaining) }} / {{ formatInteger(item.usage.limit) }}
+                            Used {{ formatInteger(item.usage.used) }} · Reset {{ formatEodhdUsageReset(item.usage.reset_at) }}
+                        </span>
+                    </span>
+                    <span
+                        class="app-bar-group text-caption queue-header-status"
+                        :class="queueStatusClass"
+                        :title="queueStatusTitle"
+                    >
+                        <span
+                            class="price-refresh-status-dot"
+                            :class="queueStatus?.status === 'ok' && !queueStatusError ? 'price-refresh-status-dot--waiting' : 'price-refresh-status-dot--updating'"
+                        />
+                        {{ queueStatusLabel }}
+                    </span>
+                    <v-btn href="/admin/logout" prepend-icon="mdi-logout" size="small" variant="text">
+                        Logout
+                    </v-btn>
+                </div>
             </v-app-bar>
 
             <v-main>
@@ -5321,21 +5309,24 @@ function emptyPriceRefreshScheduleForm() {
 </template>
 
 <style scoped>
-.app-bar-status {
+.app-bar-row {
+    align-items: center;
+    display: flex;
     font-size: 0.8125rem;
+    gap: 20px;
+    justify-content: space-between;
     line-height: 1.3;
-}
-
-:deep(.v-app-bar-title) {
-    flex: 1 1 0;
-    min-width: 0;
-    overflow: visible;
-}
-
-:deep(.v-app-bar-title__content) {
-    overflow: visible;
-    white-space: normal;
+    overflow-x: auto;
+    padding: 0 16px;
+    white-space: nowrap;
     width: 100%;
+}
+
+.app-bar-group {
+    align-items: center;
+    display: inline-flex;
+    flex-shrink: 0;
+    gap: 6px;
 }
 
 .dashboard-menu-toggle {
@@ -5348,10 +5339,6 @@ function emptyPriceRefreshScheduleForm() {
 
 .dashboard-navigation-drawer--compact :deep(.v-list-item__prepend) {
     margin-inline-end: 0;
-}
-
-.eodhd-header-usage {
-    padding-left: 0;
 }
 
 .analyze-dummy-page,
