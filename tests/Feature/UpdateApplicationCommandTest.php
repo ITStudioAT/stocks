@@ -108,7 +108,7 @@ PHP);
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
     }
 
-    public function test_update_command_removes_the_obsolete_sanctum_migration_before_migration_preflight(): void
+    public function test_update_command_retires_the_obsolete_sanctum_migration_before_migration_preflight(): void
     {
         Process::preventStrayProcesses();
 
@@ -145,12 +145,14 @@ PHP);
 
         try {
             $this->artisan('app:update --skip-npm --skip-build')
-                ->expectsOutputToContain('Removed obsolete duplicate migration: 2019_12_14_000001_create_personal_access_tokens_table.php')
+                ->expectsOutputToContain('Retired obsolete duplicate migration: 2019_12_14_000001_create_personal_access_tokens_table.php')
                 ->doesntExpectOutputToContain('Migration preflight failed')
                 ->expectsOutputToContain('Application update complete.')
                 ->assertSuccessful();
 
-            $this->assertFileDoesNotExist($obsoleteMigration);
+            $this->assertFileExists($obsoleteMigration);
+            $this->assertStringContainsString('Retired duplicate migration', file_get_contents($obsoleteMigration));
+            $this->assertStringNotContainsString("Schema::create('personal_access_tokens'", file_get_contents($obsoleteMigration));
         } finally {
             if (file_exists($obsoleteMigration)) {
                 unlink($obsoleteMigration);

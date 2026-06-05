@@ -34,7 +34,7 @@ class UpdateApplicationCommand extends Command
         $this->components->info('Updating application');
 
         if (! $this->option('dry-run') && ! $this->option('skip-migrate')) {
-            if (! $this->removeObsoleteDuplicateMigrations()) {
+            if (! $this->retireObsoleteDuplicateMigrations()) {
                 return self::FAILURE;
             }
 
@@ -98,7 +98,7 @@ class UpdateApplicationCommand extends Command
         return $commands;
     }
 
-    private function removeObsoleteDuplicateMigrations(): bool
+    private function retireObsoleteDuplicateMigrations(): bool
     {
         foreach (self::OBSOLETE_DUPLICATE_MIGRATIONS as $migration) {
             $obsoletePath = database_path("migrations/{$migration['obsolete']}");
@@ -108,16 +108,47 @@ class UpdateApplicationCommand extends Command
                 continue;
             }
 
-            if (! File::delete($obsoletePath)) {
-                $this->components->error("Could not remove obsolete duplicate migration: {$migration['obsolete']}");
+            if (File::put($obsoletePath, $this->obsoleteDuplicateMigrationNoopContent($migration['obsolete'])) === false) {
+                $this->components->error("Could not retire obsolete duplicate migration: {$migration['obsolete']}");
 
                 return false;
             }
 
-            $this->components->info("Removed obsolete duplicate migration: {$migration['obsolete']}");
+            $this->components->info("Retired obsolete duplicate migration: {$migration['obsolete']}");
         }
 
         return true;
+    }
+
+    private function obsoleteDuplicateMigrationNoopContent(string $migration): string
+    {
+        return <<<PHP
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+
+/*
+|--------------------------------------------------------------------------
+| Retired duplicate migration
+|--------------------------------------------------------------------------
+|
+| app:update replaces {$migration} with this no-op because this project
+| keeps the real personal_access_tokens schema in the 2026 migration.
+|
+*/
+return new class extends Migration
+{
+    public function up(): void
+    {
+        //
+    }
+
+    public function down(): void
+    {
+        //
+    }
+};
+PHP;
     }
 
     private function ensureMigrationsCanRun(): bool
