@@ -8,6 +8,18 @@ use Throwable;
 
 class StockSearchQueryResolver
 {
+    /**
+     * @var array<string, array{name?: string, wkn?: string, valor?: string, country?: string}>
+     */
+    private const MetadataCorrectionsByIsin = [
+        'LU1900066462' => [
+            'name' => 'Amundi MSCI Eastern Europe Ex Russia UCITS ETF Acc',
+            'wkn' => 'LYX02C',
+            'valor' => '45209801',
+            'country' => 'Luxembourg',
+        ],
+    ];
+
     public function __construct(
         private EodhdApiClient $apiClient,
     ) {}
@@ -192,6 +204,8 @@ class StockSearchQueryResolver
             'currency' => $this->nullableUpperString(Arr::get($candidate, 'Currency', Arr::get($candidate, 'currency'))),
         ];
 
+        $payload = $this->correctKnownStaleMetadata($payload);
+
         $identifierTerms = collect([
             $payload['isin'],
             $payload['symbol'],
@@ -209,6 +223,24 @@ class StockSearchQueryResolver
             ->all();
 
         return $payload;
+    }
+
+    /**
+     * @param  array{name: ?string, isin: ?string, wkn: ?string, valor: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string}  $payload
+     * @return array{name: ?string, isin: ?string, wkn: ?string, valor: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string}
+     */
+    private function correctKnownStaleMetadata(array $payload): array
+    {
+        $isin = $payload['isin'];
+
+        if ($isin === null || ! array_key_exists($isin, self::MetadataCorrectionsByIsin)) {
+            return $payload;
+        }
+
+        return [
+            ...$payload,
+            ...self::MetadataCorrectionsByIsin[$isin],
+        ];
     }
 
     private function nullableString(mixed $value): ?string

@@ -124,6 +124,38 @@ class StockSearchQueryResolverTest extends TestCase
         Http::assertSentCount(2);
     }
 
+    public function test_it_corrects_known_stale_eodhd_metadata(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        Http::fake([
+            'eodhd.com/api/search/LU1900066462*' => Http::response([
+                [
+                    'Code' => 'LEER',
+                    'Exchange' => 'XETRA',
+                    'Name' => 'Lyxor MSCI Eastern Europe ex Russia UCITS ETF Acc',
+                    'Type' => 'ETF',
+                    'Country' => 'Germany',
+                    'Currency' => 'EUR',
+                    'ISIN' => 'LU1900066462',
+                ],
+            ]),
+        ]);
+
+        $candidates = app(StockSearchQueryResolver::class)->resolveCandidates('LU1900066462');
+
+        $this->assertSame('Amundi MSCI Eastern Europe Ex Russia UCITS ETF Acc', $candidates[0]['name']);
+        $this->assertSame('LU1900066462', $candidates[0]['isin']);
+        $this->assertSame('LYX02C', $candidates[0]['wkn']);
+        $this->assertSame('45209801', $candidates[0]['valor']);
+        $this->assertSame('LEER', $candidates[0]['symbol']);
+        $this->assertSame('XETRA', $candidates[0]['exchange']);
+        $this->assertSame('XETR', $candidates[0]['mic_code']);
+        $this->assertSame('ETF', $candidates[0]['instrument_type']);
+        $this->assertSame('Luxembourg', $candidates[0]['country']);
+        $this->assertSame('EUR', $candidates[0]['currency']);
+        $this->assertSame(['LU1900066462', 'LEER', 'LYX02C', '45209801'], $candidates[0]['search_terms']);
+    }
+
     public function test_it_resolves_index_candidates_from_the_eodhd_index_symbol_list(): void
     {
         Cache::flush();
