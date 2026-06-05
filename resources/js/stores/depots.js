@@ -14,6 +14,7 @@ export const useDepotStore = defineStore('depots', {
         priceRefresh: null,
         priceRefreshSettings: null,
         indexPriceRefreshSettings: null,
+        queueStatus: null,
         stockHistoricalPriceCoverage: null,
         stockHistoricalPriceRefresh: null,
         uiPreferences: {
@@ -40,11 +41,13 @@ export const useDepotStore = defineStore('depots', {
         holdingsLoading: false,
         transactionsLoading: false,
         exchangeTradingTimesLoading: false,
+        queueStatusLoading: false,
         stockSearchLoading: false,
         error: '',
         holdingsError: '',
         transactionsError: '',
         exchangeTradingTimesError: '',
+        queueStatusError: '',
         stockSearchError: '',
     }),
     actions: {
@@ -111,6 +114,22 @@ export const useDepotStore = defineStore('depots', {
         },
         async loadActiveDepotHoldings(page = 1) {
             return await this.loadWatchlistHoldings(page);
+        },
+        async loadQueueStatus() {
+            this.queueStatusLoading = true;
+            this.queueStatusError = '';
+
+            try {
+                const data = await request('/admin/queue/status');
+                this.queueStatus = data.queue ?? null;
+
+                return data;
+            } catch (error) {
+                this.queueStatusError = error.message;
+                throw error;
+            } finally {
+                this.queueStatusLoading = false;
+            }
         },
         async loadIndexWatchItems() {
             this.holdingsError = '';

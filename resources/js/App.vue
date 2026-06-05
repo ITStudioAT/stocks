@@ -9,7 +9,7 @@ import { useUserStore } from './stores/users';
 
 const indexRecentPriceLimit = 30;
 
-const { lgAndDown } = useDisplay();
+const { lgAndDown, mdAndDown, smAndDown } = useDisplay();
 
 const auth = useAuthStore();
 const depotsStore = useDepotStore();
@@ -29,6 +29,7 @@ const {
     priceRefresh,
     priceRefreshSettings,
     indexPriceRefreshSettings,
+    queueStatus,
     stockHistoricalPriceCoverage,
     stockHistoricalPriceRefresh,
     uiPreferences,
@@ -39,11 +40,13 @@ const {
     holdingsLoading,
     transactionsLoading,
     exchangeTradingTimesLoading,
+    queueStatusLoading,
     stockSearchLoading,
     error: depotsError,
     holdingsError,
     transactionsError,
     exchangeTradingTimesError,
+    queueStatusError,
     stockSearchError,
 } = storeToRefs(depotsStore);
 const {
@@ -252,6 +255,54 @@ const eodhdUsageItems = computed(() => {
         },
     ].filter(item => item.usage);
 });
+const queueStatusLabel = computed(() => {
+    if (queueStatusLoading.value) {
+        return 'Queue checking';
+    }
+
+    if (queueStatusError.value) {
+        return 'Queue unavailable';
+    }
+
+    if (!queueStatus.value) {
+        return 'Queue unknown';
+    }
+
+    const pending = Number(queueStatus.value.pending ?? 0);
+    const reserved = Number(queueStatus.value.reserved ?? 0);
+    const failed = Number(queueStatus.value.failed ?? 0);
+
+    return [
+        queueStatus.value.status === 'ok' ? 'Queue OK' : 'Queue check',
+        `${queueStatus.value.connection}:${queueStatus.value.name}`,
+        `P ${formatInteger(pending)}`,
+        `R ${formatInteger(reserved)}`,
+        `F ${formatInteger(failed)}`,
+        `${formatInteger(queueStatus.value.retry_after)}s/${formatInteger(queueStatus.value.max_job_timeout)}s`,
+    ].join(' · ');
+});
+const queueStatusTitle = computed(() => {
+    if (queueStatusError.value) {
+        return queueStatusError.value;
+    }
+
+    if (!queueStatus.value) {
+        return 'Queue status has not been loaded yet.';
+    }
+
+    if (!queueStatus.value.issues?.length) {
+        return 'Queue configuration looks appropriate.';
+    }
+
+    return queueStatus.value.issues.join(' ');
+});
+const queueStatusClass = computed(() => {
+    if (queueStatusError.value || queueStatus.value?.status === 'check') {
+        return 'text-error';
+    }
+
+    return 'text-medium-emphasis';
+});
 const analyzeSubmenuItems = [
     {
         key: 'overview',
@@ -456,6 +507,7 @@ onMounted(async () => {
         depotsStore.loadWatchlistHoldings(),
         depotsStore.loadIndexWatchItems(),
         depotsStore.loadWatchlistExchangeTradingTimes(),
+        depotsStore.loadQueueStatus(),
     ]);
     ensureAnalyzeOverviewHistoricalPrices();
     startPriceRefreshSettingsPolling();
@@ -1030,6 +1082,7 @@ async function refreshHoldingPrices() {
     try {
         const data = await depotsStore.refreshWatchlistPrices();
         holdingMessage.value = data.message;
+        await depotsStore.loadQueueStatus();
 
         if (!data.refresh) {
             await depotsStore.loadWatchlistHoldings();
@@ -1307,6 +1360,7 @@ async function ensureAnalyzeOverviewHistoricalPrices() {
 
     try {
         const data = await depotsStore.ensureStockHistoricalPrices();
+        await depotsStore.loadQueueStatus();
 
         if (data.refresh && !isFinishedPriceRefresh(data.refresh)) {
             startStockHistoricalPriceFetchPolling(data.refresh.refresh_id);
@@ -1375,7 +1429,10 @@ async function pollPriceRefreshStatus(refreshId) {
 async function finishPriceRefresh(refresh) {
     stopPriceRefreshPolling();
     depotsStore.clearPriceRefresh();
-    await depotsStore.loadWatchlistHoldings(holdingsPagination.value.current_page);
+    await Promise.all([
+        depotsStore.loadWatchlistHoldings(holdingsPagination.value.current_page),
+        depotsStore.loadQueueStatus(),
+    ]);
 
     if (refresh.status === 'failed') {
         holdingError.value = refresh.error || refresh.message;
@@ -2991,6 +3048,10 @@ function formatValidationErrors(holding) {
     return holding.validation_errors.join('\n');
 }
 
+function copyToClipboard(text) {
+    navigator.clipboard.writeText(text);
+}
+
 function clearSectionMessages() {
     profileMessage.value = '';
     profileError.value = '';
@@ -3179,7 +3240,7 @@ function emptyPriceRefreshScheduleForm() {
                 <v-app-bar-title>
                     <div class="d-flex align-center flex-wrap ga-4 app-bar-status">
                         <span v-if="priceRefreshSettings" class="d-inline-flex align-center flex-wrap ga-2 text-caption text-medium-emphasis">
-                            <span>
+                            <span v-show="!mdAndDown">
                                 Stocks Last: {{ formatScheduleDateTime(priceRefreshSettings.last_refreshed_at) }}
                                 · Next: {{ formatScheduleDateTime(priceRefreshSettings.next_refresh_at) }}
                             </span>
@@ -3191,11 +3252,12 @@ function emptyPriceRefreshScheduleForm() {
                                     class="price-refresh-status-dot"
                                     :class="isHeaderStatusUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
                                 />
+                                <span v-show="!smAndDown">Stocks</span>
                                 {{ priceRefreshHeaderStatusLabel }}
                             </span>
                         </span>
                         <span v-if="indexPriceRefreshSettings" class="d-inline-flex align-center flex-wrap ga-2 text-caption text-medium-emphasis">
-                            <span>
+                            <span v-show="!mdAndDown">
                                 Indices Last: {{ formatScheduleDateTime(indexPriceRefreshSettings.last_refreshed_at) }}
                                 · Next: {{ formatScheduleDateTime(indexPriceRefreshSettings.next_refresh_at) }}
                             </span>
@@ -3207,6 +3269,7 @@ function emptyPriceRefreshScheduleForm() {
                                     class="price-refresh-status-dot"
                                     :class="isAutomaticIndexPriceRefreshUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
                                 />
+                                <span v-show="!smAndDown">Indices</span>
                                 {{ indexPriceRefreshHeaderStatusLabel }}
                             </span>
                         </span>
@@ -3227,14 +3290,25 @@ function emptyPriceRefreshScheduleForm() {
                             >
                                 <v-icon :icon="isDashboardMenuCompact ? 'mdi-chevron-right' : 'mdi-chevron-left'" />
                             </v-btn>
-                            <span class="font-weight-medium">EODHD API</span>
+                            <span v-show="!smAndDown" class="font-weight-medium">EODHD API</span>
                             <span
                                 v-for="item in eodhdUsageItems"
                                 :key="item.key"
                             >
                                 {{ item.label }} {{ formatInteger(item.usage.remaining) }} / {{ formatInteger(item.usage.limit) }}
-                                Used {{ formatInteger(item.usage.used) }} · Reset {{ formatEodhdUsageReset(item.usage.reset_at) }}
+                                <span v-show="!lgAndDown">Used {{ formatInteger(item.usage.used) }} · Reset {{ formatEodhdUsageReset(item.usage.reset_at) }}</span>
                             </span>
+                        </span>
+                        <span
+                            class="d-inline-flex align-center flex-wrap ga-2 text-caption queue-header-status"
+                            :class="queueStatusClass"
+                            :title="queueStatusTitle"
+                        >
+                            <span
+                                class="price-refresh-status-dot"
+                                :class="queueStatus?.status === 'ok' && !queueStatusError ? 'price-refresh-status-dot--waiting' : 'price-refresh-status-dot--updating'"
+                            />
+                            {{ queueStatusLabel }}
                         </span>
                     </div>
                 </v-app-bar-title>
@@ -3297,9 +3371,6 @@ function emptyPriceRefreshScheduleForm() {
                                 <span class="index-watch-card-header">
                                     <span class="index-watch-card-symbol">{{ indexItem.symbol }}</span>
                                     <span class="index-watch-card-country">{{ indexItem.country || '-' }}</span>
-                                    <span v-if="indexItem.eodhd_code" class="index-watch-card-code">
-                                        Code {{ indexItem.eodhd_code }}
-                                    </span>
                                 </span>
                                 <span class="index-watch-card-label">{{ indexItem.name || 'Index' }}</span>
                                 <span class="index-watch-card-price" :class="indexChangeClass(indexItem)">
@@ -3775,6 +3846,17 @@ function emptyPriceRefreshScheduleForm() {
                                     </span>
                                     <span class="index-price-dialog-name">
                                         {{ selectedIndexWatchItem.name || 'Index' }}
+                                    </span>
+                                    <span v-if="selectedIndexWatchItem.eodhd_code" class="index-price-dialog-code">
+                                        {{ selectedIndexWatchItem.eodhd_code }}
+                                        <button
+                                            type="button"
+                                            class="index-price-dialog-code-copy"
+                                            aria-label="Copy code"
+                                            @click.stop="copyToClipboard(selectedIndexWatchItem.eodhd_code)"
+                                        >
+                                            <v-icon icon="mdi-content-copy" size="12" />
+                                        </button>
                                     </span>
                                 </v-card-title>
                                 <v-card-text>
@@ -5244,6 +5326,18 @@ function emptyPriceRefreshScheduleForm() {
     line-height: 1.3;
 }
 
+:deep(.v-app-bar-title) {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: visible;
+}
+
+:deep(.v-app-bar-title__content) {
+    overflow: visible;
+    white-space: normal;
+    width: 100%;
+}
+
 .dashboard-menu-toggle {
     flex: 0 0 auto;
 }
@@ -5372,17 +5466,6 @@ function emptyPriceRefreshScheduleForm() {
     color: rgba(var(--v-theme-on-surface), 0.7);
     font-size: 0.625rem;
     font-weight: 600;
-    line-height: 1;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.index-watch-card-code {
-    color: rgba(var(--v-theme-on-surface), 0.58);
-    font-size: 0.5625rem;
-    font-weight: 700;
     line-height: 1;
     max-width: 100%;
     overflow: hidden;
@@ -5680,6 +5763,29 @@ function emptyPriceRefreshScheduleForm() {
     color: rgba(var(--v-theme-on-surface), 0.72);
     font-size: 0.875rem;
     font-weight: 500;
+}
+
+.index-price-dialog-code {
+    align-items: center;
+    color: rgba(var(--v-theme-on-surface), 0.45);
+    display: inline-flex;
+    font-size: 0.75rem;
+    font-weight: 400;
+    gap: 4px;
+}
+
+.index-price-dialog-code-copy {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    line-height: 1;
+    opacity: 0.6;
+    padding: 0;
+}
+
+.index-price-dialog-code-copy:hover {
+    opacity: 1;
 }
 
 .index-price-current {
