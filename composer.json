@@ -13,7 +13,9 @@
         "laravel/sanctum": "^4.3",
         "laravel/tinker": "^3.0",
         "predis/predis": "^3.5",
-        "spatie/laravel-permission": "^7.4"
+        "spatie/laravel-permission": "^7.4",
+        "symfony/http-client": "^7.4",
+        "symfony/postmark-mailer": "^7.4"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

@@ -15,7 +15,11 @@ return [
     */
 
     'postmark' => [
-        'key' => env('POSTMARK_API_KEY'),
+        'key' => env('POSTMARK_API_KEY', env('POSTMARK_TOKEN')),
+    ],
+
+    'super_admin' => [
+        'password' => env('SA_PW'),
     ],
 
     'resend' => [

@@ -39,6 +39,14 @@ class UpdateApplicationCommand extends Command
 
     private const REQUIRED_ROLES = ['super_admin', 'admin', 'user'];
 
+    /**
+     * @var array<string, string>
+     */
+    private const REQUIRED_COMPOSER_PACKAGES = [
+        'symfony/http-client' => '^7.4',
+        'symfony/postmark-mailer' => '^7.4',
+    ];
+
     public function handle(): int
     {
         $this->components->info('Updating application');
@@ -106,6 +114,14 @@ class UpdateApplicationCommand extends Command
         $commands = [];
 
         if (! $this->option('skip-composer')) {
+            $missingRequiredComposerPackages = $this->missingRequiredComposerPackages();
+
+            if ($missingRequiredComposerPackages !== []) {
+                $commands['Installing required Composer packages'] = 'composer require '
+                    .implode(' ', $missingRequiredComposerPackages)
+                    .' --no-interaction --no-scripts --no-progress';
+            }
+
             $commands['Installing Composer packages'] = $this->option('production')
                 ? 'composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader'
                 : 'composer install --no-interaction --prefer-dist';
@@ -126,6 +142,27 @@ class UpdateApplicationCommand extends Command
         }
 
         return $commands;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function missingRequiredComposerPackages(): array
+    {
+        $composerJson = json_decode(File::get(base_path('composer.json')), true);
+        $requiredPackages = is_array($composerJson)
+            ? ($composerJson['require'] ?? [])
+            : [];
+
+        if (! is_array($requiredPackages)) {
+            $requiredPackages = [];
+        }
+
+        return collect(self::REQUIRED_COMPOSER_PACKAGES)
+            ->reject(fn (string $constraint, string $package): bool => array_key_exists($package, $requiredPackages))
+            ->map(fn (string $constraint, string $package): string => "{$package}:{$constraint}")
+            ->values()
+            ->all();
     }
 
     private function prepareNpmInstall(): bool
@@ -185,7 +222,13 @@ class UpdateApplicationCommand extends Command
                     'email_verified_at' => now(),
                 ];
 
-                if (! $user->exists || blank($user->password)) {
+                $protectedAdminPassword = $this->protectedAdminPassword();
+
+                if ($protectedAdminPassword) {
+                    $attributes['password'] = $protectedAdminPassword;
+                }
+
+                if (! $protectedAdminPassword && (! $user->exists || blank($user->password))) {
                     $attributes['password'] = Str::password(32);
                 }
 
@@ -202,6 +245,17 @@ class UpdateApplicationCommand extends Command
 
             return false;
         }
+    }
+
+    private function protectedAdminPassword(): ?string
+    {
+        $password = config('services.super_admin.password');
+
+        if (! is_string($password) || blank($password)) {
+            return null;
+        }
+
+        return $password;
     }
 
     private function retiredProtectedAdminEmail(User $user): string

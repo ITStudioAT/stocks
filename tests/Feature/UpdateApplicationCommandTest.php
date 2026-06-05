@@ -6,6 +6,7 @@ use App\Console\Commands\UpdateApplicationCommand;
 use App\Models\User;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Schema;
 use ReflectionMethod;
@@ -14,6 +15,13 @@ use Tests\TestCase;
 
 class UpdateApplicationCommandTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config()->set('services.super_admin.password', null);
+    }
+
     public function test_update_command_can_be_previewed(): void
     {
         $this->artisan('app:update --dry-run')
@@ -41,6 +49,29 @@ class UpdateApplicationCommandTest extends TestCase
         $this->artisan('app:update --dry-run --production')
             ->expectsOutputToContain('Would run: composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader')
             ->assertSuccessful();
+    }
+
+    public function test_update_command_installs_missing_required_composer_packages(): void
+    {
+        $composerJsonPath = base_path('composer.json');
+        $originalComposerJson = file_get_contents($composerJsonPath);
+        $composerJson = json_decode($originalComposerJson, true);
+
+        unset(
+            $composerJson['require']['symfony/http-client'],
+            $composerJson['require']['symfony/postmark-mailer'],
+        );
+
+        file_put_contents($composerJsonPath, json_encode($composerJson, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES).PHP_EOL);
+
+        try {
+            $this->artisan('app:update --dry-run')
+                ->expectsOutputToContain('Would run: composer require symfony/http-client:^7.4 symfony/postmark-mailer:^7.4 --no-interaction --no-scripts --no-progress')
+                ->expectsOutputToContain('Would run: composer install --no-interaction --prefer-dist')
+                ->assertSuccessful();
+        } finally {
+            file_put_contents($composerJsonPath, $originalComposerJson);
+        }
     }
 
     public function test_update_command_stops_when_a_step_fails(): void
@@ -139,6 +170,29 @@ class UpdateApplicationCommandTest extends TestCase
         $this->assertSame(['admin', 'super_admin'], $protectedUser->getRoleNames()->sort()->values()->all());
         $this->assertStringStartsWith('kron.retired.2.', $retiredDuplicateUser->email);
         $this->assertStringEndsWith('@naturwelt.at', $retiredDuplicateUser->email);
+    }
+
+    public function test_update_command_uses_the_super_admin_password_from_configuration(): void
+    {
+        config()->set('services.super_admin.password', 'correct-super-admin-password');
+
+        $this->markCurrentMigrationsAsRanExcept([]);
+        $this->createProtectedAdminTables();
+
+        User::factory()->create([
+            'id' => 1,
+            'email' => 'wrong@example.com',
+            'password' => Hash::make('old-password'),
+        ]);
+
+        $this->fakeSuccessfulUpdateProcess();
+
+        $this->artisan('app:update --skip-npm --skip-build')
+            ->expectsOutputToContain('Verified roles and protected admin user.')
+            ->expectsOutputToContain('Application update complete.')
+            ->assertSuccessful();
+
+        $this->assertTrue(Hash::check('correct-super-admin-password', User::query()->find(1)->password));
     }
 
     public function test_update_command_stops_before_migrations_when_pending_migrations_create_the_same_table(): void
