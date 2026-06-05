@@ -6,6 +6,7 @@ use App\Jobs\FetchHistoricalSessionPrices;
 use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
+use App\Models\StockHoldingDailyPrice;
 use App\Models\StockPrice;
 use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
@@ -75,11 +76,50 @@ class AdminDepotHoldingTest extends TestCase
                         'price_type',
                         'price_spread_pct',
                         'recent_prices',
+                        'daily_prices',
                         'validation_errors',
                         'created_at',
                     ],
                 ],
             ]);
+    }
+
+    public function test_admin_listing_includes_one_year_daily_stock_prices(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-05 12:00:00', 'UTC'));
+
+        try {
+            $admin = $this->adminUser();
+            $holding = StockHolding::factory()->create([
+                'symbol' => 'AAPL',
+                'name' => 'Apple Inc.',
+                'currency' => 'USD',
+            ]);
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-06-04',
+                'close' => '123.45000000',
+                'adjusted_close' => '124.56000000',
+                'currency' => 'USD',
+            ]);
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2025-05-30',
+                'close' => '100.00000000',
+                'adjusted_close' => '100.00000000',
+                'currency' => 'USD',
+            ]);
+
+            $this->actingAs($admin)
+                ->getJson('/admin/watchlist/holdings')
+                ->assertOk()
+                ->assertJsonCount(1, 'holdings.0.daily_prices')
+                ->assertJsonPath('holdings.0.daily_prices.0.trading_date', '2026-06-04')
+                ->assertJsonPath('holdings.0.daily_prices.0.price', '124.56000000')
+                ->assertJsonPath('holdings.0.daily_prices.0.currency', 'USD');
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     public function test_admin_can_list_exchange_trading_times_from_eodhd(): void
@@ -432,8 +472,8 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.start_price_24', '192.00000000')
             ->assertJsonPath('holdings.0.start_price_48', '189.00000000')
             ->assertJsonPath('holdings.0.historical_prices_fetching', false)
-            ->assertJsonPath('holdings.0.latest_price_trend', 'up')
-            ->assertJsonPath('holdings.0.latest_price_change_pct', '0.26');
+            ->assertJsonPath('holdings.0.latest_price_trend', 'down')
+            ->assertJsonPath('holdings.0.latest_price_change_pct', '-0.78');
     }
 
     public function test_admin_listing_does_not_queue_missing_historical_session_prices(): void
@@ -859,7 +899,7 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.latest_price_change_pct', '0.00');
     }
 
-    public function test_admin_listing_always_compares_latest_price_change_to_start_price(): void
+    public function test_admin_listing_compares_latest_price_change_to_previous_day_end_price(): void
     {
         $admin = $this->adminUser();
         $this->travelTo(Carbon::parse('2026-06-04 18:00:00', 'Europe/Berlin'));
@@ -881,8 +921,8 @@ class AdminDepotHoldingTest extends TestCase
             ->assertOk()
             ->assertJsonPath('holdings.0.start_price', '100.00000000')
             ->assertJsonPath('holdings.0.end_price', '120.00000000')
-            ->assertJsonPath('holdings.0.latest_price_trend', 'up')
-            ->assertJsonPath('holdings.0.latest_price_change_pct', '10.00');
+            ->assertJsonPath('holdings.0.latest_price_trend', 'down')
+            ->assertJsonPath('holdings.0.latest_price_change_pct', '-8.33');
     }
 
     public function test_admin_can_add_a_selected_stock_holding(): void

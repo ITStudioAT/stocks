@@ -78,7 +78,7 @@ class IndexWatchItemPriceRefresher
             'raw_payload' => $payload,
         ]);
 
-        $referencePrice = $startPrice ?? $lastPrice;
+        $referencePrice = $lastPrice ?? $startPrice;
 
         $item->update([
             'currency' => $this->stringOrNull(Arr::get($payload, 'currency')) ?? $item->currency,

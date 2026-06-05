@@ -446,6 +446,11 @@ describe('App', () => {
                             name: 'Apple',
                             currency: 'EUR',
                             latest_price: '306.320010',
+                            daily_prices: [
+                                { trading_date: '2026-05-10', price: '290.000000', currency: 'EUR' },
+                                { trading_date: '2026-05-20', price: '301.500000', currency: 'EUR' },
+                                { trading_date: '2026-06-04', price: '306.320010', currency: 'EUR' },
+                            ],
                         },
                         {
                             id: 2,
@@ -453,6 +458,7 @@ describe('App', () => {
                             name: 'Microsoft',
                             currency: 'USD',
                             latest_price: '430.120000',
+                            daily_prices: [],
                         },
                     ],
                     meta: pagination,
@@ -515,8 +521,73 @@ describe('App', () => {
         expect(analyzeOverview.text()).toContain('Microsoft');
         expect(analyzeOverview.text()).toContain('430.12 USD');
         expect(analyzeOverview.text()).not.toContain('INDEX');
-        expect(analyzeOverview.text()).toContain('History');
-        expect(analyzeOverview.text()).toContain('2/2');
+        expect(analyzeOverview.text()).not.toContain('History');
+        expect(analyzeOverview.text()).toContain('0 historical price records loaded/updated.');
+        expect(analyzeOverview.text()).not.toContain('2/2');
+        expect(analyzeOverview.text()).not.toContain('6 months');
+
+        const appleCard = analyzeOverview.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Apple'));
+        await appleCard.trigger('click');
+        await flushPromises();
+
+        expect(analyzeOverview.text()).toContain('1 year');
+        expect(analyzeOverview.text()).toContain('6 months');
+        expect(analyzeOverview.text()).toContain('3 months');
+        expect(analyzeOverview.text()).toContain('1 month');
+        expect(analyzeOverview.text()).toContain('1 week');
+        expect(analyzeOverview.text()).toContain('today');
+
+        const oneYearRangeButton = analyzeOverview.findAll('.analyze-range-button')
+            .find((button) => button.text() === '1 year');
+        const oneMonthRangeButton = analyzeOverview.findAll('.analyze-range-button')
+            .find((button) => button.text() === '1 month');
+
+        expect(oneYearRangeButton.attributes('aria-pressed')).toBe('true');
+        await oneMonthRangeButton.trigger('click');
+        await flushPromises();
+
+        expect(oneMonthRangeButton.attributes('aria-pressed')).toBe('true');
+        expect(oneYearRangeButton.attributes('aria-pressed')).toBe('false');
+        expect(analyzeOverview.find('.analyze-sparkline').exists()).toBe(true);
+        expect(analyzeOverview.find('.analyze-sparkline').attributes('viewBox')).toBe('0 0 1440 600');
+        expect(analyzeOverview.findAll('.analyze-sparkline-label').length).toBeGreaterThanOrEqual(4);
+        expect(analyzeOverview.findAll('.analyze-sparkline-y-label').map((label) => label.text())).toEqual([
+            '307.136011',
+            '302.648008',
+            '298.160005',
+            '293.672002',
+            '289.184',
+        ]);
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(3);
+        expect(analyzeOverview.find('.analyze-sparkline-extremum--high').exists()).toBe(true);
+        expect(analyzeOverview.find('.analyze-sparkline-extremum--low').exists()).toBe(true);
+        expect(analyzeOverview.findAll('.analyze-sparkline-extremum-ring')).toHaveLength(2);
+        expect(analyzeOverview.findAll('.analyze-sparkline-extremum-dot')).toHaveLength(2);
+        expect(analyzeOverview.find('.analyze-sparkline-extremum--high .analyze-sparkline-extremum-label').text()).toBe('306.32001');
+        expect(analyzeOverview.find('.analyze-sparkline-extremum--low .analyze-sparkline-extremum-label').text()).toBe('290.00');
+
+        const highMarkerLine = analyzeOverview.find('.analyze-sparkline-extremum--high .analyze-sparkline-extremum-line');
+        const lowMarkerLine = analyzeOverview.find('.analyze-sparkline-extremum--low .analyze-sparkline-extremum-line');
+        const highMarkerLabel = analyzeOverview.find('.analyze-sparkline-extremum--high .analyze-sparkline-extremum-label');
+        const lowMarkerLabel = analyzeOverview.find('.analyze-sparkline-extremum--low .analyze-sparkline-extremum-label');
+
+        expect(highMarkerLine.attributes('y1')).not.toBe(highMarkerLine.attributes('y2'));
+        expect(lowMarkerLine.attributes('y1')).not.toBe(lowMarkerLine.attributes('y2'));
+        expect(highMarkerLabel.attributes('text-anchor')).toBe('end');
+        expect(lowMarkerLabel.attributes('text-anchor')).toBe('start');
+
+        await oneYearRangeButton.trigger('click');
+        await flushPromises();
+
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(0);
+
+        const allCard = analyzeOverview.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('ALL'));
+        await allCard.trigger('click');
+        await flushPromises();
+
+        expect(analyzeOverview.text()).not.toContain('6 months');
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/historical-prices/ensure', expect.objectContaining({
             method: 'POST',
         }));
@@ -614,10 +685,107 @@ describe('App', () => {
 
         const analyzeOverview = wrapper.find('[aria-label="Analyze overview"]');
 
-        expect(analyzeOverview.text()).toContain('History');
+        expect(analyzeOverview.text()).toContain('Checking historical prices');
         expect(analyzeOverview.text()).toContain('1/2');
         expect(analyzeOverview.text()).toContain('AAPL Apple');
         expect(analyzeOverview.find('.v-progress-linear').exists()).toBe(true);
+
+        wrapper.unmount();
+    });
+
+    it('shows loaded historical stock price records after a finished partial update', async () => {
+        window.history.pushState({}, '', '/admin/menu/analyze/overview');
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const partialHistoryRefresh = {
+            refresh_id: 'history-1',
+            status: 'partial',
+            processed: 2,
+            total: 2,
+            step: '2/2',
+            message: 'Historical stock price fetching finished with missing data.',
+            current: null,
+            started_at: '2026-06-05T12:00:00+00:00',
+            finished_at: '2026-06-05T12:05:00+00:00',
+            error: null,
+            success_count: 0,
+            unavailable_count: 2,
+            failed_count: 0,
+            stored_count: 0,
+        };
+        const historyCoverage = {
+            date_from: '2025-06-05',
+            date_to: '2026-06-05',
+            required_to: '2026-06-04',
+            is_complete: false,
+            total_count: 2,
+            available_count: 0,
+            missing_count: 2,
+            holdings: [],
+        };
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: { id: 1, name: 'Admin User', email: 'admin@example.com', roles: ['admin'] },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [
+                        { id: 1, symbol: 'AAPL', name: 'Apple', currency: 'USD', latest_price: '190.000000', daily_prices: [] },
+                        { id: 2, symbol: 'MSFT', name: 'Microsoft', currency: 'USD', latest_price: '430.120000', daily_prices: [] },
+                    ],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: partialHistoryRefresh.message,
+                    coverage: historyCoverage,
+                    refresh: partialHistoryRefresh,
+                }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+
+            return Promise.resolve(jsonResponse({}));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+        await flushPromises();
+
+        const analyzeOverview = wrapper.find('[aria-label="Analyze overview"]');
+
+        expect(analyzeOverview.text()).not.toContain('History');
+        expect(analyzeOverview.text()).toContain('0 historical price records loaded/updated.');
+        expect(analyzeOverview.text()).not.toContain('2 missing');
+        expect(analyzeOverview.text()).not.toContain('2/2');
+        expect(analyzeOverview.find('.v-progress-linear').exists()).toBe(false);
 
         wrapper.unmount();
     });
@@ -1517,12 +1685,17 @@ describe('App', () => {
         expect(document.body.textContent).toContain('09.05.2026');
         expect(document.body.textContent).toContain('6,116.5298');
         expect(document.body.querySelectorAll('.index-price-history-table tbody tr')).toHaveLength(30);
+        expect(Array.from(document.body.querySelectorAll('.index-price-history-table th')).map((heading) => heading.textContent.trim())).toEqual([
+            'Date',
+            'Start',
+            'Last',
+        ]);
         expect(document.body.querySelector('.index-price-chart-line')).not.toBeNull();
         expect(document.body.querySelectorAll('.index-price-chart-point')).toHaveLength(30);
         expect(document.body.querySelectorAll('.index-price-chart-grid-line')).toHaveLength(12);
         expect(document.body.querySelectorAll('.index-price-chart-y-label')).toHaveLength(5);
         expect(document.body.querySelectorAll('.index-price-chart-x-label')).toHaveLength(7);
-        expect(document.body.textContent).toContain('6,116.53');
+        expect(document.body.textContent).toContain('6,116.5298');
         expect(document.body.textContent).toContain('09.05');
 
         const closeIndexPriceButton = Array.from(document.body.querySelectorAll('button'))

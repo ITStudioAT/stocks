@@ -6,6 +6,7 @@ use App\Models\StockHistoricalPriceFetchItem;
 use App\Models\StockHistoricalPriceFetchRun;
 use App\Models\StockHolding;
 use App\Services\StockHistoricalDailyPriceFetcher;
+use App\Services\StockHistoricalPriceService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
@@ -22,7 +23,7 @@ class FetchStockHistoricalPrices implements ShouldQueue
         public string $refreshId,
     ) {}
 
-    public function handle(StockHistoricalDailyPriceFetcher $fetcher): void
+    public function handle(StockHistoricalDailyPriceFetcher $fetcher, StockHistoricalPriceService $historicalPriceService): void
     {
         $run = StockHistoricalPriceFetchRun::query()->find($this->refreshId);
 
@@ -41,7 +42,7 @@ class FetchStockHistoricalPrices implements ShouldQueue
             ->where('status', 'queued')
             ->orderBy('id')
             ->get()
-            ->each(function (StockHistoricalPriceFetchItem $item) use ($fetcher, $run): void {
+            ->each(function (StockHistoricalPriceFetchItem $item) use ($fetcher, $historicalPriceService, $run): void {
                 $holding = $item->stockHolding;
 
                 if (! $holding) {
@@ -56,8 +57,31 @@ class FetchStockHistoricalPrices implements ShouldQueue
                 $item->update(['status' => 'running']);
 
                 try {
-                    $storedCount = $fetcher->fetch($holding, $item->date_from, $item->date_to);
-                    $this->finishItem($item, $run, $storedCount > 0 ? 'success' : 'unavailable', $storedCount);
+                    $missingDateRanges = $historicalPriceService->missingDateRanges(
+                        $holding,
+                        $item->date_from,
+                        $historicalPriceService->requiredToFor($item->date_to),
+                    );
+
+                    if ($missingDateRanges === []) {
+                        $this->finishItem($item, $run, 'success', 0);
+
+                        return;
+                    }
+
+                    $storedCount = 0;
+
+                    foreach ($missingDateRanges as $range) {
+                        $storedCount += $fetcher->fetch($holding, $range['from'], $range['to']);
+                    }
+
+                    $remainingMissingDateRanges = $historicalPriceService->missingDateRanges(
+                        $holding,
+                        $item->date_from,
+                        $historicalPriceService->requiredToFor($item->date_to),
+                    );
+
+                    $this->finishItem($item, $run, $remainingMissingDateRanges === [] ? 'success' : 'unavailable', $storedCount);
                 } catch (Throwable $exception) {
                     $this->finishItem($item, $run, 'failed', 0, $exception->getMessage());
                 }

@@ -21,7 +21,7 @@ class TradingSessionPriceResolver
      * When no end price is recorded yet, the actual latest price is used. When
      * no start price is recorded, the end price is used.
      *
-     * @return array{start_price: ?string, end_price: ?string, start_price_24: ?string, start_price_48: ?string, historical_prices_fetching: bool}
+     * @return array{start_price: ?string, end_price: ?string, end_price_is_fallback: bool, start_price_24: ?string, start_price_48: ?string, historical_prices_fetching: bool}
      */
     public function resolve(StockHolding $holding, ?string $latestPrice): array
     {
@@ -31,6 +31,7 @@ class TradingSessionPriceResolver
             return [
                 'start_price' => $latestPrice,
                 'end_price' => $latestPrice,
+                'end_price_is_fallback' => true,
                 'start_price_24' => null,
                 'start_price_48' => null,
                 'historical_prices_fetching' => false,
@@ -43,6 +44,7 @@ class TradingSessionPriceResolver
         $startPrice24 = $this->storedHistoricalPriceBetween($holding, $previousOpenUtc, $previousCloseUtc, 'historical_session_start');
         $startPrice48 = $this->storedHistoricalPriceBetween($holding, $twoTradingDaysAgoOpenUtc, $twoTradingDaysAgoCloseUtc, 'historical_session_start');
         $endPrice = $this->storedHistoricalPriceBetween($holding, $previousCloseUtc, $todayOpenUtc, 'historical_session_end');
+        $endPriceIsFallback = $endPrice === null;
 
         $endPrice ??= $latestPrice;
         $startPrice ??= $endPrice;
@@ -50,6 +52,7 @@ class TradingSessionPriceResolver
         return [
             'start_price' => $startPrice,
             'end_price' => $endPrice,
+            'end_price_is_fallback' => $endPriceIsFallback,
             'start_price_24' => $startPrice24,
             'start_price_48' => $startPrice48,
             'historical_prices_fetching' => $this->isHistoricalPriceFetching(

@@ -80,7 +80,7 @@ class StockHistoricalPriceService
     }
 
     /**
-     * @return array{date_from: string, date_to: string, required_to: string, is_complete: bool, total_count: int, available_count: int, missing_count: int, holdings: array<int, array{id: int, name: ?string, symbol: ?string, is_available: bool, stored_count: int, first_date: ?string, latest_date: ?string}>}
+     * @return array{date_from: string, date_to: string, required_to: string, is_complete: bool, total_count: int, available_count: int, missing_count: int, holdings: array<int, array{id: int, name: ?string, symbol: ?string, is_available: bool, stored_count: int, stored_required_count: int, expected_required_count: int, first_date: ?string, latest_date: ?string}>}
      */
     public function coverage(): array
     {
@@ -107,7 +107,7 @@ class StockHistoricalPriceService
     }
 
     /**
-     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: ?string, finished_at: ?string, error: ?string, success_count: int, unavailable_count: int, failed_count: int}
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: ?string, finished_at: ?string, error: ?string, success_count: int, unavailable_count: int, failed_count: int, stored_count: int}
      */
     public function refreshPayload(StockHistoricalPriceFetchRun $run): array
     {
@@ -125,6 +125,7 @@ class StockHistoricalPriceService
             'success_count' => $run->success_count,
             'unavailable_count' => $run->unavailable_count,
             'failed_count' => $run->failed_count,
+            'stored_count' => (int) $run->items()->sum('stored_count'),
         ];
     }
 
@@ -148,6 +149,69 @@ class StockHistoricalPriceService
             'to' => $to,
             'required_to' => $this->previousWeekday($to->copy()->subDay()),
         ];
+    }
+
+    /**
+     * @return array<int, array{from: Carbon, to: Carbon}>
+     */
+    public function missingDateRanges(StockHolding $holding, Carbon $from, Carbon $to): array
+    {
+        if ($from->gt($to)) {
+            return [];
+        }
+
+        $storedDates = StockHoldingDailyPrice::query()
+            ->where('stock_holding_id', $holding->id)
+            ->whereDate('trading_date', '>=', $from->toDateString())
+            ->whereDate('trading_date', '<=', $to->toDateString())
+            ->pluck('trading_date')
+            ->map(fn (mixed $date): string => Carbon::parse($date)->toDateString())
+            ->flip();
+        $ranges = [];
+        $rangeStart = null;
+        $previousMissingDate = null;
+        $date = $from->copy();
+
+        while ($date->lte($to)) {
+            if (! $date->isWeekday()) {
+                $date->addDay();
+
+                continue;
+            }
+
+            if ($storedDates->has($date->toDateString())) {
+                if ($rangeStart !== null && $previousMissingDate !== null) {
+                    $ranges[] = [
+                        'from' => $rangeStart,
+                        'to' => $previousMissingDate,
+                    ];
+                }
+
+                $rangeStart = null;
+                $previousMissingDate = null;
+                $date->addDay();
+
+                continue;
+            }
+
+            $rangeStart ??= $date->copy();
+            $previousMissingDate = $date->copy();
+            $date->addDay();
+        }
+
+        if ($rangeStart !== null && $previousMissingDate !== null) {
+            $ranges[] = [
+                'from' => $rangeStart,
+                'to' => $previousMissingDate,
+            ];
+        }
+
+        return $ranges;
+    }
+
+    public function requiredToFor(Carbon $dateTo): Carbon
+    {
+        return $this->previousWeekday($dateTo->copy()->subDay());
     }
 
     /**
@@ -177,7 +241,7 @@ class StockHistoricalPriceService
     }
 
     /**
-     * @return array{id: int, name: ?string, symbol: ?string, is_available: bool, stored_count: int, first_date: ?string, latest_date: ?string}
+     * @return array{id: int, name: ?string, symbol: ?string, is_available: bool, stored_count: int, stored_required_count: int, expected_required_count: int, first_date: ?string, latest_date: ?string}
      */
     private function holdingCoverage(StockHolding $holding, Carbon $from, Carbon $to, Carbon $requiredTo): array
     {
@@ -187,23 +251,26 @@ class StockHistoricalPriceService
         $storedCount = (clone $prices)->count();
         $firstDate = (clone $prices)->min('trading_date');
         $latestDate = (clone $prices)->max('trading_date');
-        $hasSuccessfulRangeFetch = StockHistoricalPriceFetchItem::query()
-            ->where('stock_holding_id', $holding->id)
-            ->where('status', 'success')
-            ->where('date_from', '<=', $from->toDateString())
-            ->where('date_to', '>=', $to->toDateString())
-            ->exists();
+        $missingDateRanges = $this->missingDateRanges($holding, $from, $requiredTo);
+        $expectedRequiredDateCount = $this->weekdayCount($from, $requiredTo);
+        $storedRequiredDateCount = $expectedRequiredDateCount;
+        $storedRequiredDateCount -= collect($missingDateRanges)->sum(
+            fn (array $range): int => $this->weekdayCount($range['from'], $range['to']),
+        );
         $hasStoredDateCoverage = $firstDate !== null
             && $latestDate !== null
-            && Carbon::parse($firstDate)->lte($from)
-            && Carbon::parse($latestDate)->gte($requiredTo);
+            && Carbon::parse($firstDate)->toDateString() <= $from->toDateString()
+            && Carbon::parse($latestDate)->toDateString() >= $requiredTo->toDateString()
+            && $missingDateRanges === [];
 
         return [
             'id' => $holding->id,
             'name' => $holding->name,
             'symbol' => $holding->symbol,
-            'is_available' => $hasSuccessfulRangeFetch || $hasStoredDateCoverage,
+            'is_available' => $hasStoredDateCoverage,
             'stored_count' => $storedCount,
+            'stored_required_count' => $storedRequiredDateCount,
+            'expected_required_count' => $expectedRequiredDateCount,
             'first_date' => $firstDate ? Carbon::parse($firstDate)->toDateString() : null,
             'latest_date' => $latestDate ? Carbon::parse($latestDate)->toDateString() : null,
         ];
@@ -216,6 +283,22 @@ class StockHistoricalPriceService
         }
 
         return $date;
+    }
+
+    private function weekdayCount(Carbon $from, Carbon $to): int
+    {
+        $count = 0;
+        $date = $from->copy();
+
+        while ($date->lte($to)) {
+            if ($date->isWeekday()) {
+                $count++;
+            }
+
+            $date->addDay();
+        }
+
+        return $count;
     }
 
     private function message(StockHistoricalPriceFetchRun $run): string

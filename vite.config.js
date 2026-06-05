@@ -1,44 +1,16 @@
-import { defineConfig, normalizePath } from 'vite';
+import { defineConfig } from 'vite';
 import laravel from 'laravel-vite-plugin';
 import tailwindcss from '@tailwindcss/vite';
 import vue from '@vitejs/plugin-vue';
 import vuetify from 'vite-plugin-vuetify';
 
-const fullReloadPathMatchers = [
-    '/resources/js/App.vue',
-    '/routes/',
-];
-
-function shouldFullReloadForFile(file) {
-    const normalizedFile = `/${normalizePath(file)}`;
-
-    return fullReloadPathMatchers.some(pathMatcher => normalizedFile.includes(pathMatcher));
-}
-
-function reloadBrowserOnAppShellChanges() {
-    return {
-        name: 'stocks-reload-browser-on-app-shell-changes',
-        configureServer(server) {
-            server.watcher.add(['resources/js/App.vue', 'routes/**/*.php']);
-
-            server.watcher.on('change', file => {
-                if (!shouldFullReloadForFile(file)) {
-                    return;
-                }
-
-                server.ws.send({ type: 'full-reload' });
-            });
-        },
-    };
-}
-
 export default defineConfig({
+    cacheDir: process.env.VITEST ? 'node_modules/.vitest' : 'node_modules/.vite',
     plugins: [
         laravel({
             input: ['resources/css/app.css', 'resources/js/app.js', 'resources/js/homepage.js'],
             refresh: true,
         }),
-        reloadBrowserOnAppShellChanges(),
         vue(),
         vuetify({ autoImport: true }),
         tailwindcss(),

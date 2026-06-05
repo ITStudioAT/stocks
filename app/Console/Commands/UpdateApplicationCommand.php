@@ -5,7 +5,10 @@ namespace App\Console\Commands;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Schema;
 
 #[Signature('app:update
     {--dry-run : Show the commands without running them}
@@ -17,6 +20,8 @@ use Illuminate\Support\Facades\Process;
 #[Description('Update the application after deploying or pulling a new version')]
 class UpdateApplicationCommand extends Command
 {
+    private const MIGRATION_STEP = 'Running database migrations';
+
     public function handle(): int
     {
         $this->components->info('Updating application');
@@ -31,6 +36,12 @@ class UpdateApplicationCommand extends Command
             $successful = true;
 
             $this->components->task($label, function () use ($command, &$successful): bool {
+                if ($command === 'php artisan migrate --force --no-interaction' && ! $this->ensureMigrationsCanRun()) {
+                    $successful = false;
+
+                    return false;
+                }
+
                 $successful = $this->runShellCommand($command);
 
                 return $successful;
@@ -62,7 +73,7 @@ class UpdateApplicationCommand extends Command
         $commands['Clearing optimized Laravel files'] = 'php artisan optimize:clear';
 
         if (! $this->option('skip-migrate')) {
-            $commands['Running database migrations'] = 'php artisan migrate --force --no-interaction';
+            $commands[self::MIGRATION_STEP] = 'php artisan migrate --force --no-interaction';
         }
 
         if (! $this->option('skip-npm')) {
@@ -74,6 +85,103 @@ class UpdateApplicationCommand extends Command
         }
 
         return $commands;
+    }
+
+    private function ensureMigrationsCanRun(): bool
+    {
+        $pendingCreateTables = $this->pendingCreateTablesByMigration();
+        $duplicateTables = array_filter(
+            $pendingCreateTables,
+            fn (array $migrations): bool => count($migrations) > 1,
+        );
+
+        if ($duplicateTables !== []) {
+            $this->reportUnsafeMigrations('multiple pending migrations create the same table', $duplicateTables);
+
+            return false;
+        }
+
+        $existingTables = [];
+
+        foreach ($pendingCreateTables as $table => $migrations) {
+            if (Schema::hasTable($table)) {
+                $existingTables[$table] = $migrations;
+            }
+        }
+
+        if ($existingTables !== []) {
+            $this->reportUnsafeMigrations('pending migrations would create tables that already exist', $existingTables);
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * @return array<string, array<int, string>>
+     */
+    private function pendingCreateTablesByMigration(): array
+    {
+        $tables = [];
+
+        foreach ($this->pendingMigrationFiles() as $migrationFile) {
+            foreach ($this->createdTablesInMigration($migrationFile) as $table) {
+                $tables[$table][] = basename($migrationFile);
+            }
+        }
+
+        return $tables;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function pendingMigrationFiles(): array
+    {
+        $migrationFiles = File::glob(database_path('migrations/*.php')) ?: [];
+        sort($migrationFiles);
+
+        $migrationRepositoryTable = config('database.migrations.table', 'migrations');
+
+        if (! Schema::hasTable($migrationRepositoryTable)) {
+            return $migrationFiles;
+        }
+
+        $ranMigrations = DB::table($migrationRepositoryTable)
+            ->pluck('migration')
+            ->flip();
+
+        return array_values(array_filter(
+            $migrationFiles,
+            fn (string $migrationFile): bool => ! $ranMigrations->has(pathinfo($migrationFile, PATHINFO_FILENAME)),
+        ));
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function createdTablesInMigration(string $migrationFile): array
+    {
+        preg_match_all(
+            '/Schema::create\s*\(\s*[\'"]([^\'"]+)[\'"]/',
+            File::get($migrationFile),
+            $matches,
+        );
+
+        return array_values(array_unique($matches[1] ?? []));
+    }
+
+    /**
+     * @param  array<string, array<int, string>>  $tables
+     */
+    private function reportUnsafeMigrations(string $reason, array $tables): void
+    {
+        $this->components->error("Migration preflight failed: {$reason}.");
+
+        foreach ($tables as $table => $migrations) {
+            $this->line(" - {$table}: ".implode(', ', $migrations));
+        }
     }
 
     private function runShellCommand(string $command): bool

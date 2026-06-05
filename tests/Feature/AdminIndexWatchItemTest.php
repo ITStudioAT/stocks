@@ -63,7 +63,7 @@ class AdminIndexWatchItemTest extends TestCase
             ->assertJsonPath('indexes.0.name', 'Austrian Traded Index in EUR')
             ->assertJsonPath('indexes.0.latest_price', '6116.529800')
             ->assertJsonPath('indexes.0.last_price', '6096.169900')
-            ->assertJsonPath('indexes.0.latest_price_change_pct', '0.33')
+            ->assertJsonPath('indexes.0.latest_price_change_pct', '0.09')
             ->assertJsonCount(30, 'indexes.0.recent_prices')
             ->assertJsonPath('indexes.0.recent_prices.0.trading_date', $now->toDateString())
             ->assertJsonPath('indexes.0.recent_prices.0.actual_price', '6110.000000')
@@ -81,7 +81,7 @@ class AdminIndexWatchItemTest extends TestCase
                 'eodhd.com/api/real-time/DAX.XETRA*' => Http::response([
                     'code' => 'DAX.XETRA',
                     'timestamp' => Carbon::parse('2026-06-07 10:15:00', 'UTC')->timestamp,
-                    'open' => 6100.00,
+                    'open' => 6200.00,
                     'close' => 6116.5298,
                     'previousClose' => 6096.1699,
                     'currency' => 'EUR',
@@ -117,6 +117,7 @@ class AdminIndexWatchItemTest extends TestCase
                 ->assertOk()
                 ->assertJsonPath('message', 'Index prices loaded.')
                 ->assertJsonPath('index.latest_price', '6116.529800')
+                ->assertJsonPath('index.latest_price_change_pct', '0.02')
                 ->assertJsonPath('index.latest_price_source', 'EODHD real-time')
                 ->assertJsonCount(30, 'index.recent_prices')
                 ->assertJsonPath('index.recent_prices.0.trading_date', '2026-06-07')
@@ -139,7 +140,7 @@ class AdminIndexWatchItemTest extends TestCase
         }
     }
 
-    public function test_admin_index_recent_prices_hide_current_trading_day_from_open_quote_timestamp(): void
+    public function test_admin_index_recent_prices_hide_only_current_trading_day_last_price_from_open_quote_timestamp(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-05 18:00:00', 'Europe/Berlin'));
 
@@ -152,6 +153,7 @@ class AdminIndexWatchItemTest extends TestCase
                 'currency' => 'EUR',
                 'latest_price' => '24956.33010000',
                 'last_price' => '24944.94920000',
+                'latest_price_change_pct' => '-2.090000',
                 'latest_price_as_of' => Carbon::parse('2026-06-05 14:24:00', 'UTC'),
                 'trading_times' => 'Monday-Friday 08:55:00-17:35:00 Europe/Berlin',
             ]);
@@ -170,7 +172,7 @@ class AdminIndexWatchItemTest extends TestCase
                 'index_watch_item_id' => $index->id,
                 'trading_date' => '2026-06-04',
                 'start_price' => '24700.00000000',
-                'actual_price' => '24881.86910000',
+                'actual_price' => '24900.00000000',
                 'last_price' => '24881.86910000',
                 'actual_price_as_of' => '2026-06-04 17:30:00',
                 'last_price_as_of' => '2026-06-04 17:30:00',
@@ -179,12 +181,17 @@ class AdminIndexWatchItemTest extends TestCase
             $response = $this->actingAs($admin)
                 ->getJson('/admin/index-watch-items')
                 ->assertOk()
-                ->assertJsonPath('indexes.0.latest_price', '24956.330100');
+                ->assertJsonPath('indexes.0.latest_price', '24956.330100')
+                ->assertJsonPath('indexes.0.latest_price_change_pct', '0.23');
 
             $this->assertSame(
-                ['2026-06-04'],
+                ['2026-06-05', '2026-06-04'],
                 array_column($response->json('indexes.0.recent_prices'), 'trading_date'),
             );
+            $response
+                ->assertJsonPath('indexes.0.recent_prices.0.actual_price', '24956.330100')
+                ->assertJsonPath('indexes.0.recent_prices.0.last_price', '24956.330100')
+                ->assertJsonPath('indexes.0.recent_prices.1.last_price', '24900.000000');
         } finally {
             Carbon::setTestNow();
         }

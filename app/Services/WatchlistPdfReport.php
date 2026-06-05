@@ -102,7 +102,9 @@ class WatchlistPdfReport
             ? $this->storedStockPriceTimestamp($latestStockPrice, 'as_of')
             : $holding->latest_price_as_of;
         $tradingTimes = $latestStockPrice?->trading_times ?? $holding->trading_times;
-        $latestPriceReference = $sessionPrices['start_price'];
+        $latestPriceReference = $sessionPrices['end_price_is_fallback']
+            ? $sessionPrices['start_price']
+            : $sessionPrices['end_price'];
 
         return [
             'id' => $holding->id,

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Depot;
 use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
+use App\Models\StockHoldingDailyPrice;
 use App\Models\StockPrice;
 use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
@@ -13,6 +14,7 @@ use App\Services\EodhdApiUsage;
 use App\Services\EodhdMarketData;
 use App\Services\IndexPriceRefreshSettings;
 use App\Services\PriceRefreshScheduler;
+use App\Services\StockHistoricalPriceService;
 use App\Services\StockPriceCatalog;
 use App\Services\StockPriceFreshness;
 use App\Services\TradingSessionPriceResolver;
@@ -40,13 +42,22 @@ class AdminDepotHoldingController extends Controller
         private EodhdMarketData $eodhdMarketData,
         private EodhdApiUsage $eodhdApiUsage,
         private UiPreferences $uiPreferences,
+        private StockHistoricalPriceService $stockHistoricalPriceService,
     ) {}
 
     public function index(): JsonResponse
     {
         $activeDepot = $this->activeDepot();
+        $historyRange = $this->stockHistoricalPriceService->range();
         $holdings = StockHolding::query()
-            ->with('latestStockPrice')
+            ->with([
+                'latestStockPrice',
+                'dailyPrices' => fn ($query) => $query
+                    ->whereDate('trading_date', '>=', $historyRange['from']->toDateString())
+                    ->whereDate('trading_date', '<=', $historyRange['to']->toDateString())
+                    ->orderBy('trading_date')
+                    ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'adjusted_close', 'currency']),
+            ])
             ->orderBy('name')
             ->orderBy('isin')
             ->paginate(10)
@@ -271,7 +282,7 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, start_price_24: ?string, start_price_48: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, validation_errors: array<int, string>, created_at: ?string}
+     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, start_price_24: ?string, start_price_48: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, currency: ?string}>, validation_errors: array<int, string>, created_at: ?string}
      */
     private function holdingPayload(StockHolding $holding, ?Depot $activeDepot): array
     {
@@ -284,7 +295,9 @@ class AdminDepotHoldingController extends Controller
             ? $this->storedStockPriceTimestamp($latestStockPrice, 'as_of')
             : $holding->latest_price_as_of;
         $tradingTimes = $latestStockPrice?->trading_times ?? $holding->trading_times;
-        $latestPriceReference = $sessionPrices['start_price'];
+        $latestPriceReference = $sessionPrices['end_price_is_fallback']
+            ? $sessionPrices['start_price']
+            : $sessionPrices['end_price'];
 
         return [
             'id' => $holding->id,
@@ -321,6 +334,7 @@ class AdminDepotHoldingController extends Controller
             'price_type' => $hasCurrentPrice ? ($latestStockPrice?->price_type ?? $holding->latest_price_type) : null,
             'price_spread_pct' => $hasCurrentPrice ? ($latestStockPrice?->spread_pct ?? $holding->price_spread_pct) : null,
             'recent_prices' => $this->recentStoredPrices($holding),
+            'daily_prices' => $this->dailyPricePayload($holding),
             'validation_errors' => $hasCurrentPrice ? ($latestStockPrice?->validation_errors ?? []) : [],
             'created_at' => $holding->created_at?->toIso8601String(),
         ];
@@ -468,6 +482,26 @@ class AdminDepotHoldingController extends Controller
                 'source_name' => $stockPrice->source_name,
                 'price_type' => $stockPrice->price_type,
             ])
+            ->all();
+    }
+
+    /**
+     * @return array<int, array{trading_date: string, price: string, currency: ?string}>
+     */
+    private function dailyPricePayload(StockHolding $holding): array
+    {
+        if (! $holding->relationLoaded('dailyPrices')) {
+            return [];
+        }
+
+        return $holding->dailyPrices
+            ->map(fn (StockHoldingDailyPrice $price): array => [
+                'trading_date' => $price->trading_date->toDateString(),
+                'price' => (string) ($price->adjusted_close ?? $price->close),
+                'currency' => $price->currency,
+            ])
+            ->filter(fn (array $price): bool => $price['price'] !== '')
+            ->values()
             ->all();
     }
 

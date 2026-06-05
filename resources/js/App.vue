@@ -67,6 +67,8 @@ const loginMode = ref('password');
 const localError = ref('');
 const activeSection = ref('dashboard');
 const activeAnalyzeSubsection = ref('overview');
+const selectedAnalyzeHistoryRange = ref('1y');
+const selectedAnalyzeHoldingId = ref(null);
 const profileLastName = ref('');
 const profileFirstName = ref('');
 const newPassword = ref('');
@@ -128,6 +130,7 @@ const isHistoricalPriceFetchPolling = ref(false);
 const stockHistoricalPriceFetchTimer = ref(null);
 const isStockHistoricalPriceFetchPolling = ref(false);
 const isStockHistoricalPriceEnsureLoading = ref(false);
+const isAnalyzeHistoryInfoDismissed = ref(false);
 const isDashboardMenuCompact = ref(false);
 const cashTransactionForm = ref(emptyCashTransactionForm());
 const stockTransactionForm = ref(emptyStockTransactionForm());
@@ -189,6 +192,28 @@ const priceRefreshProgressValue = computed(() => {
     return Math.round((priceRefresh.value.processed / priceRefresh.value.total) * 100);
 });
 const isStockHistoricalPriceFetchRunning = computed(() => ['queued', 'running'].includes(stockHistoricalPriceRefresh.value?.status));
+const showAnalyzeHistoryProgress = computed(() => isStockHistoricalPriceEnsureLoading.value || isStockHistoricalPriceFetchRunning.value);
+const showAnalyzeHistoryResultInfo = computed(() => !showAnalyzeHistoryProgress.value
+    && !isAnalyzeHistoryInfoDismissed.value
+    && Boolean(stockHistoricalPriceCoverage.value || stockHistoricalPriceRefresh.value));
+const showAnalyzeHistoryStatus = computed(() => showAnalyzeHistoryProgress.value || showAnalyzeHistoryResultInfo.value);
+const stockHistoricalPriceStoredCount = computed(() => Number(stockHistoricalPriceRefresh.value?.stored_count ?? 0));
+const stockHistoricalPriceResultMessage = computed(() => {
+    const recordCount = stockHistoricalPriceStoredCount.value;
+    const recordLabel = recordCount === 1 ? 'record' : 'records';
+
+    return `${formatInteger(recordCount)} historical price ${recordLabel} loaded/updated.`;
+});
+const stockHistoricalPriceStatusLabel = computed(() => {
+    if (isStockHistoricalPriceFetchRunning.value) {
+        return [
+            stockHistoricalPriceRefresh.value?.step,
+            stockHistoricalPriceRefresh.value?.current,
+        ].filter(Boolean).join(' · ');
+    }
+
+    return '';
+});
 const stockHistoricalPriceFetchProgressValue = computed(() => {
     if (!stockHistoricalPriceRefresh.value || stockHistoricalPriceRefresh.value.total === 0) {
         return 0;
@@ -202,6 +227,13 @@ const sessionHeaderDates = computed(() => ({
 }));
 const selectedIndexRecentPrices = computed(() => selectedIndexWatchItem.value?.recent_prices ?? []);
 const selectedIndexChart = computed(() => buildIndexPriceChart(selectedIndexRecentPrices.value));
+const selectedAnalyzeHolding = computed(() => holdings.value.find((holding) => holding.id === selectedAnalyzeHoldingId.value) ?? null);
+const selectedAnalyzeDailyPrices = computed(() => filterAnalyzeDailyPrices(
+    selectedAnalyzeHolding.value?.daily_prices ?? [],
+    selectedAnalyzeHistoryRange.value,
+));
+const selectedAnalyzeSparkline = computed(() => buildAnalyzeSparkline(selectedAnalyzeDailyPrices.value));
+const showAnalyzeSparklineDots = computed(() => ['3m', '1m', '1w'].includes(selectedAnalyzeHistoryRange.value));
 const eodhdUsageItems = computed(() => {
     if (!eodhdApiUsage.value) {
         return [];
@@ -232,6 +264,40 @@ const analyzeSubmenuItems = [
         icon: 'mdi-chart-box-outline',
     },
 ];
+const analyzeHistoryRangeItems = [
+    {
+        key: '1y',
+        label: '1 year',
+    },
+    {
+        key: '6m',
+        label: '6 months',
+    },
+    {
+        key: '3m',
+        label: '3 months',
+    },
+    {
+        key: '1m',
+        label: '1 month',
+    },
+    {
+        key: '1w',
+        label: '1 week',
+    },
+    {
+        key: 'today',
+        label: 'today',
+    },
+];
+const analyzeHistoryRangeDays = {
+    '1y': 365,
+    '6m': 183,
+    '3m': 92,
+    '1m': 31,
+    '1w': 7,
+    today: 0,
+};
 
 const menuItems = computed(() => [
     {
@@ -333,6 +399,21 @@ watch(
         }
     },
     { immediate: true },
+);
+
+watch(
+    holdings,
+    (currentHoldings) => {
+        if (selectedAnalyzeHoldingId.value === null) {
+            return;
+        }
+
+        if (currentHoldings.some((holding) => holding.id === selectedAnalyzeHoldingId.value)) {
+            return;
+        }
+
+        selectedAnalyzeHoldingId.value = null;
+    },
 );
 
 watch(
@@ -1222,6 +1303,7 @@ async function ensureAnalyzeOverviewHistoricalPrices() {
     }
 
     isStockHistoricalPriceEnsureLoading.value = true;
+    isAnalyzeHistoryInfoDismissed.value = false;
 
     try {
         const data = await depotsStore.ensureStockHistoricalPrices();
@@ -1722,10 +1804,6 @@ function formatIndexHistoryDate(value) {
     return `${parts[2]}.${parts[1]}.${parts[0]}`;
 }
 
-function formatHistoricalPriceCoverageDate(value) {
-    return formatIndexHistoryDate(value);
-}
-
 function indexHistoryActualPrice(price) {
     return price.actual_price ?? price.last_price ?? price.start_price;
 }
@@ -1819,9 +1897,9 @@ function buildIndexPriceChart(prices) {
     const min = Math.min(...values);
     const max = Math.max(...values);
     const range = max - min;
-    const adjustedRange = range === 0 ? Math.max(Math.abs(max) * 0.02, 1) : range;
-    const chartMin = range === 0 ? min - adjustedRange / 2 : min;
-    const chartMax = range === 0 ? max + adjustedRange / 2 : max;
+    const rangePadding = range === 0 ? Math.max(Math.abs(max) * 0.05, 1) : range * 0.05;
+    const chartMin = min - rangePadding;
+    const chartMax = max + rangePadding;
     const chartRange = chartMax - chartMin;
     const horizontalGridLines = Array.from({ length: 5 }, (_, index) => {
         const ratio = index / 4;
@@ -1862,6 +1940,236 @@ function buildIndexPriceChart(prices) {
             label: point.label,
         })),
     };
+}
+
+function filterAnalyzeDailyPrices(prices, rangeKey) {
+    const chartPrices = [...prices]
+        .map((price) => ({
+            ...price,
+            chart_price: analyzeDailyPriceValue(price),
+        }))
+        .filter((price) => price.trading_date && !Number.isNaN(price.chart_price))
+        .sort((first, second) => first.trading_date.localeCompare(second.trading_date));
+
+    if (chartPrices.length === 0) {
+        return [];
+    }
+
+    const latestDate = chartPrices[chartPrices.length - 1].trading_date;
+    const days = analyzeHistoryRangeDays[rangeKey] ?? analyzeHistoryRangeDays['1y'];
+    const startDate = dateStringDaysBefore(latestDate, days);
+
+    return chartPrices.filter((price) => price.trading_date >= startDate);
+}
+
+function analyzeDailyPriceValue(price) {
+    const value = price.price;
+
+    if (value === null || value === undefined || value === '' || (typeof value === 'string' && value.trim() === '')) {
+        return Number.NaN;
+    }
+
+    return Number(value);
+}
+
+function dateStringDaysBefore(dateString, days) {
+    const [year, month, day] = dateString.split('-').map((part) => Number(part));
+
+    if ([year, month, day].some((part) => Number.isNaN(part))) {
+        return dateString;
+    }
+
+    const date = new Date(Date.UTC(year, month - 1, day));
+    date.setUTCDate(date.getUTCDate() - days);
+
+    return date.toISOString().slice(0, 10);
+}
+
+function buildAnalyzeSparkline(prices) {
+    const width = 1440;
+    const height = 600;
+    const plot = {
+        left: 104,
+        top: 38,
+        right: width - 40,
+        bottom: height - 72,
+    };
+    const chartPrices = prices.filter((price) => !Number.isNaN(price.chart_price));
+
+    if (chartPrices.length === 0) {
+        return {
+            width,
+            height,
+            plot,
+            points: [],
+            linePath: '',
+            areaPath: '',
+            horizontalGridLines: [],
+            verticalGridLines: [],
+            first: null,
+            latest: null,
+            highMarker: null,
+            lowMarker: null,
+            min: null,
+            max: null,
+            trend: 'flat',
+        };
+    }
+
+    const values = chartPrices.map((price) => price.chart_price);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min;
+    const rangePadding = range === 0 ? Math.max(Math.abs(max) * 0.05, 1) : range * 0.05;
+    const chartMin = min - rangePadding;
+    const chartMax = max + rangePadding;
+    const chartRange = chartMax - chartMin;
+    const plotWidth = plot.right - plot.left;
+    const plotHeight = plot.bottom - plot.top;
+    const points = chartPrices.map((price, index) => {
+        const x = chartPrices.length === 1
+            ? plot.left + plotWidth / 2
+            : plot.left + (index / (chartPrices.length - 1)) * plotWidth;
+        const normalized = (price.chart_price - chartMin) / chartRange;
+        const y = plot.bottom - normalized * plotHeight;
+
+        return {
+            ...price,
+            x,
+            y,
+        };
+    });
+    const highPoint = points.find((point) => point.chart_price === max);
+    const lowPoint = points.find((point) => point.chart_price === min);
+
+    return {
+        width,
+        height,
+        plot,
+        points,
+        linePath: analyzeSparklinePath(points),
+        areaPath: analyzeSparklineAreaPath(points, plot),
+        horizontalGridLines: analyzeSparklineHorizontalGridLines(chartMin, chartMax, plot),
+        verticalGridLines: analyzeSparklineTickPoints(points).map((point) => ({
+            x: point.x,
+            label: formatAnalyzeSparklineDate(point),
+        })),
+        first: points[0],
+        latest: points[points.length - 1],
+        highMarker: analyzeSparklineExtremumMarker(highPoint, 'high', plot),
+        lowMarker: analyzeSparklineExtremumMarker(lowPoint, 'low', plot),
+        min,
+        max,
+        trend: points[points.length - 1].chart_price > points[0].chart_price
+            ? 'up'
+            : (points[points.length - 1].chart_price < points[0].chart_price ? 'down' : 'flat'),
+    };
+}
+
+function analyzeSparklineExtremumMarker(point, direction, plot) {
+    if (!point) {
+        return null;
+    }
+
+    const markerDistance = 16;
+    const markerPadding = 6;
+    const preferredMarkerY = direction === 'high'
+        ? point.y - markerDistance
+        : point.y + markerDistance;
+    const fallbackMarkerY = direction === 'high'
+        ? point.y + markerDistance
+        : point.y - markerDistance;
+    const markerY = preferredMarkerY >= plot.top + markerPadding && preferredMarkerY <= plot.bottom - markerPadding
+        ? preferredMarkerY
+        : fallbackMarkerY;
+    const shouldPlaceLabelLeft = point.x > (plot.left + plot.right) / 2;
+    const labelOffset = 14;
+
+    return {
+        ...point,
+        markerX: point.x,
+        markerY: Math.min(plot.bottom - markerPadding, Math.max(plot.top + markerPadding, markerY)),
+        labelX: point.x + (shouldPlaceLabelLeft ? -labelOffset : labelOffset),
+        labelY: Math.min(plot.bottom - markerPadding, Math.max(plot.top + markerPadding, markerY)) + 4,
+        labelAnchor: shouldPlaceLabelLeft ? 'end' : 'start',
+    };
+}
+
+function analyzeSparklinePath(points) {
+    if (points.length === 1) {
+        return `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+    }
+
+    return points.reduce((path, point, index) => {
+        if (index === 0) {
+            return `M ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+        }
+
+        return `${path} L ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+    }, '');
+}
+
+function analyzeSparklineAreaPath(points, plot) {
+    if (points.length === 0) {
+        return '';
+    }
+
+    return `${analyzeSparklinePath(points)} L ${points[points.length - 1].x.toFixed(2)} ${plot.bottom.toFixed(2)} L ${points[0].x.toFixed(2)} ${plot.bottom.toFixed(2)} Z`;
+}
+
+function analyzeSparklineHorizontalGridLines(min, max, plot) {
+    const gridLineCount = 5;
+    const range = max - min;
+
+    return Array.from({ length: gridLineCount }, (_, index) => {
+        const ratio = index / (gridLineCount - 1);
+        const value = max - range * ratio;
+        const y = plot.top + (plot.bottom - plot.top) * ratio;
+
+        return {
+            y,
+            value,
+        };
+    });
+}
+
+function analyzeSparklineTickPoints(points) {
+    const maximumTickCount = 6;
+
+    if (points.length <= maximumTickCount) {
+        return points;
+    }
+
+    const lastPointIndex = points.length - 1;
+    const pointIndexes = Array.from({ length: maximumTickCount }, (_, index) => (
+        Math.round((index / (maximumTickCount - 1)) * lastPointIndex)
+    ));
+
+    return [...new Set(pointIndexes)].map((index) => points[index]);
+}
+
+function formatAnalyzeSparklinePrice(point) {
+    if (!point) {
+        return '-';
+    }
+
+    return formatPriceValue(point.chart_price, selectedAnalyzeHolding.value?.currency);
+}
+
+function formatAnalyzeSparklineDate(point) {
+    if (!point?.trading_date) {
+        return '-';
+    }
+
+    return formatIndexHistoryDate(point.trading_date);
+}
+
+function formatAnalyzeSparklineAxisPrice(value) {
+    if (value === null || value === undefined || Number.isNaN(value)) {
+        return '-';
+    }
+
+    return formatPriceValue(value, selectedAnalyzeHolding.value?.currency);
 }
 
 function formatIndexChangePercent(indexItem) {
@@ -2054,6 +2362,15 @@ function yearStartChangeClass(holding) {
         'text-success': amount !== null && amount > 0,
         'text-error': amount !== null && amount < 0,
         'text-medium-emphasis': amount === null || amount === 0,
+    };
+}
+
+function depotHoldingRowClass(holding) {
+    const amount = yearStartChangeAmount(holding);
+
+    return {
+        'depot-holding-row--positive': amount !== null && amount > 0,
+        'depot-holding-row--negative': amount !== null && amount < 0,
     };
 }
 
@@ -3495,7 +3812,6 @@ function emptyPriceRefreshScheduleForm() {
                                                 <tr>
                                                     <th>Date</th>
                                                     <th class="text-right">Start</th>
-                                                    <th class="text-right">Actual</th>
                                                     <th class="text-right">Last</th>
                                                 </tr>
                                             </thead>
@@ -3507,9 +3823,6 @@ function emptyPriceRefreshScheduleForm() {
                                                     <td>{{ formatIndexHistoryDate(price.trading_date) }}</td>
                                                     <td class="text-right">
                                                         {{ formatIndexHistoryPrice(price.start_price, selectedIndexWatchItem) }}
-                                                    </td>
-                                                    <td class="text-right">
-                                                        {{ formatIndexHistoryPrice(price.actual_price, selectedIndexWatchItem) }}
                                                     </td>
                                                     <td class="text-right">
                                                         {{ formatIndexHistoryPrice(price.last_price, selectedIndexWatchItem) }}
@@ -3674,24 +3987,25 @@ function emptyPriceRefreshScheduleForm() {
                             aria-label="Analyze overview"
                         >
                             <v-alert
-                                v-if="stockHistoricalPriceCoverage || isStockHistoricalPriceEnsureLoading"
+                                v-if="showAnalyzeHistoryStatus"
                                 class="mb-4 analyze-history-status"
+                                :closable="showAnalyzeHistoryResultInfo"
                                 density="compact"
                                 type="info"
                                 variant="tonal"
+                                @click:close="isAnalyzeHistoryInfoDismissed = true"
                             >
                                 <div class="d-flex align-center justify-space-between flex-wrap ga-3">
                                     <span>
-                                        History
-                                        {{ stockHistoricalPriceCoverage?.available_count ?? 0 }}/{{ stockHistoricalPriceCoverage?.total_count ?? holdings.length }}
-                                        · {{ formatHistoricalPriceCoverageDate(stockHistoricalPriceCoverage?.date_from) }}
-                                        - {{ formatHistoricalPriceCoverageDate(stockHistoricalPriceCoverage?.required_to) }}
+                                        <template v-if="showAnalyzeHistoryProgress">
+                                            Checking historical prices
+                                        </template>
+                                        <template v-else>
+                                            {{ stockHistoricalPriceResultMessage }}
+                                        </template>
                                     </span>
-                                    <span v-if="stockHistoricalPriceRefresh" class="text-caption">
-                                        {{ stockHistoricalPriceRefresh.step }}
-                                        <span v-if="stockHistoricalPriceRefresh.current">
-                                            · {{ stockHistoricalPriceRefresh.current }}
-                                        </span>
+                                    <span v-if="stockHistoricalPriceStatusLabel" class="text-caption">
+                                        {{ stockHistoricalPriceStatusLabel }}
                                     </span>
                                 </div>
                                 <v-progress-linear
@@ -3708,6 +4022,9 @@ function emptyPriceRefreshScheduleForm() {
                                 <button
                                     type="button"
                                     class="index-watch-card analyze-holding-card analyze-holding-card--all"
+                                    :class="{ 'analyze-holding-card--active': selectedAnalyzeHoldingId === null }"
+                                    :aria-pressed="selectedAnalyzeHoldingId === null"
+                                    @click="selectedAnalyzeHoldingId = null"
                                 >
                                     <span class="index-watch-card-symbol">ALL</span>
                                 </button>
@@ -3716,6 +4033,9 @@ function emptyPriceRefreshScheduleForm() {
                                     :key="holding.id"
                                     type="button"
                                     class="index-watch-card analyze-holding-card"
+                                    :class="{ 'analyze-holding-card--active': selectedAnalyzeHoldingId === holding.id }"
+                                    :aria-pressed="selectedAnalyzeHoldingId === holding.id"
+                                    @click="selectedAnalyzeHoldingId = holding.id"
                                 >
                                     <span class="index-watch-card-label analyze-holding-card-name">
                                         {{ holding.name || holding.symbol || '-' }}
@@ -3724,6 +4044,197 @@ function emptyPriceRefreshScheduleForm() {
                                         {{ formatHoldingCardPrice(holding) }}
                                     </span>
                                 </button>
+                            </div>
+                            <div
+                                v-if="selectedAnalyzeHolding"
+                                class="analyze-range-menu"
+                                aria-label="Analyze history range"
+                            >
+                                <button
+                                    v-for="rangeItem in analyzeHistoryRangeItems"
+                                    :key="rangeItem.key"
+                                    type="button"
+                                    class="analyze-range-button"
+                                    :class="{ 'analyze-range-button--active': selectedAnalyzeHistoryRange === rangeItem.key }"
+                                    :aria-pressed="selectedAnalyzeHistoryRange === rangeItem.key"
+                                    @click="selectedAnalyzeHistoryRange = rangeItem.key"
+                                >
+                                    {{ rangeItem.label }}
+                                </button>
+                            </div>
+                            <div
+                                v-if="selectedAnalyzeHolding"
+                                class="analyze-sparkline-panel"
+                                aria-label="Selected stock price history"
+                            >
+                                <div class="analyze-sparkline-header">
+                                    <span class="analyze-sparkline-name">
+                                        {{ selectedAnalyzeHolding.name || selectedAnalyzeHolding.symbol || '-' }}
+                                    </span>
+                                    <span class="analyze-sparkline-meta">
+                                        {{ formatAnalyzeSparklineDate(selectedAnalyzeSparkline.first) }}
+                                        · {{ formatAnalyzeSparklinePrice(selectedAnalyzeSparkline.first) }}
+                                        -
+                                        {{ formatAnalyzeSparklineDate(selectedAnalyzeSparkline.latest) }}
+                                        · {{ formatAnalyzeSparklinePrice(selectedAnalyzeSparkline.latest) }}
+                                    </span>
+                                </div>
+                                <svg
+                                    v-if="selectedAnalyzeSparkline.points.length"
+                                    class="analyze-sparkline"
+                                    :viewBox="`0 0 ${selectedAnalyzeSparkline.width} ${selectedAnalyzeSparkline.height}`"
+                                    role="img"
+                                    :aria-label="`${selectedAnalyzeHolding.name || selectedAnalyzeHolding.symbol || 'Stock'} price history`"
+                                >
+                                    <defs>
+                                        <linearGradient id="analyze-sparkline-area-fill" x1="0" x2="0" y1="0" y2="1">
+                                            <stop offset="0%" class="analyze-sparkline-area-stop analyze-sparkline-area-stop--top" />
+                                            <stop offset="100%" class="analyze-sparkline-area-stop analyze-sparkline-area-stop--bottom" />
+                                        </linearGradient>
+                                    </defs>
+                                    <rect
+                                        class="analyze-sparkline-plot"
+                                        :x="selectedAnalyzeSparkline.plot.left"
+                                        :y="selectedAnalyzeSparkline.plot.top"
+                                        :width="selectedAnalyzeSparkline.plot.right - selectedAnalyzeSparkline.plot.left"
+                                        :height="selectedAnalyzeSparkline.plot.bottom - selectedAnalyzeSparkline.plot.top"
+                                    />
+                                    <line
+                                        v-for="(gridLine, index) in selectedAnalyzeSparkline.horizontalGridLines"
+                                        :key="`analyze-horizontal-grid-${index}`"
+                                        class="analyze-sparkline-grid-line"
+                                        :x1="selectedAnalyzeSparkline.plot.left"
+                                        :y1="gridLine.y"
+                                        :x2="selectedAnalyzeSparkline.plot.right"
+                                        :y2="gridLine.y"
+                                    />
+                                    <text
+                                        v-for="(gridLine, index) in selectedAnalyzeSparkline.horizontalGridLines"
+                                        :key="`analyze-y-label-${index}`"
+                                        class="analyze-sparkline-label analyze-sparkline-y-label"
+                                        :x="selectedAnalyzeSparkline.plot.left - 8"
+                                        :y="gridLine.y"
+                                    >
+                                        {{ formatAnalyzeSparklineAxisPrice(gridLine.value) }}
+                                    </text>
+                                    <line
+                                        v-for="(gridLine, index) in selectedAnalyzeSparkline.verticalGridLines"
+                                        :key="`analyze-vertical-grid-${index}`"
+                                        class="analyze-sparkline-grid-line analyze-sparkline-grid-line--vertical"
+                                        :x1="gridLine.x"
+                                        :y1="selectedAnalyzeSparkline.plot.top"
+                                        :x2="gridLine.x"
+                                        :y2="selectedAnalyzeSparkline.plot.bottom"
+                                    />
+                                    <path
+                                        class="analyze-sparkline-area"
+                                        :d="selectedAnalyzeSparkline.areaPath"
+                                    />
+                                    <path
+                                        class="analyze-sparkline-line"
+                                        :class="`analyze-sparkline-line--${selectedAnalyzeSparkline.trend}`"
+                                        :d="selectedAnalyzeSparkline.linePath"
+                                    />
+                                    <template v-if="showAnalyzeSparklineDots">
+                                        <circle
+                                            v-for="(point, index) in selectedAnalyzeSparkline.points"
+                                            :key="`analyze-point-dot-${point.trading_date || index}`"
+                                            class="analyze-sparkline-dot"
+                                            :cx="point.x"
+                                            :cy="point.y"
+                                            r="3"
+                                        />
+                                    </template>
+                                    <circle
+                                        class="analyze-sparkline-point analyze-sparkline-point--first"
+                                        :cx="selectedAnalyzeSparkline.first.x"
+                                        :cy="selectedAnalyzeSparkline.first.y"
+                                        r="3"
+                                    />
+                                    <circle
+                                        class="analyze-sparkline-point analyze-sparkline-point--latest"
+                                        :cx="selectedAnalyzeSparkline.latest.x"
+                                        :cy="selectedAnalyzeSparkline.latest.y"
+                                        r="4"
+                                    />
+                                    <g
+                                        v-if="selectedAnalyzeSparkline.highMarker"
+                                        class="analyze-sparkline-extremum analyze-sparkline-extremum--high"
+                                    >
+                                        <line
+                                            class="analyze-sparkline-extremum-line"
+                                            :x1="selectedAnalyzeSparkline.highMarker.x"
+                                            :y1="selectedAnalyzeSparkline.highMarker.y"
+                                            :x2="selectedAnalyzeSparkline.highMarker.markerX"
+                                            :y2="selectedAnalyzeSparkline.highMarker.markerY"
+                                        />
+                                        <circle
+                                            class="analyze-sparkline-extremum-ring"
+                                            :cx="selectedAnalyzeSparkline.highMarker.markerX"
+                                            :cy="selectedAnalyzeSparkline.highMarker.markerY"
+                                            r="6"
+                                        />
+                                        <circle
+                                            class="analyze-sparkline-extremum-dot"
+                                            :cx="selectedAnalyzeSparkline.highMarker.markerX"
+                                            :cy="selectedAnalyzeSparkline.highMarker.markerY"
+                                            r="2.5"
+                                        />
+                                        <text
+                                            class="analyze-sparkline-extremum-label"
+                                            :x="selectedAnalyzeSparkline.highMarker.labelX"
+                                            :y="selectedAnalyzeSparkline.highMarker.labelY"
+                                            :text-anchor="selectedAnalyzeSparkline.highMarker.labelAnchor"
+                                        >
+                                            {{ formatAnalyzeSparklineAxisPrice(selectedAnalyzeSparkline.highMarker.chart_price) }}
+                                        </text>
+                                    </g>
+                                    <g
+                                        v-if="selectedAnalyzeSparkline.lowMarker"
+                                        class="analyze-sparkline-extremum analyze-sparkline-extremum--low"
+                                    >
+                                        <line
+                                            class="analyze-sparkline-extremum-line"
+                                            :x1="selectedAnalyzeSparkline.lowMarker.x"
+                                            :y1="selectedAnalyzeSparkline.lowMarker.y"
+                                            :x2="selectedAnalyzeSparkline.lowMarker.markerX"
+                                            :y2="selectedAnalyzeSparkline.lowMarker.markerY"
+                                        />
+                                        <circle
+                                            class="analyze-sparkline-extremum-ring"
+                                            :cx="selectedAnalyzeSparkline.lowMarker.markerX"
+                                            :cy="selectedAnalyzeSparkline.lowMarker.markerY"
+                                            r="6"
+                                        />
+                                        <circle
+                                            class="analyze-sparkline-extremum-dot"
+                                            :cx="selectedAnalyzeSparkline.lowMarker.markerX"
+                                            :cy="selectedAnalyzeSparkline.lowMarker.markerY"
+                                            r="2.5"
+                                        />
+                                        <text
+                                            class="analyze-sparkline-extremum-label"
+                                            :x="selectedAnalyzeSparkline.lowMarker.labelX"
+                                            :y="selectedAnalyzeSparkline.lowMarker.labelY"
+                                            :text-anchor="selectedAnalyzeSparkline.lowMarker.labelAnchor"
+                                        >
+                                            {{ formatAnalyzeSparklineAxisPrice(selectedAnalyzeSparkline.lowMarker.chart_price) }}
+                                        </text>
+                                    </g>
+                                    <text
+                                        v-for="(gridLine, index) in selectedAnalyzeSparkline.verticalGridLines"
+                                        :key="`analyze-x-label-${index}`"
+                                        class="analyze-sparkline-label analyze-sparkline-x-label"
+                                        :class="{ 'analyze-sparkline-x-label--end': index === selectedAnalyzeSparkline.verticalGridLines.length - 1 }"
+                                        :x="gridLine.x"
+                                        :y="selectedAnalyzeSparkline.height - 12"
+                                    >
+                                        {{ gridLine.label }}
+                                    </text>
+                                </svg>
+                                <div v-else class="text-body-2 text-medium-emphasis">
+                                    No stored prices for this range.
+                                </div>
                             </div>
                         </section>
                         <section
@@ -4180,7 +4691,7 @@ function emptyPriceRefreshScheduleForm() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr v-for="holding in depotHoldings" :key="holding.id">
+                                    <tr v-for="holding in depotHoldings" :key="holding.id" :class="depotHoldingRowClass(holding)">
                                         <td>{{ holding.symbol || '-' }}</td>
                                         <td>{{ holding.name || '-' }}</td>
                                         <td class="text-right">{{ formatPositionPieces(holding) }}</td>
@@ -4902,6 +5413,11 @@ function emptyPriceRefreshScheduleForm() {
     gap: 0;
 }
 
+.analyze-holding-card--active {
+    background: rgba(var(--v-theme-primary), 0.08);
+    border-color: rgba(var(--v-theme-primary), 0.72);
+}
+
 .analyze-holding-card-name {
     -webkit-line-clamp: 3;
     font-weight: 700;
@@ -4911,6 +5427,218 @@ function emptyPriceRefreshScheduleForm() {
 .analyze-holding-card-price {
     color: rgb(var(--v-theme-primary));
     font-size: 0.7rem;
+}
+
+.analyze-range-menu {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.analyze-range-button {
+    align-items: center;
+    background: rgb(var(--v-theme-surface));
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 4px;
+    color: rgba(var(--v-theme-on-surface), 0.72);
+    display: inline-flex;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    height: 26px;
+    justify-content: center;
+    line-height: 1;
+    min-width: 58px;
+    padding: 0 9px;
+    text-transform: uppercase;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.analyze-range-button--active {
+    background: rgba(var(--v-theme-primary), 0.08);
+    border-color: rgba(var(--v-theme-primary), 0.7);
+    color: rgb(var(--v-theme-primary));
+}
+
+.analyze-sparkline-panel {
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 0;
+    margin-top: 10px;
+    padding: 14px;
+}
+
+.analyze-sparkline-header {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+.analyze-sparkline-name {
+    color: rgb(var(--v-theme-primary));
+    font-size: 0.8125rem;
+    font-weight: 800;
+    line-height: 1.2;
+}
+
+.analyze-sparkline-meta {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    font-size: 0.6875rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.analyze-sparkline {
+    display: block;
+    height: 600px;
+    width: 100%;
+}
+
+.analyze-sparkline-plot {
+    fill: rgba(var(--v-theme-primary), 0.025);
+    stroke: rgba(var(--v-border-color), 0.45);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.analyze-sparkline-grid-line {
+    stroke: rgba(var(--v-theme-on-surface), 0.1);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.analyze-sparkline-grid-line--vertical {
+    stroke: rgba(var(--v-theme-on-surface), 0.055);
+}
+
+.analyze-sparkline-label {
+    fill: rgba(var(--v-theme-on-surface), 0.6);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.analyze-sparkline-y-label {
+    dominant-baseline: middle;
+    text-anchor: end;
+}
+
+.analyze-sparkline-x-label {
+    dominant-baseline: middle;
+    text-anchor: start;
+}
+
+.analyze-sparkline-x-label--end {
+    text-anchor: end;
+}
+
+.analyze-sparkline-area {
+    fill: url("#analyze-sparkline-area-fill");
+}
+
+.analyze-sparkline-area-stop--top {
+    stop-color: rgb(var(--v-theme-primary));
+    stop-opacity: 0.22;
+}
+
+.analyze-sparkline-area-stop--bottom {
+    stop-color: rgb(var(--v-theme-primary));
+    stop-opacity: 0.015;
+}
+
+.analyze-sparkline-line {
+    fill: none;
+    stroke: rgb(var(--v-theme-primary));
+    stroke-linecap: butt;
+    stroke-linejoin: miter;
+    stroke-width: 2.75;
+    vector-effect: non-scaling-stroke;
+}
+
+.analyze-sparkline-line--down {
+    stroke: rgb(var(--v-theme-error));
+}
+
+.analyze-sparkline-line--flat {
+    stroke: rgba(var(--v-theme-on-surface), 0.68);
+}
+
+.analyze-sparkline-dot {
+    fill: rgb(var(--v-theme-primary));
+    stroke: rgb(var(--v-theme-surface));
+    stroke-width: 1.5;
+    vector-effect: non-scaling-stroke;
+}
+
+.analyze-sparkline-line--down ~ .analyze-sparkline-dot {
+    fill: rgb(var(--v-theme-error));
+}
+
+.analyze-sparkline-point {
+    fill: rgb(var(--v-theme-primary));
+    stroke: rgb(var(--v-theme-surface));
+    stroke-width: 2;
+    vector-effect: non-scaling-stroke;
+}
+
+.analyze-sparkline-line--down ~ .analyze-sparkline-point,
+.analyze-sparkline-line--down + .analyze-sparkline-point {
+    fill: rgb(var(--v-theme-error));
+}
+
+.analyze-sparkline-point--first {
+    fill: rgba(var(--v-theme-on-surface), 0.45);
+}
+
+.analyze-sparkline-point--latest {
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.22));
+}
+
+.analyze-sparkline-extremum {
+    color: rgb(var(--v-theme-primary));
+}
+
+.analyze-sparkline-extremum--high {
+    color: rgb(var(--v-theme-success));
+}
+
+.analyze-sparkline-extremum--low {
+    color: rgb(var(--v-theme-error));
+}
+
+.analyze-sparkline-extremum-line {
+    stroke: currentColor;
+    stroke-dasharray: 2 3;
+    stroke-linecap: round;
+    stroke-width: 1.25;
+    vector-effect: non-scaling-stroke;
+}
+
+.analyze-sparkline-extremum-ring {
+    fill: rgb(var(--v-theme-surface));
+    stroke: currentColor;
+    stroke-width: 2;
+    vector-effect: non-scaling-stroke;
+}
+
+.analyze-sparkline-extremum-dot {
+    fill: currentColor;
+    stroke: rgb(var(--v-theme-surface));
+    stroke-width: 0.75;
+    vector-effect: non-scaling-stroke;
+}
+
+.analyze-sparkline-extremum-label {
+    dominant-baseline: middle;
+    fill: currentColor;
+    font-size: 12px;
+    font-weight: 800;
+    paint-order: stroke;
+    stroke: rgb(var(--v-theme-surface));
+    stroke-linejoin: round;
+    stroke-width: 4;
 }
 
 .index-price-dialog-title {
@@ -5041,6 +5769,14 @@ function emptyPriceRefreshScheduleForm() {
     font: inherit;
     text-align: right;
     width: 100%;
+}
+
+.depot-holding-row--positive td {
+    background-color: rgba(var(--v-theme-success), 0.06);
+}
+
+.depot-holding-row--negative td {
+    background-color: rgba(var(--v-theme-error), 0.06);
 }
 
 .flatex-price-input {

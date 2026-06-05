@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -128,7 +129,10 @@ class AdminIndexWatchItemController extends Controller
      */
     private function indexWatchItemPayload(IndexWatchItem $item): array
     {
-        $currentOpenTradingDate = $this->currentOpenTradingDate($item);
+        $recentPrices = $item->prices()
+            ->orderByDesc('trading_date')
+            ->limit(IndexWatchItemPriceRefresher::RecentPriceLimit)
+            ->get();
 
         return [
             'id' => $item->id,
@@ -144,26 +148,53 @@ class AdminIndexWatchItemController extends Controller
             'start_price' => $this->pricePayload($item->start_price),
             'latest_price' => $this->pricePayload($item->latest_price),
             'last_price' => $this->pricePayload($item->last_price),
-            'latest_price_change_pct' => $this->percentPayload($item->latest_price_change_pct),
+            'latest_price_change_pct' => $this->percentPayload($this->latestPriceChangePercent($item, $recentPrices)),
             'latest_price_as_of' => $item->latest_price_as_of?->toIso8601String(),
             'latest_price_source' => $item->latest_price_source,
             'trading_times' => $item->trading_times,
-            'recent_prices' => $item->prices()
-                ->when($currentOpenTradingDate !== null, fn ($query) => $query->whereDate('trading_date', '<', $currentOpenTradingDate))
-                ->orderByDesc('trading_date')
-                ->limit(IndexWatchItemPriceRefresher::RecentPriceLimit)
-                ->get()
+            'recent_prices' => $recentPrices
                 ->map(fn (IndexWatchItemPrice $price): array => [
                     'trading_date' => $price->trading_date?->toDateString(),
                     'start_price' => $this->pricePayload($price->start_price),
                     'actual_price' => $this->pricePayload($price->actual_price),
-                    'last_price' => $this->pricePayload($price->last_price),
+                    'last_price' => $this->pricePayload($price->actual_price ?? $price->last_price),
                     'actual_price_as_of' => $price->actual_price_as_of?->toIso8601String(),
-                    'last_price_as_of' => $price->last_price_as_of?->toIso8601String(),
+                    'last_price_as_of' => ($price->actual_price_as_of ?? $price->last_price_as_of)?->toIso8601String(),
                 ])
                 ->all(),
             'created_at' => $item->created_at?->toIso8601String(),
         ];
+    }
+
+    /**
+     * @param  Collection<int, IndexWatchItemPrice>  $recentPrices
+     */
+    private function latestPriceChangePercent(IndexWatchItem $item, Collection $recentPrices): ?string
+    {
+        $latestPrice = $this->pricePayload($item->latest_price) ?? $this->indexPriceDisplayValue($recentPrices->first());
+        $referencePrice = $recentPrices
+            ->skip(1)
+            ->map(fn (IndexWatchItemPrice $price): ?string => $this->indexPriceDisplayValue($price))
+            ->first(fn (?string $price): bool => $price !== null);
+
+        if ($latestPrice === null || $referencePrice === null) {
+            return $this->pricePayload($item->latest_price_change_pct);
+        }
+
+        if ((float) $referencePrice === 0.0) {
+            return null;
+        }
+
+        return number_format((((float) $latestPrice - (float) $referencePrice) / (float) $referencePrice) * 100, 6, '.', '');
+    }
+
+    private function indexPriceDisplayValue(?IndexWatchItemPrice $price): ?string
+    {
+        if (! $price) {
+            return null;
+        }
+
+        return $this->pricePayload($price->actual_price ?? $price->last_price);
     }
 
     private function currentOpenTradingDate(IndexWatchItem $item): ?string

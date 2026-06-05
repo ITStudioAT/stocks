@@ -163,7 +163,7 @@ class AdminDepotTransactionController extends Controller
         return StockHolding::query()
             ->with('latestStockPrice')
             ->whereKey($positionPiecesByHoldingId->keys()->all())
-            ->orderBy('symbol')
+            ->orderBy('name')
             ->get()
             ->map(fn (StockHolding $holding): array => $this->depotHoldingPayload(
                 holding: $holding,

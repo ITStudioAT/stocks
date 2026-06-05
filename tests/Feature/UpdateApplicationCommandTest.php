@@ -2,7 +2,9 @@
 
 namespace Tests\Feature;
 
+use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class UpdateApplicationCommandTest extends TestCase
@@ -54,5 +56,82 @@ class UpdateApplicationCommandTest extends TestCase
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
         Process::assertDidntRun('npm install --ignore-scripts');
         Process::assertDidntRun('npm run build');
+    }
+
+    public function test_update_command_stops_before_migrations_when_pending_migrations_create_the_same_table(): void
+    {
+        Process::preventStrayProcesses();
+
+        $duplicateMigration = database_path('migrations/2014_10_12_000000_create_users_table.php');
+
+        file_put_contents($duplicateMigration, <<<'PHP'
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('users', function (Blueprint $table): void {
+            $table->id();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('users');
+    }
+};
+PHP);
+
+        Process::fake([
+            'composer install --no-interaction --prefer-dist' => Process::result(),
+            'php artisan optimize:clear' => Process::result(),
+        ]);
+
+        try {
+            $this->artisan('app:update --skip-npm --skip-build')
+                ->expectsOutputToContain('Migration preflight failed: multiple pending migrations create the same table.')
+                ->expectsOutputToContain('users')
+                ->doesntExpectOutputToContain('Application update complete.')
+                ->assertFailed();
+        } finally {
+            unlink($duplicateMigration);
+        }
+
+        Process::assertRan('composer install --no-interaction --prefer-dist');
+        Process::assertRan('php artisan optimize:clear');
+        Process::assertDidntRun('php artisan migrate --force --no-interaction');
+    }
+
+    public function test_update_command_stops_before_migrations_when_a_pending_migration_would_create_an_existing_table(): void
+    {
+        Process::preventStrayProcesses();
+
+        Schema::create('users', function (Blueprint $table): void {
+            $table->id();
+        });
+
+        Process::fake([
+            'composer install --no-interaction --prefer-dist' => Process::result(),
+            'php artisan optimize:clear' => Process::result(),
+        ]);
+
+        try {
+            $this->artisan('app:update --skip-npm --skip-build')
+                ->expectsOutputToContain('Migration preflight failed: pending migrations would create tables that already exist.')
+                ->expectsOutputToContain('users')
+                ->doesntExpectOutputToContain('Application update complete.')
+                ->assertFailed();
+        } finally {
+            Schema::dropIfExists('users');
+        }
+
+        Process::assertRan('composer install --no-interaction --prefer-dist');
+        Process::assertRan('php artisan optimize:clear');
+        Process::assertDidntRun('php artisan migrate --force --no-interaction');
     }
 }

@@ -6,6 +6,10 @@ const vitestArguments = process.argv.slice(2);
 
 const exitCode = await new Promise(resolve => {
     const childProcess = spawn('vitest', vitestArguments, {
+        env: {
+            ...process.env,
+            VITEST: 'true',
+        },
         shell: process.platform === 'win32',
         stdio: 'inherit',
     });

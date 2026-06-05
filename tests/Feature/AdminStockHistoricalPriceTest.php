@@ -9,6 +9,7 @@ use App\Models\StockHolding;
 use App\Models\StockHoldingDailyPrice;
 use App\Models\User;
 use App\Services\StockHistoricalDailyPriceFetcher;
+use App\Services\StockHistoricalPriceService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -56,6 +57,67 @@ class AdminStockHistoricalPriceTest extends TestCase
             $this->assertSame('2025-06-05', $item->date_from->toDateString());
             $this->assertSame('2026-06-05', $item->date_to->toDateString());
             Queue::assertPushed(FetchStockHistoricalPrices::class, fn (FetchStockHistoricalPrices $job): bool => $job->refreshId === $refreshId);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_admin_does_not_queue_when_one_year_stock_history_is_complete(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-05 12:00:00', 'UTC'));
+        Queue::fake([FetchStockHistoricalPrices::class]);
+
+        try {
+            $admin = $this->adminUser();
+            $holding = StockHolding::factory()->create([
+                'symbol' => 'AAPL',
+                'name' => 'Apple Inc.',
+                'country' => 'United States',
+                'currency' => 'USD',
+            ]);
+
+            $this->createWeekdayDailyPrices($holding, '2025-06-05', '2026-06-04');
+
+            $this->actingAs($admin)
+                ->postJson('/admin/watchlist/holdings/historical-prices/ensure')
+                ->assertOk()
+                ->assertJsonPath('coverage.total_count', 1)
+                ->assertJsonPath('coverage.available_count', 1)
+                ->assertJsonPath('coverage.missing_count', 0)
+                ->assertJsonPath('coverage.is_complete', true)
+                ->assertJsonPath('refresh', null);
+
+            Queue::assertNotPushed(FetchStockHistoricalPrices::class);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_admin_queues_when_a_required_stock_history_day_is_missing(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-05 12:00:00', 'UTC'));
+        Queue::fake([FetchStockHistoricalPrices::class]);
+
+        try {
+            $admin = $this->adminUser();
+            $holding = StockHolding::factory()->create([
+                'symbol' => 'AAPL',
+                'name' => 'Apple Inc.',
+                'country' => 'United States',
+                'currency' => 'USD',
+            ]);
+
+            $this->createWeekdayDailyPrices($holding, '2025-06-05', '2026-06-04', '2026-01-15');
+
+            $this->actingAs($admin)
+                ->postJson('/admin/watchlist/holdings/historical-prices/ensure')
+                ->assertAccepted()
+                ->assertJsonPath('coverage.total_count', 1)
+                ->assertJsonPath('coverage.available_count', 0)
+                ->assertJsonPath('coverage.missing_count', 1)
+                ->assertJsonPath('refresh.status', 'queued');
+
+            Queue::assertPushed(FetchStockHistoricalPrices::class);
         } finally {
             Carbon::setTestNow();
         }
@@ -113,7 +175,10 @@ class AdminStockHistoricalPriceTest extends TestCase
                 'date_to' => '2026-06-05',
             ]);
 
-            (new FetchStockHistoricalPrices($run->id))->handle(app(StockHistoricalDailyPriceFetcher::class));
+            (new FetchStockHistoricalPrices($run->id))->handle(
+                app(StockHistoricalDailyPriceFetcher::class),
+                app(StockHistoricalPriceService::class),
+            );
 
             $this->assertDatabaseHas('stock_holding_daily_prices', [
                 'stock_holding_id' => $holding->id,
@@ -127,18 +192,129 @@ class AdminStockHistoricalPriceTest extends TestCase
                 'close' => '213.10000000',
             ]);
             $this->assertSame(2, StockHoldingDailyPrice::query()->where('stock_holding_id', $holding->id)->count());
-            $this->assertSame('finished', $run->refresh()->status);
+            $this->assertSame('partial', $run->refresh()->status);
             $this->assertSame(1, $run->processed_count);
-            $this->assertSame(1, $run->success_count);
+            $this->assertSame(0, $run->success_count);
+            $this->assertSame(1, $run->unavailable_count);
 
             $this->actingAs($admin)
                 ->getJson("/admin/watchlist/holdings/historical-prices/{$run->id}")
                 ->assertOk()
-                ->assertJsonPath('coverage.is_complete', true)
-                ->assertJsonPath('refresh.status', 'finished')
-                ->assertJsonPath('refresh.processed', 1);
+                ->assertJsonPath('coverage.is_complete', false)
+                ->assertJsonPath('coverage.missing_count', 1)
+                ->assertJsonPath('refresh.status', 'partial')
+                ->assertJsonPath('refresh.processed', 1)
+                ->assertJsonPath('refresh.stored_count', 2);
 
             Http::assertSent(fn ($request): bool => str_contains($request->url(), '/api/eod/AAPL.US'));
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_queued_job_does_not_call_api_when_database_days_are_complete(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-05 12:00:00', 'UTC'));
+
+        try {
+            config(['services.eodhd.key' => 'test-token']);
+            Http::fake(fn () => throw new \RuntimeException('Historical API should not be called when daily prices are complete.'));
+            $holding = StockHolding::factory()->create([
+                'symbol' => 'AAPL',
+                'name' => 'Apple Inc.',
+                'country' => 'United States',
+                'currency' => 'USD',
+                'exchange' => 'NASDAQ',
+                'mic_code' => 'XNAS',
+            ]);
+            $this->createWeekdayDailyPrices($holding, '2025-06-05', '2026-06-04');
+            $run = StockHistoricalPriceFetchRun::query()->create([
+                'id' => 'history-complete-test',
+                'status' => 'queued',
+                'date_from' => '2025-06-05',
+                'date_to' => '2026-06-05',
+                'total_count' => 1,
+            ]);
+            StockHistoricalPriceFetchItem::query()->create([
+                'fetch_run_id' => $run->id,
+                'stock_holding_id' => $holding->id,
+                'status' => 'queued',
+                'date_from' => '2025-06-05',
+                'date_to' => '2026-06-05',
+            ]);
+
+            (new FetchStockHistoricalPrices($run->id))->handle(
+                app(StockHistoricalDailyPriceFetcher::class),
+                app(StockHistoricalPriceService::class),
+            );
+
+            Http::assertSentCount(0);
+            $this->assertSame('finished', $run->refresh()->status);
+            $this->assertSame(1, $run->processed_count);
+            $this->assertSame(1, $run->success_count);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_queued_job_fetches_only_missing_database_days(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-05 12:00:00', 'UTC'));
+
+        try {
+            config(['services.eodhd.key' => 'test-token']);
+            Http::fake([
+                'eodhd.com/api/eod/AAPL.US*' => Http::response([
+                    [
+                        'date' => '2026-01-15',
+                        'open' => 200.1,
+                        'high' => 203.4,
+                        'low' => 199.9,
+                        'close' => 202.7,
+                        'adjusted_close' => 202.7,
+                        'volume' => 120000,
+                    ],
+                ]),
+            ]);
+            $holding = StockHolding::factory()->create([
+                'symbol' => 'AAPL',
+                'name' => 'Apple Inc.',
+                'country' => 'United States',
+                'currency' => 'USD',
+                'exchange' => 'NASDAQ',
+                'mic_code' => 'XNAS',
+            ]);
+            $this->createWeekdayDailyPrices($holding, '2025-06-05', '2026-06-04', '2026-01-15');
+            $run = StockHistoricalPriceFetchRun::query()->create([
+                'id' => 'history-missing-day-test',
+                'status' => 'queued',
+                'date_from' => '2025-06-05',
+                'date_to' => '2026-06-05',
+                'total_count' => 1,
+            ]);
+            StockHistoricalPriceFetchItem::query()->create([
+                'fetch_run_id' => $run->id,
+                'stock_holding_id' => $holding->id,
+                'status' => 'queued',
+                'date_from' => '2025-06-05',
+                'date_to' => '2026-06-05',
+            ]);
+
+            (new FetchStockHistoricalPrices($run->id))->handle(
+                app(StockHistoricalDailyPriceFetcher::class),
+                app(StockHistoricalPriceService::class),
+            );
+
+            Http::assertSent(fn ($request): bool => str_contains($request->url(), 'from=2026-01-15')
+                && str_contains($request->url(), 'to=2026-01-15'));
+            Http::assertSentCount(1);
+            $this->assertDatabaseHas('stock_holding_daily_prices', [
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-01-15',
+                'close' => '202.70000000',
+            ]);
+            $this->assertSame('finished', $run->refresh()->status);
+            $this->assertSame(1, $run->success_count);
         } finally {
             Carbon::setTestNow();
         }
@@ -158,5 +334,25 @@ class AdminStockHistoricalPriceTest extends TestCase
         $user->assignRole('admin');
 
         return $user;
+    }
+
+    private function createWeekdayDailyPrices(StockHolding $holding, string $from, string $to, ?string $skipDate = null): void
+    {
+        $date = Carbon::parse($from);
+        $endDate = Carbon::parse($to);
+
+        while ($date->lte($endDate)) {
+            if ($date->isWeekday() && $date->toDateString() !== $skipDate) {
+                StockHoldingDailyPrice::factory()->create([
+                    'stock_holding_id' => $holding->id,
+                    'trading_date' => $date->toDateString(),
+                    'close' => '192.70000000',
+                    'adjusted_close' => '192.70000000',
+                    'currency' => $holding->currency,
+                ]);
+            }
+
+            $date->addDay();
+        }
     }
 }

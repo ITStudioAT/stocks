@@ -26,12 +26,12 @@ return new class extends Migration
             $table->string('error_message')->nullable();
             $table->timestamps();
 
-            $table->foreign('fetch_run_id')
+            $table->foreign('fetch_run_id', 'shpfi_run_fk')
                 ->references('id')
                 ->on('stock_historical_price_fetch_runs')
                 ->cascadeOnDelete();
-            $table->index(['fetch_run_id', 'stock_holding_id']);
-            $table->index(['stock_holding_id', 'date_from', 'date_to', 'status']);
+            $table->index(['fetch_run_id', 'stock_holding_id'], 'shpfi_run_holding_idx');
+            $table->index(['stock_holding_id', 'date_from', 'date_to', 'status'], 'shpfi_holding_dates_status_idx');
         });
     }
 
