@@ -1141,12 +1141,28 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/queue/status') {
+                return Promise.resolve(jsonResponse({
+                    queue: {
+                        status: 'ok',
+                        connection: 'sync',
+                        name: 'default',
+                        pending: 0,
+                        reserved: 0,
+                        failed: 0,
+                        retry_after: 1200,
+                        max_job_timeout: 900,
+                        issues: [],
+                    },
+                }));
+            }
+
             if (path === '/admin/price-refresh-settings' && options?.method === 'PATCH') {
                 currentPriceRefreshSettings = priceRefreshSettings({
                     trading_interval_minutes: 15,
                     trading_starts_before_minutes: 8,
                     trading_ends_after_minutes: 12,
-                    closed_refresh_enabled: true,
+                    closed_refresh_enabled: false,
                     closed_interval_minutes: 45,
                     next_refresh_at: '2026-06-02T12:35:00+00:00',
                     current_interval_minutes: 15,
@@ -1531,6 +1547,8 @@ describe('App', () => {
         await scheduleInputs[1].setValue('8');
         await scheduleInputs[2].setValue('12');
         await scheduleInputs[3].setValue('45');
+        wrapper.vm.priceRefreshScheduleForm.closed_refresh_enabled = false;
+        await wrapper.vm.$nextTick();
         await wrapper.find('#price-refresh-schedule-form').trigger('submit');
         await flushPromises();
 
@@ -1540,13 +1558,14 @@ describe('App', () => {
                 trading_interval_minutes: 15,
                 trading_starts_before_minutes: 8,
                 trading_ends_after_minutes: 12,
-                closed_refresh_enabled: true,
+                closed_refresh_enabled: false,
                 closed_interval_minutes: 45,
             }),
         }));
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/refresh-prices/settings-refresh-1', expect.any(Object));
         expect(wrapper.text()).toContain('Price refresh schedule updated.');
         expect(wrapper.text()).toContain('Current interval: 15 min');
+        expect(wrapper.find('#price-refresh-schedule-form').text()).toContain('Off');
         expect(wrapper.text()).toContain('Edit');
 
         wrapper.vm.navigateSection('dashboard');
@@ -1954,6 +1973,129 @@ describe('App', () => {
         expect(fetchMock).not.toHaveBeenCalledWith('/admin/price-refresh-settings', expect.objectContaining({ method: 'PATCH' }));
         expect(wrapper.text()).toContain('Index price refresh schedule updated.');
         expect(wrapper.find('#index-price-refresh-schedule-form').findAll('input')).toHaveLength(0);
+    });
+
+    it('does not reset schedule draft values while settings polling refreshes', async () => {
+        window.history.pushState({}, '', '/admin/menu/updates');
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({ user: { id: 1, name: 'Admin', email: 'a@b.com', roles: ['admin'] } }));
+            }
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+            if (path === '/admin/price-refresh-settings') {
+                return Promise.resolve(jsonResponse({
+                    price_refresh_settings: priceRefreshSettings({ trading_interval_minutes: 55 }),
+                    index_price_refresh_settings: indexPriceRefreshSettings({ trading_interval_minutes: 65 }),
+                }));
+            }
+
+            return Promise.resolve(jsonResponse({}));
+        });
+        global.fetch = fetchMock;
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const stockEditButton = wrapper.find('#price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
+        await stockEditButton.trigger('click');
+        await flushPromises();
+
+        const stockScheduleInputs = wrapper.find('#price-refresh-schedule-form').findAll('input[type="number"]');
+        await stockScheduleInputs[0].setValue('10');
+
+        await wrapper.vm.pollPriceRefreshSettings();
+        await flushPromises();
+
+        expect(wrapper.find('#price-refresh-schedule-form').findAll('input[type="number"]')[0].element.value).toBe('10');
+        expect(wrapper.vm.priceRefreshSettings.trading_interval_minutes).toBe(55);
+    });
+
+    it('keeps outside trading off after saving the stock price refresh schedule', async () => {
+        window.history.pushState({}, '', '/admin/menu/updates');
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        const savedPriceRefreshSettings = priceRefreshSettings({ closed_refresh_enabled: false });
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({ user: { id: 1, name: 'Admin', email: 'a@b.com', roles: ['admin'] } }));
+            }
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+            if (path === '/admin/price-refresh-settings' && options?.method === 'PATCH') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Price refresh schedule updated.',
+                    price_refresh_settings: savedPriceRefreshSettings,
+                }));
+            }
+
+            return Promise.resolve(jsonResponse({}));
+        });
+        global.fetch = fetchMock;
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const stockEditButton = wrapper.find('#price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
+        await stockEditButton.trigger('click');
+        await flushPromises();
+
+        wrapper.vm.priceRefreshScheduleForm.closed_refresh_enabled = false;
+        await wrapper.vm.$nextTick();
+        await wrapper.find('#price-refresh-schedule-form').trigger('submit');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/price-refresh-settings', expect.objectContaining({
+            method: 'PATCH',
+            body: expect.stringContaining('"closed_refresh_enabled":false'),
+        }));
+        expect(wrapper.find('#price-refresh-schedule-form').text()).toContain('Off');
+
+        const editAgainButton = wrapper.find('#price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
+        await editAgainButton.trigger('click');
+        await flushPromises();
+
+        expect(wrapper.vm.priceRefreshScheduleForm.closed_refresh_enabled).toBe(false);
     });
 
     it('shows Admin group with horizontal Users, Roles, and Updates submenu chips for super_admin', async () => {

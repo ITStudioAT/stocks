@@ -59,6 +59,7 @@ class IndexWatchItemPriceRefresher
         $actualPrice = $this->decimal(Arr::get($payload, 'close'));
         $startPrice = $this->decimal(Arr::get($payload, 'open'));
         $lastPrice = $this->decimal(Arr::get($payload, 'previousClose'));
+        $changePercent = $this->signedDecimal(Arr::get($payload, 'change_p'));
         $asOf = $this->timestamp(Arr::get($payload, 'timestamp'), Arr::get($payload, 'datetime')) ?? now();
 
         if ($actualPrice === null && $lastPrice === null) {
@@ -85,10 +86,11 @@ class IndexWatchItemPriceRefresher
             'start_price' => $startPrice,
             'latest_price' => $actualPrice,
             'last_price' => $lastPrice,
-            'latest_price_change_pct' => $this->changePercent($actualPrice ?? $lastPrice, $referencePrice),
+            'latest_price_change_pct' => $changePercent ?? $this->changePercent($actualPrice ?? $lastPrice, $referencePrice),
             'latest_price_as_of' => $asOf,
             'latest_price_source' => 'EODHD real-time',
             'trading_times' => $this->tradingTimes($item),
+            'raw_payload' => $payload,
         ]);
 
         return true;
@@ -293,6 +295,21 @@ class IndexWatchItemPriceRefresher
         $value = trim((string) $value);
 
         if (! preg_match('/^-?\d+(?:\.\d+)?$/', $value) || (float) $value <= 0) {
+            return null;
+        }
+
+        return number_format((float) $value, 8, '.', '');
+    }
+
+    private function signedDecimal(mixed $value): ?string
+    {
+        if (! is_string($value) && ! is_numeric($value)) {
+            return null;
+        }
+
+        $value = trim((string) $value);
+
+        if (! preg_match('/^-?\d+(?:\.\d+)?$/', $value)) {
             return null;
         }
 

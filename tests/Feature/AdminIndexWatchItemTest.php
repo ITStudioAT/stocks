@@ -64,7 +64,7 @@ class AdminIndexWatchItemTest extends TestCase
             ->assertJsonPath('indexes.0.eodhd_code', 'ATX.INDX')
             ->assertJsonPath('indexes.0.latest_price', '6116.529800')
             ->assertJsonPath('indexes.0.last_price', '6096.169900')
-            ->assertJsonPath('indexes.0.latest_price_change_pct', '0.09')
+            ->assertJsonPath('indexes.0.latest_price_change_pct', '0.33')
             ->assertJsonCount(30, 'indexes.0.recent_prices')
             ->assertJsonPath('indexes.0.recent_prices.0.trading_date', $now->toDateString())
             ->assertJsonPath('indexes.0.recent_prices.0.actual_price', '6110.000000')
@@ -85,6 +85,7 @@ class AdminIndexWatchItemTest extends TestCase
                     'open' => 6200.00,
                     'close' => 6116.5298,
                     'previousClose' => 6096.1699,
+                    'change_p' => 0.333979,
                     'currency' => 'EUR',
                 ]),
                 'eodhd.com/api/eod/DAX.XETRA*' => Http::response($this->eodhdDailyIndexRecords()),
@@ -118,7 +119,7 @@ class AdminIndexWatchItemTest extends TestCase
                 ->assertOk()
                 ->assertJsonPath('message', 'Index prices loaded.')
                 ->assertJsonPath('index.latest_price', '6116.529800')
-                ->assertJsonPath('index.latest_price_change_pct', '0.02')
+                ->assertJsonPath('index.latest_price_change_pct', '0.33')
                 ->assertJsonPath('index.latest_price_source', 'EODHD real-time')
                 ->assertJsonCount(30, 'index.recent_prices')
                 ->assertJsonPath('index.recent_prices.0.trading_date', '2026-06-07')
@@ -183,7 +184,7 @@ class AdminIndexWatchItemTest extends TestCase
                 ->getJson('/admin/index-watch-items')
                 ->assertOk()
                 ->assertJsonPath('indexes.0.latest_price', '24956.330100')
-                ->assertJsonPath('indexes.0.latest_price_change_pct', '0.23');
+                ->assertJsonPath('indexes.0.latest_price_change_pct', '-2.09');
 
             $this->assertSame(
                 ['2026-06-05', '2026-06-04'],

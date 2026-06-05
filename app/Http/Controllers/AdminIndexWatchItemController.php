@@ -184,6 +184,12 @@ class AdminIndexWatchItemController extends Controller
      */
     private function latestPriceChangePercent(IndexWatchItem $item, Collection $recentPrices): ?string
     {
+        $storedChangePercent = $this->pricePayload($item->latest_price_change_pct);
+
+        if ($storedChangePercent !== null) {
+            return $storedChangePercent;
+        }
+
         $latestPrice = $this->pricePayload($item->latest_price) ?? $this->indexPriceDisplayValue($recentPrices->first());
         $referencePrice = $recentPrices
             ->skip(1)

@@ -430,13 +430,11 @@ watch(
 watch(
     priceRefreshSettings,
     (settings) => {
-        priceRefreshScheduleForm.value = {
-            trading_interval_minutes: settings?.trading_interval_minutes ?? 20,
-            trading_starts_before_minutes: settings?.trading_starts_before_minutes ?? 0,
-            trading_ends_after_minutes: settings?.trading_ends_after_minutes ?? 0,
-            closed_refresh_enabled: settings?.closed_refresh_enabled ?? true,
-            closed_interval_minutes: settings?.closed_interval_minutes ?? 60,
-        };
+        if (isPriceRefreshScheduleEditing.value) {
+            return;
+        }
+
+        priceRefreshScheduleForm.value = priceRefreshScheduleFormFromSettings(settings);
     },
     { immediate: true },
 );
@@ -444,13 +442,11 @@ watch(
 watch(
     indexPriceRefreshSettings,
     (settings) => {
-        indexPriceRefreshScheduleForm.value = {
-            trading_interval_minutes: settings?.trading_interval_minutes ?? 20,
-            trading_starts_before_minutes: settings?.trading_starts_before_minutes ?? 0,
-            trading_ends_after_minutes: settings?.trading_ends_after_minutes ?? 0,
-            closed_refresh_enabled: settings?.closed_refresh_enabled ?? true,
-            closed_interval_minutes: settings?.closed_interval_minutes ?? 60,
-        };
+        if (isIndexPriceRefreshScheduleEditing.value) {
+            return;
+        }
+
+        indexPriceRefreshScheduleForm.value = priceRefreshScheduleFormFromSettings(settings);
     },
     { immediate: true },
 );
@@ -1212,6 +1208,9 @@ async function savePriceRefreshSchedule() {
 
         priceRefreshScheduleMessage.value = data.message;
         isPriceRefreshScheduleEditing.value = false;
+        priceRefreshScheduleForm.value = priceRefreshScheduleFormFromSettings(
+            data.price_refresh_settings ?? priceRefreshSettings.value,
+        );
 
         if (data.refresh) {
             holdingMessage.value = data.refresh.message;
@@ -1237,6 +1236,9 @@ async function saveIndexPriceRefreshSchedule() {
 
         priceRefreshScheduleMessage.value = data.message;
         isIndexPriceRefreshScheduleEditing.value = false;
+        indexPriceRefreshScheduleForm.value = priceRefreshScheduleFormFromSettings(
+            data.index_price_refresh_settings ?? indexPriceRefreshSettings.value,
+        );
     } catch (err) {
         priceRefreshScheduleError.value = err.message;
     }
@@ -1245,12 +1247,14 @@ async function saveIndexPriceRefreshSchedule() {
 function editPriceRefreshSchedule() {
     priceRefreshScheduleMessage.value = '';
     priceRefreshScheduleError.value = '';
+    priceRefreshScheduleForm.value = priceRefreshScheduleFormFromSettings(priceRefreshSettings.value);
     isPriceRefreshScheduleEditing.value = true;
 }
 
 function editIndexPriceRefreshSchedule() {
     priceRefreshScheduleMessage.value = '';
     priceRefreshScheduleError.value = '';
+    indexPriceRefreshScheduleForm.value = priceRefreshScheduleFormFromSettings(indexPriceRefreshSettings.value);
     isIndexPriceRefreshScheduleEditing.value = true;
 }
 
@@ -3129,6 +3133,16 @@ function emptyPriceRefreshScheduleForm() {
         trading_ends_after_minutes: 0,
         closed_refresh_enabled: true,
         closed_interval_minutes: 60,
+    };
+}
+
+function priceRefreshScheduleFormFromSettings(settings) {
+    return {
+        trading_interval_minutes: settings?.trading_interval_minutes ?? 20,
+        trading_starts_before_minutes: settings?.trading_starts_before_minutes ?? 0,
+        trading_ends_after_minutes: settings?.trading_ends_after_minutes ?? 0,
+        closed_refresh_enabled: settings?.closed_refresh_enabled ?? true,
+        closed_interval_minutes: settings?.closed_interval_minutes ?? 60,
     };
 }
 </script>
