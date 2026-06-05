@@ -4,11 +4,10 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "build": "vite build",
-        "predev": "node scripts/dev-stop-stale-vite.mjs",
-        "dev": "vite",
-        "test:frontend": "vitest run --reporter verbose",
-        "test:frontend:watch": "vitest"
+        "build": "vite build && node scripts/restore-vite-hot-if-dev-running.mjs",
+        "dev": "node scripts/dev-stop-stale-vite.mjs && vite",
+        "test:frontend": "node scripts/run-frontend-tests.mjs run --reporter verbose",
+        "test:frontend:watch": "node scripts/run-frontend-tests.mjs"
     },
     "devDependencies": {
         "@tailwindcss/vite": "^4.0.0",

@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
 use App\Models\StockPrice;
 use App\Services\WebMarketData\DTO\InstrumentIdentity;
@@ -37,7 +38,7 @@ class EodhdMarketData
     {
         $candidate = $this->candidate($holding, self::RealtimeSourceKey, 'EODHD real-time');
         $errors = [];
-        $quote = $this->realtimeQuote($holding, $candidate, $errors);
+        [$quote, $historicalQuotes] = $this->realtimeQuote($holding, $candidate, $errors);
         $validatedQuote = $quote
             ? $this->validator->validate($quote, InstrumentIdentity::fromHolding($holding))
             : null;
@@ -47,12 +48,11 @@ class EodhdMarketData
             quotes: $validatedQuote ? [$validatedQuote] : [],
             attemptedSources: [$candidate],
             errors: $errors,
-            status: $validatedQuote?->isSelectable()
-                ? $validatedQuote->freshnessStatus
-                : 'unavailable',
+            status: $this->resultStatus($validatedQuote),
         );
 
         $this->persistResult($holding, $result);
+        $this->persistHistoricalQuotes($holding, $historicalQuotes);
 
         return $result;
     }
@@ -140,6 +140,22 @@ class EodhdMarketData
         return $this->exchangeCode($holding);
     }
 
+    public function exchangeCodeForIndexWatchItem(IndexWatchItem $item): string
+    {
+        $exchange = Str::upper((string) $item->exchange);
+        $country = Str::lower((string) $item->country);
+
+        if ($exchange === 'INDX' && in_array($country, ['austria', 'at'], true)) {
+            return 'VI';
+        }
+
+        if ($exchange !== '') {
+            return $exchange;
+        }
+
+        return 'INDX';
+    }
+
     /**
      * @return array{code: string, name: ?string, operating_mic: ?string, country: ?string, currency: ?string, timezone: ?string, is_open: bool, open: ?string, close: ?string, open_utc: ?string, close_utc: ?string, working_days: ?string, error: ?string}
      */
@@ -154,9 +170,21 @@ class EodhdMarketData
      */
     public function exchangeTradingTimes(iterable $holdings): array
     {
-        return collect($holdings)
+        $exchangeCodes = collect($holdings)
             ->map(fn (StockHolding $holding): string => $this->exchangeCode($holding))
-            ->filter()
+            ->filter();
+
+        return $this->exchangeTradingTimesForCodes($exchangeCodes);
+    }
+
+    /**
+     * @param  iterable<int, string>  $exchangeCodes
+     * @return array<int, array{code: string, name: ?string, operating_mic: ?string, country: ?string, currency: ?string, timezone: ?string, is_open: bool, open: ?string, close: ?string, open_utc: ?string, close_utc: ?string, working_days: ?string, error: ?string}>
+     */
+    public function exchangeTradingTimesForCodes(iterable $exchangeCodes): array
+    {
+        return collect($exchangeCodes)
+            ->filter(fn (string $exchangeCode): bool => trim($exchangeCode) !== '')
             ->unique()
             ->sort()
             ->values()
@@ -176,14 +204,17 @@ class EodhdMarketData
         ];
     }
 
-    private function realtimeQuote(StockHolding $holding, WebSourceCandidate $candidate, array &$errors): ?ParsedQuote
+    /**
+     * @return array{0: ?ParsedQuote, 1: array<int, ValidatedQuote>}
+     */
+    private function realtimeQuote(StockHolding $holding, WebSourceCandidate $candidate, array &$errors): array
     {
         $response = $this->get("real-time/{$this->eodhdSymbol($holding)}", [
             'fmt' => 'json',
         ], $errors);
 
         if (! $response) {
-            return null;
+            return [null, []];
         }
 
         $payload = $response->json();
@@ -191,16 +222,16 @@ class EodhdMarketData
         if (! is_array($payload)) {
             $errors[] = 'EODHD returned an invalid real-time response.';
 
-            return null;
+            return [null, []];
         }
 
         if (($payload['status'] ?? null) === 'error') {
             $errors[] = $this->errorMessage($payload);
 
-            return null;
+            return [null, []];
         }
 
-        return $this->quoteFromPayload(
+        $quote = $this->quoteFromPayload(
             holding: $holding,
             candidate: $candidate,
             payload: $payload,
@@ -208,6 +239,11 @@ class EodhdMarketData
             priceType: 'last',
             freshnessStatus: 'fresh',
         );
+
+        return [
+            $quote,
+            $quote ? $this->historicalQuotesFromRealtimePayload($holding, $quote, $payload) : [],
+        ];
     }
 
     /**
@@ -329,9 +365,10 @@ class EodhdMarketData
         string $priceKey,
         string $priceType,
         string $freshnessStatus,
+        ?Carbon $asOf = null,
     ): ?ParsedQuote {
         $price = $this->decimal(Arr::get($payload, $priceKey));
-        $asOf = $this->timestamp(Arr::get($payload, 'timestamp'), Arr::get($payload, 'datetime'));
+        $asOf ??= $this->timestamp(Arr::get($payload, 'timestamp'), Arr::get($payload, 'datetime'));
 
         if ($price === null || $asOf === null) {
             return null;
@@ -356,6 +393,131 @@ class EodhdMarketData
             freshnessStatus: $freshnessStatus,
             rawPayload: $payload,
         );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<int, ValidatedQuote>
+     */
+    private function historicalQuotesFromRealtimePayload(StockHolding $holding, ParsedQuote $quote, array $payload): array
+    {
+        $session = $this->sessionAsOfTimes($holding, $quote);
+
+        if ($session === null) {
+            return [];
+        }
+
+        return collect([
+            $this->historicalRealtimeQuote(
+                holding: $holding,
+                payload: $payload,
+                priceKey: 'open',
+                priceType: 'historical_session_start',
+                sourceName: 'EODHD real-time open',
+                asOf: $session['today_open'],
+            ),
+            $this->historicalRealtimeQuote(
+                holding: $holding,
+                payload: $payload,
+                priceKey: 'previousClose',
+                priceType: 'historical_session_end',
+                sourceName: 'EODHD previous close',
+                asOf: $session['previous_close'],
+            ),
+        ])
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function historicalRealtimeQuote(
+        StockHolding $holding,
+        array $payload,
+        string $priceKey,
+        string $priceType,
+        string $sourceName,
+        Carbon $asOf,
+    ): ?ValidatedQuote {
+        $quote = $this->quoteFromPayload(
+            holding: $holding,
+            candidate: $this->candidate(
+                $holding,
+                self::RealtimeSourceKey,
+                $sourceName,
+                $this->realtimeUrl($holding),
+            ),
+            payload: $payload,
+            priceKey: $priceKey,
+            priceType: $priceType,
+            freshnessStatus: 'historical',
+            asOf: $asOf,
+        );
+
+        return $quote ? $this->validatedHistoricalQuote($quote) : null;
+    }
+
+    /**
+     * @return array{today_open: Carbon, previous_close: Carbon}|null
+     */
+    private function sessionAsOfTimes(StockHolding $holding, ParsedQuote $quote): ?array
+    {
+        if ($quote->asOf === null) {
+            return null;
+        }
+
+        $tradingTimes = $holding->trading_times ?? $this->marketHours->tradingTimes($quote);
+        $window = $this->tradingWindow($tradingTimes);
+
+        if ($window === null) {
+            return null;
+        }
+
+        $marketTimezone = $this->marketTimezone($tradingTimes) ?? $this->marketHours->timezone($quote);
+        $sessionDate = $quote->asOf->copy()->setTimezone($marketTimezone)->startOfDay();
+        $previousTradingDay = $this->previousTradingDay($sessionDate);
+
+        return [
+            'today_open' => $sessionDate->copy()->addMinutes($window[0])->utc(),
+            'previous_close' => $previousTradingDay->copy()->addMinutes($window[1])->utc(),
+        ];
+    }
+
+    /**
+     * @return array{0: int, 1: int}|null
+     */
+    private function tradingWindow(string $tradingTimes): ?array
+    {
+        if (! preg_match('/(?<open_hour>\d{1,2}):(?<open_minute>\d{2})\s*(?:-|to|until|bis)\s*(?<close_hour>\d{1,2}):(?<close_minute>\d{2})/i', $tradingTimes, $matches)) {
+            return null;
+        }
+
+        return [
+            ((int) $matches['open_hour'] * 60) + (int) $matches['open_minute'],
+            ((int) $matches['close_hour'] * 60) + (int) $matches['close_minute'],
+        ];
+    }
+
+    private function marketTimezone(string $tradingTimes): ?string
+    {
+        if (preg_match('/\bEurope\/[A-Za-z_]+\b/', $tradingTimes, $matches)) {
+            return $matches[0];
+        }
+
+        return null;
+    }
+
+    private function previousTradingDay(Carbon $date): Carbon
+    {
+        $previousTradingDay = $date->copy()->subDay();
+
+        while ($previousTradingDay->isWeekend()) {
+            $previousTradingDay->subDay();
+        }
+
+        return $previousTradingDay;
     }
 
     private function validatedHistoricalQuote(ParsedQuote $quote): ValidatedQuote
@@ -411,7 +573,7 @@ class EodhdMarketData
             }
 
             $holding->update([
-                'price_status' => 'stale',
+                'price_status' => 'unavailable_now',
             ]);
 
             return;
@@ -437,6 +599,16 @@ class EodhdMarketData
         ]);
     }
 
+    /**
+     * @param  array<int, ValidatedQuote>  $historicalQuotes
+     */
+    private function persistHistoricalQuotes(StockHolding $holding, array $historicalQuotes): void
+    {
+        foreach ($historicalQuotes as $historicalQuote) {
+            $this->storeHistoricalQuote($holding, $historicalQuote);
+        }
+    }
+
     private function get(string $path, array $query, array &$errors): ?Response
     {
         if (! $this->apiClient->configured()) {
@@ -460,6 +632,23 @@ class EodhdMarketData
         }
 
         return $response;
+    }
+
+    private function resultStatus(?ValidatedQuote $quote): string
+    {
+        if ($quote === null) {
+            return 'unavailable';
+        }
+
+        if ($quote->isSelectable()) {
+            return $quote->freshnessStatus;
+        }
+
+        if ($quote->validationStatus === 'invalid' || $quote->freshnessStatus === 'invalid') {
+            return 'invalid';
+        }
+
+        return 'unavailable';
     }
 
     /**
@@ -523,9 +712,13 @@ class EodhdMarketData
             'is_open' => (bool) Arr::get($payload, 'isOpen', false),
             'open' => $this->stringOrNull(Arr::get($tradingHours, 'Open')),
             'close' => $this->stringOrNull(Arr::get($tradingHours, 'Close')),
+            'lunch_begin' => $this->stringOrNull(Arr::get($tradingHours, 'LunchBegin')),
+            'lunch_end' => $this->stringOrNull(Arr::get($tradingHours, 'LunchEnd')),
             'open_utc' => $this->stringOrNull(Arr::get($tradingHours, 'OpenUTC')),
             'close_utc' => $this->stringOrNull(Arr::get($tradingHours, 'CloseUTC')),
             'working_days' => $this->stringOrNull(Arr::get($tradingHours, 'WorkingDays')),
+            'sessions' => $this->exchangeSessions($tradingHours),
+            'holidays' => $this->exchangeHolidays($payload),
             'error' => null,
         ];
     }
@@ -545,9 +738,13 @@ class EodhdMarketData
             'is_open' => false,
             'open' => null,
             'close' => null,
+            'lunch_begin' => null,
+            'lunch_end' => null,
             'open_utc' => null,
             'close_utc' => null,
             'working_days' => null,
+            'sessions' => [],
+            'holidays' => [],
             'error' => trim($message) !== '' ? $message : 'EODHD exchange details are unavailable.',
         ];
     }
@@ -608,6 +805,10 @@ class EodhdMarketData
             return 'XETRA';
         }
 
+        if ($mic === 'XSHG' || Str::contains($exchange, ['shanghai', 'shg'])) {
+            return 'SHG';
+        }
+
         if (in_array($mic, ['XNAS', 'XNYS', 'ARCX'], true) || in_array(Str::lower((string) $holding->country), ['united states', 'usa', 'us'], true)) {
             return 'US';
         }
@@ -617,6 +818,70 @@ class EodhdMarketData
         }
 
         return Str::upper(Str::replace(' ', '', (string) $holding->exchange));
+    }
+
+    /**
+     * @param  array<string, mixed>  $tradingHours
+     * @return array<int, array{open: string, close: string}>
+     */
+    private function exchangeSessions(array $tradingHours): array
+    {
+        $open = $this->stringOrNull(Arr::get($tradingHours, 'Open'));
+        $close = $this->stringOrNull(Arr::get($tradingHours, 'Close'));
+
+        if ($open === null || $close === null) {
+            return [];
+        }
+
+        $lunchBegin = $this->stringOrNull(Arr::get($tradingHours, 'LunchBegin'));
+        $lunchEnd = $this->stringOrNull(Arr::get($tradingHours, 'LunchEnd'));
+
+        if (
+            $lunchBegin !== null
+            && $lunchEnd !== null
+            && $this->clockMinutes($open) < $this->clockMinutes($lunchBegin)
+            && $this->clockMinutes($lunchBegin) < $this->clockMinutes($lunchEnd)
+            && $this->clockMinutes($lunchEnd) < $this->clockMinutes($close)
+        ) {
+            return [
+                ['open' => $open, 'close' => $lunchBegin],
+                ['open' => $lunchEnd, 'close' => $close],
+            ];
+        }
+
+        return [
+            ['open' => $open, 'close' => $close],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     * @return array<int, string>
+     */
+    private function exchangeHolidays(array $payload): array
+    {
+        $holidays = Arr::get($payload, 'ExchangeHolidays');
+
+        if (! is_array($holidays)) {
+            return [];
+        }
+
+        return collect($holidays)
+            ->map(fn (mixed $holiday): ?string => is_array($holiday)
+                ? $this->stringOrNull(Arr::get($holiday, 'Date'))
+                : null)
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    private function clockMinutes(?string $value): int
+    {
+        if ($value === null || ! preg_match('/^(?<hour>\d{1,2}):(?<minute>\d{2})/', $value, $matches)) {
+            return -1;
+        }
+
+        return ((int) $matches['hour'] * 60) + (int) $matches['minute'];
     }
 
     private function decimal(mixed $value): ?string

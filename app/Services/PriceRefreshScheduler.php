@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\AppConfig;
+use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
 use App\Models\StockPriceRefreshRun;
 use App\Models\User;
@@ -89,8 +90,8 @@ class PriceRefreshScheduler
             'total' => $run->total_count,
             'step' => "{$run->processed_count}/{$run->total_count}",
             'message' => $run->status === 'queued'
-                ? trans_choice('{1} 1 stock price queued for refresh.|[2,*] :count stock prices queued for refresh.', $run->total_count)
-                : "Refreshing stock prices ({$run->processed_count}/{$run->total_count})...",
+                ? trans_choice('{1} 1 price queued for refresh.|[2,*] :count prices queued for refresh.', $run->total_count)
+                : "Refreshing prices ({$run->processed_count}/{$run->total_count})...",
             'current' => null,
             'started_at' => $run->started_at?->toIso8601String() ?? now()->toIso8601String(),
             'finished_at' => null,
@@ -126,7 +127,7 @@ class PriceRefreshScheduler
         $refresh = null;
 
         if ($this->shouldDispatchAfterSettingsChange($previousIntervalMinutes, $settings, $isTradingTime)) {
-            $refresh = $this->dispatchWatchlist($recipient)['progress'];
+            $refresh = $this->dispatchWatchlist($recipient, includeIndexes: false)['progress'];
         }
 
         return [
@@ -154,17 +155,18 @@ class PriceRefreshScheduler
             return 0;
         }
 
-        return $this->dispatchWatchlist()['job_count'];
+        return $this->dispatchWatchlist(includeIndexes: false)['job_count'];
     }
 
     /**
-     * @return array{progress: ?array, job_count: int, total_holdings: int}
+     * @return array{progress: ?array, job_count: int, total_holdings: int, total_instruments: int}
      */
-    public function dispatchWatchlist(?User $recipient = null): array
+    public function dispatchWatchlist(?User $recipient = null, bool $includeIndexes = true): array
     {
         $settings = $this->settings();
         $totalHoldings = StockHolding::query()->count();
-        $progress = $this->dispatcher->dispatch($recipient);
+        $totalInstruments = $totalHoldings + ($includeIndexes ? IndexWatchItem::query()->count() : 0);
+        $progress = $this->dispatcher->dispatch($recipient, $includeIndexes);
 
         $this->storeSettings([
             ...$settings,
@@ -176,6 +178,7 @@ class PriceRefreshScheduler
             'progress' => $progress,
             'job_count' => $progress === null ? 0 : 1,
             'total_holdings' => $totalHoldings,
+            'total_instruments' => $totalInstruments,
         ];
     }
 

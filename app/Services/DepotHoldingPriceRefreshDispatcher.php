@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Jobs\RefreshDepotHoldingPrices;
+use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
 use App\Models\StockPriceRefreshRun;
 use App\Models\User;
@@ -17,9 +18,9 @@ class DepotHoldingPriceRefreshDispatcher
     /**
      * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
      */
-    public function dispatch(?User $recipient = null): ?array
+    public function dispatch(?User $recipient = null, bool $includeIndexes = true): ?array
     {
-        $total = StockHolding::query()->count();
+        $total = StockHolding::query()->count() + ($includeIndexes ? IndexWatchItem::query()->count() : 0);
 
         if ($total === 0) {
             return null;
@@ -36,7 +37,7 @@ class DepotHoldingPriceRefreshDispatcher
             'finished_at' => null,
         ]);
 
-        RefreshDepotHoldingPrices::dispatch($refreshId, $recipient?->id);
+        RefreshDepotHoldingPrices::dispatch($refreshId, $recipient?->id, $includeIndexes);
 
         return $this->refreshProgress->get($refreshId) ?? $progress;
     }

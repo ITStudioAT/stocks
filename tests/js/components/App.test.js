@@ -40,6 +40,18 @@ function priceRefreshSettings(overrides = {}) {
     };
 }
 
+function indexPriceRefreshSettings(overrides = {}) {
+    return priceRefreshSettings({
+        trading_interval_minutes: 30,
+        trading_starts_before_minutes: 15,
+        trading_ends_after_minutes: 20,
+        closed_refresh_enabled: false,
+        closed_interval_minutes: 90,
+        current_interval_minutes: 30,
+        ...overrides,
+    });
+}
+
 function sessionHeaderDate(daysAgo) {
     const parts = new Intl.DateTimeFormat('en-CA', {
         timeZone: 'Europe/Vienna',
@@ -62,6 +74,35 @@ function sessionHeaderDate(daysAgo) {
     }).format(viennaDate);
 }
 
+function localDateKey(timeZone) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).formatToParts(new Date());
+    const dateParts = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+
+    return [dateParts.year, dateParts.month, dateParts.day].join('-');
+}
+
+function indexMonthPrices() {
+    const baseDate = new Date(Date.UTC(2026, 5, 7));
+
+    return Array.from({ length: 30 }, (_, index) => {
+        const tradingDate = new Date(baseDate);
+        tradingDate.setUTCDate(baseDate.getUTCDate() - index);
+        const actualPrice = 6116.5298 - index;
+
+        return {
+            trading_date: tradingDate.toISOString().slice(0, 10),
+            start_price: (actualPrice - 5).toFixed(6),
+            actual_price: actualPrice.toFixed(6),
+            last_price: (actualPrice - 2).toFixed(6),
+        };
+    });
+}
+
 describe('App', () => {
     it('renders the admin login screen without loading authenticated data', () => {
         window.history.pushState({}, '', '/admin/login');
@@ -79,7 +120,7 @@ describe('App', () => {
 
     it('renders the depots menu section with paginated depot data', async () => {
         window.history.pushState({}, '', '/admin/menu/depots');
-        const fetchMock = vi.fn((path) => {
+        const fetchMock = vi.fn((path, options = {}) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
                     user: {
@@ -325,6 +366,10 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
             return Promise.reject(new Error(`Unexpected request: ${path}`));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -367,9 +412,224 @@ describe('App', () => {
         }));
     });
 
+    it('shows the Analyze menu page with URL-backed subpages', async () => {
+        window.history.pushState({}, '', '/admin/menu/analyze/detail');
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [
+                        {
+                            id: 1,
+                            symbol: 'AAPL',
+                            name: 'Apple',
+                            currency: 'EUR',
+                            latest_price: '306.320010',
+                        },
+                        {
+                            id: 2,
+                            symbol: 'MSFT',
+                            name: 'Microsoft',
+                            currency: 'USD',
+                            latest_price: '430.120000',
+                        },
+                    ],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Historical stock prices are available.',
+                    coverage: {
+                        date_from: '2025-06-05',
+                        date_to: '2026-06-05',
+                        required_to: '2026-06-04',
+                        is_complete: true,
+                        total_count: 2,
+                        available_count: 2,
+                        missing_count: 0,
+                        holdings: [],
+                    },
+                    refresh: null,
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+
+            return Promise.resolve(jsonResponse({}));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const drawerText = wrapper.find('.dashboard-navigation-drawer').text();
+        expect(drawerText.indexOf('Dashboard')).toBeLessThan(drawerText.indexOf('Analyze'));
+        expect(drawerText.indexOf('Analyze')).toBeLessThan(drawerText.indexOf('Depot'));
+        expect(wrapper.find('[aria-label="Analyze detail"]').exists()).toBe(true);
+        expect(wrapper.text()).toContain('Overview');
+        expect(wrapper.text()).toContain('Detail');
+
+        const overviewTab = wrapper.findAll('.v-tab')
+            .find((tab) => tab.text().includes('Overview'));
+        await overviewTab.trigger('click');
+        await flushPromises();
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/overview');
+        const analyzeOverview = wrapper.find('[aria-label="Analyze overview"]');
+        expect(analyzeOverview.exists()).toBe(true);
+        expect(analyzeOverview.text()).toContain('ALL');
+        expect(analyzeOverview.text()).toContain('Apple');
+        expect(analyzeOverview.text()).toContain('306.32 EUR');
+        expect(analyzeOverview.text()).toContain('Microsoft');
+        expect(analyzeOverview.text()).toContain('430.12 USD');
+        expect(analyzeOverview.text()).not.toContain('INDEX');
+        expect(analyzeOverview.text()).toContain('History');
+        expect(analyzeOverview.text()).toContain('2/2');
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/historical-prices/ensure', expect.objectContaining({
+            method: 'POST',
+        }));
+    });
+
+    it('shows historical stock price fetch progress on the Analyze overview', async () => {
+        window.history.pushState({}, '', '/admin/menu/analyze/overview');
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const runningHistoryRefresh = {
+            refresh_id: 'history-1',
+            status: 'running',
+            processed: 1,
+            total: 2,
+            step: '1/2',
+            message: 'Fetching historical stock prices (1/2)...',
+            current: 'AAPL Apple',
+            started_at: '2026-06-05T12:00:00+00:00',
+            finished_at: null,
+            error: null,
+        };
+        const historyCoverage = {
+            date_from: '2025-06-05',
+            date_to: '2026-06-05',
+            required_to: '2026-06-04',
+            is_complete: false,
+            total_count: 2,
+            available_count: 1,
+            missing_count: 1,
+            holdings: [],
+        };
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: { id: 1, name: 'Admin User', email: 'admin@example.com', roles: ['admin'] },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [
+                        { id: 1, symbol: 'AAPL', name: 'Apple', currency: 'USD', latest_price: '190.000000' },
+                        { id: 2, symbol: 'MSFT', name: 'Microsoft', currency: 'USD', latest_price: '430.120000' },
+                    ],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Historical stock prices are being fetched.',
+                    coverage: historyCoverage,
+                    refresh: runningHistoryRefresh,
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/historical-prices/history-1') {
+                return Promise.resolve(jsonResponse({
+                    message: runningHistoryRefresh.message,
+                    coverage: historyCoverage,
+                    refresh: runningHistoryRefresh,
+                }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+
+            return Promise.resolve(jsonResponse({}));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+        await flushPromises();
+
+        const analyzeOverview = wrapper.find('[aria-label="Analyze overview"]');
+
+        expect(analyzeOverview.text()).toContain('History');
+        expect(analyzeOverview.text()).toContain('1/2');
+        expect(analyzeOverview.text()).toContain('AAPL Apple');
+        expect(analyzeOverview.find('.v-progress-linear').exists()).toBe(true);
+
+        wrapper.unmount();
+    });
+
     it('shows the watch-list stocks on the dashboard', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
         let currentPriceRefreshSettings = priceRefreshSettings();
+        const currentIndexPriceRefreshSettings = indexPriceRefreshSettings({
+            last_refreshed_at: '2026-06-02T13:00:00+00:00',
+            next_refresh_at: '2026-06-02T13:30:00+00:00',
+        });
+        const currentBerlinDate = localDateKey('Europe/Berlin');
         const fetchMock = vi.fn((path, options) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -417,6 +677,8 @@ describe('App', () => {
                         account_balance: '12345.67',
                         is_active: true,
                     },
+                    price_refresh_settings: currentPriceRefreshSettings,
+                    index_price_refresh_settings: currentIndexPriceRefreshSettings,
                 }));
             }
 
@@ -667,6 +929,7 @@ describe('App', () => {
                         to: 5,
                     },
                     price_refresh_settings: currentPriceRefreshSettings,
+                    index_price_refresh_settings: currentIndexPriceRefreshSettings,
                     eodhd_api_usage: {
                         hour: {
                             used: 12,
@@ -700,6 +963,10 @@ describe('App', () => {
                             open_utc: '07:00:00',
                             close_utc: '15:30:00',
                             working_days: 'Mon,Tue,Wed,Thu,Fri',
+                            sessions: [
+                                { open: '09:00:00', close: '17:30:00' },
+                            ],
+                            holidays: [currentBerlinDate],
                             error: null,
                         },
                     ],
@@ -767,6 +1034,54 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/index-watch-items' && (!options?.method || options.method === 'GET')) {
+                return Promise.resolve(jsonResponse({
+                    indexes: [],
+                }));
+            }
+
+            if (path === '/admin/index-watch-items' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Index added.',
+                    index: {
+                        id: 1,
+                        symbol: 'DAX',
+                        name: 'DAX Index',
+                        isin: 'DE0008469008',
+                        exchange: 'XETRA',
+                        mic_code: 'XETR',
+                        instrument_type: 'INDEX',
+                        country: 'Germany',
+                        currency: 'EUR',
+                        latest_price: '6116.529800',
+                        last_price: '6096.169900',
+                        latest_price_change_pct: '0.33',
+                        recent_prices: [],
+                    },
+                }));
+            }
+
+            if (path === '/admin/index-watch-items/1/prices/ensure' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Index prices loaded.',
+                    index: {
+                        id: 1,
+                        symbol: 'DAX',
+                        name: 'DAX Index',
+                        isin: 'DE0008469008',
+                        exchange: 'XETRA',
+                        mic_code: 'XETR',
+                        instrument_type: 'INDEX',
+                        country: 'Germany',
+                        currency: 'EUR',
+                        latest_price: '6116.529800',
+                        last_price: '6096.169900',
+                        latest_price_change_pct: '0.33',
+                        recent_prices: indexMonthPrices(),
+                    },
+                }));
+            }
+
             if (path === '/admin/watchlist/holdings/refresh-prices') {
                 return Promise.resolve(jsonResponse({
                     message: '2 stock prices queued for refresh.',
@@ -827,6 +1142,23 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/stocks/search?query=DAX') {
+                return Promise.resolve(jsonResponse({
+                    results: [
+                        {
+                            symbol: 'DAX',
+                            name: 'DAX Index',
+                            isin: 'DE0008469008',
+                            exchange: 'XETRA',
+                            mic_code: 'XETR',
+                            instrument_type: 'INDEX',
+                            country: 'Germany',
+                            currency: 'EUR',
+                        },
+                    ],
+                }));
+            }
+
             if (path === '/admin/stocks/search?query=Microsoft') {
                 return Promise.resolve(jsonResponse({
                     results: [
@@ -871,12 +1203,30 @@ describe('App', () => {
         expect(dashboardHeaders[7]).toBe('Source time');
         expect(dashboardHeaders[8]).toBe('Actions');
         const appBarStatusText = wrapper.get('.app-bar-status').text();
+        expect(appBarStatusText).toContain('Stocks Last:');
+        expect(appBarStatusText).toContain('Indices Last:');
         expect(appBarStatusText).toContain('EODHD API');
         expect(appBarStatusText).toContain('Hour 988 / 1,000 Used 12');
         expect(appBarStatusText).toContain('Day 98,805 / 100,000 Used 1,195');
+        expect(appBarStatusText).toContain('fetching historical data');
+        expect(appBarStatusText.match(/waiting/g)).toHaveLength(1);
+        const eodhdHeaderUsage = wrapper.get('.eodhd-header-usage');
+        expect(wrapper.find('[aria-label="Minify dashboard menu"]').exists()).toBe(true);
+        expect(eodhdHeaderUsage.find('[aria-label="Minify dashboard menu"]').exists()).toBe(true);
+        expect(eodhdHeaderUsage.html().indexOf('Minify dashboard menu')).toBeLessThan(eodhdHeaderUsage.html().indexOf('EODHD API'));
         expect(wrapper.text()).toContain('Watch-list');
         expect(wrapper.html().indexOf('EODHD API')).toBeLessThan(wrapper.html().indexOf('Watch-list'));
         expect(wrapper.text()).not.toContain('Free calls remaining');
+        expect(wrapper.find('.dashboard-navigation-drawer').classes()).not.toContain('dashboard-navigation-drawer--compact');
+        expect(wrapper.find('.dashboard-navigation-drawer').text()).toContain('Stocks');
+        await wrapper.find('[aria-label="Minify dashboard menu"]').trigger('click');
+        await flushPromises();
+        expect(wrapper.find('.dashboard-navigation-drawer').classes()).toContain('dashboard-navigation-drawer--compact');
+        expect(wrapper.find('.dashboard-navigation-drawer').text()).not.toContain('Stocks');
+        expect(wrapper.find('[aria-label="Enhance dashboard menu"]').exists()).toBe(true);
+        await wrapper.find('[aria-label="Enhance dashboard menu"]').trigger('click');
+        await flushPromises();
+        expect(wrapper.find('.dashboard-navigation-drawer').classes()).not.toContain('dashboard-navigation-drawer--compact');
         expect(wrapper.text()).toContain('Depot');
         expect(wrapper.text()).toContain('Long term depot');
         expect(wrapper.text()).toContain('AAPL');
@@ -970,8 +1320,11 @@ describe('App', () => {
         expect(wrapper.text()).not.toContain('43.37 EUR');
         expect(wrapper.text()).not.toContain('Trading depot');
         expect(wrapper.text()).not.toContain('250.50');
-        expect(wrapper.text()).toContain('Last: 02.06.2026, 14:20');
+        expect(appBarStatusText).not.toContain('Admin User');
+        expect(wrapper.text()).toContain('Stocks Last: 02.06.2026, 14:20');
         expect(wrapper.text()).toContain('Next: 02.06.2026, 14:40');
+        expect(wrapper.text()).toContain('Indices Last: 02.06.2026, 15:00');
+        expect(wrapper.text()).toContain('Next: 02.06.2026, 15:30');
         expect(wrapper.text()).toContain('fetching historical data');
         expect(wrapper.text()).not.toContain('Automatic price refresh');
 
@@ -981,6 +1334,7 @@ describe('App', () => {
         expect(window.location.pathname).toBe('/admin/menu/updates');
         expect(wrapper.text()).toContain('Updates');
         expect(wrapper.text()).toContain('Automatic price refresh');
+        expect(wrapper.text()).toContain('Automatic index price refresh');
         expect(wrapper.text()).toContain('Current interval: 20 min');
         expect(wrapper.text()).toContain('Edit');
         expect(wrapper.text()).toContain('During trading');
@@ -990,13 +1344,19 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Outside trading interval');
 
         expect(wrapper.find('#price-refresh-schedule-form').findAll('input')).toHaveLength(0);
+        expect(wrapper.find('#index-price-refresh-schedule-form').findAll('input')).toHaveLength(0);
 
-        const editScheduleButton = wrapper.findAll('button').find((button) => button.text().includes('Edit'));
+        const editScheduleButton = wrapper.find('#price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
+        const editIndexScheduleButton = wrapper.find('#index-price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
+        expect(editScheduleButton.attributes('disabled')).toBeUndefined();
+        expect(editIndexScheduleButton.attributes('disabled')).toBeUndefined();
         await editScheduleButton.trigger('click');
         await flushPromises();
 
         const scheduleInputs = wrapper.find('#price-refresh-schedule-form').findAll('input[type="number"]');
         expect(scheduleInputs).toHaveLength(4);
+        expect(wrapper.find('#index-price-refresh-schedule-form').findAll('input[type="number"]')).toHaveLength(0);
+        expect(editIndexScheduleButton.attributes('disabled')).toBeDefined();
         expect(wrapper.text()).toContain('Save');
 
         await scheduleInputs[0].setValue('15');
@@ -1092,6 +1452,86 @@ describe('App', () => {
             }),
         }));
 
+        const addIndexButton = wrapper.findAll('button').find((button) => button.text().includes('INDEX'));
+        await addIndexButton.trigger('click');
+        await flushPromises();
+
+        expect(document.body.textContent).toContain('Add index');
+
+        const indexSearchInput = document.body.querySelector('#index-search-form input');
+        expect(document.activeElement).toBe(indexSearchInput);
+
+        indexSearchInput.value = 'DAX';
+        indexSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+        document.body.querySelector('#index-search-form').dispatchEvent(new Event('submit', {
+            bubbles: true,
+            cancelable: true,
+        }));
+        await flushPromises();
+
+        expect(document.body.textContent).toContain('DAX Index');
+        expect(document.body.textContent).toContain('DE0008469008');
+
+        const addIndexResultButton = Array.from(document.body.querySelectorAll('button'))
+            .filter((button) => button.textContent.trim() === 'Add')
+            .at(-1);
+        addIndexResultButton.click();
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/index-watch-items', expect.objectContaining({
+            method: 'POST',
+            body: JSON.stringify({
+                symbol: 'DAX',
+                name: 'DAX Index',
+                isin: 'DE0008469008',
+                exchange: 'XETRA',
+                mic_code: 'XETR',
+                instrument_type: 'INDEX',
+                country: 'Germany',
+                currency: 'EUR',
+            }),
+        }));
+        expect(wrapper.vm.holdingMessage).toBe('Index added.');
+        expect(fetchMock).toHaveBeenCalledWith('/admin/index-watch-items', expect.any(Object));
+
+        const indexWatchStrip = wrapper.find('.index-watch-strip');
+        expect(indexWatchStrip.text()).toContain('DAX');
+        expect(indexWatchStrip.text()).toContain('Germany');
+        expect(indexWatchStrip.text()).toContain('DAX Index');
+        expect(indexWatchStrip.text()).toContain('+0.33%');
+        expect(indexWatchStrip.text()).toContain('6,116.5298');
+        expect(wrapper.find('.index-watch-card').text()).not.toContain('2026-06-07');
+        expect(wrapper.find('.index-watch-card').text()).not.toContain('DE0008469008');
+        expect(indexWatchStrip.text().indexOf('DAX')).toBeLessThan(indexWatchStrip.text().indexOf('+INDEX'));
+
+        await wrapper.find('.index-watch-card').trigger('click');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/index-watch-items/1/prices/ensure', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(document.body.textContent).toContain('Actual price');
+        expect(document.body.textContent).toContain('Last');
+        expect(document.body.textContent).toContain('Evolution');
+        expect(document.body.textContent).toContain('07.06.2026');
+        expect(document.body.textContent).toContain('09.05.2026');
+        expect(document.body.textContent).toContain('6,116.5298');
+        expect(document.body.querySelectorAll('.index-price-history-table tbody tr')).toHaveLength(30);
+        expect(document.body.querySelector('.index-price-chart-line')).not.toBeNull();
+        expect(document.body.querySelectorAll('.index-price-chart-point')).toHaveLength(30);
+        expect(document.body.querySelectorAll('.index-price-chart-grid-line')).toHaveLength(12);
+        expect(document.body.querySelectorAll('.index-price-chart-y-label')).toHaveLength(5);
+        expect(document.body.querySelectorAll('.index-price-chart-x-label')).toHaveLength(7);
+        expect(document.body.textContent).toContain('6,116.53');
+        expect(document.body.textContent).toContain('09.05');
+
+        const closeIndexPriceButton = Array.from(document.body.querySelectorAll('button'))
+            .find((button) => button.textContent.trim() === 'Close');
+        closeIndexPriceButton.click();
+        await flushPromises();
+
+        expect(wrapper.vm.isIndexPriceDialogOpen).toBe(false);
+
         await addStockButton.trigger('click');
         await flushPromises();
 
@@ -1118,6 +1558,229 @@ describe('App', () => {
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/1', expect.objectContaining({
             method: 'DELETE',
         }));
+    });
+
+    it('disables the delete button for holdings with position pieces', async () => {
+        window.history.pushState({}, '', '/admin/dashboard');
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 2, from: 1, to: 2 };
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const holdingWithPieces = {
+            id: 1, symbol: 'AAPL', name: 'Apple', isin: 'US0378331005', wkn: '865985',
+            exchange: 'NASDAQ', currency: 'EUR', latest_price: '100.000000',
+            start_price: null, end_price: null, start_price_24: null, start_price_48: null,
+            historical_prices_fetching: false, position_pieces: '3.00000000',
+            latest_price_status: 'fresh', price_status: 'fresh',
+            latest_price_fetched_at: '2026-06-02T12:00:00+00:00',
+            latest_price_source: null, latest_price_source_url: null,
+            latest_price_as_of: '2026-06-03T15:35:00+00:00',
+            trading_times: null, venue: null, price_type: null,
+            price_spread_pct: null, recent_prices: [], validation_errors: [],
+        };
+        const holdingWithoutPieces = {
+            ...holdingWithPieces,
+            id: 2, symbol: 'MSFT', name: 'Microsoft', isin: 'US5949181045',
+            position_pieces: '0.00000000',
+        };
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({ user: { id: 1, name: 'Admin', email: 'a@b.com', roles: ['admin'] } }));
+            }
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({ depot, price_refresh_settings: priceRefreshSettings() }));
+            }
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot, holdings: [holdingWithPieces, holdingWithoutPieces],
+                    meta: pagination, price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+            return Promise.resolve(jsonResponse({}));
+        });
+        global.fetch = fetchMock;
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const deleteButtons = wrapper.findAll('[aria-label="Delete stock"]');
+        expect(deleteButtons).toHaveLength(2);
+        expect(deleteButtons[0].attributes('disabled')).toBeDefined();
+        expect(deleteButtons[1].attributes('disabled')).toBeUndefined();
+    });
+
+    it('shows the next Shanghai trading session during the lunch break', async () => {
+        window.history.pushState({}, '', '/admin/dashboard');
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-06-05T04:06:00Z'));
+
+        try {
+            const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+            const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+            const fetchMock = vi.fn((path) => {
+                if (path === '/admin/me') {
+                    return Promise.resolve(jsonResponse({
+                        user: { id: 1, name: 'Admin', email: 'a@b.com', roles: ['admin'] },
+                    }));
+                }
+                if (path === '/admin/depots/active') {
+                    return Promise.resolve(jsonResponse({
+                        depot,
+                        price_refresh_settings: priceRefreshSettings(),
+                        index_price_refresh_settings: indexPriceRefreshSettings(),
+                    }));
+                }
+                if (path === '/admin/watchlist/holdings?page=1') {
+                    return Promise.resolve(jsonResponse({
+                        depot,
+                        holdings: [],
+                        meta: pagination,
+                        price_refresh_settings: priceRefreshSettings(),
+                        index_price_refresh_settings: indexPriceRefreshSettings(),
+                    }));
+                }
+                if (path === '/admin/watchlist/exchange-trading-times') {
+                    return Promise.resolve(jsonResponse({
+                        exchange_trading_times: [
+                            {
+                                code: 'SHG',
+                                name: 'Shanghai Stock Exchange',
+                                operating_mic: 'XSHG',
+                                country: 'China',
+                                currency: 'CNY',
+                                timezone: 'Asia/Shanghai',
+                                is_open: false,
+                                open: '09:30:00',
+                                close: '15:00:00',
+                                lunch_begin: '11:30:00',
+                                lunch_end: '13:00:00',
+                                open_utc: '01:30:00',
+                                close_utc: '07:00:00',
+                                working_days: 'Mon,Tue,Wed,Thu,Fri',
+                                sessions: [
+                                    { open: '09:30:00', close: '11:30:00' },
+                                    { open: '13:00:00', close: '15:00:00' },
+                                ],
+                                holidays: [],
+                                error: null,
+                            },
+                        ],
+                    }));
+                }
+                if (path === '/admin/depots?page=1') {
+                    return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+                }
+
+                return Promise.resolve(jsonResponse({}));
+            });
+            global.fetch = fetchMock;
+
+            const wrapper = mountApp();
+            await flushPromises();
+
+            const exchangeRow = wrapper.findAll('tbody tr')
+                .find((row) => row.text().includes('SHG'));
+
+            expect(exchangeRow.text()).toContain('Shanghai Stock Exchange');
+            expect(exchangeRow.text()).toContain('09:30-11:30, 13:00-15:00');
+            expect(exchangeRow.text()).toContain('Next trading: 05.06.2026, 13:00');
+            expect(exchangeRow.text()).toContain('Closed');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('allows editing the index price refresh schedule via the index card Edit button', async () => {
+        window.history.pushState({}, '', '/admin/menu/updates');
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({ user: { id: 1, name: 'Admin', email: 'a@b.com', roles: ['admin'] } }));
+            }
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+            if (path === '/admin/price-refresh-settings' && options?.method === 'PATCH') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Price refresh schedule updated.',
+                    price_refresh_settings: priceRefreshSettings({ trading_interval_minutes: 30 }),
+                }));
+            }
+            if (path === '/admin/index-price-refresh-settings' && options?.method === 'PATCH') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Index price refresh schedule updated.',
+                    index_price_refresh_settings: indexPriceRefreshSettings({ trading_interval_minutes: 35 }),
+                }));
+            }
+            if (path === '/admin/price-refresh-settings') {
+                return Promise.resolve(jsonResponse({
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+            return Promise.resolve(jsonResponse({}));
+        });
+        global.fetch = fetchMock;
+        const wrapper = mountApp();
+        await flushPromises();
+
+        expect(wrapper.find('#price-refresh-schedule-form').text()).toContain('20 min');
+        expect(wrapper.find('#index-price-refresh-schedule-form').text()).toContain('30 min');
+        expect(wrapper.find('#index-price-refresh-schedule-form').text()).toContain('15 min');
+        expect(wrapper.find('#index-price-refresh-schedule-form').text()).toContain('20 min');
+        expect(wrapper.find('#index-price-refresh-schedule-form').text()).toContain('Off');
+        expect(wrapper.find('#index-price-refresh-schedule-form').text()).toContain('90 min');
+        expect(wrapper.find('#index-price-refresh-schedule-form').findAll('input')).toHaveLength(0);
+
+        const stockEditButton = wrapper.find('#price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
+        const indexEditButton = wrapper.find('#index-price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
+        expect(stockEditButton.attributes('disabled')).toBeUndefined();
+        expect(indexEditButton.attributes('disabled')).toBeUndefined();
+        await indexEditButton.trigger('click');
+        await flushPromises();
+
+        expect(wrapper.find('#index-price-refresh-schedule-form').findAll('input[type="number"]')).toHaveLength(4);
+        expect(stockEditButton.attributes('disabled')).toBeDefined();
+
+        await wrapper.find('#index-price-refresh-schedule-form').trigger('submit');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/index-price-refresh-settings', expect.objectContaining({
+            method: 'PATCH',
+            body: JSON.stringify({
+                trading_interval_minutes: 30,
+                trading_starts_before_minutes: 15,
+                trading_ends_after_minutes: 20,
+                closed_refresh_enabled: false,
+                closed_interval_minutes: 90,
+            }),
+        }));
+        expect(fetchMock).not.toHaveBeenCalledWith('/admin/price-refresh-settings', expect.objectContaining({ method: 'PATCH' }));
+        expect(wrapper.text()).toContain('Index price refresh schedule updated.');
+        expect(wrapper.find('#index-price-refresh-schedule-form').findAll('input')).toHaveLength(0);
     });
 
     it('shows Admin group with horizontal Users, Roles, and Updates submenu chips for super_admin', async () => {
@@ -1166,6 +1829,10 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
             return Promise.reject(new Error(`Unexpected request: ${path}`));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -1210,6 +1877,7 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
 
@@ -1240,6 +1908,10 @@ describe('App', () => {
                     meta: { current_page: 1, last_page: 1, per_page: 10, total: 1, from: 1, to: 1 },
                     price_refresh_settings: priceRefreshSettings(),
                 }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
             }
 
             return Promise.reject(new Error(`Unexpected request: ${path}`));
@@ -1284,6 +1956,9 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({
                     depot,
                     price_refresh_settings: priceRefreshSettings(),
+                    ui_preferences: {
+                        depot_price_source: 'latest',
+                    },
                 }));
             }
 
@@ -1323,6 +1998,10 @@ describe('App', () => {
                         type: 'deposit',
                     },
                 }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
             }
 
             return Promise.reject(new Error(`Unexpected request: ${path}`));
@@ -1445,6 +2124,10 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
             return Promise.reject(new Error(`Unexpected request: ${path}`));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -1519,7 +2202,7 @@ describe('App', () => {
                 name: 'Apple Inc.',
                 currency: 'USD',
                 latest_price: '191.500000',
-                flatex_price: '191.500000',
+                flatex_price: '180.000000',
                 year_start_price: '175.00000000',
                 latest_price_fetched_at: '2026-06-04T10:00:00+00:00',
                 latest_price_status: 'fresh',
@@ -1549,6 +2232,13 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ depot_holdings: depotHoldings, transactions }));
             }
 
+            if (path === '/admin/ui-preferences' && options.method === 'PATCH') {
+                return Promise.resolve(jsonResponse({
+                    message: 'UI preferences updated.',
+                    ui_preferences: JSON.parse(options.body),
+                }));
+            }
+
             if (path === '/admin/watchlist/holdings/1/flatex-price' && options.method === 'PATCH') {
                 return Promise.resolve(jsonResponse({
                     message: 'Flatex price updated.',
@@ -1556,6 +2246,12 @@ describe('App', () => {
                         id: 1,
                         flatex_price: '180.250000',
                     },
+                    holdings: [
+                        {
+                            id: 1,
+                            flatex_price: '180.250000',
+                        },
+                    ],
                 }));
             }
 
@@ -1579,6 +2275,10 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
             return Promise.reject(new Error(`Unexpected request: ${path}`));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -1595,7 +2295,7 @@ describe('App', () => {
         expect(wrapper.text()).toContain('1,033.00 EUR');
         expect(wrapper.text()).toContain('Balance 01.01.');
         expect(wrapper.text()).toContain('1,000.00 EUR');
-        expect(wrapper.text()).toContain('Balance 04.06.');
+        expect(wrapper.text()).toContain(`Balance ${sessionHeaderDate(0).slice(0, 6)}`);
         expect(wrapper.text()).toContain('+3.30% · +33.00 EUR');
         expect(wrapper.text()).toContain('Symbol');
         expect(wrapper.text()).toContain('Name');
@@ -1616,10 +2316,17 @@ describe('App', () => {
         expect(rightAlignedDepotHeaders).toContain('1.1.');
         expect(rightAlignedDepotHeaders).toContain('Change');
         expect(rightAlignedDepotHeaders).toContain('+/- EUR');
+        const latestPriceHeaderButton = wrapper.findAll('button').find((button) => button.text() === 'Latest price');
+        const flatexPriceHeaderButton = wrapper.findAll('button').find((button) => button.text() === 'Flatex price');
+        expect(latestPriceHeaderButton).toBeTruthy();
+        expect(flatexPriceHeaderButton).toBeTruthy();
+        expect(latestPriceHeaderButton.classes()).toContain('depot-price-source-button--active');
+        expect(flatexPriceHeaderButton.classes()).not.toContain('depot-price-source-button--active');
         expect(wrapper.text()).toContain('AAPL');
         expect(wrapper.text()).toContain('2');
         expect(wrapper.text()).toContain('383.00 USD');
         expect(wrapper.text()).toContain('191.50 USD');
+        expect(wrapper.text()).toContain('180.00 USD');
         expect(wrapper.text()).toContain('175.00 USD');
         expect(wrapper.text()).toContain('↑');
         expect(wrapper.text()).toContain('+9.43%');
@@ -1632,7 +2339,22 @@ describe('App', () => {
         expect(wrapper.text()).toContain('+1,000.00');
         expect(wrapper.text()).toContain('-350.00');
 
-        const flatexPriceButton = wrapper.findAll('button').find((button) => button.text() === '191.50 USD');
+        await flatexPriceHeaderButton.trigger('click');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/ui-preferences', expect.objectContaining({
+            method: 'PATCH',
+            body: JSON.stringify({ depot_price_source: 'flatex' }),
+        }));
+        expect(latestPriceHeaderButton.classes()).not.toContain('depot-price-source-button--active');
+        expect(flatexPriceHeaderButton.classes()).toContain('depot-price-source-button--active');
+        expect(wrapper.text()).toContain('360.00 USD');
+        expect(wrapper.text()).toContain('1,010.00 EUR');
+        expect(wrapper.text()).toContain('+1.00% · +10.00 EUR');
+        expect(wrapper.text()).toContain('+2.86%');
+        expect(wrapper.text()).toContain('+10.00');
+
+        const flatexPriceButton = wrapper.findAll('button').find((button) => button.text() === '180.00 USD');
         expect(flatexPriceButton).toBeTruthy();
 
         await flatexPriceButton.trigger('click');
@@ -1650,6 +2372,10 @@ describe('App', () => {
             body: JSON.stringify({ flatex_price: 180.25 }),
         }));
         expect(wrapper.text()).toContain('180.25 USD');
+        expect(wrapper.text()).toContain('360.50 USD');
+        expect(wrapper.text()).toContain('1,010.50 EUR');
+        expect(wrapper.text()).toContain('+1.05% · +10.50 EUR');
+        expect(wrapper.text()).toContain('+3.00%');
 
         const updatedFlatexPriceButton = wrapper.findAll('button').find((button) => button.text() === '180.25 USD');
         expect(updatedFlatexPriceButton).toBeTruthy();
@@ -1738,6 +2464,7 @@ describe('App', () => {
                     ],
                     meta: emptyPagination,
                     price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
 
@@ -1751,8 +2478,13 @@ describe('App', () => {
             if (path === '/admin/price-refresh-settings') {
                 return Promise.resolve(jsonResponse({
                     price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
                     refresh: null,
                 }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
             }
 
             return Promise.reject(new Error(`Unexpected request: ${path}`));
@@ -1769,7 +2501,7 @@ describe('App', () => {
             await flushPromises();
 
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1')).toHaveLength(2);
-            expect(wrapper.text()).toContain('waiting');
+            expect(wrapper.get('.app-bar-status').text().match(/waiting/g)).toHaveLength(2);
             expect(wrapper.text()).not.toContain('fetching historical data');
 
             wrapper.unmount();
@@ -1858,6 +2590,10 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
             return Promise.reject(new Error(`Unexpected request: ${path}`));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -1877,6 +2613,99 @@ describe('App', () => {
                 expect.any(Object),
             );
             expect(wrapper.text()).toContain('Updating prices');
+
+            wrapper.unmount();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('shows the index app bar status as waiting when the next index refresh is due but not running', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-06-02T12:41:00+00:00'));
+        window.history.pushState({}, '', '/admin/dashboard');
+
+        const emptyPagination = {
+            current_page: 1,
+            last_page: 1,
+            per_page: 10,
+            total: 0,
+            from: null,
+            to: null,
+        };
+        const dueIndexPriceRefreshSettings = indexPriceRefreshSettings({
+            last_refreshed_at: '2026-06-02T12:20:00+00:00',
+            next_refresh_at: '2026-06-02T12:40:00+00:00',
+            status: 'waiting',
+            status_label: 'waiting',
+        });
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: dueIndexPriceRefreshSettings,
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    holdings: [],
+                    meta: emptyPagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: dueIndexPriceRefreshSettings,
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [],
+                    meta: emptyPagination,
+                }));
+            }
+
+            if (path === '/admin/price-refresh-settings') {
+                return Promise.resolve(jsonResponse({
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: dueIndexPriceRefreshSettings,
+                    refresh: null,
+                }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        try {
+            const wrapper = mountApp();
+            await flushPromises();
+
+            const appBarStatusText = wrapper.get('.app-bar-status').text();
+
+            expect(appBarStatusText).toContain('Stocks Last:');
+            expect(appBarStatusText).toContain('waiting');
+            expect(appBarStatusText).toContain('Indices Last:');
+            expect(appBarStatusText).not.toContain('Updating prices');
 
             wrapper.unmount();
         } finally {

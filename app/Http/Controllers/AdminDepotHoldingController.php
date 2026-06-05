@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Depot;
+use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
 use App\Models\StockPrice;
 use App\Models\User;
@@ -10,11 +11,14 @@ use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\DepotTransactionBooker;
 use App\Services\EodhdApiUsage;
 use App\Services\EodhdMarketData;
+use App\Services\IndexPriceRefreshSettings;
 use App\Services\PriceRefreshScheduler;
 use App\Services\StockPriceCatalog;
 use App\Services\StockPriceFreshness;
 use App\Services\TradingSessionPriceResolver;
+use App\Services\UiPreferences;
 use App\Services\WatchlistPdfReport;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -28,12 +32,14 @@ class AdminDepotHoldingController extends Controller
     public function __construct(
         private StockPriceFreshness $stockPriceFreshness,
         private PriceRefreshScheduler $priceRefreshScheduler,
+        private IndexPriceRefreshSettings $indexPriceRefreshSettings,
         private TradingSessionPriceResolver $tradingSessionPriceResolver,
         private StockPriceCatalog $stockPriceCatalog,
         private WatchlistPdfReport $watchlistPdfReport,
         private DepotTransactionBooker $depotTransactionBooker,
         private EodhdMarketData $eodhdMarketData,
         private EodhdApiUsage $eodhdApiUsage,
+        private UiPreferences $uiPreferences,
     ) {}
 
     public function index(): JsonResponse
@@ -49,7 +55,9 @@ class AdminDepotHoldingController extends Controller
         return response()->json([
             'depot' => $activeDepot ? $this->depotPayload($activeDepot) : null,
             'price_refresh_settings' => $this->priceRefreshScheduler->payload(),
+            'index_price_refresh_settings' => $this->indexPriceRefreshSettings->payload(),
             'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
+            'ui_preferences' => $this->uiPreferences->payload(),
             'holdings' => $holdings->items(),
             'meta' => [
                 'current_page' => $holdings->currentPage(),
@@ -74,9 +82,20 @@ class AdminDepotHoldingController extends Controller
             ->orderBy('mic_code')
             ->orderBy('symbol')
             ->get(['id', 'symbol', 'exchange', 'mic_code', 'country']);
+        $holdingExchangeCodes = $holdings
+            ->map(fn (StockHolding $holding): string => $this->eodhdMarketData->exchangeCodeForHolding($holding))
+            ->toBase();
+        $indexExchangeCodes = IndexWatchItem::query()
+            ->orderBy('exchange')
+            ->orderBy('symbol')
+            ->get(['id', 'symbol', 'exchange', 'country'])
+            ->map(fn (IndexWatchItem $item): string => $this->eodhdMarketData->exchangeCodeForIndexWatchItem($item))
+            ->toBase();
 
         return response()->json([
-            'exchange_trading_times' => $this->eodhdMarketData->exchangeTradingTimes($holdings),
+            'exchange_trading_times' => $this->eodhdMarketData->exchangeTradingTimesForCodes(
+                $holdingExchangeCodes->merge($indexExchangeCodes),
+            ),
             'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
         ]);
     }
@@ -120,12 +139,14 @@ class AdminDepotHoldingController extends Controller
         $user = $request->user();
         $dispatchedRefresh = $this->priceRefreshScheduler->dispatchWatchlist($user instanceof User ? $user : null);
         $progress = $dispatchedRefresh['progress'];
-        $message = trans_choice('{0} No stock prices queued for refresh.|{1} 1 stock price queued for refresh.|[2,*] :count stock prices queued for refresh.', $dispatchedRefresh['total_holdings']);
+        $message = trans_choice('{0} No prices queued for refresh.|{1} 1 price queued for refresh.|[2,*] :count prices queued for refresh.', $dispatchedRefresh['total_instruments']);
 
         if ($progress === null) {
             return response()->json([
                 'message' => $message,
                 'refresh' => null,
+                'price_refresh_settings' => $this->priceRefreshScheduler->payload(),
+                'index_price_refresh_settings' => $this->indexPriceRefreshSettings->payload(),
                 'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
             ], 202);
         }
@@ -133,6 +154,8 @@ class AdminDepotHoldingController extends Controller
         return response()->json([
             'message' => $message,
             'refresh' => $this->refreshPayload($progress),
+            'price_refresh_settings' => $this->priceRefreshScheduler->payload(),
+            'index_price_refresh_settings' => $this->indexPriceRefreshSettings->payload(),
             'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
         ], 202);
     }
@@ -143,7 +166,7 @@ class AdminDepotHoldingController extends Controller
 
         if ($progress === null) {
             return response()->json([
-                'message' => 'Stock price refresh not found.',
+                'message' => 'Price refresh not found.',
             ], 404);
         }
 
@@ -159,18 +182,60 @@ class AdminDepotHoldingController extends Controller
         $validated = $request->validate([
             'flatex_price' => ['nullable', 'numeric', 'min:0', 'max:99999999999999.999999'],
         ]);
+        $matchingHoldingIds = $this->matchingStockHoldings($holding)->pluck('id');
 
-        $holding->update([
-            'flatex_price' => $validated['flatex_price'] ?? null,
-        ]);
+        StockHolding::query()
+            ->whereKey($matchingHoldingIds->all())
+            ->update([
+                'flatex_price' => $validated['flatex_price'] ?? null,
+            ]);
+
+        $updatedHoldings = StockHolding::query()
+            ->whereKey($matchingHoldingIds->all())
+            ->orderBy('id')
+            ->get(['id', 'symbol', 'isin', 'wkn', 'exchange', 'mic_code', 'flatex_price'])
+            ->map(fn (StockHolding $updatedHolding): array => [
+                'id' => $updatedHolding->id,
+                'symbol' => $updatedHolding->symbol,
+                'isin' => $updatedHolding->isin,
+                'wkn' => $updatedHolding->wkn,
+                'exchange' => $updatedHolding->exchange,
+                'mic_code' => $updatedHolding->mic_code,
+                'flatex_price' => $this->pricePayload($updatedHolding->flatex_price),
+            ]);
+        $updatedHolding = $updatedHoldings
+            ->firstWhere('id', $holding->id)
+            ?? $updatedHoldings->first()
+            ?? [
+                'id' => $holding->id,
+                'flatex_price' => $this->pricePayload($validated['flatex_price'] ?? null),
+            ];
 
         return response()->json([
             'message' => 'Flatex price updated.',
-            'holding' => [
-                'id' => $holding->id,
-                'flatex_price' => $this->pricePayload($holding->refresh()->flatex_price),
-            ],
+            'holding' => $updatedHolding,
+            'holdings' => $updatedHoldings->all(),
         ]);
+    }
+
+    /**
+     * @return Builder<StockHolding>
+     */
+    private function matchingStockHoldings(StockHolding $holding): Builder
+    {
+        if (filled($holding->isin)) {
+            return StockHolding::query()->where('isin', $holding->isin);
+        }
+
+        if (filled($holding->wkn)) {
+            return StockHolding::query()->where('wkn', $holding->wkn);
+        }
+
+        if (filled($holding->symbol)) {
+            return StockHolding::query()->where('symbol', $holding->symbol);
+        }
+
+        return StockHolding::query()->whereKey($holding->id);
     }
 
     public function destroy(StockHolding $holding): JsonResponse
@@ -246,7 +311,7 @@ class AdminDepotHoldingController extends Controller
             'latest_price_change_pct' => $this->latestPriceChangePercent($latestPrice, $latestPriceReference),
             'latest_price_tick_trend' => $this->latestPriceTrend($latestPrice, $this->previousStoredPrice($holding, $latestStockPrice)),
             'latest_price_status' => $latestPriceStatus,
-            'price_status' => $holding->price_status,
+            'price_status' => $latestPriceStatus,
             'latest_price_fetched_at' => $latestStockPrice?->fetched_at?->toIso8601String() ?? $holding->latest_price_fetched_at?->toIso8601String(),
             'latest_price_source' => $latestStockPrice?->source_name ?? $holding->latest_price_source,
             'latest_price_source_url' => $latestStockPrice?->source_url ?? $holding->latest_price_source_url,
@@ -263,11 +328,16 @@ class AdminDepotHoldingController extends Controller
 
     private function latestPriceStatus(StockHolding $holding): string
     {
+        $latestStockPrice = $holding->latestStockPrice;
+        $storedPriceStatus = $this->storedPriceStatus($latestStockPrice);
+
+        if ($storedPriceStatus !== null) {
+            return $storedPriceStatus;
+        }
+
         if (in_array($holding->price_status, ['realtime', 'fresh', 'delayed', 'closed_market', 'suspicious', 'unavailable_now', 'stale'], true)) {
             return $holding->price_status;
         }
-
-        $latestStockPrice = $holding->latestStockPrice;
 
         if ($latestStockPrice?->price === null && $holding->latest_price === null) {
             return $holding->latest_price_fetched_at === null ? 'missing' : 'unavailable';
@@ -283,6 +353,21 @@ class AdminDepotHoldingController extends Controller
         }
 
         return 'stale';
+    }
+
+    private function storedPriceStatus(?StockPrice $stockPrice): ?string
+    {
+        if ($stockPrice?->price === null) {
+            return null;
+        }
+
+        if ($stockPrice->validation_status === 'suspicious') {
+            return 'suspicious';
+        }
+
+        return in_array($stockPrice->freshness_status, ['realtime', 'fresh', 'delayed', 'closed_market'], true)
+            ? $stockPrice->freshness_status
+            : null;
     }
 
     private function pricePayload(?string $price): ?string

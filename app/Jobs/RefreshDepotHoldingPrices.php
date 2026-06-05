@@ -2,11 +2,13 @@
 
 namespace App\Jobs;
 
+use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
 use App\Models\StockPriceRefreshItem;
 use App\Models\StockPriceRefreshRun;
 use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\EodhdMarketData;
+use App\Services\IndexWatchItemPriceRefresher;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
@@ -25,10 +27,12 @@ class RefreshDepotHoldingPrices implements ShouldQueue
     public function __construct(
         public string $refreshId,
         public ?int $recipientUserId = null,
+        public bool $includeIndexes = true,
     ) {}
 
     public function handle(
         EodhdMarketData $marketData,
+        IndexWatchItemPriceRefresher $indexPriceRefresher,
         DepotHoldingPriceRefreshProgress $progress,
     ): void {
         $progress->markRunning($this->refreshId);
@@ -75,6 +79,20 @@ class RefreshDepotHoldingPrices implements ShouldQueue
 
                 $progress->advance($this->refreshId, $holding->symbol ?? $holding->name);
             });
+
+        if ($this->includeIndexes) {
+            IndexWatchItem::query()
+                ->orderBy('id')
+                ->eachById(function (IndexWatchItem $item) use ($indexPriceRefresher, $progress, $run): void {
+                    try {
+                        $this->incrementRunCounters($run, $indexPriceRefresher->refresh($item) ? 'success' : 'unavailable');
+                    } catch (Throwable) {
+                        $this->incrementRunCounters($run, 'failed');
+                    }
+
+                    $progress->advance($this->refreshId, $item->symbol ?? $item->name);
+                });
+        }
 
         $progress->finish($this->refreshId);
         $run?->refresh()->update([

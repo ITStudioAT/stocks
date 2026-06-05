@@ -87,6 +87,39 @@ class StockSearchQueryResolverTest extends TestCase
         Http::assertSent(fn (Request $request): bool => str_starts_with($request->url(), 'https://eodhd.com/api/search/Apple%20Inc?'));
     }
 
+    public function test_it_resolves_index_candidates_from_the_eodhd_index_symbol_list(): void
+    {
+        Cache::flush();
+        config(['services.eodhd.key' => 'test-token']);
+        Http::fake([
+            'eodhd.com/api/search/AT0000999982*' => Http::response([]),
+            'eodhd.com/api/search/099998*' => Http::response([]),
+            'eodhd.com/api/exchange-symbol-list/INDX*' => Http::response([
+                [
+                    'Code' => 'ATX',
+                    'Name' => 'Austrian Traded Index in EUR',
+                    'Country' => 'Austria',
+                    'Exchange' => 'INDX',
+                    'Currency' => 'EUR',
+                    'Type' => 'INDEX',
+                    'Isin' => 'AT0000999982',
+                ],
+            ]),
+        ]);
+
+        $isinCandidates = app(StockSearchQueryResolver::class)->resolveCandidates('AT0000999982');
+        $numericCandidates = app(StockSearchQueryResolver::class)->resolveCandidates('099998');
+
+        $this->assertSame('Austrian Traded Index in EUR', $isinCandidates[0]['name']);
+        $this->assertSame('AT0000999982', $isinCandidates[0]['isin']);
+        $this->assertSame('ATX', $isinCandidates[0]['symbol']);
+        $this->assertSame('INDX', $isinCandidates[0]['exchange']);
+        $this->assertSame('INDEX', $isinCandidates[0]['instrument_type']);
+        $this->assertSame('EUR', $isinCandidates[0]['currency']);
+        $this->assertSame('ATX', $numericCandidates[0]['symbol']);
+        $this->assertSame('AT0000999982', $numericCandidates[0]['isin']);
+    }
+
     public function test_it_returns_no_candidates_when_eodhd_fails(): void
     {
         Cache::flush();

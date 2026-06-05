@@ -125,7 +125,7 @@ class WatchlistPdfReport
             'latest_price_change_pct' => $this->latestPriceChangePercent($latestPrice, $latestPriceReference),
             'latest_price_tick_trend' => $this->latestPriceTrend($latestPrice, $this->previousStoredPrice($holding, $latestStockPrice)),
             'latest_price_status' => $latestPriceStatus,
-            'price_status' => $holding->price_status,
+            'price_status' => $latestPriceStatus,
             'latest_price_fetched_at' => $latestStockPrice?->fetched_at?->toIso8601String() ?? $holding->latest_price_fetched_at?->toIso8601String(),
             'latest_price_source' => $latestStockPrice?->source_name ?? $holding->latest_price_source,
             'latest_price_source_url' => $latestStockPrice?->source_url ?? $holding->latest_price_source_url,
@@ -142,11 +142,16 @@ class WatchlistPdfReport
 
     private function latestPriceStatus(StockHolding $holding): string
     {
+        $latestStockPrice = $holding->latestStockPrice;
+        $storedPriceStatus = $this->storedPriceStatus($latestStockPrice);
+
+        if ($storedPriceStatus !== null) {
+            return $storedPriceStatus;
+        }
+
         if (in_array($holding->price_status, ['realtime', 'fresh', 'delayed', 'closed_market', 'suspicious', 'unavailable_now', 'stale'], true)) {
             return $holding->price_status;
         }
-
-        $latestStockPrice = $holding->latestStockPrice;
 
         if ($latestStockPrice?->price === null && $holding->latest_price === null) {
             return $holding->latest_price_fetched_at === null ? 'missing' : 'unavailable';
@@ -162,6 +167,21 @@ class WatchlistPdfReport
         }
 
         return 'stale';
+    }
+
+    private function storedPriceStatus(?StockPrice $stockPrice): ?string
+    {
+        if ($stockPrice?->price === null) {
+            return null;
+        }
+
+        if ($stockPrice->validation_status === 'suspicious') {
+            return 'suspicious';
+        }
+
+        return in_array($stockPrice->freshness_status, ['realtime', 'fresh', 'delayed', 'closed_market'], true)
+            ? $stockPrice->freshness_status
+            : null;
     }
 
     private function pricePayload(?string $price): ?string

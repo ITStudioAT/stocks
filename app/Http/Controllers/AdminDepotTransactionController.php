@@ -5,7 +5,9 @@ namespace App\Http\Controllers;
 use App\Models\Depot;
 use App\Models\DepotTransaction;
 use App\Models\StockHolding;
+use App\Models\StockPrice;
 use App\Services\DepotTransactionBooker;
+use App\Services\UiPreferences;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -14,7 +16,7 @@ use Illuminate\Validation\ValidationException;
 
 class AdminDepotTransactionController extends Controller
 {
-    public function index(): JsonResponse
+    public function index(UiPreferences $uiPreferences): JsonResponse
     {
         $depot = $this->activeDepot();
 
@@ -22,6 +24,7 @@ class AdminDepotTransactionController extends Controller
             return response()->json([
                 'depot_holdings' => [],
                 'transactions' => [],
+                'ui_preferences' => $uiPreferences->payload(),
             ]);
         }
 
@@ -36,6 +39,7 @@ class AdminDepotTransactionController extends Controller
                 ->get()
                 ->map(fn (DepotTransaction $transaction): array => $this->transactionPayload($transaction))
                 ->all(),
+            'ui_preferences' => $uiPreferences->payload(),
         ]);
     }
 
@@ -217,6 +221,12 @@ class AdminDepotTransactionController extends Controller
 
     private function latestPriceStatus(StockHolding $holding, ?string $latestPrice): string
     {
+        $storedPriceStatus = $this->storedPriceStatus($holding->latestStockPrice);
+
+        if ($storedPriceStatus !== null) {
+            return $storedPriceStatus;
+        }
+
         if (in_array($holding->price_status, ['realtime', 'fresh', 'delayed', 'closed_market', 'suspicious', 'unavailable_now', 'stale'], true)) {
             return $holding->price_status;
         }
@@ -226,6 +236,21 @@ class AdminDepotTransactionController extends Controller
         }
 
         return 'fresh';
+    }
+
+    private function storedPriceStatus(?StockPrice $stockPrice): ?string
+    {
+        if ($stockPrice?->price === null) {
+            return null;
+        }
+
+        if ($stockPrice->validation_status === 'suspicious') {
+            return 'suspicious';
+        }
+
+        return in_array($stockPrice->freshness_status, ['realtime', 'fresh', 'delayed', 'closed_market'], true)
+            ? $stockPrice->freshness_status
+            : null;
     }
 
     /**

@@ -32,5 +32,19 @@
     "additionalDirectories": [
       "C:\\Users\\kron\\.claude"
     ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .claude\\hooks\\verify-before-stop.ps1",
+            "timeout": 600,
+            "statusMessage": "Verifying Laravel/Vue app before Claude finishes"
+          }
+        ]
+      }
+    ]
   }
 }

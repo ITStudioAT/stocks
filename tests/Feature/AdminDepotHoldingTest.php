@@ -4,15 +4,18 @@ namespace Tests\Feature;
 
 use App\Jobs\FetchHistoricalSessionPrices;
 use App\Jobs\RefreshDepotHoldingPrices;
+use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
 use App\Models\StockPrice;
 use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\EodhdMarketData;
 use App\Services\HistoricalSessionStartPriceFetchStatus;
+use App\Services\IndexWatchItemPriceRefresher;
 use App\Services\StockPriceCatalog;
 use App\Services\WebMarketData\DTO\QuoteSelectionResult;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -145,6 +148,135 @@ class AdminDepotHoldingTest extends TestCase
         Http::assertSentCount(1);
     }
 
+    public function test_admin_exchange_trading_times_include_saved_austrian_index_exchange(): void
+    {
+        Cache::flush();
+        config([
+            'services.eodhd.key' => 'test-token',
+            'services.eodhd.calls_per_hour' => 1000,
+            'services.eodhd.calls_per_day' => 100000,
+            'services.eodhd.calls_used_today' => 0,
+        ]);
+
+        Http::fake([
+            'eodhd.com/api/exchange-details/VI*' => Http::response([
+                'Name' => 'Vienna Exchange',
+                'Code' => 'VI',
+                'OperatingMIC' => 'XWBO',
+                'Country' => 'Austria',
+                'Currency' => 'EUR',
+                'Timezone' => 'Europe/Vienna',
+                'isOpen' => false,
+                'TradingHours' => [
+                    'Open' => '08:55:00',
+                    'Close' => '17:35:00',
+                    'OpenUTC' => '06:55:00',
+                    'CloseUTC' => '15:35:00',
+                    'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
+                ],
+            ]),
+        ]);
+
+        $admin = $this->adminUser();
+        IndexWatchItem::factory()->create([
+            'symbol' => 'ATX',
+            'name' => 'Austrian Traded Index in EUR',
+            'isin' => 'AT0000999982',
+            'exchange' => 'INDX',
+            'instrument_type' => 'INDEX',
+            'country' => 'Austria',
+            'currency' => 'EUR',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/exchange-trading-times')
+            ->assertOk()
+            ->assertJsonCount(1, 'exchange_trading_times')
+            ->assertJsonPath('exchange_trading_times.0.code', 'VI')
+            ->assertJsonPath('exchange_trading_times.0.name', 'Vienna Exchange')
+            ->assertJsonPath('exchange_trading_times.0.operating_mic', 'XWBO')
+            ->assertJsonPath('exchange_trading_times.0.timezone', 'Europe/Vienna')
+            ->assertJsonPath('exchange_trading_times.0.open', '08:55:00')
+            ->assertJsonPath('exchange_trading_times.0.close', '17:35:00')
+            ->assertJsonPath('exchange_trading_times.0.open_utc', '06:55:00')
+            ->assertJsonPath('exchange_trading_times.0.close_utc', '15:35:00')
+            ->assertJsonPath('exchange_trading_times.0.working_days', 'Mon,Tue,Wed,Thu,Fri')
+            ->assertJsonPath('eodhd_api_usage.hour.used', 1);
+
+        Http::assertSentCount(1);
+    }
+
+    public function test_admin_exchange_trading_times_include_lunch_break_sessions_from_eodhd(): void
+    {
+        Cache::flush();
+        config([
+            'services.eodhd.key' => 'test-token',
+            'services.eodhd.calls_per_hour' => 1000,
+            'services.eodhd.calls_per_day' => 100000,
+            'services.eodhd.calls_used_today' => 0,
+        ]);
+
+        Http::fake([
+            'eodhd.com/api/exchange-details/SHG*' => Http::response([
+                'Name' => 'Shanghai Stock Exchange',
+                'Code' => 'SHG',
+                'OperatingMIC' => 'XSHG',
+                'Country' => 'China',
+                'Currency' => 'CNY',
+                'Timezone' => 'Asia/Shanghai',
+                'ExchangeHolidays' => [
+                    [
+                        'Holiday' => 'Dragon Boat Festival',
+                        'Date' => '2026-06-19',
+                        'Type' => 'official',
+                    ],
+                ],
+                'isOpen' => false,
+                'TradingHours' => [
+                    'Open' => '09:30:00',
+                    'Close' => '15:00:00',
+                    'LunchBegin' => '11:30:00',
+                    'LunchEnd' => '13:00:00',
+                    'OpenUTC' => '01:30:00',
+                    'CloseUTC' => '07:00:00',
+                    'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
+                ],
+            ]),
+        ]);
+
+        $admin = $this->adminUser();
+        StockHolding::factory()->create([
+            'symbol' => '000001',
+            'exchange' => 'Shanghai Stock Exchange',
+            'mic_code' => 'XSHG',
+            'country' => 'China',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/exchange-trading-times')
+            ->assertOk()
+            ->assertJsonCount(1, 'exchange_trading_times')
+            ->assertJsonPath('exchange_trading_times.0.code', 'SHG')
+            ->assertJsonPath('exchange_trading_times.0.name', 'Shanghai Stock Exchange')
+            ->assertJsonPath('exchange_trading_times.0.operating_mic', 'XSHG')
+            ->assertJsonPath('exchange_trading_times.0.timezone', 'Asia/Shanghai')
+            ->assertJsonPath('exchange_trading_times.0.open', '09:30:00')
+            ->assertJsonPath('exchange_trading_times.0.close', '15:00:00')
+            ->assertJsonPath('exchange_trading_times.0.lunch_begin', '11:30:00')
+            ->assertJsonPath('exchange_trading_times.0.lunch_end', '13:00:00')
+            ->assertJsonPath('exchange_trading_times.0.sessions.0.open', '09:30:00')
+            ->assertJsonPath('exchange_trading_times.0.sessions.0.close', '11:30:00')
+            ->assertJsonPath('exchange_trading_times.0.sessions.1.open', '13:00:00')
+            ->assertJsonPath('exchange_trading_times.0.sessions.1.close', '15:00:00')
+            ->assertJsonPath('exchange_trading_times.0.holidays.0', '2026-06-19');
+
+        Http::assertSent(fn (Request $request): bool => str_starts_with(
+            $request->url(),
+            'https://eodhd.com/api/exchange-details/SHG?',
+        ));
+        Http::assertSentCount(1);
+    }
+
     public function test_admin_listing_hides_stale_holding_prices(): void
     {
         $admin = $this->adminUser();
@@ -193,6 +325,58 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.latest_price_as_of', null)
             ->assertJsonPath('holdings.0.venue', null)
             ->assertJsonPath('holdings.0.price_type', null);
+    }
+
+    public function test_admin_listing_uses_selected_stock_price_status_before_stale_holding_status(): void
+    {
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'name' => 'Amundi IBEX 35 UCITS ETF Acc',
+            'isin' => 'FR0010655746',
+            'wkn' => 'A0REJT',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'country' => 'France',
+            'currency' => 'EUR',
+            'latest_price' => '465.637500',
+            'latest_price_as_of' => '2026-06-03 17:24:53',
+            'price_status' => 'stale',
+        ]);
+        $stockPrice = StockPrice::factory()->create([
+            'instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($holding),
+            'source_key' => 'eodhd_realtime',
+            'source_name' => 'EODHD real-time',
+            'source_url' => 'https://eodhd.com/api/real-time/AMES.XETRA?fmt=json',
+            'source_quality' => 'market_data_vendor',
+            'venue' => 'Xetra',
+            'mic' => 'XETR',
+            'isin' => 'FR0010655746',
+            'wkn' => 'A0REJT',
+            'symbol' => 'AMES',
+            'currency' => 'EUR',
+            'price' => '469.20000000',
+            'price_type' => 'last',
+            'as_of' => '2026-06-04 15:35:00',
+            'fetched_at' => '2026-06-04 20:47:05',
+            'freshness_status' => 'closed_market',
+            'validation_status' => 'valid',
+        ]);
+        $holding->update([
+            'latest_stock_price_id' => $stockPrice->id,
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.symbol', 'AMES')
+            ->assertJsonPath('holdings.0.latest_price', '469.200000')
+            ->assertJsonPath('holdings.0.latest_price_status', 'closed_market')
+            ->assertJsonPath('holdings.0.price_status', 'closed_market')
+            ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-04T15:35:00+00:00')
+            ->assertJsonPath('holdings.0.latest_price_source', 'EODHD real-time')
+            ->assertJsonPath('holdings.0.venue', 'Xetra')
+            ->assertJsonPath('holdings.0.price_type', 'last');
     }
 
     public function test_admin_listing_hides_source_time_for_unavailable_holding_prices(): void
@@ -839,7 +1023,7 @@ class AdminDepotHoldingTest extends TestCase
         $response = $this->actingAs($admin)
             ->postJson('/admin/watchlist/holdings/refresh-prices')
             ->assertAccepted()
-            ->assertJsonPath('message', '3 stock prices queued for refresh.')
+            ->assertJsonPath('message', '3 prices queued for refresh.')
             ->assertJsonPath('refresh.status', 'queued')
             ->assertJsonPath('refresh.processed', 0)
             ->assertJsonPath('refresh.total', 3)
@@ -875,11 +1059,32 @@ class AdminDepotHoldingTest extends TestCase
         $this->actingAs($admin)
             ->postJson('/admin/watchlist/holdings/refresh-prices')
             ->assertAccepted()
-            ->assertJsonPath('message', '1 stock price queued for refresh.')
+            ->assertJsonPath('message', '1 price queued for refresh.')
             ->assertJsonPath('refresh.status', 'queued')
             ->assertJsonPath('refresh.total', 1);
 
         Queue::assertPushedTimes(RefreshDepotHoldingPrices::class, 1);
+    }
+
+    public function test_manual_watchlist_price_refresh_reports_index_schedule_as_updating_when_indexes_are_included(): void
+    {
+        Queue::fake();
+        $admin = $this->adminUser();
+        StockHolding::factory()->create([
+            'symbol' => 'AAPL',
+        ]);
+        IndexWatchItem::factory()->create([
+            'symbol' => 'ATX',
+        ]);
+
+        $this->actingAs($admin)
+            ->postJson('/admin/watchlist/holdings/refresh-prices')
+            ->assertAccepted()
+            ->assertJsonPath('message', '2 prices queued for refresh.')
+            ->assertJsonPath('refresh.total', 2)
+            ->assertJsonPath('price_refresh_settings.status', 'updating')
+            ->assertJsonPath('index_price_refresh_settings.status', 'updating')
+            ->assertJsonPath('index_price_refresh_settings.status_label', 'Updating prices');
     }
 
     public function test_queued_job_refreshes_watchlist_prices_and_tracks_progress(): void
@@ -943,6 +1148,7 @@ class AdminDepotHoldingTest extends TestCase
 
         (new RefreshDepotHoldingPrices('refresh-test'))->handle(
             app(EodhdMarketData::class),
+            app(IndexWatchItemPriceRefresher::class),
             $progress,
         );
 
@@ -970,6 +1176,70 @@ class AdminDepotHoldingTest extends TestCase
         $this->assertSame('2/2', $progress->get('refresh-test')['step']);
     }
 
+    public function test_queued_job_refreshes_index_prices_and_daily_snapshot(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        Http::fake([
+            'eodhd.com/api/real-time/ATX.INDX*' => Http::response([
+                'code' => 'ATX.INDX',
+                'timestamp' => Carbon::parse('2026-06-04 15:13:00', 'UTC')->timestamp,
+                'open' => 6096.1699,
+                'close' => 6116.5298,
+                'previousClose' => 6096.1699,
+            ]),
+            'eodhd.com/api/exchange-details/VI*' => Http::response([
+                'Name' => 'Vienna Exchange',
+                'Code' => 'VI',
+                'OperatingMIC' => 'XWBO',
+                'Country' => 'Austria',
+                'Currency' => 'EUR',
+                'Timezone' => 'Europe/Vienna',
+                'TradingHours' => [
+                    'Open' => '08:55:00',
+                    'Close' => '17:35:00',
+                    'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
+                ],
+            ]),
+        ]);
+        $index = IndexWatchItem::factory()->create([
+            'symbol' => 'ATX',
+            'name' => 'Austrian Traded Index in EUR',
+            'isin' => 'AT0000999982',
+            'exchange' => 'INDX',
+            'country' => 'Austria',
+            'currency' => 'EUR',
+        ]);
+        $progress = app(DepotHoldingPriceRefreshProgress::class);
+        $progress->start('refresh-index-test', 1);
+
+        (new RefreshDepotHoldingPrices('refresh-index-test'))->handle(
+            app(EodhdMarketData::class),
+            app(IndexWatchItemPriceRefresher::class),
+            $progress,
+        );
+
+        $this->assertDatabaseHas('index_watch_items', [
+            'id' => $index->id,
+            'start_price' => '6096.16990000',
+            'latest_price' => '6116.52980000',
+            'last_price' => '6096.16990000',
+            'latest_price_change_pct' => '0.333979',
+            'latest_price_as_of' => '2026-06-04 15:13:00',
+            'latest_price_source' => 'EODHD real-time',
+            'trading_times' => 'Monday-Friday 08:55:00-17:35:00 Europe/Vienna',
+        ]);
+        $this->assertDatabaseHas('index_watch_item_prices', [
+            'index_watch_item_id' => $index->id,
+            'trading_date' => '2026-06-04 00:00:00',
+            'start_price' => '6096.16990000',
+            'actual_price' => '6116.52980000',
+            'last_price' => '6096.16990000',
+            'actual_price_as_of' => '2026-06-04 15:13:00',
+        ]);
+        $this->assertSame('finished', $progress->get('refresh-index-test')['status']);
+        $this->assertSame('1/1', $progress->get('refresh-index-test')['step']);
+    }
+
     public function test_completed_manual_refresh_does_not_send_watchlist_pdf_email(): void
     {
         Mail::fake();
@@ -991,6 +1261,7 @@ class AdminDepotHoldingTest extends TestCase
 
         (new RefreshDepotHoldingPrices('refresh-mail-test', $admin->id))->handle(
             app(EodhdMarketData::class),
+            app(IndexWatchItemPriceRefresher::class),
             $progress,
         );
 
@@ -1017,6 +1288,7 @@ class AdminDepotHoldingTest extends TestCase
 
         (new RefreshDepotHoldingPrices('refresh-mail-fail-test', $admin->id))->handle(
             app(EodhdMarketData::class),
+            app(IndexWatchItemPriceRefresher::class),
             $progress,
         );
 
@@ -1039,8 +1311,24 @@ class AdminDepotHoldingTest extends TestCase
     {
         $admin = $this->adminUser();
         $holding = StockHolding::factory()->create([
+            'symbol' => 'AAPL',
+            'isin' => null,
+            'wkn' => null,
             'latest_price' => '191.500000',
             'flatex_price' => '191.500000',
+        ]);
+        $matchingHolding = StockHolding::factory()->create([
+            'symbol' => 'AAPL',
+            'isin' => null,
+            'wkn' => null,
+            'latest_price' => '190.000000',
+            'flatex_price' => '190.000000',
+        ]);
+        $otherHolding = StockHolding::factory()->create([
+            'symbol' => 'MSFT',
+            'isin' => null,
+            'wkn' => null,
+            'flatex_price' => '300.000000',
         ]);
 
         $this->actingAs($admin)
@@ -1050,9 +1338,16 @@ class AdminDepotHoldingTest extends TestCase
             ->assertOk()
             ->assertJsonPath('message', 'Flatex price updated.')
             ->assertJsonPath('holding.id', $holding->id)
-            ->assertJsonPath('holding.flatex_price', '180.250000');
+            ->assertJsonPath('holding.flatex_price', '180.250000')
+            ->assertJsonCount(2, 'holdings')
+            ->assertJsonPath('holdings.0.id', $holding->id)
+            ->assertJsonPath('holdings.0.flatex_price', '180.250000')
+            ->assertJsonPath('holdings.1.id', $matchingHolding->id)
+            ->assertJsonPath('holdings.1.flatex_price', '180.250000');
 
         $this->assertSame('180.250000', $holding->refresh()->flatex_price);
+        $this->assertSame('180.250000', $matchingHolding->refresh()->flatex_price);
+        $this->assertSame('300.000000', $otherHolding->refresh()->flatex_price);
     }
 
     public function test_admin_must_provide_a_valid_flatex_price(): void

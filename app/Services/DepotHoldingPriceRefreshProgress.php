@@ -19,8 +19,8 @@ class DepotHoldingPriceRefreshProgress
             'total' => $total,
             'step' => "0/{$total}",
             'message' => $total === 0
-                ? 'No stock prices queued for refresh.'
-                : trans_choice('{1} 1 stock price queued for refresh.|[2,*] :count stock prices queued for refresh.', $total),
+                ? 'No prices queued for refresh.'
+                : trans_choice('{1} 1 price queued for refresh.|[2,*] :count prices queued for refresh.', $total),
             'current' => null,
             'started_at' => now()->toIso8601String(),
             'finished_at' => $total === 0 ? now()->toIso8601String() : null,
@@ -46,7 +46,7 @@ class DepotHoldingPriceRefreshProgress
         return $this->update($refreshId, fn (array $payload): array => [
             ...$payload,
             'status' => 'running',
-            'message' => 'Refreshing stock prices...',
+            'message' => 'Refreshing prices...',
         ]);
     }
 
@@ -63,7 +63,7 @@ class DepotHoldingPriceRefreshProgress
                 'status' => 'running',
                 'processed' => $processed,
                 'step' => "{$processed}/{$payload['total']}",
-                'message' => "Refreshing stock prices ({$processed}/{$payload['total']})...",
+                'message' => "Refreshing prices ({$processed}/{$payload['total']})...",
                 'current' => $current,
             ];
         });
@@ -79,7 +79,7 @@ class DepotHoldingPriceRefreshProgress
             'status' => 'finished',
             'processed' => $payload['total'],
             'step' => "{$payload['total']}/{$payload['total']}",
-            'message' => trans_choice('{0} No stock prices refreshed.|{1} 1 stock price refreshed.|[2,*] :count stock prices refreshed.', $payload['total']),
+            'message' => trans_choice('{0} No prices refreshed.|{1} 1 price refreshed.|[2,*] :count prices refreshed.', $payload['total']),
             'current' => null,
             'finished_at' => now()->toIso8601String(),
         ]);
@@ -93,7 +93,7 @@ class DepotHoldingPriceRefreshProgress
         return $this->update($refreshId, fn (array $payload): array => [
             ...$payload,
             'status' => 'failed',
-            'message' => 'Stock price refresh failed.',
+            'message' => 'Price refresh failed.',
             'finished_at' => now()->toIso8601String(),
             'error' => Str::limit($error, 255, ''),
         ]);

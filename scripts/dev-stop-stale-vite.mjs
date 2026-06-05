@@ -6,21 +6,63 @@ if (process.platform !== 'win32') {
 
 const workspace = process.cwd().replaceAll("'", "''");
 const currentProcessId = process.pid;
+const port = Number(process.env.VITE_DEV_SERVER_PORT ?? 5173);
 const command = `
-$workspace = '${workspace}'
+$workspace = '${workspace}'.ToLowerInvariant()
 $currentProcessId = ${currentProcessId}
-$viteCommandPattern = 'vite[\\\\/]bin[\\\\/]vite\\.js|node_modules[\\\\/]\\.bin[\\\\/]vite'
+$port = ${port}
+$targets = @{}
+
+function Add-TargetProcess {
+    param([int] $processId)
+
+    if (-not $processId -or $processId -eq 0 -or $processId -eq $currentProcessId) {
+        return
+    }
+
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue
+
+    if (-not $process) {
+        return
+    }
+
+    $commandLine = ([string] $process.CommandLine).ToLowerInvariant()
+    $processName = ([string] $process.Name).ToLowerInvariant()
+
+    if ($processName -eq 'node.exe' -and $commandLine.Contains($workspace) -and $commandLine.Contains('vite')) {
+        $targets[$process.ProcessId] = $process
+    }
+}
+
 Get-CimInstance Win32_Process |
     Where-Object {
         $_.Name -eq 'node.exe' -and
         $_.ProcessId -ne $currentProcessId -and
-        $_.CommandLine -match [regex]::Escape($workspace) -and
-        $_.CommandLine -match $viteCommandPattern
+        (([string] $_.CommandLine).ToLowerInvariant()).Contains($workspace) -and
+        (([string] $_.CommandLine).ToLowerInvariant()).Contains('vite')
     } |
+    ForEach-Object { Add-TargetProcess -processId $_.ProcessId }
+
+Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+    ForEach-Object { Add-TargetProcess -processId $_.OwningProcess }
+
+$targets.Values |
     ForEach-Object {
-        Stop-Process -Id $_.ProcessId -Force
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
         Write-Output "Stopped stale Vite process $($_.ProcessId)"
     }
+
+if ($targets.Count -gt 0) {
+    $deadline = (Get-Date).AddSeconds(5)
+
+    while ((Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -ne 0 }) -and (Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 200
+    }
+
+    if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -ne 0 }) {
+        throw "Port $port is still in use after stopping stale Vite processes."
+    }
+}
 `;
 
 try {

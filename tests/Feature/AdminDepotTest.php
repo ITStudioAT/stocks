@@ -144,6 +144,15 @@ class AdminDepotTest extends TestCase
             ->assertOk();
     }
 
+    public function test_admin_can_open_nested_analyze_menu_page(): void
+    {
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->get('/admin/menu/analyze/detail')
+            ->assertOk();
+    }
+
     private function adminUser(): User
     {
         Role::findOrCreate('admin');

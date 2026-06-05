@@ -107,7 +107,72 @@ class StockSearchQueryResolver
                 return [];
             }
 
+            $searchCandidates = collect($candidates)
+                ->map(fn (array $candidate): array => $this->candidatePayload($query, $candidate))
+                ->filter(fn (array $candidate): bool => $candidate['search_terms'] !== [])
+                ->values()
+                ->all();
+
+            $indexCandidates = $this->shouldSearchIndexCandidates($query)
+                ? $this->resolveIndexCandidates($query)
+                : [];
+
+            return collect($searchCandidates)
+                ->merge($indexCandidates)
+                ->unique(fn (array $candidate): string => implode('|', [
+                    $candidate['symbol'] ?? '',
+                    $candidate['exchange'] ?? '',
+                    $candidate['isin'] ?? '',
+                ]))
+                ->values()
+                ->all();
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    private function shouldSearchIndexCandidates(string $query): bool
+    {
+        $query = trim($query);
+        $normalizedQuery = Str::upper($query);
+
+        if ($query === '' || ! ctype_alnum($query)) {
+            return false;
+        }
+
+        if (preg_match('/^[A-Z]{2}[A-Z0-9]{10}$/', $normalizedQuery) === 1) {
+            return true;
+        }
+
+        if (ctype_digit($query)) {
+            return true;
+        }
+
+        return $query === $normalizedQuery && ctype_alpha($query) && strlen($query) <= 8;
+    }
+
+    /**
+     * @return array<int, array{name: ?string, isin: ?string, wkn: ?string, valor: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, search_terms: array<int, string>}>
+     */
+    private function resolveIndexCandidates(string $query): array
+    {
+        try {
+            $response = $this->apiClient->get('exchange-symbol-list/INDX', [
+                'fmt' => 'json',
+            ]);
+
+            if (! $response->ok()) {
+                return [];
+            }
+
+            $candidates = $response->json();
+
+            if (! is_array($candidates) || Arr::get($candidates, 'status') === 'error') {
+                return [];
+            }
+
             return collect($candidates)
+                ->filter(fn (array $candidate): bool => $this->candidateMatchesQuery($candidate, $query))
                 ->map(fn (array $candidate): array => $this->candidatePayload($query, $candidate))
                 ->filter(fn (array $candidate): bool => $candidate['search_terms'] !== [])
                 ->values()
@@ -117,6 +182,25 @@ class StockSearchQueryResolver
         }
     }
 
+    private function candidateMatchesQuery(array $candidate, string $query): bool
+    {
+        $needle = Str::upper(trim($query));
+
+        if ($needle === '') {
+            return false;
+        }
+
+        return collect([
+            Arr::get($candidate, 'Code'),
+            Arr::get($candidate, 'Name'),
+            Arr::get($candidate, 'ISIN'),
+            Arr::get($candidate, 'Isin'),
+            Arr::get($candidate, 'isin'),
+        ])
+            ->filter(fn (mixed $value): bool => is_string($value) && trim($value) !== '')
+            ->contains(fn (string $value): bool => str_contains(Str::upper($value), $needle));
+    }
+
     /**
      * @return array{name: ?string, isin: ?string, wkn: ?string, valor: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, search_terms: array<int, string>}
      */
@@ -124,7 +208,7 @@ class StockSearchQueryResolver
     {
         $payload = [
             'name' => $this->nullableString(Arr::get($candidate, 'Name', Arr::get($candidate, 'name'))),
-            'isin' => $this->nullableUpperString(Arr::get($candidate, 'ISIN', Arr::get($candidate, 'isin'))),
+            'isin' => $this->nullableUpperString(Arr::get($candidate, 'ISIN', Arr::get($candidate, 'Isin', Arr::get($candidate, 'isin')))),
             'wkn' => $this->nullableUpperString(Arr::get($candidate, 'WKN', Arr::get($candidate, 'wkn'))),
             'valor' => $this->nullableUpperString(Arr::get($candidate, 'Valor', Arr::get($candidate, 'valor'))),
             'symbol' => $this->nullableUpperString(Arr::get($candidate, 'Code', Arr::get($candidate, 'symbol'))),

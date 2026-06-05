@@ -7,6 +7,8 @@ import { useDepotStore } from './stores/depots';
 import { useRoleStore } from './stores/roles';
 import { useUserStore } from './stores/users';
 
+const indexRecentPriceLimit = 30;
+
 const { lgAndDown } = useDisplay();
 
 const auth = useAuthStore();
@@ -19,12 +21,17 @@ const {
     activeDepot,
     depots,
     holdings,
+    indexWatchItems,
     depotHoldings,
     transactions,
     exchangeTradingTimes,
     eodhdApiUsage,
     priceRefresh,
     priceRefreshSettings,
+    indexPriceRefreshSettings,
+    stockHistoricalPriceCoverage,
+    stockHistoricalPriceRefresh,
+    uiPreferences,
     stockSearchResults,
     pagination: depotPagination,
     holdingsPagination,
@@ -59,6 +66,7 @@ const loginPassword = ref('');
 const loginMode = ref('password');
 const localError = ref('');
 const activeSection = ref('dashboard');
+const activeAnalyzeSubsection = ref('overview');
 const profileLastName = ref('');
 const profileFirstName = ref('');
 const newPassword = ref('');
@@ -87,35 +95,54 @@ const depotForm = ref(emptyDepotForm());
 const depotMessage = ref('');
 const depotError = ref('');
 const isHoldingDialogOpen = ref(false);
+const isIndexDialogOpen = ref(false);
+const isIndexPriceDialogOpen = ref(false);
+const isIndexPriceDialogLoading = ref(false);
 const isDeleteHoldingDialogOpen = ref(false);
 const isCashTransactionDialogOpen = ref(false);
 const isStockTransactionDialogOpen = ref(false);
 const selectedHolding = ref(null);
+const selectedIndexWatchItem = ref(null);
 const transactionHolding = ref(null);
 const holdingSearchQuery = ref('');
+const indexSearchQuery = ref('');
 const holdingSearchInput = ref(null);
+const indexSearchInput = ref(null);
 const holdingMessage = ref('');
 const holdingError = ref('');
+const indexMessage = ref('');
+const indexError = ref('');
+const indexPriceDialogError = ref('');
 const expandedHoldingIds = ref([]);
 const priceRefreshScheduleForm = ref(emptyPriceRefreshScheduleForm());
+const indexPriceRefreshScheduleForm = ref(emptyPriceRefreshScheduleForm());
 const priceRefreshScheduleMessage = ref('');
 const priceRefreshScheduleError = ref('');
 const isPriceRefreshScheduleEditing = ref(false);
+const isIndexPriceRefreshScheduleEditing = ref(false);
 const priceRefreshTimer = ref(null);
 const priceRefreshSettingsTimer = ref(null);
 const isPriceRefreshSettingsPolling = ref(false);
 const historicalPriceFetchTimer = ref(null);
 const isHistoricalPriceFetchPolling = ref(false);
+const stockHistoricalPriceFetchTimer = ref(null);
+const isStockHistoricalPriceFetchPolling = ref(false);
+const isStockHistoricalPriceEnsureLoading = ref(false);
+const isDashboardMenuCompact = ref(false);
 const cashTransactionForm = ref(emptyCashTransactionForm());
 const stockTransactionForm = ref(emptyStockTransactionForm());
 const editingFlatexHoldingId = ref(null);
 const flatexPriceEditValue = ref('');
 const flatexPriceEditInput = ref(null);
+const depotPriceSource = ref('latest');
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
 const canManageDashboardAdmin = computed(() => user.value?.roles?.some((role) => ['admin', 'super_admin'].includes(role)) ?? false);
 const profileDisplayName = computed(() => user.value?.name || 'Loading...');
+const dashboardMenuToggleLabel = computed(() => (isDashboardMenuCompact.value
+    ? 'Enhance dashboard menu'
+    : 'Minify dashboard menu'));
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
 const isPriceRefreshRunning = computed(() => {
     if (!priceRefresh.value || isFinishedPriceRefresh(priceRefresh.value)) {
@@ -126,6 +153,7 @@ const isPriceRefreshRunning = computed(() => {
 });
 const isAutomaticPriceRefreshUpdating = computed(() => isPriceRefreshRunning.value
     || priceRefreshSettings.value?.status === 'updating');
+const isAutomaticIndexPriceRefreshUpdating = computed(() => indexPriceRefreshSettings.value?.status === 'updating');
 const isHistoricalPriceFetchRunning = computed(() => holdings.value.some((holding) => holding.historical_prices_fetching));
 const isHeaderStatusUpdating = computed(() => isAutomaticPriceRefreshUpdating.value || isHistoricalPriceFetchRunning.value);
 const priceRefreshHeaderStatusLabel = computed(() => {
@@ -138,6 +166,13 @@ const priceRefreshHeaderStatusLabel = computed(() => {
     }
 
     return 'waiting';
+});
+const indexPriceRefreshHeaderStatusLabel = computed(() => {
+    if (isAutomaticIndexPriceRefreshUpdating.value) {
+        return 'Updating prices';
+    }
+
+    return indexPriceRefreshSettings.value?.status_label ?? 'waiting';
 });
 const visibleHoldingMessage = computed(() => {
     if (priceRefresh.value && isFinishedPriceRefresh(priceRefresh.value)) {
@@ -153,10 +188,20 @@ const priceRefreshProgressValue = computed(() => {
 
     return Math.round((priceRefresh.value.processed / priceRefresh.value.total) * 100);
 });
+const isStockHistoricalPriceFetchRunning = computed(() => ['queued', 'running'].includes(stockHistoricalPriceRefresh.value?.status));
+const stockHistoricalPriceFetchProgressValue = computed(() => {
+    if (!stockHistoricalPriceRefresh.value || stockHistoricalPriceRefresh.value.total === 0) {
+        return 0;
+    }
+
+    return Math.round((stockHistoricalPriceRefresh.value.processed / stockHistoricalPriceRefresh.value.total) * 100);
+});
 const sessionHeaderDates = computed(() => ({
     yesterday: formatSessionHeaderDate(1),
     dayBeforeYesterday: formatSessionHeaderDate(2),
 }));
+const selectedIndexRecentPrices = computed(() => selectedIndexWatchItem.value?.recent_prices ?? []);
+const selectedIndexChart = computed(() => buildIndexPriceChart(selectedIndexRecentPrices.value));
 const eodhdUsageItems = computed(() => {
     if (!eodhdApiUsage.value) {
         return [];
@@ -175,12 +220,29 @@ const eodhdUsageItems = computed(() => {
         },
     ].filter(item => item.usage);
 });
+const analyzeSubmenuItems = [
+    {
+        key: 'overview',
+        label: 'Overview',
+        icon: 'mdi-view-grid-outline',
+    },
+    {
+        key: 'detail',
+        label: 'Detail',
+        icon: 'mdi-chart-box-outline',
+    },
+];
 
 const menuItems = computed(() => [
     {
         key: 'dashboard',
         label: 'Dashboard',
         icon: 'mdi-view-dashboard-outline',
+    },
+    {
+        key: 'analyze',
+        label: 'Analyze',
+        icon: 'mdi-chart-line',
     },
     {
         key: 'depot',
@@ -250,6 +312,39 @@ watch(
 );
 
 watch(
+    indexPriceRefreshSettings,
+    (settings) => {
+        indexPriceRefreshScheduleForm.value = {
+            trading_interval_minutes: settings?.trading_interval_minutes ?? 20,
+            trading_starts_before_minutes: settings?.trading_starts_before_minutes ?? 0,
+            trading_ends_after_minutes: settings?.trading_ends_after_minutes ?? 0,
+            closed_refresh_enabled: settings?.closed_refresh_enabled ?? true,
+            closed_interval_minutes: settings?.closed_interval_minutes ?? 60,
+        };
+    },
+    { immediate: true },
+);
+
+watch(
+    uiPreferences,
+    (preferences) => {
+        if (['latest', 'flatex'].includes(preferences?.depot_price_source)) {
+            depotPriceSource.value = preferences.depot_price_source;
+        }
+    },
+    { immediate: true },
+);
+
+watch(
+    [activeSection, activeAnalyzeSubsection],
+    ([section, subsection]) => {
+        if (section === 'analyze' && subsection === 'overview') {
+            ensureAnalyzeOverviewHistoricalPrices();
+        }
+    },
+);
+
+watch(
     isHistoricalPriceFetchRunning,
     (isRunning) => {
         if (isRunning) {
@@ -278,8 +373,10 @@ onMounted(async () => {
 
     await Promise.all([
         depotsStore.loadWatchlistHoldings(),
+        depotsStore.loadIndexWatchItems(),
         depotsStore.loadWatchlistExchangeTradingTimes(),
     ]);
+    ensureAnalyzeOverviewHistoricalPrices();
     startPriceRefreshSettingsPolling();
 
     await depotsStore.loadDepots();
@@ -298,12 +395,18 @@ onBeforeUnmount(() => {
     stopPriceRefreshPolling();
     stopPriceRefreshSettingsPolling();
     stopHistoricalPriceFetchPolling();
+    stopStockHistoricalPriceFetchPolling();
     stopHoldingDialogKeyboardShortcuts();
     window.removeEventListener('popstate', applyRouteFromPath);
 });
 
 function navigateSection(section) {
     activeSection.value = section;
+
+    if (section === 'analyze' && !isAnalyzeSubsection(activeAnalyzeSubsection.value)) {
+        activeAnalyzeSubsection.value = 'overview';
+    }
+
     clearSectionMessages();
     updateUrlPath();
 
@@ -329,6 +432,21 @@ function navigateSection(section) {
     }
 }
 
+function navigateAnalyzeSubsection(subsection) {
+    if (!isAnalyzeSubsection(subsection) || activeAnalyzeSubsection.value === subsection) {
+        return;
+    }
+
+    activeAnalyzeSubsection.value = subsection;
+    activeSection.value = 'analyze';
+    clearSectionMessages();
+    updateUrlPath();
+}
+
+function toggleDashboardMenuCompact() {
+    isDashboardMenuCompact.value = !isDashboardMenuCompact.value;
+}
+
 function applyRouteFromPath() {
     const path = window.location.pathname.replace(/\/+$/, '') || '/admin';
 
@@ -339,8 +457,22 @@ function applyRouteFromPath() {
     }
 
     if (path.startsWith('/admin/menu/')) {
-        const section = decodeURIComponent(path.replace('/admin/menu/', ''));
+        const [sectionSegment, subsectionSegment] = path
+            .replace('/admin/menu/', '')
+            .split('/')
+            .map((segment) => decodeURIComponent(segment));
+        const section = sectionSegment ?? '';
         const normalizedSection = section === 'dashboard-admin' ? 'updates' : section;
+
+        if (normalizedSection === 'analyze') {
+            activeSection.value = 'analyze';
+            activeAnalyzeSubsection.value = isAnalyzeSubsection(subsectionSegment)
+                ? subsectionSegment
+                : 'overview';
+
+            return;
+        }
+
         const isTopLevel = menuItems.value.some((item) => item.key === normalizedSection);
         const isChild = menuItems.value.flatMap((item) => item.children ?? []).some((child) => child.key === normalizedSection);
         activeSection.value = (isTopLevel || isChild) ? normalizedSection : 'dashboard';
@@ -356,13 +488,19 @@ function updateUrlPath() {
         ? '/admin/dashboard'
         : activeSection.value === 'profile'
             ? '/admin/profile'
-            : `/admin/menu/${activeSection.value}`;
+            : activeSection.value === 'analyze'
+                ? `/admin/menu/analyze/${activeAnalyzeSubsection.value}`
+                : `/admin/menu/${activeSection.value}`;
 
     if (window.location.pathname === path) {
         return;
     }
 
     window.history.pushState({}, '', path);
+}
+
+function isAnalyzeSubsection(subsection) {
+    return analyzeSubmenuItems.some((item) => item.key === subsection);
 }
 
 async function requestLoginCode() {
@@ -662,10 +800,58 @@ function abortHoldingDialog() {
     stopHoldingDialogKeyboardShortcuts();
 }
 
+function openIndexDialog() {
+    indexSearchQuery.value = '';
+    depotsStore.stockSearchResults = [];
+    depotsStore.stockSearchError = '';
+    indexError.value = '';
+    indexMessage.value = '';
+    isIndexDialogOpen.value = true;
+    focusIndexSearchInput();
+}
+
+function abortIndexDialog() {
+    isIndexDialogOpen.value = false;
+}
+
+async function openIndexPriceDialog(indexItem) {
+    selectedIndexWatchItem.value = indexItem;
+    indexPriceDialogError.value = '';
+    isIndexPriceDialogOpen.value = true;
+
+    if (hasEnoughIndexRecentPrices(indexItem)) {
+        return;
+    }
+
+    isIndexPriceDialogLoading.value = true;
+
+    try {
+        const data = await depotsStore.ensureIndexWatchItemPrices(indexItem.id);
+        selectedIndexWatchItem.value = data.index ?? indexItem;
+    } catch (err) {
+        indexPriceDialogError.value = err.message;
+    } finally {
+        isIndexPriceDialogLoading.value = false;
+    }
+}
+
+function closeIndexPriceDialog() {
+    isIndexPriceDialogOpen.value = false;
+    isIndexPriceDialogLoading.value = false;
+    indexPriceDialogError.value = '';
+    selectedIndexWatchItem.value = null;
+}
+
 async function focusHoldingSearchInput() {
     await nextTick();
 
     holdingSearchInput.value?.focus?.();
+}
+
+async function focusIndexSearchInput() {
+    await nextTick();
+
+    indexSearchInput.value?.focus?.();
 }
 
 function handleHoldingSearchKeydown(event) {
@@ -712,6 +898,17 @@ async function searchStocks() {
     }
 }
 
+async function searchIndexes() {
+    indexError.value = '';
+    indexMessage.value = '';
+
+    try {
+        await depotsStore.searchStocks(indexSearchQuery.value);
+    } catch (err) {
+        indexError.value = err.message;
+    }
+}
+
 async function saveHolding(result) {
     holdingError.value = '';
     holdingMessage.value = '';
@@ -727,6 +924,21 @@ async function saveHolding(result) {
         ]);
     } catch (err) {
         holdingError.value = err.message;
+    }
+}
+
+async function saveIndexWatchItem(result) {
+    indexError.value = '';
+    indexMessage.value = '';
+
+    try {
+        const data = await depotsStore.createIndexWatchItem(result);
+        indexMessage.value = data.message;
+        holdingMessage.value = data.message;
+        isIndexDialogOpen.value = false;
+        await depotsStore.loadWatchlistExchangeTradingTimes();
+    } catch (err) {
+        indexError.value = err.message;
     }
 }
 
@@ -863,10 +1075,36 @@ async function savePriceRefreshSchedule() {
     }
 }
 
+async function saveIndexPriceRefreshSchedule() {
+    priceRefreshScheduleError.value = '';
+    priceRefreshScheduleMessage.value = '';
+
+    try {
+        const data = await depotsStore.updateIndexPriceRefreshSettings({
+            trading_interval_minutes: Number(indexPriceRefreshScheduleForm.value.trading_interval_minutes),
+            trading_starts_before_minutes: Number(indexPriceRefreshScheduleForm.value.trading_starts_before_minutes),
+            trading_ends_after_minutes: Number(indexPriceRefreshScheduleForm.value.trading_ends_after_minutes),
+            closed_refresh_enabled: Boolean(indexPriceRefreshScheduleForm.value.closed_refresh_enabled),
+            closed_interval_minutes: Number(indexPriceRefreshScheduleForm.value.closed_interval_minutes),
+        });
+
+        priceRefreshScheduleMessage.value = data.message;
+        isIndexPriceRefreshScheduleEditing.value = false;
+    } catch (err) {
+        priceRefreshScheduleError.value = err.message;
+    }
+}
+
 function editPriceRefreshSchedule() {
     priceRefreshScheduleMessage.value = '';
     priceRefreshScheduleError.value = '';
     isPriceRefreshScheduleEditing.value = true;
+}
+
+function editIndexPriceRefreshSchedule() {
+    priceRefreshScheduleMessage.value = '';
+    priceRefreshScheduleError.value = '';
+    isIndexPriceRefreshScheduleEditing.value = true;
 }
 
 async function loadPriceRefreshSettings() {
@@ -971,6 +1209,70 @@ async function pollHistoricalPriceFetches() {
     } catch {
     } finally {
         isHistoricalPriceFetchPolling.value = false;
+    }
+}
+
+async function ensureAnalyzeOverviewHistoricalPrices() {
+    if (activeSection.value !== 'analyze' || activeAnalyzeSubsection.value !== 'overview') {
+        return;
+    }
+
+    if (isStockHistoricalPriceEnsureLoading.value || isStockHistoricalPriceFetchRunning.value) {
+        return;
+    }
+
+    isStockHistoricalPriceEnsureLoading.value = true;
+
+    try {
+        const data = await depotsStore.ensureStockHistoricalPrices();
+
+        if (data.refresh && !isFinishedPriceRefresh(data.refresh)) {
+            startStockHistoricalPriceFetchPolling(data.refresh.refresh_id);
+
+            return;
+        }
+
+        stopStockHistoricalPriceFetchPolling();
+    } catch (err) {
+        holdingError.value = err.message;
+    } finally {
+        isStockHistoricalPriceEnsureLoading.value = false;
+    }
+}
+
+function startStockHistoricalPriceFetchPolling(refreshId) {
+    stopStockHistoricalPriceFetchPolling();
+    pollStockHistoricalPriceFetch(refreshId);
+    stockHistoricalPriceFetchTimer.value = window.setInterval(() => pollStockHistoricalPriceFetch(refreshId), 3000);
+}
+
+function stopStockHistoricalPriceFetchPolling() {
+    if (!stockHistoricalPriceFetchTimer.value) {
+        return;
+    }
+
+    window.clearInterval(stockHistoricalPriceFetchTimer.value);
+    stockHistoricalPriceFetchTimer.value = null;
+}
+
+async function pollStockHistoricalPriceFetch(refreshId) {
+    if (isStockHistoricalPriceFetchPolling.value) {
+        return;
+    }
+
+    isStockHistoricalPriceFetchPolling.value = true;
+
+    try {
+        const data = await depotsStore.loadStockHistoricalPriceRefresh(refreshId);
+
+        if (isFinishedPriceRefresh(data.refresh)) {
+            stopStockHistoricalPriceFetchPolling();
+        }
+    } catch (err) {
+        stopStockHistoricalPriceFetchPolling();
+        holdingError.value = err.message;
+    } finally {
+        isStockHistoricalPriceFetchPolling.value = false;
     }
 }
 
@@ -1086,16 +1388,50 @@ function formatDepotCashBalance() {
     return `${formatAccountBalance(activeDepot.value?.account_balance)} EUR`;
 }
 
+function isDepotPriceSource(source) {
+    return depotPriceSource.value === source;
+}
+
+async function selectDepotPriceSource(source) {
+    if (!['latest', 'flatex'].includes(source)) {
+        return;
+    }
+
+    const previousSource = depotPriceSource.value;
+    depotPriceSource.value = source;
+
+    try {
+        await depotsStore.updateUiPreferences({
+            depot_price_source: source,
+        });
+    } catch (error) {
+        depotPriceSource.value = previousSource;
+        transactionsError.value = error.message;
+    }
+}
+
+function depotPriceSourceButtonClass(source) {
+    return {
+        'depot-price-source-button--active': isDepotPriceSource(source),
+    };
+}
+
+function selectedDepotHoldingPrice(holding) {
+    return depotPriceSource.value === 'flatex'
+        ? holding.flatex_price
+        : holding.latest_price;
+}
+
 function depotStockBalance() {
     return depotHoldings.value.reduce((sum, holding) => {
-        const latestPrice = Number(holding.latest_price);
+        const selectedPrice = Number(selectedDepotHoldingPrice(holding));
         const pieces = Number(holding.position_pieces ?? 0);
 
-        if (Number.isNaN(latestPrice) || Number.isNaN(pieces)) {
+        if (Number.isNaN(selectedPrice) || Number.isNaN(pieces)) {
             return sum;
         }
 
-        return sum + (latestPrice * pieces);
+        return sum + (selectedPrice * pieces);
     }, 0);
 }
 
@@ -1285,15 +1621,31 @@ function formatLatestPrice(holding) {
     return formatPriceValue(holding.latest_price, holding.currency);
 }
 
+function formatHoldingCardPrice(holding) {
+    if (holding.latest_price === null || holding.latest_price === undefined || holding.latest_price === '') {
+        return formatLatestPrice(holding);
+    }
+
+    const amount = Number(holding.latest_price);
+    const formattedAmount = Number.isNaN(amount)
+        ? holding.latest_price
+        : new Intl.NumberFormat('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        }).format(amount);
+
+    return holding.currency ? `${formattedAmount} ${holding.currency}` : formattedAmount;
+}
+
 function stockHoldingValue(holding) {
-    const latestPrice = Number(holding.latest_price);
+    const selectedPrice = Number(selectedDepotHoldingPrice(holding));
     const pieces = Number(holding.position_pieces ?? 0);
 
-    if (Number.isNaN(latestPrice) || Number.isNaN(pieces)) {
+    if (Number.isNaN(selectedPrice) || Number.isNaN(pieces)) {
         return null;
     }
 
-    return latestPrice * pieces;
+    return selectedPrice * pieces;
 }
 
 function formatStockHoldingValue(holding) {
@@ -1326,6 +1678,230 @@ function formatLatestPriceChangePercent(holding) {
     return `${sign}${amount.toFixed(2)}%`;
 }
 
+function formatIndexPrice(indexItem) {
+    const price = indexItem.latest_price ?? indexItem.last_price;
+
+    if (price === null || price === undefined || price === '') {
+        return '-';
+    }
+
+    return formatPriceValue(price, indexItem.currency);
+}
+
+function formatIndexDialogActualPrice(indexItem) {
+    if (!indexItem) {
+        return '-';
+    }
+
+    return formatIndexPrice(indexItem);
+}
+
+function hasEnoughIndexRecentPrices(indexItem) {
+    return Array.isArray(indexItem?.recent_prices) && indexItem.recent_prices.length >= indexRecentPriceLimit;
+}
+
+function formatIndexHistoryPrice(value, indexItem) {
+    if (value === null || value === undefined || value === '') {
+        return '-';
+    }
+
+    return formatPriceValue(value, indexItem?.currency);
+}
+
+function formatIndexHistoryDate(value) {
+    if (!value || typeof value !== 'string') {
+        return '-';
+    }
+
+    const parts = value.split('-');
+
+    if (parts.length !== 3) {
+        return value;
+    }
+
+    return `${parts[2]}.${parts[1]}.${parts[0]}`;
+}
+
+function formatHistoricalPriceCoverageDate(value) {
+    return formatIndexHistoryDate(value);
+}
+
+function indexHistoryActualPrice(price) {
+    return price.actual_price ?? price.last_price ?? price.start_price;
+}
+
+function indexHistoryChartPrice(price) {
+    const value = indexHistoryActualPrice(price);
+
+    if (value === null || value === undefined || value === '' || (typeof value === 'string' && value.trim() === '')) {
+        return Number.NaN;
+    }
+
+    return Number(value);
+}
+
+function formatIndexChartDate(value) {
+    if (!value || typeof value !== 'string') {
+        return '';
+    }
+
+    const parts = value.split('-');
+
+    if (parts.length !== 3) {
+        return value;
+    }
+
+    return `${parts[2]}.${parts[1]}`;
+}
+
+function formatIndexChartValue(value) {
+    const maximumFractionDigits = Math.abs(value) >= 100 ? 2 : 4;
+
+    return new Intl.NumberFormat('en-US', {
+        maximumFractionDigits,
+        minimumFractionDigits: 0,
+    }).format(value);
+}
+
+function indexChartTickPoints(points) {
+    const maximumTickCount = 7;
+
+    if (points.length <= maximumTickCount) {
+        return points;
+    }
+
+    const lastPointIndex = points.length - 1;
+    const pointIndexes = Array.from({ length: maximumTickCount }, (_, index) => (
+        Math.round((index / (maximumTickCount - 1)) * lastPointIndex)
+    ));
+
+    return [...new Set(pointIndexes)].map((index) => points[index]);
+}
+
+function buildIndexPriceChart(prices) {
+    const chartWidth = 720;
+    const chartHeight = 260;
+    const chartPadding = {
+        top: 18,
+        right: 18,
+        bottom: 44,
+        left: 74,
+    };
+    const plot = {
+        left: chartPadding.left,
+        top: chartPadding.top,
+        right: chartWidth - chartPadding.right,
+        bottom: chartHeight - chartPadding.bottom,
+    };
+    const plotWidth = plot.right - plot.left;
+    const plotHeight = plot.bottom - plot.top;
+    const chartPrices = [...prices]
+        .reverse()
+        .map((price) => ({
+            ...price,
+            chart_price: indexHistoryChartPrice(price),
+        }))
+        .filter((price) => !Number.isNaN(price.chart_price));
+
+    if (chartPrices.length === 0) {
+        return {
+            width: chartWidth,
+            height: chartHeight,
+            plot,
+            points: [],
+            linePoints: '',
+            horizontalGridLines: [],
+            verticalGridLines: [],
+        };
+    }
+
+    const values = chartPrices.map((price) => price.chart_price);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min;
+    const adjustedRange = range === 0 ? Math.max(Math.abs(max) * 0.02, 1) : range;
+    const chartMin = range === 0 ? min - adjustedRange / 2 : min;
+    const chartMax = range === 0 ? max + adjustedRange / 2 : max;
+    const chartRange = chartMax - chartMin;
+    const horizontalGridLines = Array.from({ length: 5 }, (_, index) => {
+        const ratio = index / 4;
+        const value = chartMax - chartRange * ratio;
+        const y = plot.top + plotHeight * ratio;
+
+        return {
+            value,
+            y,
+            label: formatIndexChartValue(value),
+        };
+    });
+
+    const points = chartPrices.map((price, index) => {
+        const x = chartPrices.length === 1
+            ? chartWidth / 2
+            : plot.left + (index / (chartPrices.length - 1)) * plotWidth;
+        const normalized = (price.chart_price - chartMin) / chartRange;
+        const y = plot.bottom - normalized * plotHeight;
+
+        return {
+            ...price,
+            x,
+            y,
+            label: formatIndexChartDate(price.trading_date),
+        };
+    });
+
+    return {
+        width: chartWidth,
+        height: chartHeight,
+        plot,
+        points,
+        linePoints: points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' '),
+        horizontalGridLines,
+        verticalGridLines: indexChartTickPoints(points).map((point) => ({
+            x: point.x,
+            label: point.label,
+        })),
+    };
+}
+
+function formatIndexChangePercent(indexItem) {
+    if (
+        indexItem.latest_price_change_pct === null
+        || indexItem.latest_price_change_pct === undefined
+        || indexItem.latest_price_change_pct === ''
+    ) {
+        return '';
+    }
+
+    const amount = Number(indexItem.latest_price_change_pct);
+
+    if (Number.isNaN(amount)) {
+        return '';
+    }
+
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${amount.toFixed(2)}%`;
+}
+
+function indexChangeClass(indexItem) {
+    const amount = Number(indexItem.latest_price_change_pct);
+
+    if (Number.isNaN(amount)) {
+        return 'is-flat';
+    }
+
+    if (amount > 0) {
+        return 'is-up';
+    }
+
+    if (amount < 0) {
+        return 'is-down';
+    }
+
+    return 'is-flat';
+}
+
 function formatSessionPriceChangePercent(value, holding) {
     if (
         value === null
@@ -1356,21 +1932,21 @@ function yearStartChangePercent(holding) {
         holding.year_start_price === null
         || holding.year_start_price === undefined
         || holding.year_start_price === ''
-        || holding.latest_price === null
-        || holding.latest_price === undefined
-        || holding.latest_price === ''
+        || selectedDepotHoldingPrice(holding) === null
+        || selectedDepotHoldingPrice(holding) === undefined
+        || selectedDepotHoldingPrice(holding) === ''
     ) {
         return null;
     }
 
     const yearStartPrice = Number(holding.year_start_price);
-    const latestPrice = Number(holding.latest_price);
+    const selectedPrice = Number(selectedDepotHoldingPrice(holding));
 
-    if (Number.isNaN(yearStartPrice) || Number.isNaN(latestPrice) || yearStartPrice === 0) {
+    if (Number.isNaN(yearStartPrice) || Number.isNaN(selectedPrice) || yearStartPrice === 0) {
         return null;
     }
 
-    return ((latestPrice - yearStartPrice) / yearStartPrice) * 100;
+    return ((selectedPrice - yearStartPrice) / yearStartPrice) * 100;
 }
 
 function yearStartChangeAmount(holding) {
@@ -1378,22 +1954,22 @@ function yearStartChangeAmount(holding) {
         holding.year_start_price === null
         || holding.year_start_price === undefined
         || holding.year_start_price === ''
-        || holding.latest_price === null
-        || holding.latest_price === undefined
-        || holding.latest_price === ''
+        || selectedDepotHoldingPrice(holding) === null
+        || selectedDepotHoldingPrice(holding) === undefined
+        || selectedDepotHoldingPrice(holding) === ''
     ) {
         return null;
     }
 
     const yearStartPrice = Number(holding.year_start_price);
-    const latestPrice = Number(holding.latest_price);
+    const selectedPrice = Number(selectedDepotHoldingPrice(holding));
     const pieces = Number(holding.position_pieces ?? 0);
 
-    if (Number.isNaN(yearStartPrice) || Number.isNaN(latestPrice) || Number.isNaN(pieces)) {
+    if (Number.isNaN(yearStartPrice) || Number.isNaN(selectedPrice) || Number.isNaN(pieces)) {
         return null;
     }
 
-    return (latestPrice - yearStartPrice) * pieces;
+    return (selectedPrice - yearStartPrice) * pieces;
 }
 
 function formatYearStartChangeAmount(holding) {
@@ -1800,14 +2376,15 @@ function formatLatestPriceSource(holding) {
 }
 
 function formatExchangeTradingTime(exchange) {
-    const open = formatClock(exchange.open);
-    const close = formatClock(exchange.close);
+    const sessions = exchangeSessions(exchange);
 
-    if (open === '-' || close === '-') {
+    if (!sessions.length) {
         return '-';
     }
 
-    return [open, close].join('-');
+    return sessions
+        .map((session) => `${session.open}-${session.close}`)
+        .join(', ');
 }
 
 function formatExchangeNextTradingText(exchange) {
@@ -1815,10 +2392,10 @@ function formatExchangeNextTradingText(exchange) {
         return '-';
     }
 
-    if (exchange.is_open) {
-        const close = formatClock(exchange.close);
+    const tradingState = exchangeTradingState(exchange);
 
-        return close === '-' ? '-' : `Trading closes: ${close}`;
+    if (tradingState.isOpen) {
+        return tradingState.session ? `Trading closes: ${tradingState.session.close}` : '-';
     }
 
     const nextTradingDateTime = nextExchangeTradingDateTime(exchange);
@@ -1826,14 +2403,52 @@ function formatExchangeNextTradingText(exchange) {
     return nextTradingDateTime === '-' ? '-' : `Next trading: ${nextTradingDateTime}`;
 }
 
-function nextExchangeTradingDateTime(exchange) {
-    const open = formatClock(exchange.open);
+function formatExchangeStatusText(exchange) {
+    return exchangeTradingState(exchange).isOpen ? 'Open' : 'Closed';
+}
 
-    if (open === '-' || !exchange.timezone) {
+function exchangeTradingState(exchange) {
+    const sessions = exchangeSessions(exchange);
+    const exchangeToday = exchangeLocalDateParts(exchange.timezone);
+
+    if (!sessions.length || !exchangeToday) {
+        return {
+            isOpen: Boolean(exchange.is_open),
+            session: sessions.at(-1) ?? null,
+        };
+    }
+
+    if (
+        !exchangeWorkingDays(exchange).includes(exchangeToday.weekday)
+        || exchangeHolidayDates(exchange).includes(exchangeDateKey(exchangeToday))
+    ) {
+        return {
+            isOpen: false,
+            session: null,
+        };
+    }
+
+    const currentMinutes = (exchangeToday.hour * 60) + exchangeToday.minute;
+    const session = sessions.find((tradingSession) => (
+        currentMinutes >= tradingSession.openMinutes
+        && currentMinutes < tradingSession.closeMinutes
+    ));
+
+    return {
+        isOpen: Boolean(session),
+        session: session ?? null,
+    };
+}
+
+function nextExchangeTradingDateTime(exchange) {
+    const sessions = exchangeSessions(exchange);
+
+    if (!sessions.length || !exchange.timezone) {
         return '-';
     }
 
     const workingDays = exchangeWorkingDays(exchange);
+    const holidays = exchangeHolidayDates(exchange);
     const exchangeToday = exchangeLocalDateParts(exchange.timezone);
 
     if (!exchangeToday) {
@@ -1841,24 +2456,109 @@ function nextExchangeTradingDateTime(exchange) {
     }
 
     const currentMinutes = (exchangeToday.hour * 60) + exchangeToday.minute;
-    const [openHours, openMinutes] = open.split(':').map((value) => Number(value));
-    const openTotalMinutes = (openHours * 60) + openMinutes;
 
-    let daysToAdd = workingDays.includes(exchangeToday.weekday) && currentMinutes < openTotalMinutes ? 0 : 1;
+    for (let daysToAdd = 0; daysToAdd < 370; daysToAdd += 1) {
+        const nextDate = exchangeDatePartsAfter(exchangeToday, daysToAdd);
 
-    while (!workingDays.includes(weekdayAfter(exchangeToday.weekday, daysToAdd))) {
-        daysToAdd += 1;
+        if (!workingDays.includes(nextDate.weekday) || holidays.includes(exchangeDateKey(nextDate))) {
+            continue;
+        }
+
+        const nextSession = sessions.find((session) => daysToAdd > 0 || currentMinutes < session.openMinutes);
+
+        if (nextSession) {
+            return `${formatExchangeDate(nextDate)}, ${nextSession.open}`;
+        }
     }
 
-    const nextDate = new Date(Date.UTC(exchangeToday.year, exchangeToday.month - 1, exchangeToday.day + daysToAdd));
-    const dateText = new Intl.DateTimeFormat('de-AT', {
+    return '-';
+}
+
+function exchangeSessions(exchange) {
+    const sessions = Array.isArray(exchange.sessions) ? exchange.sessions : [];
+    const normalizedSessions = sessions
+        .map((session) => normalizedExchangeSession(session.open, session.close))
+        .filter(Boolean);
+
+    if (normalizedSessions.length) {
+        return normalizedSessions;
+    }
+
+    return [normalizedExchangeSession(exchange.open, exchange.close)].filter(Boolean);
+}
+
+function normalizedExchangeSession(openValue, closeValue) {
+    const open = formatClock(openValue);
+    const close = formatClock(closeValue);
+    const openMinutes = clockTotalMinutes(open);
+    const closeMinutes = clockTotalMinutes(close);
+
+    if (openMinutes === null || closeMinutes === null || openMinutes >= closeMinutes) {
+        return null;
+    }
+
+    return {
+        open,
+        close,
+        openMinutes,
+        closeMinutes,
+    };
+}
+
+function clockTotalMinutes(value) {
+    if (!value || value === '-') {
+        return null;
+    }
+
+    const [hours, minutes] = value.split(':').map((part) => Number(part));
+
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) {
+        return null;
+    }
+
+    return (hours * 60) + minutes;
+}
+
+function exchangeHolidayDates(exchange) {
+    if (!Array.isArray(exchange.holidays)) {
+        return [];
+    }
+
+    return exchange.holidays
+        .map((holiday) => String(holiday).trim())
+        .filter(Boolean);
+}
+
+function exchangeDatePartsAfter(exchangeToday, daysToAdd) {
+    const date = new Date(Date.UTC(
+        exchangeToday.year,
+        exchangeToday.month - 1,
+        exchangeToday.day + daysToAdd,
+    ));
+
+    return {
+        year: date.getUTCFullYear(),
+        month: date.getUTCMonth() + 1,
+        day: date.getUTCDate(),
+        weekday: weekdayAfter(exchangeToday.weekday, daysToAdd),
+    };
+}
+
+function exchangeDateKey(exchangeDate) {
+    return [
+        String(exchangeDate.year),
+        String(exchangeDate.month).padStart(2, '0'),
+        String(exchangeDate.day).padStart(2, '0'),
+    ].join('-');
+}
+
+function formatExchangeDate(exchangeDate) {
+    return new Intl.DateTimeFormat('de-AT', {
         timeZone: 'UTC',
         day: '2-digit',
         month: '2-digit',
         year: 'numeric',
-    }).format(nextDate);
-
-    return `${dateText}, ${open}`;
+    }).format(new Date(Date.UTC(exchangeDate.year, exchangeDate.month - 1, exchangeDate.day)));
 }
 
 function exchangeLocalDateParts(timezone) {
@@ -1984,6 +2684,7 @@ function clearSectionMessages() {
     priceRefreshScheduleMessage.value = '';
     priceRefreshScheduleError.value = '';
     isPriceRefreshScheduleEditing.value = false;
+    isIndexPriceRefreshScheduleEditing.value = false;
     userMessage.value = '';
     userError.value = '';
     roleMessage.value = '';
@@ -2123,13 +2824,21 @@ function emptyPriceRefreshScheduleForm() {
         </template>
 
         <template v-else>
-            <v-navigation-drawer permanent width="272">
+            <v-navigation-drawer
+                class="dashboard-navigation-drawer"
+                :class="{ 'dashboard-navigation-drawer--compact': isDashboardMenuCompact }"
+                permanent
+                :width="isDashboardMenuCompact ? 88 : 272"
+            >
                 <div class="pa-6">
-                    <div class="d-flex align-center ga-3">
+                    <div
+                        class="d-flex align-center ga-3"
+                        :class="{ 'justify-center': isDashboardMenuCompact }"
+                    >
                         <v-avatar color="primary" size="40">
                             <span>STK</span>
                         </v-avatar>
-                        <div>
+                        <div v-if="!isDashboardMenuCompact">
                             <strong>Stocks</strong>
                             <div class="text-caption text-medium-emphasis">{{ profileDisplayName }}</div>
                         </div>
@@ -2141,8 +2850,8 @@ function emptyPriceRefreshScheduleForm() {
                         <v-list-item
                             :active="item.children ? item.children.some(c => activeSection === c.key) : activeSection === item.key"
                             :prepend-icon="item.icon"
-                            :title="item.label"
-                            :subtitle="item.subtitle ?? undefined"
+                            :title="isDashboardMenuCompact ? undefined : item.label"
+                            :subtitle="isDashboardMenuCompact ? undefined : (item.subtitle ?? undefined)"
                             @click="item.children ? navigateSection(item.children[0].key) : navigateSection(item.key)"
                         />
                     </template>
@@ -2152,22 +2861,55 @@ function emptyPriceRefreshScheduleForm() {
             <v-app-bar flat border>
                 <v-app-bar-title>
                     <div class="d-flex align-center flex-wrap ga-4 app-bar-status">
-                        <span class="text-body-2 font-weight-medium">{{ profileDisplayName }}</span>
-                        <span v-if="priceRefreshSettings" class="text-caption text-medium-emphasis">
-                            Last: {{ formatScheduleDateTime(priceRefreshSettings.last_refreshed_at) }}
-                            · Next: {{ formatScheduleDateTime(priceRefreshSettings.next_refresh_at) }}
-                        </span>
-                        <span v-if="priceRefreshSettings" class="d-inline-flex align-center ga-2 text-caption">
+                        <span v-if="priceRefreshSettings" class="d-inline-flex align-center flex-wrap ga-2 text-caption text-medium-emphasis">
+                            <span>
+                                Stocks Last: {{ formatScheduleDateTime(priceRefreshSettings.last_refreshed_at) }}
+                                · Next: {{ formatScheduleDateTime(priceRefreshSettings.next_refresh_at) }}
+                            </span>
                             <span
-                                class="price-refresh-status-dot"
-                                :class="isHeaderStatusUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
-                            />
-                            {{ priceRefreshHeaderStatusLabel }}
+                                class="d-inline-flex align-center ga-2"
+                                :class="isHeaderStatusUpdating ? 'text-error' : 'text-medium-emphasis'"
+                            >
+                                <span
+                                    class="price-refresh-status-dot"
+                                    :class="isHeaderStatusUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
+                                />
+                                {{ priceRefreshHeaderStatusLabel }}
+                            </span>
+                        </span>
+                        <span v-if="indexPriceRefreshSettings" class="d-inline-flex align-center flex-wrap ga-2 text-caption text-medium-emphasis">
+                            <span>
+                                Indices Last: {{ formatScheduleDateTime(indexPriceRefreshSettings.last_refreshed_at) }}
+                                · Next: {{ formatScheduleDateTime(indexPriceRefreshSettings.next_refresh_at) }}
+                            </span>
+                            <span
+                                class="d-inline-flex align-center ga-2"
+                                :class="isAutomaticIndexPriceRefreshUpdating ? 'text-error' : 'text-medium-emphasis'"
+                            >
+                                <span
+                                    class="price-refresh-status-dot"
+                                    :class="isAutomaticIndexPriceRefreshUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
+                                />
+                                {{ indexPriceRefreshHeaderStatusLabel }}
+                            </span>
                         </span>
                         <span
                             v-if="eodhdUsageItems.length"
                             class="d-inline-flex align-center flex-wrap ga-2 text-caption text-medium-emphasis eodhd-header-usage"
                         >
+                            <v-btn
+                                class="dashboard-menu-toggle"
+                                density="comfortable"
+                                icon
+                                size="small"
+                                type="button"
+                                variant="text"
+                                :aria-label="dashboardMenuToggleLabel"
+                                :title="dashboardMenuToggleLabel"
+                                @click="toggleDashboardMenuCompact"
+                            >
+                                <v-icon :icon="isDashboardMenuCompact ? 'mdi-chevron-right' : 'mdi-chevron-left'" />
+                            </v-btn>
                             <span class="font-weight-medium">EODHD API</span>
                             <span
                                 v-for="item in eodhdUsageItems"
@@ -2227,6 +2969,31 @@ function emptyPriceRefreshScheduleForm() {
                         <v-alert v-if="visibleHoldingMessage" type="success" variant="tonal" density="compact" class="mb-4">
                             {{ visibleHoldingMessage }}
                         </v-alert>
+                        <div class="index-watch-strip mb-4">
+                            <button
+                                v-for="indexItem in indexWatchItems"
+                                :key="indexItem.id"
+                                type="button"
+                                class="index-watch-card"
+                                @click="openIndexPriceDialog(indexItem)"
+                            >
+                                <span class="index-watch-card-header">
+                                    <span class="index-watch-card-symbol">{{ indexItem.symbol }}</span>
+                                    <span class="index-watch-card-country">{{ indexItem.country || '-' }}</span>
+                                </span>
+                                <span class="index-watch-card-label">{{ indexItem.name || 'Index' }}</span>
+                                <span class="index-watch-card-price" :class="indexChangeClass(indexItem)">
+                                    <span v-if="formatIndexChangePercent(indexItem)">
+                                        {{ formatIndexChangePercent(indexItem) }}
+                                    </span>
+                                    <span>{{ formatIndexPrice(indexItem) }}</span>
+                                </span>
+                            </button>
+                            <button type="button" class="index-add-tile" @click="openIndexDialog">
+                                <span class="index-add-tile-plus">+</span>
+                                <span class="index-add-tile-label">INDEX</span>
+                            </button>
+                        </div>
                         <v-alert
                             v-if="isPriceRefreshRunning"
                             type="info"
@@ -2412,7 +3179,7 @@ function emptyPriceRefreshScheduleForm() {
                                                 variant="text"
                                                 color="error"
                                                 aria-label="Delete stock"
-                                                :disabled="holdingsLoading"
+                                                :disabled="holdingsLoading || hasPositionPieces(holding)"
                                                 @click.stop="openDeleteHoldingDialog(holding)"
                                             >
                                                 <v-icon icon="mdi-delete-outline" />
@@ -2512,7 +3279,7 @@ function emptyPriceRefreshScheduleForm() {
                                                 Unavailable
                                             </span>
                                             <span v-else>
-                                                {{ exchange.is_open ? 'Open' : 'Closed' }}
+                                                {{ formatExchangeStatusText(exchange) }}
                                             </span>
                                         </td>
                                     </tr>
@@ -2601,6 +3368,258 @@ function emptyPriceRefreshScheduleForm() {
                             </v-card>
                         </v-dialog>
 
+                        <v-dialog v-model="isIndexDialogOpen" persistent max-width="900">
+                            <v-card>
+                                <v-card-title>Add index</v-card-title>
+                                <v-card-text>
+                                    <form
+                                        id="index-search-form"
+                                        class="d-flex align-center ga-3 mb-5"
+                                        @submit.prevent="searchIndexes"
+                                    >
+                                        <v-text-field
+                                            ref="indexSearchInput"
+                                            v-model="indexSearchQuery"
+                                            density="comfortable"
+                                            hide-details
+                                            label="ISIN, symbol, or name"
+                                            required
+                                        />
+                                        <v-btn type="submit" color="primary" variant="tonal" :loading="stockSearchLoading">
+                                            Search
+                                        </v-btn>
+                                    </form>
+
+                                    <v-alert v-if="stockSearchError || indexError" type="error" variant="tonal" density="compact" class="mb-4">
+                                        {{ stockSearchError || indexError }}
+                                    </v-alert>
+
+                                    <v-alert v-if="indexMessage" type="success" variant="tonal" density="compact" class="mb-4">
+                                        {{ indexMessage }}
+                                    </v-alert>
+
+                                    <v-table v-if="stockSearchResults.length > 0">
+                                        <thead>
+                                            <tr>
+                                                <th>Symbol</th>
+                                                <th>Name</th>
+                                                <th>ISIN</th>
+                                                <th>WKN / Valor</th>
+                                                <th>Exchange</th>
+                                                <th>Type</th>
+                                                <th class="text-right">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="result in stockSearchResults" :key="`index-${result.symbol}-${result.exchange}-${result.mic_code}`">
+                                                <td>{{ result.symbol }}</td>
+                                                <td>{{ result.name }}</td>
+                                                <td>{{ result.isin || '-' }}</td>
+                                                <td>{{ result.wkn || result.valor || '-' }}</td>
+                                                <td>{{ result.exchange }}</td>
+                                                <td>{{ result.instrument_type }}</td>
+                                                <td class="text-right">
+                                                    <v-btn
+                                                        size="small"
+                                                        color="primary"
+                                                        variant="text"
+                                                        :loading="holdingsLoading"
+                                                        @click="saveIndexWatchItem(result)"
+                                                    >
+                                                        Add
+                                                    </v-btn>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </v-table>
+                                </v-card-text>
+                                <v-card-actions>
+                                    <v-spacer />
+                                    <v-btn type="button" variant="text" :disabled="holdingsLoading" @click="abortIndexDialog">
+                                        Cancel
+                                    </v-btn>
+                                </v-card-actions>
+                            </v-card>
+                        </v-dialog>
+
+                        <v-dialog v-model="isIndexPriceDialogOpen" persistent max-width="900">
+                            <v-card v-if="selectedIndexWatchItem">
+                                <v-card-title class="index-price-dialog-title">
+                                    <span>
+                                        <span class="index-price-dialog-symbol">
+                                            {{ selectedIndexWatchItem.symbol }}
+                                        </span>
+                                        <span class="index-price-dialog-country">
+                                            {{ selectedIndexWatchItem.country || '-' }}
+                                        </span>
+                                    </span>
+                                    <span class="index-price-dialog-name">
+                                        {{ selectedIndexWatchItem.name || 'Index' }}
+                                    </span>
+                                </v-card-title>
+                                <v-card-text>
+                                    <v-progress-linear
+                                        v-if="isIndexPriceDialogLoading"
+                                        class="mb-4"
+                                        color="primary"
+                                        indeterminate
+                                    />
+                                    <v-alert
+                                        v-if="indexPriceDialogError"
+                                        class="mb-4"
+                                        type="error"
+                                        variant="tonal"
+                                        density="compact"
+                                    >
+                                        {{ indexPriceDialogError }}
+                                    </v-alert>
+                                    <div class="index-price-current mb-4">
+                                        <span class="text-caption text-medium-emphasis">Actual price</span>
+                                        <span class="index-price-current-value" :class="indexChangeClass(selectedIndexWatchItem)">
+                                            <span v-if="formatIndexChangePercent(selectedIndexWatchItem)">
+                                                {{ formatIndexChangePercent(selectedIndexWatchItem) }}
+                                            </span>
+                                            <span>{{ formatIndexDialogActualPrice(selectedIndexWatchItem) }}</span>
+                                        </span>
+                                    </div>
+
+                                    <div
+                                        v-if="selectedIndexRecentPrices.length"
+                                        class="index-price-history-table-wrap"
+                                    >
+                                        <v-table
+                                            class="index-price-history-table"
+                                            density="compact"
+                                        >
+                                            <thead>
+                                                <tr>
+                                                    <th>Date</th>
+                                                    <th class="text-right">Start</th>
+                                                    <th class="text-right">Actual</th>
+                                                    <th class="text-right">Last</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr
+                                                    v-for="(price, index) in selectedIndexRecentPrices"
+                                                    :key="`price-${price.trading_date || index}`"
+                                                >
+                                                    <td>{{ formatIndexHistoryDate(price.trading_date) }}</td>
+                                                    <td class="text-right">
+                                                        {{ formatIndexHistoryPrice(price.start_price, selectedIndexWatchItem) }}
+                                                    </td>
+                                                    <td class="text-right">
+                                                        {{ formatIndexHistoryPrice(price.actual_price, selectedIndexWatchItem) }}
+                                                    </td>
+                                                    <td class="text-right">
+                                                        {{ formatIndexHistoryPrice(price.last_price, selectedIndexWatchItem) }}
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </v-table>
+                                    </div>
+                                    <v-alert
+                                        v-else-if="!isIndexPriceDialogLoading"
+                                        type="info"
+                                        variant="tonal"
+                                        density="compact"
+                                    >
+                                        No stored index prices yet.
+                                    </v-alert>
+
+                                    <div class="index-price-chart-panel mt-5">
+                                        <div class="text-caption text-medium-emphasis mb-2">Evolution</div>
+                                        <svg
+                                            v-if="selectedIndexChart.points.length"
+                                            class="index-price-chart"
+                                            :viewBox="`0 0 ${selectedIndexChart.width} ${selectedIndexChart.height}`"
+                                            role="img"
+                                            :aria-label="`${selectedIndexWatchItem.symbol} price evolution`"
+                                        >
+                                            <line
+                                                v-for="(gridLine, index) in selectedIndexChart.horizontalGridLines"
+                                                :key="`horizontal-grid-${index}`"
+                                                class="index-price-chart-grid-line"
+                                                :x1="selectedIndexChart.plot.left"
+                                                :y1="gridLine.y"
+                                                :x2="selectedIndexChart.plot.right"
+                                                :y2="gridLine.y"
+                                            />
+                                            <line
+                                                v-for="(gridLine, index) in selectedIndexChart.verticalGridLines"
+                                                :key="`vertical-grid-${index}`"
+                                                class="index-price-chart-grid-line"
+                                                :x1="gridLine.x"
+                                                :y1="selectedIndexChart.plot.top"
+                                                :x2="gridLine.x"
+                                                :y2="selectedIndexChart.plot.bottom"
+                                            />
+                                            <line
+                                                class="index-price-chart-axis"
+                                                :x1="selectedIndexChart.plot.left"
+                                                :y1="selectedIndexChart.plot.bottom"
+                                                :x2="selectedIndexChart.plot.right"
+                                                :y2="selectedIndexChart.plot.bottom"
+                                            />
+                                            <line
+                                                class="index-price-chart-axis"
+                                                :x1="selectedIndexChart.plot.left"
+                                                :y1="selectedIndexChart.plot.top"
+                                                :x2="selectedIndexChart.plot.left"
+                                                :y2="selectedIndexChart.plot.bottom"
+                                            />
+                                            <text
+                                                v-for="(gridLine, index) in selectedIndexChart.horizontalGridLines"
+                                                :key="`horizontal-label-${index}`"
+                                                class="index-price-chart-y-label"
+                                                :x="selectedIndexChart.plot.left - 8"
+                                                :y="gridLine.y"
+                                                text-anchor="end"
+                                            >
+                                                {{ gridLine.label }}
+                                            </text>
+                                            <text
+                                                v-for="(gridLine, index) in selectedIndexChart.verticalGridLines"
+                                                :key="`vertical-label-${index}`"
+                                                class="index-price-chart-x-label"
+                                                :x="gridLine.x"
+                                                :y="selectedIndexChart.height - 13"
+                                                text-anchor="middle"
+                                            >
+                                                {{ gridLine.label }}
+                                            </text>
+                                            <polyline
+                                                class="index-price-chart-line"
+                                                :points="selectedIndexChart.linePoints"
+                                            />
+                                            <circle
+                                                v-for="(point, index) in selectedIndexChart.points"
+                                                :key="`point-${point.trading_date || index}`"
+                                                class="index-price-chart-point"
+                                                :cx="point.x"
+                                                :cy="point.y"
+                                                r="4"
+                                            />
+                                        </svg>
+                                        <div v-else class="text-body-2 text-medium-emphasis">
+                                            No chart data available.
+                                        </div>
+                                    </div>
+                                </v-card-text>
+                                <v-card-actions>
+                                    <v-spacer />
+                                    <v-btn
+                                        type="button"
+                                        variant="text"
+                                        :disabled="isIndexPriceDialogLoading"
+                                        @click="closeIndexPriceDialog"
+                                    >
+                                        Close
+                                    </v-btn>
+                                </v-card-actions>
+                            </v-card>
+                        </v-dialog>
+
                         <v-dialog v-model="isDeleteHoldingDialogOpen" persistent max-width="440">
                             <v-card>
                                 <v-card-title>Confirm delete</v-card-title>
@@ -2625,6 +3644,93 @@ function emptyPriceRefreshScheduleForm() {
                             </v-card>
                         </v-dialog>
 
+                    </section>
+
+                    <section v-if="activeSection === 'analyze'">
+                        <div class="mb-6">
+                            <p class="text-overline text-primary mb-1">Analyze</p>
+                            <h1 class="text-h4">Analyze</h1>
+                        </div>
+
+                        <v-tabs
+                            :model-value="activeAnalyzeSubsection"
+                            color="primary"
+                            class="mb-6"
+                            @update:model-value="navigateAnalyzeSubsection"
+                        >
+                            <v-tab
+                                v-for="item in analyzeSubmenuItems"
+                                :key="item.key"
+                                :value="item.key"
+                                :prepend-icon="item.icon"
+                            >
+                                {{ item.label }}
+                            </v-tab>
+                        </v-tabs>
+
+                        <section
+                            v-if="activeAnalyzeSubsection === 'overview'"
+                            class="analyze-overview-page"
+                            aria-label="Analyze overview"
+                        >
+                            <v-alert
+                                v-if="stockHistoricalPriceCoverage || isStockHistoricalPriceEnsureLoading"
+                                class="mb-4 analyze-history-status"
+                                density="compact"
+                                type="info"
+                                variant="tonal"
+                            >
+                                <div class="d-flex align-center justify-space-between flex-wrap ga-3">
+                                    <span>
+                                        History
+                                        {{ stockHistoricalPriceCoverage?.available_count ?? 0 }}/{{ stockHistoricalPriceCoverage?.total_count ?? holdings.length }}
+                                        · {{ formatHistoricalPriceCoverageDate(stockHistoricalPriceCoverage?.date_from) }}
+                                        - {{ formatHistoricalPriceCoverageDate(stockHistoricalPriceCoverage?.required_to) }}
+                                    </span>
+                                    <span v-if="stockHistoricalPriceRefresh" class="text-caption">
+                                        {{ stockHistoricalPriceRefresh.step }}
+                                        <span v-if="stockHistoricalPriceRefresh.current">
+                                            · {{ stockHistoricalPriceRefresh.current }}
+                                        </span>
+                                    </span>
+                                </div>
+                                <v-progress-linear
+                                    v-if="isStockHistoricalPriceEnsureLoading || isStockHistoricalPriceFetchRunning"
+                                    class="mt-2"
+                                    color="primary"
+                                    height="6"
+                                    rounded
+                                    :indeterminate="isStockHistoricalPriceEnsureLoading || stockHistoricalPriceRefresh?.status === 'queued'"
+                                    :model-value="stockHistoricalPriceFetchProgressValue"
+                                />
+                            </v-alert>
+                            <div class="index-watch-strip">
+                                <button
+                                    type="button"
+                                    class="index-watch-card analyze-holding-card analyze-holding-card--all"
+                                >
+                                    <span class="index-watch-card-symbol">ALL</span>
+                                </button>
+                                <button
+                                    v-for="holding in holdings"
+                                    :key="holding.id"
+                                    type="button"
+                                    class="index-watch-card analyze-holding-card"
+                                >
+                                    <span class="index-watch-card-label analyze-holding-card-name">
+                                        {{ holding.name || holding.symbol || '-' }}
+                                    </span>
+                                    <span class="index-watch-card-price analyze-holding-card-price">
+                                        {{ formatHoldingCardPrice(holding) }}
+                                    </span>
+                                </button>
+                            </div>
+                        </section>
+                        <section
+                            v-if="activeAnalyzeSubsection === 'detail'"
+                            class="analyze-dummy-page"
+                            aria-label="Analyze detail"
+                        />
                     </section>
 
                     <v-dialog v-model="isCashTransactionDialogOpen" persistent max-width="480">
@@ -2829,6 +3935,7 @@ function emptyPriceRefreshScheduleForm() {
                                     color="primary"
                                     prepend-icon="mdi-pencil-outline"
                                     variant="tonal"
+                                    :disabled="isIndexPriceRefreshScheduleEditing"
                                     @click="editPriceRefreshSchedule"
                                 >
                                     Edit
@@ -2845,6 +3952,125 @@ function emptyPriceRefreshScheduleForm() {
                                 </v-btn>
                                 <span class="text-caption text-medium-emphasis">
                                     Current interval: {{ priceRefreshSettings?.current_interval_minutes ?? '-' }} min
+                                </span>
+                            </form>
+                        </v-sheet>
+                        <v-sheet border rounded class="pa-4 mb-4">
+                            <form
+                                id="index-price-refresh-schedule-form"
+                                class="d-flex align-center flex-wrap ga-3"
+                                @submit.prevent="saveIndexPriceRefreshSchedule"
+                            >
+                                <div class="text-subtitle-2 mr-2">Automatic index price refresh</div>
+                                <template v-if="!isIndexPriceRefreshScheduleEditing">
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">During trading</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ indexPriceRefreshScheduleForm.trading_interval_minutes }} min
+                                        </div>
+                                    </div>
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">Start before trading</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ indexPriceRefreshScheduleForm.trading_starts_before_minutes }} min
+                                        </div>
+                                    </div>
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">End after trading</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ indexPriceRefreshScheduleForm.trading_ends_after_minutes }} min
+                                        </div>
+                                    </div>
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">Outside trading</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ indexPriceRefreshScheduleForm.closed_refresh_enabled ? 'On' : 'Off' }}
+                                        </div>
+                                    </div>
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">Outside trading interval</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ indexPriceRefreshScheduleForm.closed_interval_minutes }} min
+                                        </div>
+                                    </div>
+                                </template>
+                                <template v-else>
+                                    <v-text-field
+                                        v-model="indexPriceRefreshScheduleForm.trading_interval_minutes"
+                                        density="compact"
+                                        hide-details
+                                        label="During trading"
+                                        min="1"
+                                        max="1440"
+                                        suffix="min"
+                                        type="number"
+                                        style="max-width: 180px"
+                                    />
+                                    <v-text-field
+                                        v-model="indexPriceRefreshScheduleForm.trading_starts_before_minutes"
+                                        density="compact"
+                                        hide-details
+                                        label="Start before trading"
+                                        min="0"
+                                        max="1440"
+                                        suffix="min"
+                                        type="number"
+                                        style="max-width: 210px"
+                                    />
+                                    <v-text-field
+                                        v-model="indexPriceRefreshScheduleForm.trading_ends_after_minutes"
+                                        density="compact"
+                                        hide-details
+                                        label="End after trading"
+                                        min="0"
+                                        max="1440"
+                                        suffix="min"
+                                        type="number"
+                                        style="max-width: 200px"
+                                    />
+                                    <v-switch
+                                        v-model="indexPriceRefreshScheduleForm.closed_refresh_enabled"
+                                        color="primary"
+                                        density="compact"
+                                        hide-details
+                                        label="Outside trading"
+                                    />
+                                    <v-text-field
+                                        v-model="indexPriceRefreshScheduleForm.closed_interval_minutes"
+                                        density="compact"
+                                        hide-details
+                                        label="Outside trading interval"
+                                        min="1"
+                                        max="1440"
+                                        :disabled="!indexPriceRefreshScheduleForm.closed_refresh_enabled"
+                                        suffix="min"
+                                        type="number"
+                                        style="max-width: 220px"
+                                    />
+                                </template>
+                                <v-btn
+                                    v-if="!isIndexPriceRefreshScheduleEditing"
+                                    type="button"
+                                    color="primary"
+                                    prepend-icon="mdi-pencil-outline"
+                                    variant="tonal"
+                                    :disabled="isPriceRefreshScheduleEditing"
+                                    @click="editIndexPriceRefreshSchedule"
+                                >
+                                    Edit
+                                </v-btn>
+                                <v-btn
+                                    v-else
+                                    type="submit"
+                                    color="primary"
+                                    prepend-icon="mdi-content-save-outline"
+                                    variant="tonal"
+                                    :loading="holdingsLoading"
+                                >
+                                    Save
+                                </v-btn>
+                                <span class="text-caption text-medium-emphasis">
+                                    Current interval: {{ indexPriceRefreshSettings?.current_interval_minutes ?? '-' }} min
                                 </span>
                             </form>
                         </v-sheet>
@@ -2925,8 +4151,28 @@ function emptyPriceRefreshScheduleForm() {
                                         <th>Name</th>
                                         <th class="text-right">Amount</th>
                                         <th class="text-right">Value</th>
-                                        <th class="text-right">Latest price</th>
-                                        <th class="text-right">Flatex price</th>
+                                        <th class="text-right">
+                                            <button
+                                                type="button"
+                                                class="depot-price-source-button"
+                                                :class="depotPriceSourceButtonClass('latest')"
+                                                :aria-pressed="isDepotPriceSource('latest')"
+                                                @click="selectDepotPriceSource('latest')"
+                                            >
+                                                Latest price
+                                            </button>
+                                        </th>
+                                        <th class="text-right">
+                                            <button
+                                                type="button"
+                                                class="depot-price-source-button"
+                                                :class="depotPriceSourceButtonClass('flatex')"
+                                                :aria-pressed="isDepotPriceSource('flatex')"
+                                                @click="selectDepotPriceSource('flatex')"
+                                            >
+                                                Flatex price
+                                            </button>
+                                        </th>
                                         <th class="text-right">1.1.</th>
                                         <th class="text-right">Change</th>
                                         <th class="text-right">+/- EUR</th>
@@ -3060,7 +4306,7 @@ function emptyPriceRefreshScheduleForm() {
                                             </v-chip>
                                         </td>
                                         <td>{{ tx.stock_label ?? '–' }}</td>
-                                        <td class="text-right">{{ tx.pieces ?? '–' }}</td>
+                                        <td class="text-right">{{ tx.pieces != null ? Math.trunc(Number(tx.pieces)) : '–' }}</td>
                                         <td class="text-right">{{ formatAccountBalance(tx.total_amount) }}</td>
                                         <td class="text-right" :class="Number(tx.cash_delta) >= 0 ? 'text-success' : 'text-error'">
                                             {{ formatCashDelta(tx.cash_delta) }}
@@ -3484,9 +4730,25 @@ function emptyPriceRefreshScheduleForm() {
     line-height: 1.3;
 }
 
+.dashboard-menu-toggle {
+    flex: 0 0 auto;
+}
+
+.dashboard-navigation-drawer {
+    transition: width 0.2s ease;
+}
+
+.dashboard-navigation-drawer--compact :deep(.v-list-item__prepend) {
+    margin-inline-end: 0;
+}
+
 .eodhd-header-usage {
-    border-left: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-    padding-left: 16px;
+    padding-left: 0;
+}
+
+.analyze-dummy-page,
+.analyze-overview-page {
+    min-height: 320px;
 }
 
 .price-refresh-status-dot {
@@ -3502,6 +4764,276 @@ function emptyPriceRefreshScheduleForm() {
 
 .price-refresh-status-dot--waiting {
     background: #2e7d32;
+}
+
+.depot-price-source-button {
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
+    padding: 2px 6px;
+    text-align: right;
+}
+
+.depot-price-source-button--active {
+    border-color: rgb(var(--v-theme-success));
+}
+
+.index-watch-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.index-add-tile {
+    align-items: center;
+    background: transparent;
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 4px;
+    color: rgb(var(--v-theme-primary));
+    cursor: pointer;
+    display: inline-flex;
+    flex-direction: column;
+    height: 100px;
+    justify-content: center;
+    width: 100px;
+}
+
+.index-watch-card {
+    align-items: center;
+    background: transparent;
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 4px;
+    color: inherit;
+    cursor: pointer;
+    display: inline-flex;
+    flex-direction: column;
+    font: inherit;
+    height: 100px;
+    justify-content: space-between;
+    padding: 7px 6px;
+    text-align: center;
+    width: 100px;
+}
+
+.index-watch-card:focus-visible,
+.index-add-tile:focus-visible {
+    outline: 2px solid rgb(var(--v-theme-primary));
+    outline-offset: 2px;
+}
+
+.index-watch-card:hover {
+    border-color: rgb(var(--v-theme-primary));
+}
+
+.index-add-tile-plus {
+    font-size: 3rem;
+    font-weight: 300;
+    line-height: 0.9;
+}
+
+.index-add-tile-label {
+    font-size: 0.8125rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.index-watch-card-symbol {
+    color: rgb(var(--v-theme-primary));
+    font-size: 0.95rem;
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.index-watch-card-header {
+    align-items: center;
+    display: inline-flex;
+    flex-direction: column;
+    gap: 1px;
+    max-width: 100%;
+}
+
+.index-watch-card-country {
+    color: rgba(var(--v-theme-on-surface), 0.7);
+    font-size: 0.625rem;
+    font-weight: 600;
+    line-height: 1;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.index-watch-card-label {
+    display: -webkit-box;
+    font-size: 0.6875rem;
+    line-height: 1.15;
+    margin-top: 2px;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
+.index-watch-card-price {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    display: inline-flex;
+    flex-direction: column;
+    font-size: 0.625rem;
+    font-weight: 700;
+    line-height: 1.1;
+    margin-top: 2px;
+}
+
+.index-watch-card-price.is-up {
+    color: rgb(var(--v-theme-success));
+}
+
+.index-watch-card-price.is-down {
+    color: rgb(var(--v-theme-error));
+}
+
+.analyze-holding-card {
+    justify-content: center;
+    gap: 10px;
+}
+
+.analyze-holding-card--all {
+    gap: 0;
+}
+
+.analyze-holding-card-name {
+    -webkit-line-clamp: 3;
+    font-weight: 700;
+    margin-top: 0;
+}
+
+.analyze-holding-card-price {
+    color: rgb(var(--v-theme-primary));
+    font-size: 0.7rem;
+}
+
+.index-price-dialog-title {
+    align-items: flex-start;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.index-price-dialog-symbol {
+    color: rgb(var(--v-theme-primary));
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin-right: 8px;
+}
+
+.index-price-dialog-country {
+    color: rgba(var(--v-theme-on-surface), 0.68);
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.index-price-dialog-name {
+    color: rgba(var(--v-theme-on-surface), 0.72);
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.index-price-current {
+    align-items: flex-start;
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 4px;
+    display: inline-flex;
+    flex-direction: column;
+    min-width: 180px;
+    padding: 10px 12px;
+}
+
+.index-price-current-value {
+    display: inline-flex;
+    flex-direction: column;
+    font-size: 1.125rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.index-price-current-value.is-up {
+    color: rgb(var(--v-theme-success));
+}
+
+.index-price-current-value.is-down {
+    color: rgb(var(--v-theme-error));
+}
+
+.index-price-current-value.is-flat {
+    color: rgba(var(--v-theme-on-surface), 0.72);
+}
+
+.index-price-history-table {
+    min-width: 100%;
+}
+
+.index-price-history-table-wrap {
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 4px;
+    max-height: 280px;
+    overflow: auto;
+}
+
+.index-price-history-table thead th {
+    background: rgb(var(--v-theme-surface));
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.index-price-chart-panel {
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 4px;
+    padding: 12px;
+}
+
+.index-price-chart {
+    display: block;
+    height: 260px;
+    width: 100%;
+}
+
+.index-price-chart-axis {
+    stroke: rgba(var(--v-theme-on-surface), 0.18);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.index-price-chart-grid-line {
+    stroke: rgba(var(--v-theme-on-surface), 0.09);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.index-price-chart-x-label,
+.index-price-chart-y-label {
+    dominant-baseline: middle;
+    fill: rgba(var(--v-theme-on-surface), 0.58);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.index-price-chart-line {
+    fill: none;
+    stroke: rgb(var(--v-theme-primary));
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 3;
+    vector-effect: non-scaling-stroke;
+}
+
+.index-price-chart-point {
+    fill: rgb(var(--v-theme-primary));
+    stroke: rgb(var(--v-theme-surface));
+    stroke-width: 2;
+    vector-effect: non-scaling-stroke;
 }
 
 .flatex-price-button {
