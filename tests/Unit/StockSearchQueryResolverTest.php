@@ -156,6 +156,83 @@ class StockSearchQueryResolverTest extends TestCase
         $this->assertSame(['LU1900066462', 'LEER', 'LYX02C', '45209801'], $candidates[0]['search_terms']);
     }
 
+    public function test_it_corrects_the_stale_lyxor_greece_etf_metadata(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        Http::fake([
+            'eodhd.com/api/search/FR0010405431*' => Http::response([
+                [
+                    'Code' => 'LYMH',
+                    'Exchange' => 'PA',
+                    'Name' => 'Multi Units France - Lyxor MSCI Greece UCITS ETF',
+                    'Type' => 'ETF',
+                    'Country' => 'France',
+                    'Currency' => 'EUR',
+                    'ISIN' => 'FR0010405431',
+                ],
+            ]),
+        ]);
+
+        $candidates = app(StockSearchQueryResolver::class)->resolveCandidates('FR0010405431');
+        $lymhCandidate = collect($candidates)->firstWhere('symbol', 'LYMH');
+
+        $this->assertSame('Amundi MSCI Greece UCITS ETF Dist', $candidates[0]['name']);
+        $this->assertSame('FR0010405431', $candidates[0]['isin']);
+        $this->assertSame('LYX0BF', $candidates[0]['wkn']);
+        $this->assertNull($candidates[0]['valor']);
+        $this->assertSame('GRE', $candidates[0]['symbol']);
+        $this->assertSame('PA', $candidates[0]['exchange']);
+        $this->assertSame('XPAR', $candidates[0]['mic_code']);
+        $this->assertSame('ETF', $candidates[0]['instrument_type']);
+        $this->assertSame('France', $candidates[0]['country']);
+        $this->assertSame('EUR', $candidates[0]['currency']);
+        $this->assertSame(['FR0010405431', 'GRE', 'LYX0BF'], $candidates[0]['search_terms']);
+
+        $this->assertIsArray($lymhCandidate);
+        $this->assertSame('Amundi MSCI Greece UCITS ETF Dist', $lymhCandidate['name']);
+        $this->assertSame('LYX0BF', $lymhCandidate['wkn']);
+        $this->assertSame('LYMH', $lymhCandidate['symbol']);
+    }
+
+    public function test_it_finds_known_corrected_instruments_by_wkn_when_eodhd_returns_no_results(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        Http::fake([
+            'eodhd.com/api/search/LYX0BF*' => Http::response([]),
+        ]);
+
+        $candidates = app(StockSearchQueryResolver::class)->resolveCandidates('LYX0BF');
+
+        $this->assertCount(1, $candidates);
+        $this->assertSame('Amundi MSCI Greece UCITS ETF Dist', $candidates[0]['name']);
+        $this->assertSame('FR0010405431', $candidates[0]['isin']);
+        $this->assertSame('LYX0BF', $candidates[0]['wkn']);
+        $this->assertSame('GRE', $candidates[0]['symbol']);
+        $this->assertSame('PA', $candidates[0]['exchange']);
+        $this->assertSame('XPAR', $candidates[0]['mic_code']);
+        $this->assertSame(['LYX0BF', 'FR0010405431', 'GRE'], $candidates[0]['search_terms']);
+    }
+
+    public function test_it_finds_known_corrected_instruments_by_valor_when_eodhd_returns_no_results(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        Http::fake([
+            'eodhd.com/api/search/45209801*' => Http::response([]),
+        ]);
+
+        $candidates = app(StockSearchQueryResolver::class)->resolveCandidates('45209801');
+
+        $this->assertCount(1, $candidates);
+        $this->assertSame('Amundi MSCI Eastern Europe Ex Russia UCITS ETF Acc', $candidates[0]['name']);
+        $this->assertSame('LU1900066462', $candidates[0]['isin']);
+        $this->assertSame('LYX02C', $candidates[0]['wkn']);
+        $this->assertSame('45209801', $candidates[0]['valor']);
+        $this->assertSame('LEER', $candidates[0]['symbol']);
+        $this->assertSame('XETRA', $candidates[0]['exchange']);
+        $this->assertSame('XETR', $candidates[0]['mic_code']);
+        $this->assertSame(['45209801', 'LU1900066462', 'LEER', 'LYX02C'], $candidates[0]['search_terms']);
+    }
+
     public function test_it_resolves_index_candidates_from_the_eodhd_index_symbol_list(): void
     {
         Cache::flush();

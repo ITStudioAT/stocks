@@ -8,20 +8,9 @@ use Throwable;
 
 class StockSearchQueryResolver
 {
-    /**
-     * @var array<string, array{name?: string, wkn?: string, valor?: string, country?: string}>
-     */
-    private const MetadataCorrectionsByIsin = [
-        'LU1900066462' => [
-            'name' => 'Amundi MSCI Eastern Europe Ex Russia UCITS ETF Acc',
-            'wkn' => 'LYX02C',
-            'valor' => '45209801',
-            'country' => 'Luxembourg',
-        ],
-    ];
-
     public function __construct(
         private EodhdApiClient $apiClient,
+        private KnownInstrumentMetadataCorrections $metadataCorrections,
     ) {}
 
     /**
@@ -71,8 +60,10 @@ class StockSearchQueryResolver
      */
     private function resolveFreshCandidates(string $query): array
     {
+        $fallbackCandidates = $this->knownSearchFallbackCandidates($query);
+
         if (! $this->apiClient->configured()) {
-            return [];
+            return $fallbackCandidates;
         }
 
         try {
@@ -83,13 +74,13 @@ class StockSearchQueryResolver
             ]);
 
             if (! $response->ok()) {
-                return [];
+                return $fallbackCandidates;
             }
 
             $candidates = $response->json();
 
             if (! is_array($candidates) || Arr::get($candidates, 'status') === 'error') {
-                return [];
+                return $fallbackCandidates;
             }
 
             $searchCandidates = collect($candidates)
@@ -102,7 +93,8 @@ class StockSearchQueryResolver
                 ? $this->resolveIndexCandidates($query)
                 : [];
 
-            return collect($searchCandidates)
+            return collect($fallbackCandidates)
+                ->merge($searchCandidates)
                 ->merge($indexCandidates)
                 ->unique(fn (array $candidate): string => implode('|', [
                     $candidate['symbol'] ?? '',
@@ -112,8 +104,19 @@ class StockSearchQueryResolver
                 ->values()
                 ->all();
         } catch (Throwable) {
-            return [];
+            return $fallbackCandidates;
         }
+    }
+
+    /**
+     * @return array<int, array{name: ?string, isin: ?string, wkn: ?string, valor: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, search_terms: array<int, string>}>
+     */
+    private function knownSearchFallbackCandidates(string $query): array
+    {
+        return collect($this->metadataCorrections->searchFallbacksForQuery($query))
+            ->map(fn (array $candidate): array => $this->candidatePayload($query, $candidate))
+            ->values()
+            ->all();
     }
 
     private function shouldSearchIndexCandidates(string $query): bool
@@ -198,13 +201,13 @@ class StockSearchQueryResolver
             'valor' => $this->nullableUpperString(Arr::get($candidate, 'Valor', Arr::get($candidate, 'valor'))),
             'symbol' => $this->nullableUpperString(Arr::get($candidate, 'Code', Arr::get($candidate, 'symbol'))),
             'exchange' => $this->nullableUpperString(Arr::get($candidate, 'Exchange', Arr::get($candidate, 'exchange'))),
-            'mic_code' => $this->micCodeForExchange(Arr::get($candidate, 'Exchange', Arr::get($candidate, 'mic_code'))),
+            'mic_code' => $this->micCodeForCandidate($candidate),
             'instrument_type' => $this->nullableString(Arr::get($candidate, 'Type', Arr::get($candidate, 'instrument_type'))),
             'country' => $this->nullableString(Arr::get($candidate, 'Country', Arr::get($candidate, 'country'))),
             'currency' => $this->nullableUpperString(Arr::get($candidate, 'Currency', Arr::get($candidate, 'currency'))),
         ];
 
-        $payload = $this->correctKnownStaleMetadata($payload);
+        $payload = $this->metadataCorrections->apply($payload);
 
         $identifierTerms = collect([
             $payload['isin'],
@@ -225,24 +228,6 @@ class StockSearchQueryResolver
         return $payload;
     }
 
-    /**
-     * @param  array{name: ?string, isin: ?string, wkn: ?string, valor: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string}  $payload
-     * @return array{name: ?string, isin: ?string, wkn: ?string, valor: ?string, symbol: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string}
-     */
-    private function correctKnownStaleMetadata(array $payload): array
-    {
-        $isin = $payload['isin'];
-
-        if ($isin === null || ! array_key_exists($isin, self::MetadataCorrectionsByIsin)) {
-            return $payload;
-        }
-
-        return [
-            ...$payload,
-            ...self::MetadataCorrectionsByIsin[$isin],
-        ];
-    }
-
     private function nullableString(mixed $value): ?string
     {
         if (! is_string($value)) {
@@ -259,6 +244,17 @@ class StockSearchQueryResolver
         $value = $this->nullableString($value);
 
         return $value === null ? null : Str::upper($value);
+    }
+
+    private function micCodeForCandidate(array $candidate): ?string
+    {
+        $micCode = $this->nullableUpperString(Arr::get($candidate, 'mic_code'));
+
+        if ($micCode !== null) {
+            return $micCode;
+        }
+
+        return $this->micCodeForExchange(Arr::get($candidate, 'Exchange', Arr::get($candidate, 'exchange')));
     }
 
     private function micCodeForExchange(mixed $value): ?string

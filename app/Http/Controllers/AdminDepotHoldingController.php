@@ -13,6 +13,7 @@ use App\Services\DepotTransactionBooker;
 use App\Services\EodhdApiUsage;
 use App\Services\EodhdMarketData;
 use App\Services\IndexPriceRefreshSettings;
+use App\Services\KnownInstrumentMetadataCorrections;
 use App\Services\PriceRefreshScheduler;
 use App\Services\StockHistoricalPriceService;
 use App\Services\StockPriceCatalog;
@@ -43,6 +44,7 @@ class AdminDepotHoldingController extends Controller
         private EodhdApiUsage $eodhdApiUsage,
         private UiPreferences $uiPreferences,
         private StockHistoricalPriceService $stockHistoricalPriceService,
+        private KnownInstrumentMetadataCorrections $metadataCorrections,
     ) {}
 
     public function index(): JsonResponse
@@ -545,6 +547,8 @@ class AdminDepotHoldingController extends Controller
             'country' => $request->filled('country') ? trim((string) $request->input('country')) : null,
             'currency' => $request->filled('currency') ? Str::upper(trim((string) $request->input('currency'))) : null,
         ]);
+
+        $request->merge($this->metadataCorrections->apply($request->all()));
 
         return $request->validate([
             'symbol' => ['required', 'string', 'max:32'],

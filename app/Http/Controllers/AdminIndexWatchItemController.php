@@ -6,6 +6,7 @@ use App\Models\IndexWatchItem;
 use App\Models\IndexWatchItemPrice;
 use App\Services\EodhdApiUsage;
 use App\Services\IndexWatchItemPriceRefresher;
+use App\Services\KnownInstrumentMetadataCorrections;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -19,6 +20,7 @@ class AdminIndexWatchItemController extends Controller
     public function __construct(
         private IndexWatchItemPriceRefresher $priceRefresher,
         private EodhdApiUsage $eodhdApiUsage,
+        private KnownInstrumentMetadataCorrections $metadataCorrections,
     ) {}
 
     public function index(): JsonResponse
@@ -100,6 +102,8 @@ class AdminIndexWatchItemController extends Controller
             'country' => $request->filled('country') ? trim((string) $request->input('country')) : null,
             'currency' => $request->filled('currency') ? Str::upper(trim((string) $request->input('currency'))) : null,
         ]);
+
+        $request->merge($this->metadataCorrections->apply($request->all()));
 
         return $request->validate([
             'symbol' => ['required', 'string', 'max:32'],

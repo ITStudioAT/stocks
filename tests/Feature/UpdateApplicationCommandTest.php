@@ -30,6 +30,8 @@ class UpdateApplicationCommandTest extends TestCase
             ->expectsOutputToContain('Would run: php artisan migrate --force --no-interaction')
             ->expectsOutputToContain('Would run: npm ci --ignore-scripts --no-audit --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm')
             ->expectsOutputToContain('Would run: npm run build')
+            ->expectsOutputToContain('Would run: php artisan optimize')
+            ->expectsOutputToContain('Would run: php artisan queue:restart')
             ->assertSuccessful();
     }
 
@@ -41,6 +43,8 @@ class UpdateApplicationCommandTest extends TestCase
             ->doesntExpectOutputToContain('npm ci')
             ->doesntExpectOutputToContain('npm run build')
             ->expectsOutputToContain('Would run: php artisan optimize:clear')
+            ->expectsOutputToContain('Would run: php artisan optimize')
+            ->expectsOutputToContain('Would run: php artisan queue:restart')
             ->assertSuccessful();
     }
 
@@ -92,6 +96,8 @@ class UpdateApplicationCommandTest extends TestCase
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
         Process::assertDidntRun('npm ci --ignore-scripts --no-audit --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm');
         Process::assertDidntRun('npm run build');
+        Process::assertDidntRun('php artisan optimize');
+        Process::assertDidntRun('php artisan queue:restart');
     }
 
     public function test_update_command_uses_project_local_npm_cache_and_log_directories(): void
@@ -285,6 +291,8 @@ PHP);
             'composer install --no-interaction --prefer-dist' => Process::result(),
             'php artisan optimize:clear' => Process::result(),
             'php artisan migrate --force --no-interaction' => Process::result(),
+            'php artisan optimize' => Process::result(),
+            'php artisan queue:restart' => Process::result(),
         ]);
 
         try {
@@ -306,6 +314,8 @@ PHP);
         Process::assertRan('composer install --no-interaction --prefer-dist');
         Process::assertRan('php artisan optimize:clear');
         Process::assertRan('php artisan migrate --force --no-interaction');
+        Process::assertRan('php artisan optimize');
+        Process::assertRan('php artisan queue:restart');
     }
 
     public function test_update_command_retires_legacy_default_migrations_that_create_existing_tables(): void
@@ -336,6 +346,8 @@ PHP);
             'composer install --no-interaction --prefer-dist' => Process::result(),
             'php artisan optimize:clear' => Process::result(),
             'php artisan migrate --force --no-interaction' => Process::result(),
+            'php artisan optimize' => Process::result(),
+            'php artisan queue:restart' => Process::result(),
         ]);
 
         try {
@@ -362,6 +374,8 @@ PHP);
         Process::assertRan('composer install --no-interaction --prefer-dist');
         Process::assertRan('php artisan optimize:clear');
         Process::assertRan('php artisan migrate --force --no-interaction');
+        Process::assertRan('php artisan optimize');
+        Process::assertRan('php artisan queue:restart');
     }
 
     public function test_update_command_stops_before_migrations_when_a_pending_migration_would_create_an_existing_table(): void
@@ -401,6 +415,8 @@ PHP);
             'composer install --no-interaction --prefer-dist' => Process::result(),
             'php artisan optimize:clear' => Process::result(),
             'php artisan migrate --force --no-interaction' => Process::result(),
+            'php artisan optimize' => Process::result(),
+            'php artisan queue:restart' => Process::result(),
         ]);
     }
 

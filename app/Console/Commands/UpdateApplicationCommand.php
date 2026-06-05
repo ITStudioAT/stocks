@@ -141,6 +141,9 @@ class UpdateApplicationCommand extends Command
             $commands['Building frontend assets'] = 'npm run build';
         }
 
+        $commands['Caching Laravel optimized files'] = 'php artisan optimize';
+        $commands['Restarting queue workers'] = 'php artisan queue:restart';
+
         return $commands;
     }
 

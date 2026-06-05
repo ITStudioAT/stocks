@@ -1045,6 +1045,40 @@ class AdminDepotHoldingTest extends TestCase
         ]);
     }
 
+    public function test_admin_can_add_a_known_stale_eodhd_result_with_corrected_wkn(): void
+    {
+        $admin = $this->adminUser();
+        $this->mock(EodhdMarketData::class, function (MockInterface $mock): void {
+            $mock
+                ->shouldReceive('resolve')
+                ->once()
+                ->andReturn(new QuoteSelectionResult(null, [], [], status: 'unavailable'));
+        });
+
+        $this->actingAs($admin)
+            ->postJson('/admin/watchlist/holdings', [
+                'symbol' => 'LYMH',
+                'name' => 'Multi Units France - Lyxor MSCI Greece UCITS ETF',
+                'isin' => 'FR0010405431',
+                'exchange' => 'XETRA',
+                'mic_code' => 'XETR',
+                'instrument_type' => 'ETF',
+                'country' => 'Germany',
+                'currency' => 'EUR',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('holding.name', 'Amundi MSCI Greece UCITS ETF Dist')
+            ->assertJsonPath('holding.isin', 'FR0010405431')
+            ->assertJsonPath('holding.wkn', 'LYX0BF');
+
+        $this->assertDatabaseHas('stock_holdings', [
+            'symbol' => 'LYMH',
+            'name' => 'Amundi MSCI Greece UCITS ETF Dist',
+            'isin' => 'FR0010405431',
+            'wkn' => 'LYX0BF',
+        ]);
+    }
+
     public function test_admin_can_queue_all_watchlist_price_refreshes(): void
     {
         Queue::fake();
