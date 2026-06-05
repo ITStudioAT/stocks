@@ -87,6 +87,43 @@ class StockSearchQueryResolverTest extends TestCase
         Http::assertSent(fn (Request $request): bool => str_starts_with($request->url(), 'https://eodhd.com/api/search/Apple%20Inc?'));
     }
 
+    public function test_it_always_fetches_fresh_candidates_from_eodhd(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        Http::fake([
+            'eodhd.com/api/search/Apple*' => Http::sequence()
+                ->push([
+                    [
+                        'Code' => 'AAPL',
+                        'Exchange' => 'NASDAQ',
+                        'Name' => 'Apple Old',
+                        'Type' => 'Common Stock',
+                        'Country' => 'USA',
+                        'Currency' => 'USD',
+                        'ISIN' => 'US0378331005',
+                    ],
+                ])
+                ->push([
+                    [
+                        'Code' => 'AAPL',
+                        'Exchange' => 'NASDAQ',
+                        'Name' => 'Apple Fresh',
+                        'Type' => 'Common Stock',
+                        'Country' => 'USA',
+                        'Currency' => 'USD',
+                        'ISIN' => 'US0378331005',
+                    ],
+                ]),
+        ]);
+
+        $firstCandidates = app(StockSearchQueryResolver::class)->resolveCandidates('Apple');
+        $secondCandidates = app(StockSearchQueryResolver::class)->resolveCandidates('Apple');
+
+        $this->assertSame('Apple Old', $firstCandidates[0]['name']);
+        $this->assertSame('Apple Fresh', $secondCandidates[0]['name']);
+        Http::assertSentCount(2);
+    }
+
     public function test_it_resolves_index_candidates_from_the_eodhd_index_symbol_list(): void
     {
         Cache::flush();

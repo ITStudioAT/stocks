@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use Illuminate\Support\Arr;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -24,20 +23,7 @@ class StockSearchQueryResolver
             return [];
         }
 
-        $cacheKey = $this->cacheKey($query);
-        $cachedTerms = Cache::get($cacheKey);
-
-        if (is_array($cachedTerms)) {
-            return $cachedTerms;
-        }
-
-        $terms = $this->resolveFresh($query);
-
-        if ($terms !== []) {
-            Cache::put($cacheKey, $terms, now()->addDays(7));
-        }
-
-        return $terms;
+        return $this->resolveFresh($query);
     }
 
     /**
@@ -51,20 +37,7 @@ class StockSearchQueryResolver
             return [];
         }
 
-        $cacheKey = $this->candidateCacheKey($query);
-        $cachedCandidates = Cache::get($cacheKey);
-
-        if (is_array($cachedCandidates)) {
-            return $cachedCandidates;
-        }
-
-        $candidates = $this->resolveFreshCandidates($query);
-
-        if ($candidates !== []) {
-            Cache::put($cacheKey, $candidates, now()->addDays(7));
-        }
-
-        return $candidates;
+        return $this->resolveFreshCandidates($query);
     }
 
     /**
@@ -276,15 +249,5 @@ class StockSearchQueryResolver
             'MC' => 'XMAD',
             default => null,
         };
-    }
-
-    private function cacheKey(string $query): string
-    {
-        return 'stock-search-query-resolver:'.sha1(Str::upper(trim($query)));
-    }
-
-    private function candidateCacheKey(string $query): string
-    {
-        return 'stock-search-query-resolver:candidates:'.sha1(Str::upper(trim($query)));
     }
 }
