@@ -240,6 +240,7 @@ class StockSearchQueryResolverTest extends TestCase
         Http::fake([
             'eodhd.com/api/search/AT0000999982*' => Http::response([]),
             'eodhd.com/api/search/099998*' => Http::response([]),
+            'eodhd.com/api/search/ATX.INDX*' => Http::response([]),
             'eodhd.com/api/exchange-symbol-list/INDX*' => Http::response([
                 [
                     'Code' => 'ATX',
@@ -255,6 +256,7 @@ class StockSearchQueryResolverTest extends TestCase
 
         $isinCandidates = app(StockSearchQueryResolver::class)->resolveCandidates('AT0000999982');
         $numericCandidates = app(StockSearchQueryResolver::class)->resolveCandidates('099998');
+        $codeCandidates = app(StockSearchQueryResolver::class)->resolveCandidates('ATX.INDX');
 
         $this->assertSame('Austrian Traded Index in EUR', $isinCandidates[0]['name']);
         $this->assertSame('AT0000999982', $isinCandidates[0]['isin']);
@@ -264,6 +266,9 @@ class StockSearchQueryResolverTest extends TestCase
         $this->assertSame('EUR', $isinCandidates[0]['currency']);
         $this->assertSame('ATX', $numericCandidates[0]['symbol']);
         $this->assertSame('AT0000999982', $numericCandidates[0]['isin']);
+        $this->assertSame('ATX', $codeCandidates[0]['symbol']);
+        $this->assertSame('INDX', $codeCandidates[0]['exchange']);
+        $this->assertSame('AT0000999982', $codeCandidates[0]['isin']);
     }
 
     public function test_it_returns_no_candidates_when_eodhd_fails(): void

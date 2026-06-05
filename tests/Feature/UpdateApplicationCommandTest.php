@@ -32,6 +32,7 @@ class UpdateApplicationCommandTest extends TestCase
             ->expectsOutputToContain('Would run: npm run build')
             ->expectsOutputToContain('Would run: php artisan optimize')
             ->expectsOutputToContain('Would run: php artisan queue:restart')
+            ->expectsOutputToContain('Would run: php artisan historical-session-prices:dispatch-due')
             ->assertSuccessful();
     }
 
@@ -45,6 +46,7 @@ class UpdateApplicationCommandTest extends TestCase
             ->expectsOutputToContain('Would run: php artisan optimize:clear')
             ->expectsOutputToContain('Would run: php artisan optimize')
             ->expectsOutputToContain('Would run: php artisan queue:restart')
+            ->expectsOutputToContain('Would run: php artisan historical-session-prices:dispatch-due')
             ->assertSuccessful();
     }
 
@@ -98,6 +100,7 @@ class UpdateApplicationCommandTest extends TestCase
         Process::assertDidntRun('npm run build');
         Process::assertDidntRun('php artisan optimize');
         Process::assertDidntRun('php artisan queue:restart');
+        Process::assertDidntRun('php artisan historical-session-prices:dispatch-due');
     }
 
     public function test_update_command_uses_project_local_npm_cache_and_log_directories(): void
@@ -293,6 +296,7 @@ PHP);
             'php artisan migrate --force --no-interaction' => Process::result(),
             'php artisan optimize' => Process::result(),
             'php artisan queue:restart' => Process::result(),
+            'php artisan historical-session-prices:dispatch-due' => Process::result(),
         ]);
 
         try {
@@ -316,6 +320,7 @@ PHP);
         Process::assertRan('php artisan migrate --force --no-interaction');
         Process::assertRan('php artisan optimize');
         Process::assertRan('php artisan queue:restart');
+        Process::assertRan('php artisan historical-session-prices:dispatch-due');
     }
 
     public function test_update_command_retires_legacy_default_migrations_that_create_existing_tables(): void
@@ -348,6 +353,7 @@ PHP);
             'php artisan migrate --force --no-interaction' => Process::result(),
             'php artisan optimize' => Process::result(),
             'php artisan queue:restart' => Process::result(),
+            'php artisan historical-session-prices:dispatch-due' => Process::result(),
         ]);
 
         try {
@@ -376,6 +382,7 @@ PHP);
         Process::assertRan('php artisan migrate --force --no-interaction');
         Process::assertRan('php artisan optimize');
         Process::assertRan('php artisan queue:restart');
+        Process::assertRan('php artisan historical-session-prices:dispatch-due');
     }
 
     public function test_update_command_stops_before_migrations_when_a_pending_migration_would_create_an_existing_table(): void
@@ -417,6 +424,7 @@ PHP);
             'php artisan migrate --force --no-interaction' => Process::result(),
             'php artisan optimize' => Process::result(),
             'php artisan queue:restart' => Process::result(),
+            'php artisan historical-session-prices:dispatch-due' => Process::result(),
         ]);
     }
 

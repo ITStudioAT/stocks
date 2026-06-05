@@ -25,13 +25,15 @@ class AdminQueueStatusController extends Controller
         $queueSizes = $this->queueSizes($connection, $queue);
         $failedJobs = $this->failedJobsCount();
         $staleRunningRuns = $this->staleRunningRuns($maxJobTimeout);
+        $pendingJobs = (int) ($queueSizes['pending'] ?? 0);
+        $reservedJobs = (int) ($queueSizes['reserved'] ?? 0);
 
         $issues = collect([
             $retryAfter <= $maxJobTimeout
                 ? "retry_after ({$retryAfter}s) must be greater than max job timeout ({$maxJobTimeout}s)"
                 : null,
-            ($queueSizes['reserved'] ?? 0) > 0
-                ? "{$queueSizes['reserved']} reserved job(s) are currently running or stuck"
+            $reservedJobs > 0
+                ? "{$reservedJobs} reserved job(s) are currently running or stuck"
                 : null,
             $staleRunningRuns > 0
                 ? "{$staleRunningRuns} refresh run(s) are still running after {$maxJobTimeout}s"
@@ -40,10 +42,15 @@ class AdminQueueStatusController extends Controller
                 ? "{$failedJobs} failed job(s) recorded"
                 : null,
         ])->filter()->values()->all();
+        $status = match (true) {
+            $issues !== [] => 'check',
+            $pendingJobs > 0 && $reservedJobs === 0 => 'waiting',
+            default => 'ok',
+        };
 
         return response()->json([
             'queue' => [
-                'status' => $issues === [] ? 'ok' : 'check',
+                'status' => $status,
                 'connection' => $connection,
                 'name' => $queue,
                 'retry_after' => $retryAfter,

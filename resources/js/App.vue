@@ -271,9 +271,14 @@ const queueStatusLabel = computed(() => {
     const pending = Number(queueStatus.value.pending ?? 0);
     const reserved = Number(queueStatus.value.reserved ?? 0);
     const failed = Number(queueStatus.value.failed ?? 0);
+    const statusLabel = {
+        ok: 'Queue OK',
+        waiting: 'Queue waiting',
+        check: 'Queue check',
+    }[queueStatus.value.status] ?? 'Queue check';
 
     return [
-        queueStatus.value.status === 'ok' ? 'Queue OK' : 'Queue check',
+        statusLabel,
         `${queueStatus.value.connection}:${queueStatus.value.name}`,
         `P ${formatInteger(pending)}`,
         `R ${formatInteger(reserved)}`,
@@ -290,6 +295,10 @@ const queueStatusTitle = computed(() => {
         return 'Queue status has not been loaded yet.';
     }
 
+    if (queueStatus.value.status === 'waiting') {
+        return 'Jobs are pending, but no worker currently has a job reserved. This is normal briefly with a cron worker; it should clear on the next run.';
+    }
+
     if (!queueStatus.value.issues?.length) {
         return 'Queue configuration looks appropriate.';
     }
@@ -299,6 +308,10 @@ const queueStatusTitle = computed(() => {
 const queueStatusClass = computed(() => {
     if (queueStatusError.value || queueStatus.value?.status === 'check') {
         return 'text-error';
+    }
+
+    if (queueStatus.value?.status === 'waiting') {
+        return 'text-warning';
     }
 
     return 'text-medium-emphasis';

@@ -124,7 +124,15 @@ class StockSearchQueryResolver
         $query = trim($query);
         $normalizedQuery = Str::upper($query);
 
-        if ($query === '' || ! ctype_alnum($query)) {
+        if ($query === '') {
+            return false;
+        }
+
+        if (preg_match('/^[A-Z0-9]{1,16}\.INDX$/', $normalizedQuery) === 1) {
+            return true;
+        }
+
+        if (! ctype_alnum($query)) {
             return false;
         }
 
@@ -180,6 +188,7 @@ class StockSearchQueryResolver
 
         return collect([
             Arr::get($candidate, 'Code'),
+            $this->eodhdCodeForCandidate($candidate),
             Arr::get($candidate, 'Name'),
             Arr::get($candidate, 'ISIN'),
             Arr::get($candidate, 'Isin'),
@@ -187,6 +196,18 @@ class StockSearchQueryResolver
         ])
             ->filter(fn (mixed $value): bool => is_string($value) && trim($value) !== '')
             ->contains(fn (string $value): bool => str_contains(Str::upper($value), $needle));
+    }
+
+    private function eodhdCodeForCandidate(array $candidate): ?string
+    {
+        $symbol = $this->nullableUpperString(Arr::get($candidate, 'Code', Arr::get($candidate, 'symbol')));
+        $exchange = $this->nullableUpperString(Arr::get($candidate, 'Exchange', Arr::get($candidate, 'exchange')));
+
+        if ($symbol === null || $exchange === null) {
+            return null;
+        }
+
+        return "{$symbol}.{$exchange}";
     }
 
     /**

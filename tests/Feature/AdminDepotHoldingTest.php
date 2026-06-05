@@ -568,6 +568,41 @@ class AdminDepotHoldingTest extends TestCase
         ));
     }
 
+    public function test_due_historical_session_price_command_dispatches_missed_bundle_after_exchange_close(): void
+    {
+        Queue::fake();
+        Cache::flush();
+        config(['services.eodhd.key' => 'test-token']);
+        $this->travelTo(Carbon::parse('2026-06-04 21:49:00', 'Europe/Berlin'));
+        Http::fake([
+            'eodhd.com/api/exchange-details/XETRA*' => Http::response([
+                'Name' => 'XETRA Stock Exchange',
+                'Code' => 'XETRA',
+                'OperatingMIC' => 'XETR',
+                'Timezone' => 'Europe/Berlin',
+                'TradingHours' => [
+                    'Open' => '09:00:00',
+                    'Close' => '17:30:00',
+                    'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
+                ],
+            ]),
+        ]);
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'country' => 'Germany',
+        ]);
+
+        $this->artisan('historical-session-prices:dispatch-due')
+            ->expectsOutput('Dispatched 1 historical session price job(s).')
+            ->assertExitCode(0);
+
+        Queue::assertPushed(FetchHistoricalSessionPrices::class, fn (FetchHistoricalSessionPrices $job): bool => $job->exchangeCode === 'XETRA'
+            && $job->stockHoldingIds === [$holding->id]
+            && $job->session['today_date'] === '2026-06-04');
+    }
+
     public function test_historical_session_price_bundle_job_stores_start_end_start24_and_start48_together(): void
     {
         config(['services.eodhd.key' => 'test-token']);

@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Facades\DB;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -44,6 +45,40 @@ class AdminQueueStatusTest extends TestCase
             ->assertJsonPath('queue.status', 'check')
             ->assertJsonPath('queue.retry_after', 60)
             ->assertJsonPath('queue.issues.0', 'retry_after (60s) must be greater than max job timeout (900s)');
+    }
+
+    public function test_queue_status_shows_waiting_when_jobs_are_pending_without_a_reserved_worker(): void
+    {
+        Config::set('queue.default', 'database');
+        Config::set('queue.connections.database.retry_after', 1200);
+        Config::set('queue.connections.database.queue', 'default');
+
+        DB::table('jobs')->insert([
+            [
+                'queue' => 'default',
+                'payload' => '{}',
+                'attempts' => 0,
+                'reserved_at' => null,
+                'available_at' => now()->timestamp,
+                'created_at' => now()->timestamp,
+            ],
+            [
+                'queue' => 'default',
+                'payload' => '{}',
+                'attempts' => 0,
+                'reserved_at' => null,
+                'available_at' => now()->timestamp,
+                'created_at' => now()->timestamp,
+            ],
+        ]);
+
+        $this->actingAs($this->adminUser())
+            ->getJson('/admin/queue/status')
+            ->assertOk()
+            ->assertJsonPath('queue.status', 'waiting')
+            ->assertJsonPath('queue.pending', 2)
+            ->assertJsonPath('queue.reserved', 0)
+            ->assertJsonPath('queue.issues', []);
     }
 
     public function test_guest_cannot_view_queue_status(): void

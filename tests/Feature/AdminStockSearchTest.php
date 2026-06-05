@@ -104,6 +104,44 @@ class AdminStockSearchTest extends TestCase
             ->assertJsonPath('results.0.currency', 'EUR');
     }
 
+    public function test_admin_can_search_index_by_eodhd_code(): void
+    {
+        Cache::flush();
+        config([
+            'services.eodhd.key' => 'test-token',
+            'services.eodhd.calls_per_hour' => 1000,
+            'services.eodhd.calls_per_day' => 100000,
+            'services.eodhd.calls_used_today' => 0,
+        ]);
+        Http::fake([
+            'eodhd.com/api/search/ATX.INDX*' => Http::response([]),
+            'eodhd.com/api/exchange-symbol-list/INDX*' => Http::response([
+                [
+                    'Code' => 'ATX',
+                    'Exchange' => 'INDX',
+                    'Name' => 'Austrian Traded Index in EUR',
+                    'Type' => 'INDEX',
+                    'Country' => 'Austria',
+                    'Currency' => 'EUR',
+                    'Isin' => 'AT0000999982',
+                ],
+            ]),
+        ]);
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->getJson('/admin/stocks/search?query=ATX.INDX')
+            ->assertOk()
+            ->assertJsonCount(1, 'results')
+            ->assertJsonPath('results.0.symbol', 'ATX')
+            ->assertJsonPath('results.0.name', 'Austrian Traded Index in EUR')
+            ->assertJsonPath('results.0.isin', 'AT0000999982')
+            ->assertJsonPath('results.0.exchange', 'INDX')
+            ->assertJsonPath('results.0.instrument_type', 'INDEX')
+            ->assertJsonPath('results.0.country', 'Austria')
+            ->assertJsonPath('results.0.currency', 'EUR');
+    }
+
     public function test_search_query_is_required(): void
     {
         $admin = $this->adminUser();

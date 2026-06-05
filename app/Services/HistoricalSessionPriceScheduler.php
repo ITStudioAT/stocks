@@ -79,8 +79,7 @@ class HistoricalSessionPriceScheduler
     {
         $localNow = now()->setTimezone($session['timezone']);
 
-        return $localNow->greaterThanOrEqualTo($session['today_open'])
-            && $localNow->lessThan($session['today_close']);
+        return $localNow->greaterThanOrEqualTo($session['today_open']);
     }
 
     /**
