@@ -2,10 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Console\Commands\UpdateApplicationCommand;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Schema;
+use ReflectionMethod;
 use Tests\TestCase;
 
 class UpdateApplicationCommandTest extends TestCase
@@ -16,7 +18,7 @@ class UpdateApplicationCommandTest extends TestCase
             ->expectsOutputToContain('Would run: composer install --no-interaction --prefer-dist')
             ->expectsOutputToContain('Would run: php artisan optimize:clear')
             ->expectsOutputToContain('Would run: php artisan migrate --force --no-interaction')
-            ->expectsOutputToContain('Would run: npm install --ignore-scripts')
+            ->expectsOutputToContain('Would run: npm ci --ignore-scripts --no-audit --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm')
             ->expectsOutputToContain('Would run: npm run build')
             ->assertSuccessful();
     }
@@ -26,7 +28,7 @@ class UpdateApplicationCommandTest extends TestCase
         $this->artisan('app:update --dry-run --skip-composer --skip-npm --skip-build --skip-migrate')
             ->doesntExpectOutputToContain('composer install')
             ->doesntExpectOutputToContain('php artisan migrate')
-            ->doesntExpectOutputToContain('npm install')
+            ->doesntExpectOutputToContain('npm ci')
             ->doesntExpectOutputToContain('npm run build')
             ->expectsOutputToContain('Would run: php artisan optimize:clear')
             ->assertSuccessful();
@@ -55,8 +57,19 @@ class UpdateApplicationCommandTest extends TestCase
         Process::assertRan('composer install --no-interaction --prefer-dist');
         Process::assertRan('php artisan optimize:clear');
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
-        Process::assertDidntRun('npm install --ignore-scripts');
+        Process::assertDidntRun('npm ci --ignore-scripts --no-audit --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm');
         Process::assertDidntRun('npm run build');
+    }
+
+    public function test_update_command_uses_project_local_npm_cache_and_log_directories(): void
+    {
+        $method = new ReflectionMethod(UpdateApplicationCommand::class, 'shellCommandEnvironment');
+        $environment = $method->invoke(new UpdateApplicationCommand, 'npm ci --ignore-scripts');
+
+        $this->assertSame(storage_path('app/npm-cache'), $environment['NPM_CONFIG_CACHE']);
+        $this->assertSame(storage_path('logs/npm'), $environment['NPM_CONFIG_LOGS_DIR']);
+        $this->assertSame('false', $environment['NPM_CONFIG_UPDATE_NOTIFIER']);
+        $this->assertSame([], $method->invoke(new UpdateApplicationCommand, 'composer install'));
     }
 
     public function test_update_command_stops_before_migrations_when_pending_migrations_create_the_same_table(): void

@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\Schema;
     {--dry-run : Show the commands without running them}
     {--production : Install Composer dependencies without dev packages}
     {--skip-composer : Do not run composer install}
-    {--skip-npm : Do not run npm install}
+    {--skip-npm : Do not run npm ci}
     {--skip-build : Do not run npm run build}
     {--skip-migrate : Do not run database migrations}')]
 #[Description('Update the application after deploying or pulling a new version')]
@@ -45,7 +45,13 @@ class UpdateApplicationCommand extends Command
 
             $successful = true;
 
-            $this->components->task($label, function () use ($command, &$successful): bool {
+            $this->components->task($label, function () use ($label, $command, &$successful): bool {
+                if ($label === 'Installing npm packages' && ! $this->prepareNpmInstall()) {
+                    $successful = false;
+
+                    return false;
+                }
+
                 $successful = $this->runShellCommand($command);
 
                 return $successful;
@@ -81,7 +87,7 @@ class UpdateApplicationCommand extends Command
         }
 
         if (! $this->option('skip-npm')) {
-            $commands['Installing npm packages'] = 'npm install --ignore-scripts';
+            $commands['Installing npm packages'] = 'npm ci --ignore-scripts --no-audit --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm';
         }
 
         if (! $this->option('skip-build')) {
@@ -89,6 +95,32 @@ class UpdateApplicationCommand extends Command
         }
 
         return $commands;
+    }
+
+    private function prepareNpmInstall(): bool
+    {
+        foreach ([
+            storage_path('app/npm-cache'),
+            storage_path('logs/npm'),
+        ] as $directory) {
+            File::ensureDirectoryExists($directory);
+
+            if (! File::isDirectory($directory)) {
+                $this->components->error("Could not create npm working directory: {$directory}");
+
+                return false;
+            }
+        }
+
+        $nodeModulesPath = base_path('node_modules');
+
+        if (File::isDirectory($nodeModulesPath) && ! File::deleteDirectory($nodeModulesPath)) {
+            $this->components->error('Could not remove the existing node_modules directory before npm ci.');
+
+            return false;
+        }
+
+        return true;
     }
 
     private function retireAlreadyAppliedDuplicateCreateMigrations(): bool
@@ -294,6 +326,7 @@ PHP;
     private function runShellCommand(string $command): bool
     {
         $result = Process::path(base_path())
+            ->env($this->shellCommandEnvironment($command))
             ->forever()
             ->run($command, function (string $type, string $output): void {
                 $this->output->write($output);
@@ -306,5 +339,21 @@ PHP;
         $this->components->error(trim($result->errorOutput()) ?: "Command failed: {$command}");
 
         return false;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function shellCommandEnvironment(string $command): array
+    {
+        if (! str_starts_with($command, 'npm ')) {
+            return [];
+        }
+
+        return [
+            'NPM_CONFIG_CACHE' => storage_path('app/npm-cache'),
+            'NPM_CONFIG_LOGS_DIR' => storage_path('logs/npm'),
+            'NPM_CONFIG_UPDATE_NOTIFIER' => 'false',
+        ];
     }
 }
