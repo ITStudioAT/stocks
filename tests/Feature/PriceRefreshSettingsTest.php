@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\FetchHistoricalSessionPrices;
 use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\AppConfig;
 use App\Models\IndexWatchItem;
@@ -10,6 +11,8 @@ use App\Models\StockPriceRefreshRun;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
@@ -17,6 +20,13 @@ use Tests\TestCase;
 class PriceRefreshSettingsTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        config(['services.eodhd.key' => null]);
+    }
 
     public function test_admin_can_view_and_update_the_global_price_refresh_schedule(): void
     {
@@ -327,6 +337,57 @@ class PriceRefreshSettingsTest extends TestCase
             ->assertJsonPath('refresh.status', 'queued')
             ->assertJsonPath('refresh.total', 2)
             ->assertJsonPath('refresh.step', '0/2');
+    }
+
+    public function test_due_price_refresh_command_dispatches_missing_historical_session_prices(): void
+    {
+        Queue::fake();
+        Cache::flush();
+        config(['services.eodhd.key' => 'test-token']);
+        $this->travelTo(Carbon::parse('2026-06-04 21:49:00', 'Europe/Berlin'));
+        Http::fake([
+            'eodhd.com/api/exchange-details/XETRA*' => Http::response([
+                'Name' => 'XETRA Stock Exchange',
+                'Code' => 'XETRA',
+                'OperatingMIC' => 'XETR',
+                'Timezone' => 'Europe/Berlin',
+                'TradingHours' => [
+                    'Open' => '09:00:00',
+                    'Close' => '17:30:00',
+                    'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
+                ],
+            ]),
+        ]);
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'country' => 'Germany',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+        AppConfig::query()->create([
+            'key' => 'price_refresh.schedule',
+            'value' => [
+                'trading_interval_minutes' => 20,
+                'closed_refresh_enabled' => true,
+                'closed_interval_minutes' => 60,
+                'last_refreshed_at' => null,
+                'next_refresh_at' => now()->subMinute()->toIso8601String(),
+            ],
+        ]);
+
+        $this->artisan('price-refresh:dispatch-due')
+            ->expectsOutput('Dispatched 1 watch-list price refresh job(s).')
+            ->expectsOutput('Dispatched 1 historical session price job(s).')
+            ->assertExitCode(0);
+
+        Queue::assertPushedTimes(RefreshDepotHoldingPrices::class, 1);
+        Queue::assertPushedTimes(FetchHistoricalSessionPrices::class, 1);
+        Queue::assertPushed(FetchHistoricalSessionPrices::class, fn (FetchHistoricalSessionPrices $job): bool => $job->exchangeCode === 'XETRA'
+            && $job->stockHoldingIds === [$holding->id]
+            && $job->session['today_date'] === '2026-06-04'
+            && $job->session['previous_date'] === '2026-06-03'
+            && $job->session['two_ago_date'] === '2026-06-02');
     }
 
     public function test_index_schedule_reports_updating_for_combined_price_refreshes(): void
