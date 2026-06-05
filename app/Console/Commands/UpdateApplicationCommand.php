@@ -22,12 +22,25 @@ class UpdateApplicationCommand extends Command
 {
     private const MIGRATION_STEP = 'Running database migrations';
 
+    private const OBSOLETE_DUPLICATE_MIGRATIONS = [
+        [
+            'obsolete' => '2019_12_14_000001_create_personal_access_tokens_table.php',
+            'replacement' => '2026_05_23_153233_create_personal_access_tokens_table.php',
+        ],
+    ];
+
     public function handle(): int
     {
         $this->components->info('Updating application');
 
-        if (! $this->option('dry-run') && ! $this->option('skip-migrate') && ! $this->ensureMigrationsCanRun()) {
-            return self::FAILURE;
+        if (! $this->option('dry-run') && ! $this->option('skip-migrate')) {
+            if (! $this->removeObsoleteDuplicateMigrations()) {
+                return self::FAILURE;
+            }
+
+            if (! $this->ensureMigrationsCanRun()) {
+                return self::FAILURE;
+            }
         }
 
         foreach ($this->commands() as $label => $command) {
@@ -83,6 +96,28 @@ class UpdateApplicationCommand extends Command
         }
 
         return $commands;
+    }
+
+    private function removeObsoleteDuplicateMigrations(): bool
+    {
+        foreach (self::OBSOLETE_DUPLICATE_MIGRATIONS as $migration) {
+            $obsoletePath = database_path("migrations/{$migration['obsolete']}");
+            $replacementPath = database_path("migrations/{$migration['replacement']}");
+
+            if (! File::exists($obsoletePath) || ! File::exists($replacementPath)) {
+                continue;
+            }
+
+            if (! File::delete($obsoletePath)) {
+                $this->components->error("Could not remove obsolete duplicate migration: {$migration['obsolete']}");
+
+                return false;
+            }
+
+            $this->components->info("Removed obsolete duplicate migration: {$migration['obsolete']}");
+        }
+
+        return true;
     }
 
     private function ensureMigrationsCanRun(): bool

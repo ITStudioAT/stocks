@@ -108,6 +108,60 @@ PHP);
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
     }
 
+    public function test_update_command_removes_the_obsolete_sanctum_migration_before_migration_preflight(): void
+    {
+        Process::preventStrayProcesses();
+
+        $obsoleteMigration = database_path('migrations/2019_12_14_000001_create_personal_access_tokens_table.php');
+
+        file_put_contents($obsoleteMigration, <<<'PHP'
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('personal_access_tokens', function (Blueprint $table): void {
+            $table->id();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('personal_access_tokens');
+    }
+};
+PHP);
+
+        Process::fake([
+            'composer install --no-interaction --prefer-dist' => Process::result(),
+            'php artisan optimize:clear' => Process::result(),
+            'php artisan migrate --force --no-interaction' => Process::result(),
+        ]);
+
+        try {
+            $this->artisan('app:update --skip-npm --skip-build')
+                ->expectsOutputToContain('Removed obsolete duplicate migration: 2019_12_14_000001_create_personal_access_tokens_table.php')
+                ->doesntExpectOutputToContain('Migration preflight failed')
+                ->expectsOutputToContain('Application update complete.')
+                ->assertSuccessful();
+
+            $this->assertFileDoesNotExist($obsoleteMigration);
+        } finally {
+            if (file_exists($obsoleteMigration)) {
+                unlink($obsoleteMigration);
+            }
+        }
+
+        Process::assertRan('composer install --no-interaction --prefer-dist');
+        Process::assertRan('php artisan optimize:clear');
+        Process::assertRan('php artisan migrate --force --no-interaction');
+    }
+
     public function test_update_command_stops_before_migrations_when_a_pending_migration_would_create_an_existing_table(): void
     {
         Process::preventStrayProcesses();
