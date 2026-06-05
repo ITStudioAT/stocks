@@ -3,11 +3,13 @@
 namespace Tests\Feature;
 
 use App\Console\Commands\UpdateApplicationCommand;
+use App\Models\User;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Schema;
 use ReflectionMethod;
+use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
 class UpdateApplicationCommandTest extends TestCase
@@ -70,6 +72,73 @@ class UpdateApplicationCommandTest extends TestCase
         $this->assertSame(storage_path('logs/npm'), $environment['NPM_CONFIG_LOGS_DIR']);
         $this->assertSame('false', $environment['NPM_CONFIG_UPDATE_NOTIFIER']);
         $this->assertSame([], $method->invoke(new UpdateApplicationCommand, 'composer install'));
+    }
+
+    public function test_update_command_creates_required_roles_and_protected_admin_user(): void
+    {
+        $this->markCurrentMigrationsAsRanExcept([]);
+        $this->createProtectedAdminTables();
+
+        $this->fakeSuccessfulUpdateProcess();
+
+        $this->artisan('app:update --skip-npm --skip-build')
+            ->expectsOutputToContain('Verified roles and protected admin user.')
+            ->expectsOutputToContain('Application update complete.')
+            ->assertSuccessful();
+
+        foreach (['super_admin', 'admin', 'user'] as $role) {
+            $this->assertDatabaseHas('roles', [
+                'name' => $role,
+                'guard_name' => 'web',
+            ]);
+        }
+
+        $protectedUser = User::query()->find(1);
+
+        $this->assertNotNull($protectedUser);
+        $this->assertSame('Kron', $protectedUser->last_name);
+        $this->assertSame('Günther', $protectedUser->first_name);
+        $this->assertSame('kron@naturwelt.at', $protectedUser->email);
+        $this->assertNotNull($protectedUser->email_verified_at);
+        $this->assertSame(['admin', 'super_admin'], $protectedUser->getRoleNames()->sort()->values()->all());
+    }
+
+    public function test_update_command_repairs_protected_admin_user_and_moves_duplicate_email(): void
+    {
+        $this->markCurrentMigrationsAsRanExcept([]);
+        $this->createProtectedAdminTables();
+
+        User::factory()->create([
+            'id' => 1,
+            'last_name' => 'Wrong',
+            'first_name' => 'User',
+            'email' => 'wrong@example.com',
+        ]);
+
+        $duplicateProtectedUser = User::factory()->create([
+            'id' => 2,
+            'email' => 'kron@naturwelt.at',
+        ]);
+
+        Role::findOrCreate('guest', 'web');
+        User::query()->find(1)->assignRole('guest');
+
+        $this->fakeSuccessfulUpdateProcess();
+
+        $this->artisan('app:update --skip-npm --skip-build')
+            ->expectsOutputToContain('Verified roles and protected admin user.')
+            ->expectsOutputToContain('Application update complete.')
+            ->assertSuccessful();
+
+        $protectedUser = User::query()->find(1);
+        $retiredDuplicateUser = $duplicateProtectedUser->fresh();
+
+        $this->assertSame('Kron', $protectedUser->last_name);
+        $this->assertSame('Günther', $protectedUser->first_name);
+        $this->assertSame('kron@naturwelt.at', $protectedUser->email);
+        $this->assertSame(['admin', 'super_admin'], $protectedUser->getRoleNames()->sort()->values()->all());
+        $this->assertStringStartsWith('kron.retired.2.', $retiredDuplicateUser->email);
+        $this->assertStringEndsWith('@naturwelt.at', $retiredDuplicateUser->email);
     }
 
     public function test_update_command_stops_before_migrations_when_pending_migrations_create_the_same_table(): void
@@ -156,6 +225,7 @@ PHP);
         Schema::create('personal_access_tokens', function (Blueprint $table): void {
             $table->id();
         });
+        $this->createProtectedAdminTables();
 
         Process::fake([
             'composer install --no-interaction --prefer-dist' => Process::result(),
@@ -200,9 +270,7 @@ PHP);
 
         $this->markCurrentMigrationsAsRanExcept(array_keys($legacyMigrations));
 
-        Schema::create('users', function (Blueprint $table): void {
-            $table->id();
-        });
+        $this->createProtectedAdminTables();
         Schema::create('password_reset_tokens', function (Blueprint $table): void {
             $table->string('email')->primary();
         });
@@ -269,6 +337,75 @@ PHP);
         Process::assertDidntRun('composer install --no-interaction --prefer-dist');
         Process::assertDidntRun('php artisan optimize:clear');
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
+    }
+
+    private function fakeSuccessfulUpdateProcess(): void
+    {
+        Process::preventStrayProcesses();
+
+        Process::fake([
+            'composer install --no-interaction --prefer-dist' => Process::result(),
+            'php artisan optimize:clear' => Process::result(),
+            'php artisan migrate --force --no-interaction' => Process::result(),
+        ]);
+    }
+
+    private function createProtectedAdminTables(): void
+    {
+        Schema::create('users', function (Blueprint $table): void {
+            $table->id();
+            $table->string('last_name')->default('');
+            $table->string('first_name')->default('');
+            $table->string('email')->unique();
+            $table->timestamp('email_verified_at')->nullable();
+            $table->string('password');
+            $table->rememberToken();
+            $table->timestamps();
+        });
+
+        Schema::create('permissions', function (Blueprint $table): void {
+            $table->id();
+            $table->string('name');
+            $table->string('guard_name');
+            $table->timestamps();
+
+            $table->unique(['name', 'guard_name']);
+        });
+
+        Schema::create('roles', function (Blueprint $table): void {
+            $table->id();
+            $table->string('name');
+            $table->string('guard_name');
+            $table->timestamps();
+
+            $table->unique(['name', 'guard_name']);
+        });
+
+        Schema::create('model_has_permissions', function (Blueprint $table): void {
+            $table->unsignedBigInteger('permission_id');
+            $table->string('model_type');
+            $table->unsignedBigInteger('model_id');
+            $table->index(['model_id', 'model_type'], 'model_has_permissions_model_id_model_type_index');
+            $table->foreign('permission_id')->references('id')->on('permissions')->cascadeOnDelete();
+            $table->primary(['permission_id', 'model_id', 'model_type'], 'model_has_permissions_permission_model_type_primary');
+        });
+
+        Schema::create('model_has_roles', function (Blueprint $table): void {
+            $table->unsignedBigInteger('role_id');
+            $table->string('model_type');
+            $table->unsignedBigInteger('model_id');
+            $table->index(['model_id', 'model_type'], 'model_has_roles_model_id_model_type_index');
+            $table->foreign('role_id')->references('id')->on('roles')->cascadeOnDelete();
+            $table->primary(['role_id', 'model_id', 'model_type'], 'model_has_roles_role_model_type_primary');
+        });
+
+        Schema::create('role_has_permissions', function (Blueprint $table): void {
+            $table->unsignedBigInteger('permission_id');
+            $table->unsignedBigInteger('role_id');
+            $table->foreign('permission_id')->references('id')->on('permissions')->cascadeOnDelete();
+            $table->foreign('role_id')->references('id')->on('roles')->cascadeOnDelete();
+            $table->primary(['permission_id', 'role_id'], 'role_has_permissions_permission_id_role_id_primary');
+        });
     }
 
     /**

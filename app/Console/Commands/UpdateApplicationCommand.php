@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\User;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -9,6 +10,10 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
+use Spatie\Permission\Models\Role;
+use Spatie\Permission\PermissionRegistrar;
+use Throwable;
 
 #[Signature('app:update
     {--dry-run : Show the commands without running them}
@@ -21,6 +26,18 @@ use Illuminate\Support\Facades\Schema;
 class UpdateApplicationCommand extends Command
 {
     private const MIGRATION_STEP = 'Running database migrations';
+
+    private const PROTECTED_ADMIN_USER_ID = 1;
+
+    private const PROTECTED_ADMIN_EMAIL = 'kron@naturwelt.at';
+
+    private const PROTECTED_ADMIN_FIRST_NAME = 'Günther';
+
+    private const PROTECTED_ADMIN_LAST_NAME = 'Kron';
+
+    private const PROTECTED_ADMIN_ROLES = ['super_admin', 'admin'];
+
+    private const REQUIRED_ROLES = ['super_admin', 'admin', 'user'];
 
     public function handle(): int
     {
@@ -35,6 +52,8 @@ class UpdateApplicationCommand extends Command
                 return self::FAILURE;
             }
         }
+
+        $protectedAdminUserVerified = false;
 
         foreach ($this->commands() as $label => $command) {
             if ($this->option('dry-run')) {
@@ -60,6 +79,18 @@ class UpdateApplicationCommand extends Command
             if (! $successful) {
                 return self::FAILURE;
             }
+
+            if ($label === self::MIGRATION_STEP) {
+                if (! $this->ensureProtectedAdminUser()) {
+                    return self::FAILURE;
+                }
+
+                $protectedAdminUserVerified = true;
+            }
+        }
+
+        if (! $this->option('dry-run') && ! $protectedAdminUserVerified && ! $this->ensureProtectedAdminUser()) {
+            return self::FAILURE;
         }
 
         $this->components->info($this->option('dry-run') ? 'Dry run complete.' : 'Application update complete.');
@@ -121,6 +152,70 @@ class UpdateApplicationCommand extends Command
         }
 
         return true;
+    }
+
+    private function ensureProtectedAdminUser(): bool
+    {
+        try {
+            app(PermissionRegistrar::class)->forgetCachedPermissions();
+
+            DB::transaction(function (): void {
+                foreach (self::REQUIRED_ROLES as $role) {
+                    Role::findOrCreate($role, 'web');
+                }
+
+                $duplicateProtectedUser = User::query()
+                    ->where('email', self::PROTECTED_ADMIN_EMAIL)
+                    ->whereKeyNot(self::PROTECTED_ADMIN_USER_ID)
+                    ->first();
+
+                if ($duplicateProtectedUser) {
+                    $duplicateProtectedUser->forceFill([
+                        'email' => $this->retiredProtectedAdminEmail($duplicateProtectedUser),
+                    ])->save();
+                }
+
+                $user = User::query()->find(self::PROTECTED_ADMIN_USER_ID) ?? new User;
+                $user->id = self::PROTECTED_ADMIN_USER_ID;
+
+                $attributes = [
+                    'last_name' => self::PROTECTED_ADMIN_LAST_NAME,
+                    'first_name' => self::PROTECTED_ADMIN_FIRST_NAME,
+                    'email' => self::PROTECTED_ADMIN_EMAIL,
+                    'email_verified_at' => now(),
+                ];
+
+                if (! $user->exists || blank($user->password)) {
+                    $attributes['password'] = Str::password(32);
+                }
+
+                $user->forceFill($attributes)->save();
+                $user->syncRoles(self::PROTECTED_ADMIN_ROLES);
+            });
+
+            app(PermissionRegistrar::class)->forgetCachedPermissions();
+            $this->components->info('Verified roles and protected admin user.');
+
+            return true;
+        } catch (Throwable $exception) {
+            $this->components->error("Could not verify protected admin user: {$exception->getMessage()}");
+
+            return false;
+        }
+    }
+
+    private function retiredProtectedAdminEmail(User $user): string
+    {
+        $baseEmail = "kron.retired.{$user->id}.".now()->format('YmdHis');
+        $email = "{$baseEmail}@naturwelt.at";
+        $attempt = 1;
+
+        while (User::query()->where('email', $email)->whereKeyNot($user->getKey())->exists()) {
+            $email = "{$baseEmail}.{$attempt}@naturwelt.at";
+            $attempt++;
+        }
+
+        return $email;
     }
 
     private function retireAlreadyAppliedDuplicateCreateMigrations(): bool
