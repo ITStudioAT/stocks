@@ -271,11 +271,13 @@ const selectedAnalyzeDailyPrices = computed(() => filterAnalyzeDailyPrices(
 const selectedAnalyzeIntradayPrices = computed(() => mapAnalyzeIntradayPrices(
     selectedAnalyzeHolding.value?.intraday_prices ?? [],
 ));
-const selectedAnalyzeChartPrices = computed(() => (
-    selectedAnalyzeHistoryRange.value === 'today' && selectedAnalyzeIntradayPrices.value.length > 0
-        ? selectedAnalyzeIntradayPrices.value
-        : selectedAnalyzeDailyPrices.value
-));
+const selectedAnalyzeChartPrices = computed(() => {
+    if (selectedAnalyzeHistoryRange.value === 'today') {
+        return selectedAnalyzeIntradayPrices.value;
+    }
+
+    return selectedAnalyzeDailyPrices.value;
+});
 const selectedAnalyzeSparkline = computed(() => buildAnalyzeSparkline(selectedAnalyzeChartPrices.value));
 const showAnalyzeSparklineDots = computed(() => ['3m', '1m', '1w', 'today'].includes(selectedAnalyzeHistoryRange.value));
 const eodhdUsageItems = computed(() => {
@@ -4955,7 +4957,12 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                     </text>
                                 </svg>
                                 <div v-else class="text-body-2 text-medium-emphasis">
-                                    No stored prices for this range.
+                                    <template v-if="selectedAnalyzeHistoryRange === 'today'">
+                                        No EODHD intraday prices available for this session.
+                                    </template>
+                                    <template v-else>
+                                        No stored prices for this range.
+                                    </template>
                                 </div>
                             </div>
                         </section>

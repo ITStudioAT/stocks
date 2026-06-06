@@ -17,7 +17,6 @@ use App\Services\IndexPriceRefreshSettings;
 use App\Services\KnownInstrumentMetadataCorrections;
 use App\Services\PriceRefreshScheduler;
 use App\Services\StockHistoricalPriceService;
-use App\Services\StockHoldingIntradayPriceSampler;
 use App\Services\StockPriceCatalog;
 use App\Services\StockPriceFreshness;
 use App\Services\TradingSessionPriceResolver;
@@ -34,8 +33,6 @@ use Throwable;
 
 class AdminDepotHoldingController extends Controller
 {
-    private const IntradayPriceSampleCount = 20;
-
     public function __construct(
         private StockPriceFreshness $stockPriceFreshness,
         private PriceRefreshScheduler $priceRefreshScheduler,
@@ -49,7 +46,6 @@ class AdminDepotHoldingController extends Controller
         private UiPreferences $uiPreferences,
         private StockHistoricalPriceService $stockHistoricalPriceService,
         private KnownInstrumentMetadataCorrections $metadataCorrections,
-        private StockHoldingIntradayPriceSampler $intradayPriceSampler,
     ) {}
 
     public function index(): JsonResponse
@@ -621,44 +617,38 @@ class AdminDepotHoldingController extends Controller
      */
     private function intradayPricePayload(StockHolding $holding): array
     {
-        $this->intradayPriceSampler->persistLatestTradingDaySamples($holding);
+        $sessionDate = $this->eodhdMarketData->intradaySessionDate($holding);
 
-        $latestStoredDate = StockHoldingIntradayPrice::query()
-            ->where('stock_holding_id', $holding->id)
-            ->latest('trading_date')
-            ->value('trading_date');
-
-        if (
-            $latestStoredDate === null
-            || $this->storedIntradayPriceCount($holding, $latestStoredDate) < self::IntradayPriceSampleCount
-        ) {
-            $this->eodhdMarketData->ensureIntradaySamples($holding);
-
-            $latestStoredDate = StockHoldingIntradayPrice::query()
-                ->where('stock_holding_id', $holding->id)
-                ->latest('trading_date')
-                ->value('trading_date');
-
-            if (
-                $latestStoredDate === null
-                || $this->storedIntradayPriceCount($holding, $latestStoredDate) < self::IntradayPriceSampleCount
-            ) {
-                $this->intradayPriceSampler->persistLatestTradingDaySamples($holding, fillMissingSamples: true);
-
-                $latestStoredDate = StockHoldingIntradayPrice::query()
-                    ->where('stock_holding_id', $holding->id)
-                    ->latest('trading_date')
-                    ->value('trading_date');
+        if ($sessionDate !== null) {
+            if ($this->storedIntradayPriceCount($holding, $sessionDate) === 0) {
+                $this->eodhdMarketData->ensureIntradaySamples($holding);
             }
+
+            if ($this->storedIntradayPriceCount($holding, $sessionDate) === 0) {
+                return $this->storedSameDayIntradayFallbackPayload($holding, $sessionDate);
+            }
+
+            return $this->storedEodhdIntradayPayload($holding, $sessionDate);
         }
+
+        $latestStoredDate = $this->latestStoredIntradayDate($holding);
 
         if ($latestStoredDate === null) {
             return [];
         }
 
+        return $this->storedEodhdIntradayPayload($holding, $latestStoredDate);
+    }
+
+    /**
+     * @return array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>
+     */
+    private function storedEodhdIntradayPayload(StockHolding $holding, Carbon|string $tradingDate): array
+    {
         return StockHoldingIntradayPrice::query()
             ->where('stock_holding_id', $holding->id)
-            ->whereDate('trading_date', $latestStoredDate)
+            ->whereDate('trading_date', Carbon::parse($tradingDate)->toDateString())
+            ->where('source_name', 'EODHD intraday')
             ->orderBy('sample_index')
             ->get(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type'])
             ->map(fn (StockHoldingIntradayPrice $intradayPrice): array => [
@@ -672,11 +662,77 @@ class AdminDepotHoldingController extends Controller
             ->all();
     }
 
+    /**
+     * @return array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>
+     */
+    private function storedSameDayIntradayFallbackPayload(StockHolding $holding, Carbon|string $tradingDate): array
+    {
+        $date = Carbon::parse($tradingDate)->toDateString();
+        $legacyIntradayPrices = $this->storedLegacySameDayIntradayPayload($holding, $date);
+
+        if ($legacyIntradayPrices !== []) {
+            return $legacyIntradayPrices;
+        }
+
+        return $this->stockPriceCatalog
+            ->pricesForHolding($holding)
+            ->where('validation_status', 'valid')
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->whereDate('as_of', $date)
+            ->orderBy('as_of')
+            ->orderBy('id')
+            ->get(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type'])
+            ->map(fn (StockPrice $stockPrice): array => [
+                'id' => $stockPrice->id,
+                'price' => (string) $stockPrice->price,
+                'currency' => $stockPrice->currency,
+                'as_of' => $this->storedStockPriceTimestamp($stockPrice, 'as_of'),
+                'source_name' => $stockPrice->source_name,
+                'price_type' => $stockPrice->price_type,
+            ])
+            ->all();
+    }
+
+    /**
+     * @return array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>
+     */
+    private function storedLegacySameDayIntradayPayload(StockHolding $holding, string $date): array
+    {
+        return StockHoldingIntradayPrice::query()
+            ->where('stock_holding_id', $holding->id)
+            ->whereDate('trading_date', $date)
+            ->where('source_name', '!=', 'EODHD intraday')
+            ->orderBy('sample_index')
+            ->orderBy('as_of')
+            ->orderBy('id')
+            ->get(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type'])
+            ->map(fn (StockHoldingIntradayPrice $intradayPrice): array => [
+                'id' => $intradayPrice->id,
+                'price' => (string) $intradayPrice->price,
+                'currency' => $intradayPrice->currency,
+                'as_of' => $this->storedIntradayPriceTimestamp($intradayPrice),
+                'source_name' => $intradayPrice->source_name,
+                'price_type' => $intradayPrice->price_type,
+            ])
+            ->all();
+    }
+
+    private function latestStoredIntradayDate(StockHolding $holding): Carbon|string|null
+    {
+        return StockHoldingIntradayPrice::query()
+            ->where('stock_holding_id', $holding->id)
+            ->where('source_name', 'EODHD intraday')
+            ->latest('trading_date')
+            ->value('trading_date');
+    }
+
     private function storedIntradayPriceCount(StockHolding $holding, Carbon|string $tradingDate): int
     {
         return StockHoldingIntradayPrice::query()
             ->where('stock_holding_id', $holding->id)
             ->whereDate('trading_date', Carbon::parse($tradingDate)->toDateString())
+            ->where('source_name', 'EODHD intraday')
             ->count();
     }
 

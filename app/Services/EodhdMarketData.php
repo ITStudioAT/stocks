@@ -22,6 +22,11 @@ use Throwable;
 
 class EodhdMarketData
 {
+    /**
+     * @var array<int, string>
+     */
+    private const IntradayIntervals = ['1m', '5m', '1h'];
+
     private const RealtimeSourceKey = 'eodhd_realtime';
 
     private const IntradaySourceKey = 'eodhd_intraday';
@@ -112,7 +117,6 @@ class EodhdMarketData
             $validatedQuote,
             $holding->trading_times ?? $this->marketHours->tradingTimes($validatedQuote->quote),
         );
-        $this->intradayPriceSampler->persistLatestTradingDaySamples($holding);
 
         return (string) $stockPrice->price;
     }
@@ -162,10 +166,33 @@ class EodhdMarketData
             return;
         }
 
+        $emptySessionCacheKey = $this->intradayEmptySessionCacheKey($holding, $session['date']);
+
+        if (Cache::get($emptySessionCacheKey) === true) {
+            return;
+        }
+
         $errors = [];
         $records = $this->intradayRecords($holding, $session['open'], $until, $errors);
 
+        if ($records === []) {
+            Cache::put($emptySessionCacheKey, true, now()->addHours(6));
+
+            return;
+        }
+
+        Cache::forget($emptySessionCacheKey);
+
         $this->intradayPriceSampler->persistIntradayRecords($holding, $records);
+    }
+
+    public function intradaySessionDate(StockHolding $holding): ?string
+    {
+        $session = $this->sessionPriceWindow($holding, null);
+
+        return $session === null
+            ? null
+            : $session['date']->toDateString();
     }
 
     public function dailyOpenQuote(StockHolding $holding, Carbon $sessionDate, Carbon $asOf): ?ValidatedQuote
@@ -199,8 +226,6 @@ class EodhdMarketData
             $validatedQuote,
             $holding->trading_times ?? $this->marketHours->tradingTimes($validatedQuote->quote),
         );
-
-        $this->intradayPriceSampler->persistLatestTradingDaySamples($holding);
 
         return $stockPrice;
     }
@@ -321,10 +346,31 @@ class EodhdMarketData
      */
     private function intradayRecords(StockHolding $holding, Carbon $from, Carbon $until, array &$errors): array
     {
+        foreach (self::IntradayIntervals as $interval) {
+            $records = $this->intradayRecordsForInterval($holding, $from, $until, $interval, $errors);
+
+            if ($records !== []) {
+                return $records;
+            }
+        }
+
+        return [];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function intradayRecordsForInterval(
+        StockHolding $holding,
+        Carbon $from,
+        Carbon $until,
+        string $interval,
+        array &$errors,
+    ): array {
         $response = $this->get("intraday/{$this->eodhdSymbol($holding)}", [
             'from' => $from->copy()->utc()->timestamp,
             'to' => $until->copy()->utc()->timestamp,
-            'interval' => '1m',
+            'interval' => $interval,
             'fmt' => 'json',
         ], $errors);
 
@@ -335,7 +381,7 @@ class EodhdMarketData
         $payload = $response->json();
 
         if (! is_array($payload)) {
-            $errors[] = 'EODHD returned an invalid intraday response.';
+            $errors[] = "EODHD returned an invalid {$interval} intraday response.";
 
             return [];
         }
@@ -659,7 +705,6 @@ class EodhdMarketData
             $result->selectedQuote,
             $this->marketHours->tradingTimes($quote),
         );
-        $this->intradayPriceSampler->persistLatestTradingDaySamples($holding);
 
         $holding->update([
             'currency' => $quote->currency ?? $holding->currency,
@@ -1010,6 +1055,15 @@ class EodhdMarketData
         return Str::upper((string) $holding->symbol).'.'.$this->exchangeCode($holding);
     }
 
+    private function intradayEmptySessionCacheKey(StockHolding $holding, Carbon $sessionDate): string
+    {
+        return 'eodhd.intraday-empty-session.v2.'.implode('.', [
+            $holding->id,
+            $this->eodhdSymbol($holding),
+            $sessionDate->toDateString(),
+        ]);
+    }
+
     private function exchangeCode(StockHolding $holding): string
     {
         $mic = Str::upper((string) $holding->mic_code);
@@ -1126,19 +1180,18 @@ class EodhdMarketData
 
     private function timestamp(mixed $timestamp, mixed $datetime = null): ?Carbon
     {
+        if (is_string($datetime) && trim($datetime) !== '') {
+            try {
+                return Carbon::parse($datetime, 'UTC')->utc();
+            } catch (Throwable) {
+            }
+        }
+
         if (is_numeric($timestamp) && (int) $timestamp > 0) {
             return Carbon::createFromTimestampUTC((int) $timestamp);
         }
 
-        if (! is_string($datetime) || trim($datetime) === '') {
-            return null;
-        }
-
-        try {
-            return Carbon::parse($datetime, 'UTC')->utc();
-        } catch (Throwable) {
-            return null;
-        }
+        return null;
     }
 
     private function errorMessage(array $payload): string

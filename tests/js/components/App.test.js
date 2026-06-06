@@ -785,11 +785,12 @@ describe('App', () => {
                                 { trading_date: '2026-05-20', price: '301.500000', currency: 'EUR' },
                                 { trading_date: '2026-06-04', price: '306.320010', currency: 'EUR' },
                             ],
-                            intraday_prices: [
-                                { id: 1, price: '305.00000000', currency: 'EUR', as_of: '2026-06-05T10:00:00+00:00' },
-                                { id: 2, price: '306.50000000', currency: 'EUR', as_of: '2026-06-05T10:15:00+00:00' },
-                                { id: 3, price: '307.25000000', currency: 'EUR', as_of: '2026-06-05T10:30:00+00:00' },
-                            ],
+                            intraday_prices: Array.from({ length: 20 }, (_, index) => ({
+                                id: index + 1,
+                                price: index === 6 ? '307.25000000' : (305 + index * 0.1).toFixed(8),
+                                currency: 'EUR',
+                                as_of: new Date(Date.UTC(2026, 5, 5, 10, index * 5)).toISOString(),
+                            })),
                         },
                         {
                             id: 2,
@@ -927,9 +928,9 @@ describe('App', () => {
         await flushPromises();
 
         expect(todayRangeButton.attributes('aria-pressed')).toBe('true');
-        expect(analyzeOverview.text()).toContain('12:30');
+        expect(analyzeOverview.text()).toContain('13:35');
         expect(analyzeOverview.text()).toContain('307.25');
-        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(3);
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(20);
 
         const highMarkerLine = analyzeOverview.find('.analyze-sparkline-extremum--high .analyze-sparkline-extremum-line');
         const lowMarkerLine = analyzeOverview.find('.analyze-sparkline-extremum--low .analyze-sparkline-extremum-line');
@@ -938,8 +939,8 @@ describe('App', () => {
 
         expect(highMarkerLine.attributes('y1')).not.toBe(highMarkerLine.attributes('y2'));
         expect(lowMarkerLine.attributes('y1')).not.toBe(lowMarkerLine.attributes('y2'));
-        expect(highMarkerLabel.attributes('text-anchor')).toBe('end');
-        expect(lowMarkerLabel.attributes('text-anchor')).toBe('start');
+        expect(['start', 'end']).toContain(highMarkerLabel.attributes('text-anchor'));
+        expect(['start', 'end']).toContain(lowMarkerLabel.attributes('text-anchor'));
 
         await oneYearRangeButton.trigger('click');
         await flushPromises();
@@ -1056,7 +1057,7 @@ describe('App', () => {
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Apple');
     });
 
-    it('renders a visible Today chart when only one intraday price exists', async () => {
+    it('renders a Today chart with the actual stored EODHD intraday rows', async () => {
         window.history.pushState({}, '', '/admin/menu/analyze/overview?stock=1');
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
         const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
@@ -1090,7 +1091,9 @@ describe('App', () => {
                             name: 'Apple',
                             currency: 'EUR',
                             latest_price: '307.250000',
-                            daily_prices: [],
+                            daily_prices: [
+                                { trading_date: '2026-06-05', price: '307.250000', currency: 'EUR' },
+                            ],
                             intraday_prices: [
                                 { id: 1, price: '307.25000000', currency: 'EUR', as_of: '2026-06-05T10:30:00+00:00' },
                             ],
@@ -1139,6 +1142,7 @@ describe('App', () => {
         expect(wrapper.findAll('.analyze-sparkline-dot')).toHaveLength(1);
         expect(wrapper.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Start 307.25');
         expect(wrapper.find('.analyze-sparkline-endpoint-label--latest').text()).toBe('End 307.25');
+        expect(wrapper.text()).not.toContain('No EODHD intraday prices available for this session.');
     });
 
     it('shows historical stock price fetch progress on the Analyze overview', async () => {

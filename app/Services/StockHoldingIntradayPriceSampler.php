@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\StockHolding;
 use App\Models\StockHoldingIntradayPrice;
-use App\Models\StockPrice;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -12,73 +11,6 @@ use Illuminate\Support\Facades\DB;
 
 class StockHoldingIntradayPriceSampler
 {
-    public function __construct(
-        private StockPriceCatalog $stockPriceCatalog,
-    ) {}
-
-    public function persistLatestTradingDaySamples(StockHolding $holding, bool $fillMissingSamples = false): void
-    {
-        $latestRawDate = $this->stockPriceCatalog
-            ->pricesForHolding($holding)
-            ->whereIn('source_key', EodhdMarketData::sourceKeys())
-            ->whereNotNull('price')
-            ->whereNotNull('as_of')
-            ->latest('as_of')
-            ->value(DB::raw('DATE(as_of)'));
-
-        if ($latestRawDate === null) {
-            return;
-        }
-
-        $prices = $this->stockPriceCatalog
-            ->pricesForHolding($holding)
-            ->whereIn('source_key', EodhdMarketData::sourceKeys())
-            ->whereNotNull('price')
-            ->whereNotNull('as_of')
-            ->whereDate('as_of', $latestRawDate)
-            ->orderBy('as_of')
-            ->orderBy('id')
-            ->get(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type']);
-
-        if ($fillMissingSamples) {
-            $this->persistArraySamples(
-                holding: $holding,
-                latestRawDate: $latestRawDate,
-                prices: $this->sampleArraysExactly(
-                    $prices->map(fn (StockPrice $stockPrice): array => $this->stockPricePayload($stockPrice)),
-                    20,
-                ),
-            );
-
-            return;
-        }
-
-        $sampledPrices = $this->sampleModels($prices, 20);
-        $now = now();
-        $rows = $sampledPrices
-            ->values()
-            ->map(fn (StockPrice $stockPrice, int $index): array => [
-                'stock_holding_id' => $holding->id,
-                'trading_date' => $latestRawDate,
-                'sample_index' => $index,
-                'source_stock_price_id' => $stockPrice->id,
-                'price' => $stockPrice->price,
-                'currency' => $stockPrice->currency,
-                'as_of' => $stockPrice->as_of,
-                'source_name' => $stockPrice->source_name,
-                'price_type' => $stockPrice->price_type,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ])
-            ->all();
-
-        if ($this->storedIntradayRecordCount($holding, $latestRawDate) >= count($rows)) {
-            return;
-        }
-
-        $this->upsertRows($holding, $latestRawDate, $rows);
-    }
-
     /**
      * @param  array<int, array<string, mixed>>  $records
      */
@@ -98,7 +30,7 @@ class StockHoldingIntradayPriceSampler
         }
 
         $latestRawDate = Carbon::parse((string) $prices->last()['as_of'], 'UTC')->toDateString();
-        $sampledPrices = $this->sampleArraysExactly(
+        $sampledPrices = $this->sampleArrays(
             $prices
                 ->filter(fn (array $price): bool => Carbon::parse((string) $price['as_of'], 'UTC')->toDateString() === $latestRawDate)
                 ->values(),
@@ -134,21 +66,6 @@ class StockHoldingIntradayPriceSampler
     }
 
     /**
-     * @return array{source_stock_price_id: int, price: mixed, currency: ?string, as_of: mixed, source_name: ?string, price_type: ?string}
-     */
-    private function stockPricePayload(StockPrice $stockPrice): array
-    {
-        return [
-            'source_stock_price_id' => $stockPrice->id,
-            'price' => $stockPrice->price,
-            'currency' => $stockPrice->currency,
-            'as_of' => $stockPrice->as_of,
-            'source_name' => $stockPrice->source_name,
-            'price_type' => $stockPrice->price_type,
-        ];
-    }
-
-    /**
      * @param  array<int, array<string, mixed>>  $rows
      */
     private function upsertRows(StockHolding $holding, string $latestRawDate, array $rows): void
@@ -161,15 +78,6 @@ class StockHoldingIntradayPriceSampler
 
             StockHoldingIntradayPrice::query()->insert($rows);
         });
-    }
-
-    private function storedIntradayRecordCount(StockHolding $holding, string $latestRawDate): int
-    {
-        return StockHoldingIntradayPrice::query()
-            ->where('stock_holding_id', $holding->id)
-            ->whereDate('trading_date', $latestRawDate)
-            ->where('source_name', 'EODHD intraday')
-            ->count();
     }
 
     /**
@@ -196,12 +104,12 @@ class StockHoldingIntradayPriceSampler
 
     private function recordTimestamp(mixed $timestamp, mixed $datetime): ?Carbon
     {
-        if (is_numeric($timestamp)) {
-            return Carbon::createFromTimestamp((int) $timestamp, 'UTC');
-        }
-
         if (is_string($datetime) && trim($datetime) !== '') {
             return Carbon::parse($datetime, 'UTC');
+        }
+
+        if (is_numeric($timestamp)) {
+            return Carbon::createFromTimestamp((int) $timestamp, 'UTC');
         }
 
         return null;
@@ -216,10 +124,7 @@ class StockHoldingIntradayPriceSampler
         return number_format((float) $value, 8, '.', '');
     }
 
-    /**
-     * @return Collection<int, StockPrice>
-     */
-    private function sampleModels(Collection $prices, int $maximumPoints): Collection
+    private function sampleArrays(Collection $prices, int $maximumPoints): Collection
     {
         if ($prices->count() <= $maximumPoints) {
             return $prices->values();
@@ -232,26 +137,6 @@ class StockHoldingIntradayPriceSampler
             ->map(fn (int $index): int => (int) round(($index / ($maximumPoints - 1)) * $lastIndex))
             ->unique()
             ->values()
-            ->map(fn (int $index): StockPrice => $prices->get($index))
-            ->filter()
-            ->values();
-    }
-
-    private function sampleArraysExactly(Collection $prices, int $maximumPoints): Collection
-    {
-        if ($prices->count() === 0) {
-            return collect();
-        }
-
-        if ($prices->count() === $maximumPoints) {
-            return $prices->values();
-        }
-
-        $lastIndex = $prices->count() - 1;
-        $prices = $prices->values();
-
-        return collect(range(0, $maximumPoints - 1))
-            ->map(fn (int $index): int => (int) round(($index / ($maximumPoints - 1)) * $lastIndex))
             ->map(fn (int $index): array => $prices->get($index))
             ->filter()
             ->values();
