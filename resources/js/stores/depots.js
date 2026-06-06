@@ -10,6 +10,7 @@ export const useDepotStore = defineStore('depots', {
         depotHoldings: [],
         transactions: [],
         exchangeTradingTimes: [],
+        appVersion: null,
         eodhdApiUsage: null,
         priceRefresh: null,
         priceRefreshSettings: null,
@@ -58,6 +59,7 @@ export const useDepotStore = defineStore('depots', {
             try {
                 const data = await request('/admin/depots/active');
                 this.activeDepot = data.depot;
+                this.appVersion = data.app_version ?? this.appVersion;
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;

@@ -10,7 +10,7 @@ describe('Homepage', () => {
     it('renders the wordmark, eyebrow, and balanced headline', () => {
         const wrapper = mountHomepage();
 
-        expect(wrapper.get('.wordmark').text()).toBe('Stocks.');
+        expect(wrapper.get('.wordmark').text()).toBe('GKStocks');
         expect(wrapper.get('.eyebrow').text()).toContain('Total holdings · Live');
         expect(wrapper.get('.headline').text()).toBe('A quiet place to watch your money grow.');
         expect(wrapper.get('.headline-your').text()).toBe('your');

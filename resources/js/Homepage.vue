@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 
 const adminUrl = '/admin/login';
+const logoMarkUrl = '/images/gkstocks-logo-mark.png';
 
 // ── Chart geometry ────────────────────────────────────────────────────────────
 // viewBox is 1440 x 560. Two series are procedurally generated as a placeholder
@@ -294,7 +295,10 @@ onUnmounted(() => {
 
         <!-- Header -->
         <header class="header">
-            <a class="wordmark" href="/" aria-label="Stocks home">Stocks<span class="wordmark-dot" :style="{ color: wordmarkDotColor }">.</span></a>
+            <a class="wordmark" href="/" aria-label="GKStocks home">
+                <img class="wordmark-logo" :src="logoMarkUrl" alt="">
+                <span>GKStocks</span>
+            </a>
             <a class="admin-pill" :href="adminUrl">Admin</a>
         </header>
 
@@ -588,7 +592,7 @@ onUnmounted(() => {
     top: 0;
     left: 0;
     right: 0;
-    z-index: 3;
+    z-index: 20;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -598,26 +602,29 @@ onUnmounted(() => {
 }
 
 .wordmark {
+    align-items: center;
+    background: rgba(1, 2, 4, 0.72);
+    border-radius: 12px;
+    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(14px);
+    display: inline-flex;
+    gap: 14px;
     font-family: 'Newsreader', serif;
-    font-weight: 400;
-    font-size: 21px;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--ink);
+    font-weight: 600;
+    font-size: 24px;
+    letter-spacing: 0;
+    color: #ffffff;
+    padding: 8px 16px 8px 8px;
     text-decoration: none;
-    animation: wordmark-flicker 16s linear infinite;
+    text-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
 }
 
-@keyframes wordmark-flicker {
-    0%, 88%, 100% { opacity: 1; }
-    89%   { opacity: 0.25; }
-    89.1% { opacity: 1; }
-    89.4% { opacity: 0.55; }
-    89.5% { opacity: 1; }
-    90%   { opacity: 0.15; }
-    90.1% { opacity: 1; }
-    90.4% { opacity: 0.7; }
-    90.5% { opacity: 1; }
+.wordmark-logo {
+    border-radius: 10px;
+    display: block;
+    height: 44px;
+    object-fit: contain;
+    width: 44px;
 }
 
 .wordmark-dot {
@@ -1031,7 +1038,6 @@ onUnmounted(() => {
 .stage.is-still .sweep,
 .stage.is-still .glitch-bar,
 .stage.is-still .headline,
-.stage.is-still .wordmark,
 .stage.is-still .line,
 .stage.is-still .area,
 .stage.is-still .dot {
@@ -1070,7 +1076,6 @@ onUnmounted(() => {
     .sweep,
     .glitch-bar,
     .headline,
-    .wordmark,
     .line,
     .area,
     .dot {

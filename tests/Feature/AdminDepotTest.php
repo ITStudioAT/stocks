@@ -3,6 +3,9 @@
 namespace Tests\Feature;
 
 use App\Models\Depot;
+use App\Models\DepotTransaction;
+use App\Models\StockHolding;
+use App\Models\StockPrice;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Spatie\Permission\Models\Role;
@@ -30,6 +33,7 @@ class AdminDepotTest extends TestCase
                         'id',
                         'name',
                         'account_balance',
+                        'current_account_balance',
                         'is_active',
                         'created_at',
                         'updated_at',
@@ -44,6 +48,67 @@ class AdminDepotTest extends TestCase
                     'to',
                 ],
             ]);
+    }
+
+    public function test_admin_can_list_depots_with_current_account_balance(): void
+    {
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create([
+            'account_balance' => '100.00',
+        ]);
+        $holding = StockHolding::factory()->create([
+            'latest_price' => '12.500000',
+        ]);
+
+        DepotTransaction::factory()->create([
+            'depot_id' => $depot->id,
+            'stock_holding_id' => $holding->id,
+            'type' => 'buy',
+            'pieces' => '3.00000000',
+            'total_amount' => '30.00',
+        ]);
+        DepotTransaction::factory()->create([
+            'depot_id' => $depot->id,
+            'stock_holding_id' => $holding->id,
+            'type' => 'sell',
+            'pieces' => '1.00000000',
+            'total_amount' => '10.00',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/depots')
+            ->assertOk()
+            ->assertJsonPath('depots.0.account_balance', '100.00')
+            ->assertJsonPath('depots.0.current_account_balance', '125.00');
+    }
+
+    public function test_admin_can_list_depots_with_current_account_balance_from_latest_stock_price(): void
+    {
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create([
+            'account_balance' => '44286.56',
+        ]);
+        $latestPrice = StockPrice::factory()->create([
+            'price' => '42.60000000',
+        ]);
+        $holding = StockHolding::factory()->create([
+            'latest_price' => null,
+            'latest_stock_price_id' => $latestPrice->id,
+        ]);
+
+        DepotTransaction::factory()->create([
+            'depot_id' => $depot->id,
+            'stock_holding_id' => $holding->id,
+            'type' => 'buy',
+            'pieces' => '300.00000000',
+            'total_amount' => '12780.00',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/depots')
+            ->assertOk()
+            ->assertJsonPath('depots.0.account_balance', '44286.56')
+            ->assertJsonPath('depots.0.current_account_balance', '57066.56');
     }
 
     public function test_admin_can_create_a_depot(): void
@@ -127,7 +192,8 @@ class AdminDepotTest extends TestCase
         $this->actingAs($admin)
             ->getJson('/admin/depots/active')
             ->assertOk()
-            ->assertJsonPath('depot.name', 'Active depot');
+            ->assertJsonPath('depot.name', 'Active depot')
+            ->assertJsonPath('app_version', config('stocks.version'));
     }
 
     public function test_guest_cannot_list_depots(): void
@@ -141,7 +207,8 @@ class AdminDepotTest extends TestCase
 
         $this->actingAs($admin)
             ->get('/admin/menu/depots')
-            ->assertOk();
+            ->assertOk()
+            ->assertSee('<title>GKStocks</title>', false);
     }
 
     public function test_admin_can_open_nested_analyze_menu_page(): void

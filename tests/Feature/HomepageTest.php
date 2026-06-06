@@ -20,6 +20,7 @@ class HomepageTest extends TestCase
         $response->assertStatus(200);
         $response->assertViewIs('homepage');
         $response->assertSee('id="homepage"', false);
+        $response->assertSee('<title>GKStocks</title>', false);
     }
 
     public function test_homepage_loads_the_editorial_google_fonts(): void

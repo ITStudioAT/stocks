@@ -8,6 +8,7 @@ import { useRoleStore } from './stores/roles';
 import { useUserStore } from './stores/users';
 
 const indexRecentPriceLimit = 30;
+const logoMarkUrl = '/images/gkstocks-logo-mark.png';
 
 const { lgAndDown, mdAndDown, smAndDown } = useDisplay();
 
@@ -25,6 +26,7 @@ const {
     depotHoldings,
     transactions,
     exchangeTradingTimes,
+    appVersion,
     eodhdApiUsage,
     priceRefresh,
     priceRefreshSettings,
@@ -148,6 +150,7 @@ const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
 const canManageDashboardAdmin = computed(() => user.value?.roles?.some((role) => ['admin', 'super_admin'].includes(role)) ?? false);
 const profileDisplayName = computed(() => user.value?.name || 'Loading...');
+const appVersionLabel = computed(() => appVersion.value ?? '');
 const dashboardMenuToggleLabel = computed(() => (isDashboardMenuCompact.value
     ? 'Enhance dashboard menu'
     : 'Minify dashboard menu'));
@@ -3387,7 +3390,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
             <v-main class="login-screen">
                 <v-container class="login-container">
                     <v-card class="login-card" elevation="0">
-                        <v-card-title>Stocks admin</v-card-title>
+                        <v-card-title>GKStocks admin</v-card-title>
                         <v-card-subtitle>Sign in to manage your workspace.</v-card-subtitle>
 
                         <v-card-text>
@@ -3474,12 +3477,14 @@ function priceRefreshScheduleFormFromSettings(settings) {
                         class="d-flex align-center ga-3"
                         :class="{ 'justify-center': isDashboardMenuCompact }"
                     >
-                        <v-avatar color="primary" size="40">
-                            <span>STK</span>
-                        </v-avatar>
-                        <div v-if="!isDashboardMenuCompact">
-                            <strong>Stocks</strong>
-                            <div class="text-caption text-medium-emphasis">{{ profileDisplayName }}</div>
+                        <img
+                            class="dashboard-brand-mark"
+                            :src="logoMarkUrl"
+                            alt="GKStocks"
+                        >
+                        <div v-if="!isDashboardMenuCompact" class="dashboard-brand-copy">
+                            <strong>GKStocks</strong>
+                            <div class="dashboard-brand-version text-medium-emphasis">{{ appVersionLabel }}</div>
                         </div>
                     </div>
                 </div>
@@ -5085,19 +5090,19 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                     <tbody>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Depot balance</td>
-                                            <td>{{ formatDepotStockBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotStockBalance() }}</td>
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Cash balance</td>
-                                            <td>{{ formatDepotCashBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotCashBalance() }}</td>
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Account balance</td>
-                                            <td>{{ formatDepotAccountBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotAccountBalance() }}</td>
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Status</td>
-                                            <td>
+                                            <td class="text-right">
                                                 <v-chip color="success" density="comfortable" size="x-small" variant="tonal">Active</v-chip>
                                             </td>
                                         </tr>
@@ -5110,15 +5115,15 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                     <tbody>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Balance 01.01.</td>
-                                            <td>{{ formatDepotYearStartBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotYearStartBalance() }}</td>
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Balance {{ formatCurrentDayMonth() }}</td>
-                                            <td>{{ formatDepotCurrentBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotCurrentBalance() }}</td>
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">+/-</td>
-                                            <td>
+                                            <td class="text-right">
                                                 <span :class="depotBalanceChangeClass()">
                                                     {{ formatDepotBalanceChangePercent() }} · {{ formatDepotBalanceChangeAmount() }}
                                                 </span>
@@ -5443,7 +5448,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         <span v-else class="text-medium-emphasis">Inactive</span>
                                     </td>
                                     <td>{{ depot.name }}</td>
-                                    <td class="text-right">{{ formatAccountBalance(depot.account_balance) }}</td>
+                                    <td class="text-right">{{ formatAccountBalance(depot.current_account_balance ?? depot.account_balance) }} EUR</td>
                                     <td class="text-right">
                                         <v-btn icon variant="text" aria-label="Edit depot" @click="openEditDepotDialog(depot)">
                                             <v-icon icon="mdi-pencil-outline" />
@@ -5855,6 +5860,24 @@ function priceRefreshScheduleFormFromSettings(settings) {
     transition: width 0.2s ease;
 }
 
+.dashboard-brand-mark {
+    border-radius: 10px;
+    display: block;
+    flex: 0 0 auto;
+    height: 44px;
+    object-fit: contain;
+    width: 44px;
+}
+
+.dashboard-brand-copy {
+    min-width: 0;
+}
+
+.dashboard-brand-version {
+    font-size: 0.75rem;
+    line-height: 1.15;
+}
+
 .dashboard-navigation-drawer--compact .dashboard-navigation-header {
     padding-inline: 12px !important;
 }
@@ -5884,12 +5907,6 @@ function priceRefreshScheduleFormFromSettings(settings) {
 .dashboard-compact-menu-item--active {
     background: rgba(var(--v-theme-on-surface), 0.08);
     color: rgb(var(--v-theme-primary));
-}
-
-@media (max-width: 600px), (max-width: 960px) and (max-height: 600px) and (orientation: landscape) {
-    .depot-balance-card :deep(tbody td:nth-child(2)) {
-        text-align: right;
-    }
 }
 
 .mobile-cash-ledger,

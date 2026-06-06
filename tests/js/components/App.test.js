@@ -156,7 +156,7 @@ describe('App', () => {
 
         const wrapper = mountApp();
 
-        expect(wrapper.text()).toContain('Stocks admin');
+        expect(wrapper.text()).toContain('GKStocks admin');
         expect(wrapper.text()).toContain('Sign in to manage your workspace.');
         expect(wrapper.text()).toContain('Password');
         expect(wrapper.text()).toContain('Code');
@@ -469,12 +469,14 @@ describe('App', () => {
                             id: 1,
                             name: 'Long term depot',
                             account_balance: '12345.67',
+                            current_account_balance: '82830.36',
                             is_active: true,
                         },
                         {
                             id: 2,
                             name: 'Trading depot',
                             account_balance: '250.50',
+                            current_account_balance: '250.50',
                             is_active: false,
                         },
                     ],
@@ -710,7 +712,8 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Depots');
         expect(wrapper.text()).toContain('New depot');
         expect(wrapper.text()).toContain('Long term depot');
-        expect(wrapper.text()).toContain('12,345.67');
+        expect(wrapper.text()).toContain('82,830.36 EUR');
+        expect(wrapper.text()).not.toContain('12,345.67');
         expect(wrapper.text()).toContain('Active');
         expect(wrapper.text()).toContain('Inactive');
         expect(fetchMock).toHaveBeenCalledWith('/admin/depots?page=1', expect.any(Object));
@@ -1176,6 +1179,7 @@ describe('App', () => {
                         account_balance: '12345.67',
                         is_active: true,
                     },
+                    app_version: '0.1.5',
                     price_refresh_settings: currentPriceRefreshSettings,
                     index_price_refresh_settings: currentIndexPriceRefreshSettings,
                 }));
@@ -1732,11 +1736,14 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Watch-list');
         expect(wrapper.text()).not.toContain('Free calls remaining');
         expect(wrapper.find('.dashboard-navigation-drawer').classes()).not.toContain('dashboard-navigation-drawer--compact');
-        expect(wrapper.find('.dashboard-navigation-drawer').text()).toContain('Stocks');
+        expect(wrapper.find('.dashboard-navigation-drawer').text()).toContain('GKStocks');
+        expect(wrapper.find('.dashboard-navigation-drawer').text()).toContain('0.1.5');
+        expect(wrapper.find('.dashboard-brand-version').exists()).toBe(true);
+        expect(wrapper.find('.dashboard-navigation-drawer').text()).not.toContain('Admin User');
         await wrapper.find('[aria-label="Minify dashboard menu"]').trigger('click');
         await flushPromises();
         expect(wrapper.find('.dashboard-navigation-drawer').classes()).toContain('dashboard-navigation-drawer--compact');
-        expect(wrapper.find('.dashboard-navigation-drawer').text()).not.toContain('Stocks');
+        expect(wrapper.find('.dashboard-navigation-drawer').text()).not.toContain('GKStocks');
         expect(wrapper.find('[aria-label="Enhance dashboard menu"]').exists()).toBe(true);
         await wrapper.find('[aria-label="Enhance dashboard menu"]').trigger('click');
         await flushPromises();
@@ -3018,6 +3025,7 @@ describe('App', () => {
         expect(wrapper.text()).toContain(`Balance ${sessionHeaderDate(0).slice(0, 6)}`);
         expect(wrapper.text()).toContain('+3.30% · +33.00 EUR');
         expect(wrapper.findAll('.depot-balance-card')).toHaveLength(2);
+        expect(wrapper.find('.depot-balance-card tbody td:nth-child(2)').classes()).toContain('text-right');
         expect(wrapper.text()).toContain('Symbol');
         expect(wrapper.text()).toContain('Name');
         expect(wrapper.text()).toContain('Amount');

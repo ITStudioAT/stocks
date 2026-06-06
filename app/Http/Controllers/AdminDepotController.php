@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Models\Depot;
+use App\Models\DepotTransaction;
+use App\Models\StockHolding;
 use App\Services\EodhdApiUsage;
 use App\Services\IndexPriceRefreshSettings;
 use App\Services\PriceRefreshScheduler;
@@ -42,6 +44,7 @@ class AdminDepotController extends Controller
 
         return response()->json([
             'depot' => $depot ? $this->depotPayload($depot) : null,
+            'app_version' => config('stocks.version'),
             'price_refresh_settings' => $priceRefreshScheduler->payload(),
             'index_price_refresh_settings' => $indexPriceRefreshSettings->payload(),
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
@@ -115,7 +118,7 @@ class AdminDepotController extends Controller
     }
 
     /**
-     * @return array{id: int, name: string, account_balance: string, is_active: bool, created_at: ?string, updated_at: ?string}
+     * @return array{id: int, name: string, account_balance: string, current_account_balance: string, is_active: bool, created_at: ?string, updated_at: ?string}
      */
     private function depotPayload(Depot $depot): array
     {
@@ -123,10 +126,50 @@ class AdminDepotController extends Controller
             'id' => $depot->id,
             'name' => $depot->name,
             'account_balance' => $depot->account_balance,
+            'current_account_balance' => $this->currentAccountBalance($depot),
             'is_active' => $depot->is_active,
             'created_at' => $depot->created_at?->toIso8601String(),
             'updated_at' => $depot->updated_at?->toIso8601String(),
         ];
+    }
+
+    private function currentAccountBalance(Depot $depot): string
+    {
+        $positionPiecesByHoldingId = DepotTransaction::query()
+            ->where('depot_id', $depot->id)
+            ->whereNotNull('stock_holding_id')
+            ->whereIn('type', ['buy', 'sell'])
+            ->get(['stock_holding_id', 'type', 'pieces'])
+            ->groupBy('stock_holding_id')
+            ->map(function ($transactions): float {
+                return $transactions->reduce(function (float $sum, DepotTransaction $transaction): float {
+                    $pieces = (float) $transaction->pieces;
+
+                    return $transaction->type === 'buy'
+                        ? $sum + $pieces
+                        : $sum - $pieces;
+                }, 0.0);
+            })
+            ->filter(fn (float $pieces): bool => $pieces > 0);
+
+        if ($positionPiecesByHoldingId->isEmpty()) {
+            return number_format((float) $depot->account_balance, 2, '.', '');
+        }
+
+        $latestPricesByHoldingId = StockHolding::query()
+            ->with('latestStockPrice')
+            ->whereKey($positionPiecesByHoldingId->keys()->all())
+            ->get()
+            ->mapWithKeys(fn (StockHolding $holding): array => [
+                $holding->id => $holding->latestStockPrice?->price ?? $holding->latest_price,
+            ]);
+
+        $stockBalance = $positionPiecesByHoldingId->reduce(
+            fn (float $sum, float $pieces, int $holdingId): float => $sum + ($pieces * (float) ($latestPricesByHoldingId->get($holdingId) ?? 0)),
+            0.0,
+        );
+
+        return number_format(((float) $depot->account_balance) + $stockBalance, 2, '.', '');
     }
 
     /**
