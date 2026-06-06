@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\StockHolding;
+use App\Models\StockHoldingIntradayPrice;
 use App\Models\StockPrice;
 use App\Services\EodhdMarketData;
 use App\Services\StockPriceCatalog;
@@ -75,12 +76,14 @@ class EodhdMarketDataTest extends TestCase
                 'close' => 472.4,
                 'previousClose' => 469.2,
             ]),
-            'eodhd.com/api/intraday/AMES.XETRA*' => Http::response([
-                [
-                    'timestamp' => Carbon::parse('2026-06-05 07:01:00', 'UTC')->timestamp,
-                    'close' => 470.15,
-                ],
-            ]),
+            'eodhd.com/api/intraday/AMES.XETRA*' => Http::response(
+                collect(range(0, 24))
+                    ->map(fn (int $index): array => [
+                        'timestamp' => Carbon::parse('2026-06-05 07:01:00', 'UTC')->addMinutes($index * 20)->timestamp,
+                        'close' => 470.15 + $index,
+                    ])
+                    ->all(),
+            ),
             'eodhd.com/api/eod/AMES.XETRA*' => Http::sequence()
                 ->push([[
                     'date' => '2026-06-04',
@@ -139,6 +142,25 @@ class EodhdMarketDataTest extends TestCase
             'price' => '469.20000000',
             'price_type' => 'historical_session_end',
             'as_of' => '2026-06-04 15:30:00',
+        ]);
+        $this->assertSame(20, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
+        $this->assertDatabaseHas('stock_holding_intraday_prices', [
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-05',
+            'sample_index' => 0,
+            'price' => '470.15000000',
+            'as_of' => '2026-06-05 07:01:00',
+            'source_name' => 'EODHD intraday',
+            'price_type' => 'intraday',
+        ]);
+        $this->assertDatabaseHas('stock_holding_intraday_prices', [
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-05',
+            'sample_index' => 19,
+            'price' => '494.15000000',
+            'as_of' => '2026-06-05 15:01:00',
+            'source_name' => 'EODHD intraday',
+            'price_type' => 'intraday',
         ]);
     }
 

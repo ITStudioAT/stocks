@@ -784,6 +784,11 @@ describe('App', () => {
                                 { trading_date: '2026-05-20', price: '301.500000', currency: 'EUR' },
                                 { trading_date: '2026-06-04', price: '306.320010', currency: 'EUR' },
                             ],
+                            intraday_prices: [
+                                { id: 1, price: '305.00000000', currency: 'EUR', as_of: '2026-06-05T10:00:00+00:00' },
+                                { id: 2, price: '306.50000000', currency: 'EUR', as_of: '2026-06-05T10:15:00+00:00' },
+                                { id: 3, price: '307.25000000', currency: 'EUR', as_of: '2026-06-05T10:30:00+00:00' },
+                            ],
                         },
                         {
                             id: 2,
@@ -847,6 +852,7 @@ describe('App', () => {
         await flushPromises();
 
         expect(window.location.pathname).toBe('/admin/menu/analyze/overview');
+        expect(window.location.search).toBe('?stock=all');
         const analyzeOverview = wrapper.find('[aria-label="Analyze overview"]');
         expect(analyzeOverview.exists()).toBe(true);
         expect(analyzeOverview.text()).toContain('ALL');
@@ -865,6 +871,7 @@ describe('App', () => {
         await appleCard.trigger('click');
         await flushPromises();
 
+        expect(window.location.search).toBe('?stock=1');
         expect(analyzeOverview.text()).toContain('1 year');
         expect(analyzeOverview.text()).toContain('6 months');
         expect(analyzeOverview.text()).toContain('3 months');
@@ -876,6 +883,8 @@ describe('App', () => {
             .find((button) => button.text() === '1 year');
         const oneMonthRangeButton = analyzeOverview.findAll('.analyze-range-button')
             .find((button) => button.text() === '1 month');
+        const todayRangeButton = analyzeOverview.findAll('.analyze-range-button')
+            .find((button) => button.text() === 'today');
 
         expect(oneYearRangeButton.attributes('aria-pressed')).toBe('true');
         await oneMonthRangeButton.trigger('click');
@@ -894,12 +903,29 @@ describe('App', () => {
             '289.184',
         ]);
         expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(3);
+        expect(analyzeOverview.find('.analyze-sparkline-trend-line').exists()).toBe(true);
+        expect(Number(analyzeOverview.find('.analyze-sparkline-trend-line').attributes('x2'))).toBeGreaterThan(
+            Number(analyzeOverview.find('.analyze-sparkline-trend-line').attributes('x1')),
+        );
+        expect(analyzeOverview.findAll('.analyze-sparkline-endpoint-label')).toHaveLength(2);
+        expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Start 290.00');
+        expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--latest').text()).toBe('End 306.32001');
+        expect(Number(analyzeOverview.find('.analyze-sparkline-endpoint-label--start').attributes('y'))).toBeGreaterThan(500);
+        expect(Number(analyzeOverview.find('.analyze-sparkline-endpoint-label--latest').attributes('y'))).toBeLessThan(30);
         expect(analyzeOverview.find('.analyze-sparkline-extremum--high').exists()).toBe(true);
         expect(analyzeOverview.find('.analyze-sparkline-extremum--low').exists()).toBe(true);
         expect(analyzeOverview.findAll('.analyze-sparkline-extremum-ring')).toHaveLength(2);
         expect(analyzeOverview.findAll('.analyze-sparkline-extremum-dot')).toHaveLength(2);
         expect(analyzeOverview.find('.analyze-sparkline-extremum--high .analyze-sparkline-extremum-label').text()).toBe('306.32001');
         expect(analyzeOverview.find('.analyze-sparkline-extremum--low .analyze-sparkline-extremum-label').text()).toBe('290.00');
+
+        await todayRangeButton.trigger('click');
+        await flushPromises();
+
+        expect(todayRangeButton.attributes('aria-pressed')).toBe('true');
+        expect(analyzeOverview.text()).toContain('12:30');
+        expect(analyzeOverview.text()).toContain('307.25');
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(3);
 
         const highMarkerLine = analyzeOverview.find('.analyze-sparkline-extremum--high .analyze-sparkline-extremum-line');
         const lowMarkerLine = analyzeOverview.find('.analyze-sparkline-extremum--low .analyze-sparkline-extremum-line');
@@ -921,10 +947,185 @@ describe('App', () => {
         await allCard.trigger('click');
         await flushPromises();
 
+        expect(window.location.search).toBe('?stock=all');
         expect(analyzeOverview.text()).not.toContain('6 months');
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/historical-prices/ensure', expect.objectContaining({
             method: 'POST',
         }));
+    });
+
+    it('restores the selected Analyze overview stock from the URL', async () => {
+        window.history.pushState({}, '', '/admin/menu/analyze/overview?stock=1');
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [
+                        {
+                            id: 1,
+                            symbol: 'AAPL',
+                            name: 'Apple',
+                            currency: 'EUR',
+                            latest_price: '306.320010',
+                            daily_prices: [
+                                { trading_date: '2026-06-04', price: '306.320010', currency: 'EUR' },
+                            ],
+                        },
+                        {
+                            id: 2,
+                            symbol: 'MSFT',
+                            name: 'Microsoft',
+                            currency: 'USD',
+                            latest_price: '429.950000',
+                            daily_prices: [],
+                        },
+                    ],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Historical stock prices are available.',
+                    coverage: null,
+                    refresh: null,
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+
+            return Promise.resolve(jsonResponse({}));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const analyzeOverview = wrapper.find('[aria-label="Analyze overview"]');
+        const appleCard = analyzeOverview.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Apple'));
+        const allCard = analyzeOverview.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('ALL'));
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/overview');
+        expect(window.location.search).toBe('?stock=1');
+        expect(appleCard.attributes('aria-pressed')).toBe('true');
+        expect(allCard.attributes('aria-pressed')).toBe('false');
+        expect(analyzeOverview.text()).toContain('1 year');
+    });
+
+    it('renders a visible Today chart when only one intraday price exists', async () => {
+        window.history.pushState({}, '', '/admin/menu/analyze/overview?stock=1');
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [
+                        {
+                            id: 1,
+                            symbol: 'AAPL',
+                            name: 'Apple',
+                            currency: 'EUR',
+                            latest_price: '307.250000',
+                            daily_prices: [],
+                            intraday_prices: [
+                                { id: 1, price: '307.25000000', currency: 'EUR', as_of: '2026-06-05T10:30:00+00:00' },
+                            ],
+                        },
+                    ],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Historical stock prices are available.',
+                    coverage: null,
+                    refresh: null,
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+
+            return Promise.resolve(jsonResponse({}));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const todayRangeButton = wrapper.find('[aria-label="Analyze overview"]').findAll('.analyze-range-button')
+            .find((button) => button.text() === 'today');
+        await todayRangeButton.trigger('click');
+        await flushPromises();
+
+        const linePath = wrapper.find('.analyze-sparkline-line').attributes('d');
+        const areaPath = wrapper.find('.analyze-sparkline-area').attributes('d');
+
+        expect(linePath).toContain(' L ');
+        expect(areaPath).toBe('');
+        expect(wrapper.find('.analyze-sparkline-trend-line').exists()).toBe(false);
+        expect(wrapper.findAll('.analyze-sparkline-dot')).toHaveLength(1);
+        expect(wrapper.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Start 307.25');
+        expect(wrapper.find('.analyze-sparkline-endpoint-label--latest').text()).toBe('End 307.25');
     });
 
     it('shows historical stock price fetch progress on the Analyze overview', async () => {
@@ -2092,10 +2293,19 @@ describe('App', () => {
             'Last',
         ]);
         expect(document.body.querySelector('.index-price-chart-line')).not.toBeNull();
+        expect(document.body.querySelector('.index-price-chart-trend-line')).not.toBeNull();
+        expect(Number(document.body.querySelector('.index-price-chart-trend-line').getAttribute('x2'))).toBeGreaterThan(
+            Number(document.body.querySelector('.index-price-chart-trend-line').getAttribute('x1')),
+        );
         expect(document.body.querySelectorAll('.index-price-chart-point')).toHaveLength(30);
         expect(document.body.querySelectorAll('.index-price-chart-grid-line')).toHaveLength(12);
         expect(document.body.querySelectorAll('.index-price-chart-y-label')).toHaveLength(5);
         expect(document.body.querySelectorAll('.index-price-chart-x-label')).toHaveLength(7);
+        expect(document.body.querySelectorAll('.index-price-chart-endpoint-label')).toHaveLength(2);
+        expect(document.body.querySelector('.index-price-chart-endpoint-label--start').textContent.trim()).toMatch(/^Start /);
+        expect(document.body.querySelector('.index-price-chart-endpoint-label--latest').textContent.trim()).toMatch(/^End /);
+        expect(Number(document.body.querySelector('.index-price-chart-endpoint-label--start').getAttribute('y'))).toBeGreaterThan(220);
+        expect(Number(document.body.querySelector('.index-price-chart-endpoint-label--latest').getAttribute('y'))).toBeLessThan(10);
         expect(document.body.textContent).toContain('6,116.5298');
         expect(document.body.textContent).toContain('09.05');
 

@@ -259,8 +259,16 @@ const selectedAnalyzeDailyPrices = computed(() => filterAnalyzeDailyPrices(
     selectedAnalyzeHolding.value?.daily_prices ?? [],
     selectedAnalyzeHistoryRange.value,
 ));
-const selectedAnalyzeSparkline = computed(() => buildAnalyzeSparkline(selectedAnalyzeDailyPrices.value));
-const showAnalyzeSparklineDots = computed(() => ['3m', '1m', '1w'].includes(selectedAnalyzeHistoryRange.value));
+const selectedAnalyzeIntradayPrices = computed(() => mapAnalyzeIntradayPrices(
+    selectedAnalyzeHolding.value?.intraday_prices ?? [],
+));
+const selectedAnalyzeChartPrices = computed(() => (
+    selectedAnalyzeHistoryRange.value === 'today' && selectedAnalyzeIntradayPrices.value.length > 0
+        ? selectedAnalyzeIntradayPrices.value
+        : selectedAnalyzeDailyPrices.value
+));
+const selectedAnalyzeSparkline = computed(() => buildAnalyzeSparkline(selectedAnalyzeChartPrices.value));
+const showAnalyzeSparklineDots = computed(() => ['3m', '1m', '1w', 'today'].includes(selectedAnalyzeHistoryRange.value));
 const eodhdUsageItems = computed(() => {
     if (!eodhdApiUsage.value) {
         return [];
@@ -503,6 +511,10 @@ watch(
         }
 
         selectedAnalyzeHoldingId.value = null;
+
+        if (activeSection.value === 'analyze' && activeAnalyzeSubsection.value === 'overview') {
+            updateUrlPath({ replace: true });
+        }
     },
 );
 
@@ -632,6 +644,11 @@ function navigateAnalyzeSubsection(subsection) {
     updateUrlPath();
 }
 
+function selectAnalyzeHolding(holdingId) {
+    selectedAnalyzeHoldingId.value = holdingId;
+    updateUrlPath();
+}
+
 function toggleDashboardMenuCompact() {
     isDashboardMenuCompact.value = !isDashboardMenuCompact.value;
 }
@@ -658,6 +675,8 @@ function applyRouteFromPath() {
             activeAnalyzeSubsection.value = isAnalyzeSubsection(subsectionSegment)
                 ? subsectionSegment
                 : 'overview';
+            applyAnalyzeOverviewSelectionFromQuery(new URLSearchParams(window.location.search));
+            updateUrlPath({ replace: true });
 
             return;
         }
@@ -672,7 +691,7 @@ function applyRouteFromPath() {
     activeSection.value = 'dashboard';
 }
 
-function updateUrlPath() {
+function updateUrlPath(options = {}) {
     const path = activeSection.value === 'dashboard'
         ? '/admin/dashboard'
         : activeSection.value === 'profile'
@@ -680,16 +699,40 @@ function updateUrlPath() {
             : activeSection.value === 'analyze'
                 ? `/admin/menu/analyze/${activeAnalyzeSubsection.value}`
                 : `/admin/menu/${activeSection.value}`;
+    const target = activeSection.value === 'analyze' && activeAnalyzeSubsection.value === 'overview'
+        ? `${path}?stock=${selectedAnalyzeHoldingId.value === null ? 'all' : encodeURIComponent(String(selectedAnalyzeHoldingId.value))}`
+        : path;
 
-    if (window.location.pathname === path) {
+    if (`${window.location.pathname}${window.location.search}` === target) {
         return;
     }
 
-    window.history.pushState({}, '', path);
+    if (options.replace) {
+        window.history.replaceState({}, '', target);
+
+        return;
+    }
+
+    window.history.pushState({}, '', target);
 }
 
 function isAnalyzeSubsection(subsection) {
     return analyzeSubmenuItems.some((item) => item.key === subsection);
+}
+
+function applyAnalyzeOverviewSelectionFromQuery(searchParams) {
+    const stock = searchParams.get('stock');
+
+    if (stock === null || stock === '' || stock === 'all') {
+        selectedAnalyzeHoldingId.value = null;
+
+        return;
+    }
+
+    const holdingId = Number(stock);
+    selectedAnalyzeHoldingId.value = Number.isInteger(holdingId) && holdingId > 0
+        ? holdingId
+        : null;
 }
 
 async function requestLoginCode() {
@@ -2029,6 +2072,14 @@ function formatIndexChartValue(value) {
     }).format(value);
 }
 
+function formatIndexChartEndpointPrice(point) {
+    if (!point || Number.isNaN(point.chart_price)) {
+        return '-';
+    }
+
+    return formatIndexHistoryPrice(point.chart_price, selectedIndexWatchItem.value);
+}
+
 function indexChartTickPoints(points) {
     const maximumTickCount = 7;
 
@@ -2049,9 +2100,9 @@ function buildIndexPriceChart(prices) {
     const chartHeight = 260;
     const chartPadding = {
         top: 18,
-        right: 18,
+        right: 92,
         bottom: 44,
-        left: 74,
+        left: 88,
     };
     const plot = {
         left: chartPadding.left,
@@ -2078,6 +2129,11 @@ function buildIndexPriceChart(prices) {
             linePoints: '',
             horizontalGridLines: [],
             verticalGridLines: [],
+            first: null,
+            latest: null,
+            firstLabel: null,
+            latestLabel: null,
+            trendLine: null,
         };
     }
 
@@ -2127,6 +2183,11 @@ function buildIndexPriceChart(prices) {
             x: point.x,
             label: point.label,
         })),
+        first: points[0],
+        latest: points[points.length - 1],
+        firstLabel: chartEndpointLabel(points[0], plot, 'start'),
+        latestLabel: chartEndpointLabel(points[points.length - 1], plot, 'end'),
+        trendLine: chartRegressionLine(points, chartMin, chartRange, plot),
     };
 }
 
@@ -2148,6 +2209,17 @@ function filterAnalyzeDailyPrices(prices, rangeKey) {
     const startDate = dateStringDaysBefore(latestDate, days);
 
     return chartPrices.filter((price) => price.trading_date >= startDate);
+}
+
+function mapAnalyzeIntradayPrices(prices) {
+    return [...prices]
+        .map((price) => ({
+            ...price,
+            trading_date: price.as_of,
+            chart_price: analyzeDailyPriceValue(price),
+        }))
+        .filter((price) => price.as_of && !Number.isNaN(price.chart_price))
+        .sort((first, second) => first.as_of.localeCompare(second.as_of));
 }
 
 function analyzeDailyPriceValue(price) {
@@ -2179,7 +2251,7 @@ function buildAnalyzeSparkline(prices) {
     const plot = {
         left: 104,
         top: 38,
-        right: width - 40,
+        right: width - 160,
         bottom: height - 72,
     };
     const chartPrices = prices.filter((price) => !Number.isNaN(price.chart_price));
@@ -2196,6 +2268,9 @@ function buildAnalyzeSparkline(prices) {
             verticalGridLines: [],
             first: null,
             latest: null,
+            firstLabel: null,
+            latestLabel: null,
+            trendLine: null,
             highMarker: null,
             lowMarker: null,
             min: null,
@@ -2244,6 +2319,9 @@ function buildAnalyzeSparkline(prices) {
         })),
         first: points[0],
         latest: points[points.length - 1],
+        firstLabel: chartEndpointLabel(points[0], plot, 'start'),
+        latestLabel: chartEndpointLabel(points[points.length - 1], plot, 'end'),
+        trendLine: chartRegressionLine(points, chartMin, chartRange, plot),
         highMarker: analyzeSparklineExtremumMarker(highPoint, 'high', plot),
         lowMarker: analyzeSparklineExtremumMarker(lowPoint, 'low', plot),
         min,
@@ -2251,6 +2329,66 @@ function buildAnalyzeSparkline(prices) {
         trend: points[points.length - 1].chart_price > points[0].chart_price
             ? 'up'
             : (points[points.length - 1].chart_price < points[0].chart_price ? 'down' : 'flat'),
+    };
+}
+
+function chartRegressionLine(points, chartMin, chartRange, plot) {
+    if (points.length < 2) {
+        return null;
+    }
+
+    const pointCount = points.length;
+    const sums = points.reduce((totals, point, index) => ({
+        x: totals.x + index,
+        y: totals.y + point.chart_price,
+        xy: totals.xy + index * point.chart_price,
+        xx: totals.xx + index * index,
+    }), {
+        x: 0,
+        y: 0,
+        xy: 0,
+        xx: 0,
+    });
+    const denominator = pointCount * sums.xx - sums.x * sums.x;
+
+    if (denominator === 0) {
+        return null;
+    }
+
+    const slope = (pointCount * sums.xy - sums.x * sums.y) / denominator;
+    const intercept = (sums.y - slope * sums.x) / pointCount;
+    const firstValue = intercept;
+    const latestValue = slope * (pointCount - 1) + intercept;
+
+    return {
+        x1: points[0].x,
+        y1: chartValueToY(firstValue, chartMin, chartRange, plot),
+        x2: points[points.length - 1].x,
+        y2: chartValueToY(latestValue, chartMin, chartRange, plot),
+        slope,
+    };
+}
+
+function chartValueToY(value, chartMin, chartRange, plot) {
+    const normalized = (value - chartMin) / chartRange;
+
+    return plot.bottom - normalized * (plot.bottom - plot.top);
+}
+
+function chartEndpointLabel(point, plot, side) {
+    if (!point) {
+        return null;
+    }
+
+    const verticalOffset = 18;
+
+    return {
+        ...point,
+        labelX: point.x,
+        labelY: side === 'start'
+            ? plot.bottom + verticalOffset
+            : plot.top - verticalOffset,
+        labelAnchor: side === 'start' ? 'start' : 'end',
     };
 }
 
@@ -2285,7 +2423,12 @@ function analyzeSparklineExtremumMarker(point, direction, plot) {
 
 function analyzeSparklinePath(points) {
     if (points.length === 1) {
-        return `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+        const segmentOffset = 34;
+
+        return [
+            `M ${(points[0].x - segmentOffset).toFixed(2)} ${points[0].y.toFixed(2)}`,
+            `L ${(points[0].x + segmentOffset).toFixed(2)} ${points[0].y.toFixed(2)}`,
+        ].join(' ');
     }
 
     return points.reduce((path, point, index) => {
@@ -2299,6 +2442,10 @@ function analyzeSparklinePath(points) {
 
 function analyzeSparklineAreaPath(points, plot) {
     if (points.length === 0) {
+        return '';
+    }
+
+    if (points.length === 1) {
         return '';
     }
 
@@ -2345,6 +2492,15 @@ function formatAnalyzeSparklinePrice(point) {
 }
 
 function formatAnalyzeSparklineDate(point) {
+    if (point?.as_of) {
+        return new Intl.DateTimeFormat('de-AT', {
+            day: '2-digit',
+            month: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+        }).format(new Date(point.as_of));
+    }
+
     if (!point?.trading_date) {
         return '-';
     }
@@ -4374,6 +4530,14 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                             >
                                                 {{ gridLine.label }}
                                             </text>
+                                            <line
+                                                v-if="selectedIndexChart.trendLine"
+                                                class="index-price-chart-trend-line"
+                                                :x1="selectedIndexChart.trendLine.x1"
+                                                :y1="selectedIndexChart.trendLine.y1"
+                                                :x2="selectedIndexChart.trendLine.x2"
+                                                :y2="selectedIndexChart.trendLine.y2"
+                                            />
                                             <polyline
                                                 class="index-price-chart-line"
                                                 :points="selectedIndexChart.linePoints"
@@ -4386,6 +4550,24 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                                 :cy="point.y"
                                                 r="4"
                                             />
+                                            <text
+                                                v-if="selectedIndexChart.firstLabel"
+                                                class="index-price-chart-endpoint-label index-price-chart-endpoint-label--start"
+                                                :x="selectedIndexChart.firstLabel.labelX"
+                                                :y="selectedIndexChart.firstLabel.labelY"
+                                                :text-anchor="selectedIndexChart.firstLabel.labelAnchor"
+                                            >
+                                                Start {{ formatIndexChartEndpointPrice(selectedIndexChart.firstLabel) }}
+                                            </text>
+                                            <text
+                                                v-if="selectedIndexChart.latestLabel"
+                                                class="index-price-chart-endpoint-label index-price-chart-endpoint-label--latest"
+                                                :x="selectedIndexChart.latestLabel.labelX"
+                                                :y="selectedIndexChart.latestLabel.labelY"
+                                                :text-anchor="selectedIndexChart.latestLabel.labelAnchor"
+                                            >
+                                                End {{ formatIndexChartEndpointPrice(selectedIndexChart.latestLabel) }}
+                                            </text>
                                         </svg>
                                         <div v-else class="text-body-2 text-medium-emphasis">
                                             No chart data available.
@@ -4497,7 +4679,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                     class="index-watch-card analyze-holding-card analyze-holding-card--all"
                                     :class="{ 'analyze-holding-card--active': selectedAnalyzeHoldingId === null }"
                                     :aria-pressed="selectedAnalyzeHoldingId === null"
-                                    @click="selectedAnalyzeHoldingId = null"
+                                    @click="selectAnalyzeHolding(null)"
                                 >
                                     <span class="index-watch-card-symbol">ALL</span>
                                 </button>
@@ -4508,7 +4690,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                     class="index-watch-card analyze-holding-card"
                                     :class="{ 'analyze-holding-card--active': selectedAnalyzeHoldingId === holding.id }"
                                     :aria-pressed="selectedAnalyzeHoldingId === holding.id"
-                                    @click="selectedAnalyzeHoldingId = holding.id"
+                                    @click="selectAnalyzeHolding(holding.id)"
                                 >
                                     <span class="index-watch-card-label analyze-holding-card-name">
                                         {{ holding.name || holding.symbol || '-' }}
@@ -4603,6 +4785,14 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         class="analyze-sparkline-area"
                                         :d="selectedAnalyzeSparkline.areaPath"
                                     />
+                                    <line
+                                        v-if="selectedAnalyzeSparkline.trendLine"
+                                        class="analyze-sparkline-trend-line"
+                                        :x1="selectedAnalyzeSparkline.trendLine.x1"
+                                        :y1="selectedAnalyzeSparkline.trendLine.y1"
+                                        :x2="selectedAnalyzeSparkline.trendLine.x2"
+                                        :y2="selectedAnalyzeSparkline.trendLine.y2"
+                                    />
                                     <path
                                         class="analyze-sparkline-line"
                                         :class="`analyze-sparkline-line--${selectedAnalyzeSparkline.trend}`"
@@ -4611,7 +4801,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                     <template v-if="showAnalyzeSparklineDots">
                                         <circle
                                             v-for="(point, index) in selectedAnalyzeSparkline.points"
-                                            :key="`analyze-point-dot-${point.trading_date || index}`"
+                                            :key="`analyze-point-dot-${point.trading_date || index}-${index}`"
                                             class="analyze-sparkline-dot"
                                             :cx="point.x"
                                             :cy="point.y"
@@ -4630,6 +4820,24 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         :cy="selectedAnalyzeSparkline.latest.y"
                                         r="4"
                                     />
+                                    <text
+                                        v-if="selectedAnalyzeSparkline.firstLabel"
+                                        class="analyze-sparkline-endpoint-label analyze-sparkline-endpoint-label--start"
+                                        :x="selectedAnalyzeSparkline.firstLabel.labelX"
+                                        :y="selectedAnalyzeSparkline.firstLabel.labelY"
+                                        :text-anchor="selectedAnalyzeSparkline.firstLabel.labelAnchor"
+                                    >
+                                        Start {{ formatAnalyzeSparklineAxisPrice(selectedAnalyzeSparkline.firstLabel.chart_price) }}
+                                    </text>
+                                    <text
+                                        v-if="selectedAnalyzeSparkline.latestLabel"
+                                        class="analyze-sparkline-endpoint-label analyze-sparkline-endpoint-label--latest"
+                                        :x="selectedAnalyzeSparkline.latestLabel.labelX"
+                                        :y="selectedAnalyzeSparkline.latestLabel.labelY"
+                                        :text-anchor="selectedAnalyzeSparkline.latestLabel.labelAnchor"
+                                    >
+                                        End {{ formatAnalyzeSparklineAxisPrice(selectedAnalyzeSparkline.latestLabel.chart_price) }}
+                                    </text>
                                     <g
                                         v-if="selectedAnalyzeSparkline.highMarker"
                                         class="analyze-sparkline-extremum analyze-sparkline-extremum--high"
@@ -6412,6 +6620,16 @@ function priceRefreshScheduleFormFromSettings(settings) {
     vector-effect: non-scaling-stroke;
 }
 
+.analyze-sparkline-trend-line {
+    fill: none;
+    opacity: 0.62;
+    stroke: #f97316;
+    stroke-dasharray: 1 8;
+    stroke-linecap: round;
+    stroke-width: 1.7;
+    vector-effect: non-scaling-stroke;
+}
+
 .analyze-sparkline-line--down {
     stroke: rgb(var(--v-theme-error));
 }
@@ -6494,6 +6712,21 @@ function priceRefreshScheduleFormFromSettings(settings) {
     stroke: rgb(var(--v-theme-surface));
     stroke-linejoin: round;
     stroke-width: 4;
+}
+
+.analyze-sparkline-endpoint-label {
+    dominant-baseline: middle;
+    fill: rgba(var(--v-theme-on-surface), 0.82);
+    font-size: 12px;
+    font-weight: 800;
+    paint-order: stroke;
+    stroke: rgb(var(--v-theme-surface));
+    stroke-linejoin: round;
+    stroke-width: 4;
+}
+
+.analyze-sparkline-endpoint-label--latest {
+    fill: rgb(var(--v-theme-primary));
 }
 
 .index-price-dialog-title {
@@ -6635,11 +6868,35 @@ function priceRefreshScheduleFormFromSettings(settings) {
     vector-effect: non-scaling-stroke;
 }
 
+.index-price-chart-trend-line {
+    opacity: 0.62;
+    stroke: #f97316;
+    stroke-dasharray: 1 7;
+    stroke-linecap: round;
+    stroke-width: 1.55;
+    vector-effect: non-scaling-stroke;
+}
+
 .index-price-chart-point {
     fill: rgb(var(--v-theme-primary));
     stroke: rgb(var(--v-theme-surface));
     stroke-width: 2;
     vector-effect: non-scaling-stroke;
+}
+
+.index-price-chart-endpoint-label {
+    dominant-baseline: middle;
+    fill: rgba(var(--v-theme-on-surface), 0.82);
+    font-size: 11px;
+    font-weight: 800;
+    paint-order: stroke;
+    stroke: rgb(var(--v-theme-surface));
+    stroke-linejoin: round;
+    stroke-width: 4;
+}
+
+.index-price-chart-endpoint-label--latest {
+    fill: rgb(var(--v-theme-primary));
 }
 
 .flatex-price-button {

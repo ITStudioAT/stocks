@@ -48,4 +48,12 @@ class StockHolding extends Model
     {
         return $this->hasMany(StockHoldingDailyPrice::class);
     }
+
+    /**
+     * @return HasMany<StockHoldingIntradayPrice, $this>
+     */
+    public function intradayPrices(): HasMany
+    {
+        return $this->hasMany(StockHoldingIntradayPrice::class);
+    }
 }

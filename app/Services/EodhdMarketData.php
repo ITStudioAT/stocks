@@ -30,6 +30,7 @@ class EodhdMarketData
 
     public function __construct(
         private StockPriceCatalog $stockPriceCatalog,
+        private StockHoldingIntradayPriceSampler $intradayPriceSampler,
         private WebQuoteValidator $validator,
         private MarketHours $marketHours,
         private EodhdApiClient $apiClient,
@@ -111,6 +112,7 @@ class EodhdMarketData
             $validatedQuote,
             $holding->trading_times ?? $this->marketHours->tradingTimes($validatedQuote->quote),
         );
+        $this->intradayPriceSampler->persistLatestTradingDaySamples($holding);
 
         return (string) $stockPrice->price;
     }
@@ -125,6 +127,7 @@ class EodhdMarketData
             $this->intradayUrl($holding, $from, $until),
         );
         $records = $this->intradayRecords($holding, $from, $until, $errors);
+        $this->intradayPriceSampler->persistIntradayRecords($holding, $records);
         $record = $this->firstPriceRecordBetween($records, $from, $until);
 
         if ($record === null) {
@@ -169,11 +172,15 @@ class EodhdMarketData
 
     public function storeHistoricalQuote(StockHolding $holding, ValidatedQuote $validatedQuote): StockPrice
     {
-        return $this->stockPriceCatalog->store(
+        $stockPrice = $this->stockPriceCatalog->store(
             $holding,
             $validatedQuote,
             $holding->trading_times ?? $this->marketHours->tradingTimes($validatedQuote->quote),
         );
+
+        $this->intradayPriceSampler->persistLatestTradingDaySamples($holding);
+
+        return $stockPrice;
     }
 
     public function exchangeCodeForHolding(StockHolding $holding): string
@@ -630,6 +637,7 @@ class EodhdMarketData
             $result->selectedQuote,
             $this->marketHours->tradingTimes($quote),
         );
+        $this->intradayPriceSampler->persistLatestTradingDaySamples($holding);
 
         $holding->update([
             'currency' => $quote->currency ?? $holding->currency,

@@ -7,6 +7,7 @@ use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
 use App\Models\StockHoldingDailyPrice;
+use App\Models\StockHoldingIntradayPrice;
 use App\Models\StockPrice;
 use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
@@ -80,6 +81,7 @@ class AdminDepotHoldingTest extends TestCase
                         'price_type',
                         'price_spread_pct',
                         'recent_prices',
+                        'intraday_prices',
                         'daily_prices',
                         'validation_errors',
                         'created_at',
@@ -898,6 +900,46 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.recent_prices.1.price', '100.25000000')
             ->assertJsonPath('holdings.0.recent_prices.2.price', '101.00000000')
             ->assertJsonMissingPath('holdings.0.recent_prices.3');
+    }
+
+    public function test_admin_listing_includes_sampled_intraday_prices_from_latest_available_day(): void
+    {
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'INTRA',
+            'currency' => 'EUR',
+        ]);
+
+        $this->createMedianQuote($holding, '2026-06-03 12:00:00', '90.00');
+        $this->createMedianQuote($holding, '2026-06-03 12:15:00', '91.00');
+
+        foreach (range(0, 24) as $index) {
+            $this->createMedianQuote(
+                holding: $holding,
+                asOf: Carbon::parse('2026-06-04 09:00:00', 'UTC')->addMinutes($index * 5)->toDateTimeString(),
+                price: number_format(100 + $index, 2, '.', ''),
+            );
+        }
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonCount(20, 'holdings.0.intraday_prices')
+            ->assertJsonPath('holdings.0.intraday_prices.0.price', '100.00000000')
+            ->assertJsonPath('holdings.0.intraday_prices.0.as_of', '2026-06-04T09:00:00+00:00')
+            ->assertJsonPath('holdings.0.intraday_prices.19.price', '124.00000000')
+            ->assertJsonPath('holdings.0.intraday_prices.19.as_of', '2026-06-04T11:00:00+00:00');
+
+        $this->assertSame(20, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
+
+        StockPrice::query()->delete();
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonCount(20, 'holdings.0.intraday_prices')
+            ->assertJsonPath('holdings.0.intraday_prices.0.price', '100.00000000')
+            ->assertJsonPath('holdings.0.intraday_prices.19.price', '124.00000000');
     }
 
     public function test_admin_listing_falls_back_to_latest_price_when_session_has_no_close_quote(): void
