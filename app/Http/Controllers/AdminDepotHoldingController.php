@@ -84,6 +84,22 @@ class AdminDepotHoldingController extends Controller
         ]);
     }
 
+    public function intradayCandles(StockHolding $holding): JsonResponse
+    {
+        $intraday = $this->eodhdMarketData->ensureLastTradingDayFiveMinuteCandles($holding);
+
+        return response()->json([
+            'holding' => [
+                'id' => $holding->id,
+                'symbol' => $holding->symbol,
+                'name' => $holding->name,
+                'currency' => $holding->currency,
+            ],
+            'intraday' => $intraday,
+            'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
+        ]);
+    }
+
     public function exportPdf(): Response
     {
         return $this->watchlistPdfReport->download();

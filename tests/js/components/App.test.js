@@ -812,6 +812,36 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
             }
 
+            if (path === '/admin/watchlist/holdings/1/intraday-candles') {
+                return Promise.resolve(jsonResponse({
+                    holding: {
+                        id: 1,
+                        symbol: 'AAPL',
+                        name: 'Apple',
+                        currency: 'EUR',
+                    },
+                    intraday: {
+                        title: 'Intraday 05.06.2026 - 5m',
+                        trading_date: '2026-06-05',
+                        interval: '5m',
+                        rows: [
+                            {
+                                id: 1,
+                                timestamp: 1780642800,
+                                gmtoffset: 0,
+                                datetime: '2026-06-05 07:00:00',
+                                open: '470.10000000',
+                                high: '471.50000000',
+                                low: '469.90000000',
+                                close: '470.15000000',
+                                volume: 12345,
+                                currency: 'EUR',
+                            },
+                        ],
+                    },
+                }));
+            }
+
             if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options?.method === 'POST') {
                 return Promise.resolve(jsonResponse({
                     message: 'Historical stock prices are available.',
@@ -1005,6 +1035,14 @@ describe('App', () => {
                             latest_price: '429.950000',
                             daily_prices: [],
                         },
+                        {
+                            id: 3,
+                            symbol: 'NVDA',
+                            name: 'Nvidia',
+                            currency: 'USD',
+                            latest_price: '920.000000',
+                            daily_prices: [],
+                        },
                     ],
                     meta: pagination,
                     price_refresh_settings: priceRefreshSettings(),
@@ -1014,6 +1052,62 @@ describe('App', () => {
 
             if (path === '/admin/watchlist/exchange-trading-times') {
                 return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/watchlist/holdings/1/intraday-candles') {
+                return Promise.resolve(jsonResponse({
+                    holding: {
+                        id: 1,
+                        symbol: 'AAPL',
+                        name: 'Apple',
+                        currency: 'EUR',
+                    },
+                    intraday: {
+                        title: 'Intraday 05.06.2026 - 5m',
+                        trading_date: '2026-06-05',
+                        interval: '5m',
+                        rows: [
+                            {
+                                timestamp: 1780642800,
+                                gmtoffset: 0,
+                                datetime: '2026-06-05 07:00:00',
+                                open: '470.10000000',
+                                high: '471.50000000',
+                                low: '469.90000000',
+                                close: '470.15000000',
+                                volume: 12345,
+                            },
+                        ],
+                    },
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/3/intraday-candles') {
+                return Promise.resolve(jsonResponse({
+                    holding: {
+                        id: 3,
+                        symbol: 'NVDA',
+                        name: 'Nvidia',
+                        currency: 'USD',
+                    },
+                    intraday: {
+                        title: 'Intraday 05.06.2026 - 5m',
+                        trading_date: '2026-06-05',
+                        interval: '5m',
+                        rows: [
+                            {
+                                timestamp: 1780643100,
+                                gmtoffset: 0,
+                                datetime: '2026-06-05 07:05:00',
+                                open: '920.10000000',
+                                high: '925.50000000',
+                                low: '919.90000000',
+                                close: '924.15000000',
+                                volume: 98765,
+                            },
+                        ],
+                    },
+                }));
             }
 
             if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options?.method === 'POST') {
@@ -1055,6 +1149,25 @@ describe('App', () => {
         expect(window.location.pathname).toBe('/admin/menu/analyze/detail');
         expect(window.location.search).toBe('?stock=1');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Apple');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Intraday 05.06.2026 - 5m');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('470.15000000');
+
+        const detailStockMenu = wrapper.find('[aria-label="Analyze detail stocks"]');
+        expect(detailStockMenu.exists()).toBe(true);
+        expect(detailStockMenu.text()).toContain('Apple');
+        expect(detailStockMenu.text()).toContain('Microsoft');
+        expect(detailStockMenu.text()).toContain('Nvidia');
+
+        const nvidiaButton = detailStockMenu.findAll('button')
+            .find((button) => button.text().includes('Nvidia'));
+        await nvidiaButton.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/detail');
+        expect(window.location.search).toBe('?stock=3');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Nvidia');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('924.15000000');
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/3/intraday-candles', expect.anything());
     });
 
     it('renders a Today chart with the actual stored EODHD intraday rows', async () => {

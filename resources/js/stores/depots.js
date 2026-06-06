@@ -18,6 +18,8 @@ export const useDepotStore = defineStore('depots', {
         queueStatus: null,
         stockHistoricalPriceCoverage: null,
         stockHistoricalPriceRefresh: null,
+        analyzeIntradayCandles: null,
+        analyzeIntradayCandlesRequestedId: null,
         uiPreferences: {
             depot_price_source: 'latest',
         },
@@ -44,12 +46,14 @@ export const useDepotStore = defineStore('depots', {
         exchangeTradingTimesLoading: false,
         queueStatusLoading: false,
         stockSearchLoading: false,
+        analyzeIntradayCandlesLoading: false,
         error: '',
         holdingsError: '',
         transactionsError: '',
         exchangeTradingTimesError: '',
         queueStatusError: '',
         stockSearchError: '',
+        analyzeIntradayCandlesError: '',
     }),
     actions: {
         async loadActiveDepot() {
@@ -396,6 +400,37 @@ export const useDepotStore = defineStore('depots', {
         },
         clearStockHistoricalPriceRefresh() {
             this.stockHistoricalPriceRefresh = null;
+        },
+        async loadHoldingIntradayCandles(id) {
+            this.analyzeIntradayCandlesRequestedId = id;
+            this.analyzeIntradayCandlesLoading = true;
+            this.analyzeIntradayCandlesError = '';
+
+            try {
+                const data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`);
+
+                if (this.analyzeIntradayCandlesRequestedId === id) {
+                    this.analyzeIntradayCandles = data;
+                    this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+                }
+
+                return data;
+            } catch (error) {
+                if (this.analyzeIntradayCandlesRequestedId === id) {
+                    this.analyzeIntradayCandlesError = error.message;
+                }
+
+                throw error;
+            } finally {
+                if (this.analyzeIntradayCandlesRequestedId === id) {
+                    this.analyzeIntradayCandlesLoading = false;
+                }
+            }
+        },
+        clearHoldingIntradayCandles() {
+            this.analyzeIntradayCandlesRequestedId = null;
+            this.analyzeIntradayCandles = null;
+            this.analyzeIntradayCandlesError = '';
         },
         async updatePriceRefreshSettings(payload) {
             this.holdingsError = '';

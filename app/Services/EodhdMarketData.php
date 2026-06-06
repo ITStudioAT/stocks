@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
+use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockPrice;
 use App\Services\WebMarketData\DTO\InstrumentIdentity;
 use App\Services\WebMarketData\DTO\ParsedQuote;
@@ -184,6 +185,37 @@ class EodhdMarketData
         Cache::forget($emptySessionCacheKey);
 
         $this->intradayPriceSampler->persistIntradayRecords($holding, $records);
+    }
+
+    /**
+     * @return array{title: string, trading_date: string, interval: string, rows: array<int, array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}>}|null
+     */
+    public function ensureLastTradingDayFiveMinuteCandles(StockHolding $holding): ?array
+    {
+        $session = $this->lastCompletedTradingSession($holding);
+
+        if ($session === null) {
+            return null;
+        }
+
+        if (! $this->storedIntradayCandleQuery($holding, $session['date'], '5m')->exists()) {
+            $errors = [];
+            $records = $this->intradayRecordsForInterval($holding, $session['open'], $session['close'], '5m', $errors);
+            $this->persistIntradayCandles(
+                $holding,
+                $session['date'],
+                '5m',
+                $records,
+                $this->intradayUrl($holding, $session['open'], $session['close'], '5m'),
+            );
+        }
+
+        return [
+            'title' => 'Intraday '.$session['date']->format('d.m.Y').' - 5m',
+            'trading_date' => $session['date']->toDateString(),
+            'interval' => '5m',
+            'rows' => $this->storedIntradayCandlePayload($holding, $session['date'], '5m'),
+        ];
     }
 
     public function intradaySessionDate(StockHolding $holding): ?string
@@ -1033,9 +1065,137 @@ class EodhdMarketData
         return "{$this->baseUrl()}/real-time/{$this->eodhdSymbol($holding)}?fmt=json";
     }
 
-    private function intradayUrl(StockHolding $holding, Carbon $from, Carbon $until): string
+    /**
+     * @return array{date: Carbon, open: Carbon, close: Carbon}|null
+     */
+    private function lastCompletedTradingSession(StockHolding $holding): ?array
     {
-        return "{$this->baseUrl()}/intraday/{$this->eodhdSymbol($holding)}?from={$from->copy()->utc()->timestamp}&to={$until->copy()->utc()->timestamp}&interval=1m&fmt=json";
+        $session = $this->sessionPriceWindow($holding, null);
+
+        if ($session === null) {
+            return null;
+        }
+
+        if ($session['is_open']) {
+            return [
+                'date' => $session['previous_date'],
+                'open' => $session['previous_open'],
+                'close' => $session['previous_close'],
+            ];
+        }
+
+        return [
+            'date' => $session['date'],
+            'open' => $session['open'],
+            'close' => $session['close'],
+        ];
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $records
+     */
+    private function persistIntradayCandles(
+        StockHolding $holding,
+        Carbon $tradingDate,
+        string $interval,
+        array $records,
+        string $sourceUrl,
+    ): void {
+        $now = now();
+        $rows = collect($records)
+            ->map(fn (array $record): ?array => $this->intradayCandleRow($holding, $tradingDate, $interval, $record, $sourceUrl, $now))
+            ->filter()
+            ->values()
+            ->all();
+
+        if ($rows === []) {
+            return;
+        }
+
+        StockHoldingIntradayCandle::query()->upsert(
+            $rows,
+            uniqueBy: ['stock_holding_id', 'interval', 'as_of'],
+            update: ['timestamp', 'gmtoffset', 'datetime', 'open', 'high', 'low', 'close', 'volume', 'currency', 'source_key', 'source_name', 'source_url', 'raw_payload', 'updated_at'],
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $record
+     * @return array{stock_holding_id: int|null, trading_date: string, interval: string, as_of: Carbon, timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int, currency: ?string, source_key: string, source_name: string, source_url: string, raw_payload: ?string, created_at: Carbon, updated_at: Carbon}|null
+     */
+    private function intradayCandleRow(
+        StockHolding $holding,
+        Carbon $tradingDate,
+        string $interval,
+        array $record,
+        string $sourceUrl,
+        Carbon $now,
+    ): ?array {
+        $asOf = $this->timestamp(Arr::get($record, 'timestamp'), Arr::get($record, 'datetime'));
+
+        if ($asOf === null) {
+            return null;
+        }
+
+        return [
+            'stock_holding_id' => $holding->id,
+            'trading_date' => $tradingDate->toDateString(),
+            'interval' => $interval,
+            'as_of' => $asOf,
+            'timestamp' => $this->integerOrNull(Arr::get($record, 'timestamp')),
+            'gmtoffset' => $this->integerOrNull(Arr::get($record, 'gmtoffset')),
+            'datetime' => $this->stringOrNull(Arr::get($record, 'datetime')),
+            'open' => $this->decimal(Arr::get($record, 'open')),
+            'high' => $this->decimal(Arr::get($record, 'high')),
+            'low' => $this->decimal(Arr::get($record, 'low')),
+            'close' => $this->decimal(Arr::get($record, 'close')),
+            'volume' => $this->positiveIntegerOrNull(Arr::get($record, 'volume')),
+            'currency' => $holding->currency,
+            'source_key' => self::IntradaySourceKey,
+            'source_name' => 'EODHD intraday',
+            'source_url' => $sourceUrl,
+            'raw_payload' => $this->jsonPayload($record),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ];
+    }
+
+    /**
+     * @return array<int, array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}>
+     */
+    private function storedIntradayCandlePayload(StockHolding $holding, Carbon $tradingDate, string $interval): array
+    {
+        return $this->storedIntradayCandleQuery($holding, $tradingDate, $interval)
+            ->orderBy('as_of')
+            ->orderBy('id')
+            ->get(['timestamp', 'gmtoffset', 'datetime', 'open', 'high', 'low', 'close', 'volume'])
+            ->map(fn (StockHoldingIntradayCandle $candle): array => [
+                'timestamp' => $candle->timestamp,
+                'gmtoffset' => $candle->gmtoffset,
+                'datetime' => $candle->datetime,
+                'open' => $candle->open === null ? null : (string) $candle->open,
+                'high' => $candle->high === null ? null : (string) $candle->high,
+                'low' => $candle->low === null ? null : (string) $candle->low,
+                'close' => $candle->close === null ? null : (string) $candle->close,
+                'volume' => $candle->volume,
+            ])
+            ->all();
+    }
+
+    /**
+     * @return Builder<StockHoldingIntradayCandle>
+     */
+    private function storedIntradayCandleQuery(StockHolding $holding, Carbon $tradingDate, string $interval): Builder
+    {
+        return StockHoldingIntradayCandle::query()
+            ->where('stock_holding_id', $holding->id)
+            ->whereDate('trading_date', $tradingDate->toDateString())
+            ->where('interval', $interval);
+    }
+
+    private function intradayUrl(StockHolding $holding, Carbon $from, Carbon $until, string $interval = '1m'): string
+    {
+        return "{$this->baseUrl()}/intraday/{$this->eodhdSymbol($holding)}?from={$from->copy()->utc()->timestamp}&to={$until->copy()->utc()->timestamp}&interval={$interval}&fmt=json";
     }
 
     private function eodUrl(StockHolding $holding, Carbon $sessionDate): string
@@ -1176,6 +1336,34 @@ class EodhdMarketData
         $value = trim((string) $value);
 
         return $value !== '' ? $value : null;
+    }
+
+    private function integerOrNull(mixed $value): ?int
+    {
+        if (! is_numeric($value)) {
+            return null;
+        }
+
+        return (int) $value;
+    }
+
+    private function positiveIntegerOrNull(mixed $value): ?int
+    {
+        if (! is_numeric($value) || (int) $value < 0) {
+            return null;
+        }
+
+        return (int) $value;
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
+     */
+    private function jsonPayload(array $payload): ?string
+    {
+        $encodedPayload = json_encode($payload);
+
+        return is_string($encodedPayload) ? $encodedPayload : null;
     }
 
     private function timestamp(mixed $timestamp, mixed $datetime = null): ?Carbon

@@ -149,6 +149,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::post('/admin/depot-transactions/cash', [AdminDepotTransactionController::class, 'storeCash'])->name('admin.depot-transactions.cash.store');
     Route::post('/admin/depot-transactions/stocks', [AdminDepotTransactionController::class, 'storeStock'])->name('admin.depot-transactions.stocks.store');
     Route::get('/admin/watchlist/holdings', [AdminDepotHoldingController::class, 'index'])->name('admin.watchlist.holdings.index');
+    Route::get('/admin/watchlist/holdings/{holding}/intraday-candles', [AdminDepotHoldingController::class, 'intradayCandles'])->name('admin.watchlist.holdings.intraday-candles');
     Route::get('/admin/watchlist/exchange-trading-times', [AdminDepotHoldingController::class, 'exchangeTradingTimes'])->name('admin.watchlist.exchange-trading-times');
     Route::get('/admin/watchlist/holdings/pdf', [AdminDepotHoldingController::class, 'exportPdf'])->name('admin.watchlist.holdings.pdf');
     Route::get('/admin/index-watch-items', [AdminIndexWatchItemController::class, 'index'])->name('admin.index-watch-items.index');

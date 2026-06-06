@@ -34,6 +34,7 @@ const {
     queueStatus,
     stockHistoricalPriceCoverage,
     stockHistoricalPriceRefresh,
+    analyzeIntradayCandles,
     uiPreferences,
     stockSearchResults,
     pagination: depotPagination,
@@ -44,12 +45,14 @@ const {
     exchangeTradingTimesLoading,
     queueStatusLoading,
     stockSearchLoading,
+    analyzeIntradayCandlesLoading,
     error: depotsError,
     holdingsError,
     transactionsError,
     exchangeTradingTimesError,
     queueStatusError,
     stockSearchError,
+    analyzeIntradayCandlesError,
 } = storeToRefs(depotsStore);
 const {
     users,
@@ -95,6 +98,7 @@ const selectedRole = ref(null);
 const roleForm = ref(emptyRoleForm());
 const roleMessage = ref('');
 const roleError = ref('');
+const analyzeIntradayRequestedHoldingId = ref(null);
 const depotDialogMode = ref('create');
 const isDepotDialogOpen = ref(false);
 const selectedDepot = ref(null);
@@ -280,6 +284,9 @@ const selectedAnalyzeChartPrices = computed(() => {
 });
 const selectedAnalyzeSparkline = computed(() => buildAnalyzeSparkline(selectedAnalyzeChartPrices.value));
 const showAnalyzeSparklineDots = computed(() => ['3m', '1m', '1w', 'today'].includes(selectedAnalyzeHistoryRange.value));
+const analyzeIntradayDetail = computed(() => analyzeIntradayCandles.value?.intraday ?? null);
+const analyzeIntradayDetailRows = computed(() => analyzeIntradayDetail.value?.rows ?? []);
+const analyzeIntradayDetailTitle = computed(() => analyzeIntradayDetail.value?.title ?? 'Intraday - 5m');
 const eodhdUsageItems = computed(() => {
     if (!eodhdApiUsage.value) {
         return [];
@@ -539,6 +546,13 @@ watch(
 );
 
 watch(
+    [activeSection, activeAnalyzeSubsection, selectedAnalyzeHoldingId],
+    () => {
+        ensureAnalyzeDetailIntradayCandles();
+    },
+);
+
+watch(
     isHistoricalPriceFetchRunning,
     (isRunning) => {
         if (isRunning) {
@@ -579,6 +593,7 @@ onMounted(async () => {
     }
 
     ensureAnalyzeOverviewHistoricalPrices();
+    ensureAnalyzeDetailIntradayCandles();
     startPriceRefreshSettingsPolling();
 
     await depotsStore.loadDepots();
@@ -1507,6 +1522,35 @@ async function ensureAnalyzeOverviewHistoricalPrices() {
         holdingError.value = err.message;
     } finally {
         isStockHistoricalPriceEnsureLoading.value = false;
+    }
+}
+
+async function ensureAnalyzeDetailIntradayCandles() {
+    if (activeSection.value !== 'analyze' || activeAnalyzeSubsection.value !== 'detail') {
+        return;
+    }
+
+    if (selectedAnalyzeHoldingId.value === null) {
+        analyzeIntradayRequestedHoldingId.value = null;
+        depotsStore.clearHoldingIntradayCandles();
+
+        return;
+    }
+
+    if (analyzeIntradayCandles.value?.holding?.id === selectedAnalyzeHoldingId.value) {
+        return;
+    }
+
+    if (analyzeIntradayRequestedHoldingId.value === selectedAnalyzeHoldingId.value && analyzeIntradayCandlesLoading.value) {
+        return;
+    }
+
+    analyzeIntradayRequestedHoldingId.value = selectedAnalyzeHoldingId.value;
+    depotsStore.clearHoldingIntradayCandles();
+
+    try {
+        await depotsStore.loadHoldingIntradayCandles(selectedAnalyzeHoldingId.value);
+    } catch {
     }
 }
 
@@ -2517,6 +2561,22 @@ function formatAnalyzeSparklineDate(point) {
     }
 
     return formatIndexHistoryDate(point.trading_date);
+}
+
+function formatAnalyzeIntradayCandleDateTime(value) {
+    if (!value) {
+        return '-';
+    }
+
+    return value;
+}
+
+function formatAnalyzeIntradayCandleValue(value) {
+    if (value === null || value === undefined || value === '') {
+        return '-';
+    }
+
+    return value;
 }
 
 function formatAnalyzeSparklineAxisPrice(value) {
@@ -4968,11 +5028,101 @@ function priceRefreshScheduleFormFromSettings(settings) {
                         </section>
                         <section
                             v-if="activeAnalyzeSubsection === 'detail'"
-                            class="analyze-dummy-page"
+                            class="analyze-detail-page"
                             aria-label="Analyze detail"
                         >
-                            <div class="analyze-detail-scope">
-                                {{ selectedAnalyzeScopeLabel }}
+                            <div class="analyze-detail-header">
+                                <div>
+                                    <h2 class="analyze-detail-title">
+                                        {{ analyzeIntradayDetailTitle }}
+                                    </h2>
+                                    <div class="analyze-detail-scope">
+                                        {{ selectedAnalyzeScopeLabel }}
+                                    </div>
+                                </div>
+                                <v-progress-circular
+                                    v-if="analyzeIntradayCandlesLoading"
+                                    color="primary"
+                                    indeterminate
+                                    size="28"
+                                    width="3"
+                                />
+                            </div>
+
+                            <div class="analyze-detail-stock-menu" aria-label="Analyze detail stocks">
+                                <button
+                                    v-for="holding in holdings"
+                                    :key="`analyze-detail-stock-${holding.id}`"
+                                    type="button"
+                                    class="analyze-detail-stock-button"
+                                    :class="{ 'analyze-detail-stock-button--active': selectedAnalyzeHoldingId === holding.id }"
+                                    :aria-pressed="selectedAnalyzeHoldingId === holding.id"
+                                    @click="selectAnalyzeHolding(holding.id)"
+                                >
+                                    <span class="analyze-detail-stock-symbol">
+                                        {{ holding.symbol || '-' }}
+                                    </span>
+                                    <span class="analyze-detail-stock-name">
+                                        {{ holding.name || holding.symbol || `Stock ${holding.id}` }}
+                                    </span>
+                                </button>
+                            </div>
+
+                            <v-alert
+                                v-if="selectedAnalyzeHoldingId === null"
+                                class="mb-4"
+                                type="info"
+                                variant="tonal"
+                            >
+                                No stock selected.
+                            </v-alert>
+                            <v-alert
+                                v-else-if="analyzeIntradayCandlesError"
+                                class="mb-4"
+                                type="error"
+                                variant="tonal"
+                            >
+                                {{ analyzeIntradayCandlesError }}
+                            </v-alert>
+                            <div
+                                v-else-if="!analyzeIntradayCandlesLoading && analyzeIntradayDetailRows.length === 0"
+                                class="analyze-detail-empty"
+                            >
+                                No 5-minute intraday values stored for the last trading day.
+                            </div>
+                            <div
+                                v-else
+                                class="analyze-detail-table-wrap"
+                            >
+                                <v-table class="analyze-detail-table" density="compact">
+                                    <thead>
+                                        <tr>
+                                            <th>Timestamp</th>
+                                            <th>GMT offset</th>
+                                            <th>Datetime</th>
+                                            <th class="text-right">Open</th>
+                                            <th class="text-right">High</th>
+                                            <th class="text-right">Low</th>
+                                            <th class="text-right">Close</th>
+                                            <th class="text-right">Volume</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr
+                                            v-for="(row, index) in analyzeIntradayDetailRows"
+                                            :key="row.timestamp ?? row.datetime ?? index"
+                                        >
+                                            <td>{{ formatAnalyzeIntradayCandleValue(row.timestamp) }}</td>
+                                            <td>{{ formatAnalyzeIntradayCandleValue(row.gmtoffset) }}</td>
+                                            <td>{{ formatAnalyzeIntradayCandleDateTime(row.datetime) }}</td>
+                                            <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.open) }}</td>
+                                            <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.high) }}</td>
+                                            <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.low) }}</td>
+                                            <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.close) }}</td>
+                                            <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.volume) }}</td>
+                                        </tr>
+                                    </tbody>
+                                </v-table>
                             </div>
                         </section>
                     </section>
@@ -6365,15 +6515,107 @@ function priceRefreshScheduleFormFromSettings(settings) {
 
 }
 
-.analyze-dummy-page,
+.analyze-detail-page,
 .analyze-overview-page {
     min-height: 320px;
 }
 
+.analyze-detail-header {
+    align-items: center;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+    margin-bottom: 18px;
+}
+
+.analyze-detail-title {
+    color: #1b1f24;
+    font-size: 1.25rem;
+    font-weight: 800;
+    line-height: 1.3;
+    margin: 0;
+}
+
 .analyze-detail-scope {
     color: #145b4b;
-    font-size: 1.125rem;
+    font-size: 0.95rem;
     font-weight: 700;
+    margin-top: 4px;
+}
+
+.analyze-detail-stock-menu {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 18px;
+}
+
+.analyze-detail-stock-button {
+    align-items: center;
+    background: #ffffff;
+    border: 1px solid rgba(20, 91, 75, 0.18);
+    border-radius: 6px;
+    color: #30414d;
+    display: inline-flex;
+    gap: 8px;
+    min-height: 36px;
+    max-width: 240px;
+    padding: 6px 10px;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease, color 0.16s ease;
+}
+
+.analyze-detail-stock-button:hover,
+.analyze-detail-stock-button--active {
+    border-color: #145b4b;
+    box-shadow: 0 1px 0 rgba(20, 91, 75, 0.12);
+    color: #145b4b;
+}
+
+.analyze-detail-stock-symbol {
+    font-size: 0.78rem;
+    font-weight: 800;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.analyze-detail-stock-name {
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.analyze-detail-empty {
+    border: 1px dashed rgba(20, 91, 75, 0.28);
+    border-radius: 6px;
+    color: #5d6773;
+    padding: 18px;
+}
+
+.analyze-detail-table-wrap {
+    border: 1px solid rgba(20, 91, 75, 0.16);
+    border-radius: 6px;
+    overflow-x: auto;
+}
+
+.analyze-detail-table {
+    min-width: 820px;
+}
+
+.analyze-detail-table :deep(th) {
+    color: #52606d;
+    font-size: 0.72rem;
+    letter-spacing: 0;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.analyze-detail-table :deep(td) {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 }
 
 .price-refresh-status-dot {
