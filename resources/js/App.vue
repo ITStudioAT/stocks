@@ -32,6 +32,18 @@ const {
     priceRefreshSettings,
     indexPriceRefreshSettings,
     queueStatus,
+    testOptions,
+    testTickerExchangeCode,
+    testTickers,
+    testExchanges,
+    testExchangeDetails,
+    testExchangeDetailErrors,
+    dataExchanges,
+    dataExchangeRefresh,
+    dataIntradayStocks,
+    dataIntradaySelectedStockId,
+    dataIntradayDays,
+    dataIntradayRefresh,
     stockHistoricalPriceCoverage,
     stockHistoricalPriceRefresh,
     analyzeIntradayCandles,
@@ -44,6 +56,13 @@ const {
     transactionsLoading,
     exchangeTradingTimesLoading,
     queueStatusLoading,
+    testOptionsLoading,
+    testTickersLoading,
+    testExchangesLoading,
+    dataExchangesLoading,
+    dataExchangeReloadLoading,
+    dataIntradayLoading,
+    dataIntradayReloadLoading,
     stockSearchLoading,
     analyzeIntradayCandlesLoading,
     error: depotsError,
@@ -51,6 +70,11 @@ const {
     transactionsError,
     exchangeTradingTimesError,
     queueStatusError,
+    testOptionsError,
+    testTickersError,
+    testExchangesError,
+    dataExchangesError,
+    dataIntradayError,
     stockSearchError,
     analyzeIntradayCandlesError,
 } = storeToRefs(depotsStore);
@@ -75,8 +99,14 @@ const loginMode = ref('password');
 const localError = ref('');
 const activeSection = ref('dashboard');
 const activeAnalyzeSubsection = ref('overview');
+const activeDataSubsection = ref('exchanges');
 const selectedAnalyzeHistoryRange = ref('1y');
 const selectedAnalyzeHoldingId = ref(null);
+const selectedTestIndexId = ref(null);
+const selectedTestStockId = ref(null);
+const selectedTestTab = ref('tickers');
+const selectedDataIntradayStockId = ref(null);
+const expandedDataIntradayDays = ref({});
 const profileLastName = ref('');
 const profileFirstName = ref('');
 const newPassword = ref('');
@@ -138,6 +168,8 @@ const historicalPriceFetchTimer = ref(null);
 const isHistoricalPriceFetchPolling = ref(false);
 const stockHistoricalPriceFetchTimer = ref(null);
 const isStockHistoricalPriceFetchPolling = ref(false);
+const dataExchangeReloadTimer = ref(null);
+const dataIntradayReloadTimer = ref(null);
 const isStockHistoricalPriceEnsureLoading = ref(false);
 const isAnalyzeHistoryInfoDismissed = ref(false);
 const isDashboardMenuCompact = ref(smAndDown.value);
@@ -245,6 +277,66 @@ const stockHistoricalPriceFetchProgressValue = computed(() => {
     }
 
     return Math.round((stockHistoricalPriceRefresh.value.processed / stockHistoricalPriceRefresh.value.total) * 100);
+});
+const isDataExchangeReloadRunning = computed(() => ['queued', 'running'].includes(dataExchangeRefresh.value?.status));
+const selectedDataIntradayStock = computed(() => dataIntradayStocks.value.find((stock) => stock.id === selectedDataIntradayStockId.value) ?? null);
+const dataIntradayLastUpdatedAt = computed(() => dataIntradayRefresh.value?.finished_at ?? null);
+const isDataIntradayReloadRunning = computed(() => ['queued', 'running'].includes(dataIntradayRefresh.value?.status));
+const EXCHANGE_REFRESH_DISMISSED_KEY = 'exchange_refresh_dismissed_id';
+const dismissedDataExchangeRefreshId = ref(sessionStorage.getItem(EXCHANGE_REFRESH_DISMISSED_KEY));
+const dataExchangeRefreshVisible = computed(() => {
+    if (!dataExchangeRefresh.value) return false;
+    return String(dataExchangeRefresh.value.refresh_id) !== dismissedDataExchangeRefreshId.value;
+});
+function dismissDataExchangeRefresh() {
+    if (dataExchangeRefresh.value?.refresh_id) {
+        dismissedDataExchangeRefreshId.value = String(dataExchangeRefresh.value.refresh_id);
+        sessionStorage.setItem(EXCHANGE_REFRESH_DISMISSED_KEY, dismissedDataExchangeRefreshId.value);
+    }
+}
+const dataExchangeReloadProgressValue = computed(() => {
+    if (!dataExchangeRefresh.value || dataExchangeRefresh.value.total === 0) {
+        return 0;
+    }
+
+    return Math.round((dataExchangeRefresh.value.processed / dataExchangeRefresh.value.total) * 100);
+});
+const dataExchangesLastUpdatedAt = computed(() => {
+    const exchangeSyncedTimes = dataExchanges.value
+        .map((exchange) => exchange.synced_at)
+        .filter(Boolean)
+        .map((value) => new Date(value))
+        .filter((date) => !Number.isNaN(date.getTime()));
+
+    if (exchangeSyncedTimes.length > 0) {
+        return new Date(Math.max(...exchangeSyncedTimes.map((date) => date.getTime()))).toISOString();
+    }
+
+    return dataExchangeRefresh.value?.finished_at ?? null;
+});
+const DATA_INTRADAY_REFRESH_DISMISSED_KEY = 'data_intraday_refresh_info_dismissed';
+const isDataIntradayRefreshDismissed = ref(localStorage.getItem(DATA_INTRADAY_REFRESH_DISMISSED_KEY) === '1');
+const dataIntradayRefreshVisible = computed(() => {
+    if (!dataIntradayRefresh.value || dataIntradayError.value) {
+        return false;
+    }
+
+    if (isDataIntradayReloadRunning.value || dataIntradayRefresh.value.status === 'failed') {
+        return true;
+    }
+
+    return !isDataIntradayRefreshDismissed.value;
+});
+function dismissDataIntradayRefresh() {
+    isDataIntradayRefreshDismissed.value = true;
+    localStorage.setItem(DATA_INTRADAY_REFRESH_DISMISSED_KEY, '1');
+}
+const dataIntradayReloadProgressValue = computed(() => {
+    if (!dataIntradayRefresh.value || dataIntradayRefresh.value.total === 0) {
+        return 0;
+    }
+
+    return Math.round((dataIntradayRefresh.value.processed / dataIntradayRefresh.value.total) * 100);
 });
 const sessionHeaderDates = computed(() => {
     const datedHolding = holdings.value.find((holding) => holding.start_price_date || holding.end_price_date);
@@ -383,6 +475,23 @@ const analyzeSubmenuItems = [
         label: 'Detail',
         icon: 'mdi-chart-box-outline',
     },
+    {
+        key: 'tests',
+        label: 'Tests',
+        icon: 'mdi-test-tube',
+    },
+];
+const dataSubmenuItems = [
+    {
+        key: 'exchanges',
+        label: 'Exchanges',
+        icon: 'mdi-swap-horizontal',
+    },
+    {
+        key: 'intraday',
+        label: 'Intraday',
+        icon: 'mdi-chart-timeline-variant',
+    },
 ];
 const analyzeHistoryRangeItems = [
     {
@@ -425,6 +534,13 @@ const menuItems = computed(() => [
         label: 'Dashboard',
         icon: 'mdi-view-dashboard-outline',
     },
+    ...(canManageDashboardAdmin.value ? [
+        {
+            key: 'data',
+            label: 'Data',
+            icon: 'mdi-database-outline',
+        },
+    ] : []),
     {
         key: 'analyze',
         label: 'Analyze',
@@ -537,10 +653,36 @@ watch(
 );
 
 watch(
-    [activeSection, activeAnalyzeSubsection],
-    ([section, subsection]) => {
+    [activeSection, activeAnalyzeSubsection, activeDataSubsection],
+    ([section, subsection, dataSubsection]) => {
         if (section === 'analyze' && subsection === 'overview') {
             ensureAnalyzeOverviewHistoricalPrices();
+        }
+
+        if (section === 'analyze' && subsection === 'tests') {
+            depotsStore.loadTestOptions();
+        }
+
+        if (section === 'data' && dataSubsection === 'exchanges') {
+            depotsStore.loadDataExchanges()
+                .then((data) => {
+                    if (['queued', 'running'].includes(data.refresh?.status)) {
+                        startDataExchangeReloadPolling(data.refresh.refresh_id);
+                    }
+                })
+                .catch(() => {});
+        }
+
+        if (section === 'data' && dataSubsection === 'intraday') {
+            depotsStore.loadDataIntraday(selectedDataIntradayStockId.value)
+                .then((data) => {
+                    selectedDataIntradayStockId.value = data.selected_stock_id ?? selectedDataIntradayStockId.value;
+
+                    if (['queued', 'running'].includes(data.refresh?.status)) {
+                        startDataIntradayReloadPolling(data.refresh.refresh_id);
+                    }
+                })
+                .catch(() => {});
         }
     },
 );
@@ -613,6 +755,8 @@ onBeforeUnmount(() => {
     stopPriceRefreshSettingsPolling();
     stopHistoricalPriceFetchPolling();
     stopStockHistoricalPriceFetchPolling();
+    stopDataExchangeReloadPolling();
+    stopDataIntradayReloadPolling();
     stopHoldingDialogKeyboardShortcuts();
     window.removeEventListener('resize', updateViewportMetrics);
     window.removeEventListener('popstate', applyRouteFromPath);
@@ -628,6 +772,10 @@ function navigateSection(section) {
 
     if (section === 'analyze' && !isAnalyzeSubsection(activeAnalyzeSubsection.value)) {
         activeAnalyzeSubsection.value = 'overview';
+    }
+
+    if (section === 'data' && !isDataSubsection(activeDataSubsection.value)) {
+        activeDataSubsection.value = 'exchanges';
     }
 
     clearSectionMessages();
@@ -670,6 +818,17 @@ function navigateAnalyzeSubsection(subsection) {
     updateUrlPath();
 }
 
+function navigateDataSubsection(subsection) {
+    if (!isDataSubsection(subsection) || activeDataSubsection.value === subsection) {
+        return;
+    }
+
+    activeDataSubsection.value = subsection;
+    activeSection.value = 'data';
+    clearSectionMessages();
+    updateUrlPath();
+}
+
 function selectAnalyzeHolding(holdingId) {
     selectedAnalyzeHoldingId.value = holdingId;
     updateUrlPath();
@@ -707,6 +866,16 @@ function applyRouteFromPath() {
             return;
         }
 
+        if (normalizedSection === 'data') {
+            activeSection.value = 'data';
+            activeDataSubsection.value = isDataSubsection(subsectionSegment)
+                ? subsectionSegment
+                : 'exchanges';
+            updateUrlPath({ replace: true });
+
+            return;
+        }
+
         const isTopLevel = menuItems.value.some((item) => item.key === normalizedSection);
         const isChild = menuItems.value.flatMap((item) => item.children ?? []).some((child) => child.key === normalizedSection);
         activeSection.value = (isTopLevel || isChild) ? normalizedSection : 'dashboard';
@@ -724,7 +893,9 @@ function updateUrlPath(options = {}) {
             ? '/admin/profile'
             : activeSection.value === 'analyze'
                 ? `/admin/menu/analyze/${activeAnalyzeSubsection.value}`
-                : `/admin/menu/${activeSection.value}`;
+                : activeSection.value === 'data'
+                    ? `/admin/menu/data/${activeDataSubsection.value}`
+                    : `/admin/menu/${activeSection.value}`;
     const target = activeSection.value === 'analyze'
         ? `${path}?stock=${selectedAnalyzeHoldingId.value === null ? 'all' : encodeURIComponent(String(selectedAnalyzeHoldingId.value))}`
         : path;
@@ -744,6 +915,10 @@ function updateUrlPath(options = {}) {
 
 function isAnalyzeSubsection(subsection) {
     return analyzeSubmenuItems.some((item) => item.key === subsection);
+}
+
+function isDataSubsection(subsection) {
+    return dataSubmenuItems.some((item) => item.key === subsection);
 }
 
 function applyAnalyzeSelectionFromQuery(searchParams) {
@@ -1590,6 +1765,111 @@ async function pollStockHistoricalPriceFetch(refreshId) {
     }
 }
 
+async function reloadDataExchanges() {
+    try {
+        const data = await depotsStore.reloadDataExchanges();
+        await depotsStore.loadQueueStatus();
+
+        if (data.refresh && !isFinishedPriceRefresh(data.refresh)) {
+            startDataExchangeReloadPolling(data.refresh.refresh_id);
+
+            return;
+        }
+
+        stopDataExchangeReloadPolling();
+    } catch {
+    }
+}
+
+async function selectDataIntradayStock(stockId) {
+    selectedDataIntradayStockId.value = stockId;
+
+    try {
+        await depotsStore.loadDataIntraday(stockId);
+    } catch {
+    }
+}
+
+async function reloadDataIntraday() {
+    if (!selectedDataIntradayStockId.value) {
+        return;
+    }
+
+    try {
+        const data = await depotsStore.reloadDataIntraday(selectedDataIntradayStockId.value);
+        selectedDataIntradayStockId.value = data.selected_stock_id ?? selectedDataIntradayStockId.value;
+
+        if (data.refresh && !isFinishedPriceRefresh(data.refresh)) {
+            startDataIntradayReloadPolling(data.refresh.refresh_id);
+
+            return;
+        }
+
+        stopDataIntradayReloadPolling();
+    } catch {
+    }
+}
+
+function startDataExchangeReloadPolling(refreshId) {
+    stopDataExchangeReloadPolling();
+    pollDataExchangeReload(refreshId);
+    dataExchangeReloadTimer.value = window.setInterval(() => pollDataExchangeReload(refreshId), 3000);
+}
+
+function stopDataExchangeReloadPolling() {
+    if (!dataExchangeReloadTimer.value) {
+        return;
+    }
+
+    window.clearInterval(dataExchangeReloadTimer.value);
+    dataExchangeReloadTimer.value = null;
+}
+
+async function pollDataExchangeReload(refreshId) {
+    try {
+        const data = await depotsStore.loadDataExchangeRefresh(refreshId);
+        await depotsStore.loadQueueStatus();
+
+        if (isFinishedPriceRefresh(data.refresh)) {
+            stopDataExchangeReloadPolling();
+        }
+    } catch {
+        stopDataExchangeReloadPolling();
+    }
+}
+
+function startDataIntradayReloadPolling(refreshId) {
+    stopDataIntradayReloadPolling();
+    pollDataIntradayReload(refreshId);
+    dataIntradayReloadTimer.value = window.setInterval(() => pollDataIntradayReload(refreshId), 3000);
+}
+
+function stopDataIntradayReloadPolling() {
+    if (!dataIntradayReloadTimer.value) {
+        return;
+    }
+
+    window.clearInterval(dataIntradayReloadTimer.value);
+    dataIntradayReloadTimer.value = null;
+}
+
+async function pollDataIntradayReload(refreshId) {
+    try {
+        const data = await depotsStore.loadDataIntradayRefresh(refreshId, selectedDataIntradayStockId.value);
+        await depotsStore.loadQueueStatus();
+
+        if (data.selected_stock_id) {
+            selectedDataIntradayStockId.value = data.selected_stock_id;
+        }
+
+        if (isFinishedPriceRefresh(data.refresh)) {
+            stopDataIntradayReloadPolling();
+        }
+    } catch {
+        stopDataIntradayReloadPolling();
+    }
+}
+
 async function pollPriceRefreshStatus(refreshId) {
     try {
         const data = await depotsStore.loadWatchlistPriceRefresh(refreshId);
@@ -1695,6 +1975,139 @@ function formatAccountBalance(value) {
 
 function formatInteger(value) {
     return new Intl.NumberFormat('en-US').format(Number(value ?? 0));
+}
+
+function formatDataExchangeTitle(exchange) {
+    return [
+        exchange.name,
+        exchange.code,
+    ].filter(Boolean).join(' · ');
+}
+
+function formatDataExchangeTradingHours(exchange) {
+    const tradingHours = exchange.trading_hours;
+
+    if (!tradingHours || Array.isArray(tradingHours) || typeof tradingHours !== 'object') {
+        return [];
+    }
+
+    const preferredKeys = ['Open', 'Close', 'PreMarketOpen', 'PreMarketClose', 'LunchBreakStart', 'LunchBreakEnd', 'PostMarketOpen', 'PostMarketClose'];
+    const preferredRows = preferredKeys
+        .filter((key) => Object.hasOwn(tradingHours, key))
+        .map((key) => ({
+            key,
+            label: formatExchangeDetailKey(key),
+            value: tradingHours[key],
+        }));
+    const remainingRows = Object.entries(tradingHours)
+        .filter(([key]) => !preferredKeys.includes(key) && key !== 'WorkingDays')
+        .map(([key, value]) => ({
+            key,
+            label: formatExchangeDetailKey(key),
+            value,
+        }));
+    const workingDaysRow = Object.hasOwn(tradingHours, 'WorkingDays')
+        ? [{ key: 'WorkingDays', label: formatExchangeDetailKey('WorkingDays'), value: tradingHours.WorkingDays }]
+        : [];
+
+    return [...preferredRows, ...remainingRows, ...workingDaysRow]
+        .filter((row) => row.value !== null && row.value !== undefined && row.value !== '');
+}
+
+function formatDataExchangeHolidays(exchange) {
+    const holidays = exchange.holidays;
+
+    if (!holidays) {
+        return [];
+    }
+
+    function holidayLabel(obj) {
+        if (!obj || typeof obj !== 'object') return String(obj ?? '');
+        const name = obj.Name ?? obj.name ?? obj.Holiday ?? obj.holiday ?? null;
+        const earlyClose = obj.EarlyClose ?? obj.early_close ?? obj.CloseTime ?? obj.close_time ?? null;
+        if (earlyClose) return `Early Close: ${earlyClose}`;
+        return name ?? '';
+    }
+
+    if (Array.isArray(holidays)) {
+        return holidays.map((holiday, index) => {
+            if (holiday && typeof holiday === 'object') {
+                const date = holiday.Date ?? holiday.date ?? holiday.TradingDate ?? holiday.trading_date ?? null;
+                const label = holidayLabel(holiday);
+                return {
+                    key: `${date ?? index}-${label}`,
+                    date: date ?? `Holiday ${index + 1}`,
+                    label,
+                };
+            }
+            return {
+                key: `${index}-${holiday}`,
+                date: `Holiday ${index + 1}`,
+                label: String(holiday),
+            };
+        });
+    }
+
+    if (typeof holidays === 'object') {
+        return Object.entries(holidays).map(([date, value]) => ({
+            key: date,
+            date,
+            label: holidayLabel(value),
+        }));
+    }
+
+    return [{ key: 'holidays', date: 'Holidays', label: String(holidays) }];
+}
+
+function formatDataExchangeHolidayValue(value) {
+    if (value === null || value === undefined || value === '') {
+        return '-';
+    }
+
+    if (Array.isArray(value)) {
+        return value.map(formatDataExchangeHolidayValue).join(', ');
+    }
+
+    if (typeof value === 'object') {
+        return Object.entries(value)
+            .map(([key, itemValue]) => `${formatExchangeDetailKey(key)}: ${formatDataExchangeHolidayValue(itemValue)}`)
+            .join(' · ');
+    }
+
+    return String(value);
+}
+
+function formatDataIntradayDayTitle(day) {
+    return day.title ?? `Intraday ${formatIndexHistoryDate(day.trading_date)}`;
+}
+
+function isDataIntradayDayExpanded(day) {
+    return expandedDataIntradayDays.value[day.trading_date] !== false;
+}
+
+function toggleDataIntradayDay(day) {
+    expandedDataIntradayDays.value = {
+        ...expandedDataIntradayDays.value,
+        [day.trading_date]: !isDataIntradayDayExpanded(day),
+    };
+}
+
+function formatDataIntradayReloadMessage() {
+    if (!dataIntradayRefresh.value) {
+        return '';
+    }
+
+    if (dataIntradayRefresh.value.error) {
+        return dataIntradayRefresh.value.error;
+    }
+
+    return dataIntradayRefresh.value.message ?? `${formatInteger(dataIntradayRefresh.value.stored_count)} intraday candles loaded/updated.`;
+}
+
+function formatExchangeDetailKey(key) {
+    return String(key)
+        .replace(/([a-z])([A-Z])/g, '$1 $2')
+        .replace(/_/g, ' ');
 }
 
 function formatEodhdUsageReset(value) {
@@ -5125,6 +5538,137 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                 </v-table>
                             </div>
                         </section>
+                        <section
+                            v-if="activeAnalyzeSubsection === 'tests'"
+                            class="tests-page"
+                            aria-label="Analyze tests"
+                        >
+                            <v-alert
+                                v-if="testOptionsError"
+                                class="mb-4"
+                                density="compact"
+                                type="error"
+                                variant="tonal"
+                            >
+                                {{ testOptionsError }}
+                            </v-alert>
+
+                            <div class="tests-chip-groups">
+                                <div class="tests-chip-group">
+                                    <h2 class="tests-chip-heading">Indices</h2>
+                                    <div class="tests-chip-list" aria-label="Test indices">
+                                        <button
+                                            v-for="indexItem in testOptions.indices"
+                                            :key="`test-index-${indexItem.id}`"
+                                            type="button"
+                                            class="tests-chip"
+                                            :class="{ 'tests-chip--active': selectedTestIndexId === indexItem.id }"
+                                            :aria-pressed="selectedTestIndexId === indexItem.id"
+                                            :title="indexItem.name"
+                                            @click="selectedTestIndexId = indexItem.id"
+                                        >
+                                            <span class="tests-chip-symbol">{{ indexItem.symbol || '-' }}</span>
+                                            <span class="tests-chip-name">{{ indexItem.name || indexItem.symbol || `Index ${indexItem.id}` }}</span>
+                                        </button>
+                                        <span v-if="!testOptionsLoading && testOptions.indices.length === 0" class="tests-chip-empty">
+                                            No indices.
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="tests-chip-group">
+                                    <h2 class="tests-chip-heading">Stocks</h2>
+                                    <div class="tests-chip-list" aria-label="Test stocks">
+                                        <button
+                                            v-for="stock in testOptions.stocks"
+                                            :key="`test-stock-${stock.id}`"
+                                            type="button"
+                                            class="tests-chip"
+                                            :class="{ 'tests-chip--active': selectedTestStockId === stock.id }"
+                                            :aria-pressed="selectedTestStockId === stock.id"
+                                            :title="stock.name"
+                                            @click="selectedTestStockId = stock.id"
+                                        >
+                                            <span class="tests-chip-symbol">{{ stock.symbol || '-' }}</span>
+                                            <span class="tests-chip-name">{{ stock.name || stock.symbol || `Stock ${stock.id}` }}</span>
+                                        </button>
+                                        <span v-if="!testOptionsLoading && testOptions.stocks.length === 0" class="tests-chip-empty">
+                                            No stocks.
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <v-tabs
+                                v-model="selectedTestTab"
+                                class="tests-tabs"
+                                color="primary"
+                            >
+                                <v-tab value="tickers">Tickers</v-tab>
+                            </v-tabs>
+                            <div
+                                v-if="selectedTestTab === 'tickers'"
+                                class="tests-ticker-panel"
+                                aria-label="Ticker result"
+                            >
+                                <div class="tests-ticker-actions">
+                                    <div>
+                                        <div class="tests-chip-heading">EODHD symbols</div>
+                                        <div class="text-caption text-medium-emphasis">
+                                            Exchange: {{ testTickerExchangeCode }}
+                                        </div>
+                                    </div>
+                                    <v-btn
+                                        color="primary"
+                                        prepend-icon="mdi-download-outline"
+                                        type="button"
+                                        variant="tonal"
+                                        :loading="testTickersLoading"
+                                        @click="depotsStore.loadTestTickers"
+                                    >
+                                        Load
+                                    </v-btn>
+                                </div>
+                                <v-alert
+                                    v-if="testTickersError"
+                                    class="mt-3"
+                                    density="compact"
+                                    type="error"
+                                    variant="tonal"
+                                >
+                                    {{ testTickersError }}
+                                </v-alert>
+                                <div
+                                    v-if="testTickers.length > 0"
+                                    class="tests-ticker-table-wrap"
+                                >
+                                    <v-table class="tests-ticker-table" density="compact">
+                                        <thead>
+                                            <tr>
+                                                <th>Code</th>
+                                                <th>Name</th>
+                                                <th>Exchange</th>
+                                                <th>Type</th>
+                                                <th>Currency</th>
+                                                <th>ISIN</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr
+                                                v-for="(ticker, index) in testTickers"
+                                                :key="ticker.Code ?? ticker.code ?? index"
+                                            >
+                                                <td>{{ ticker.Code ?? ticker.code ?? '-' }}</td>
+                                                <td>{{ ticker.Name ?? ticker.name ?? '-' }}</td>
+                                                <td>{{ ticker.Exchange ?? ticker.exchange ?? '-' }}</td>
+                                                <td>{{ ticker.Type ?? ticker.type ?? '-' }}</td>
+                                                <td>{{ ticker.Currency ?? ticker.currency ?? '-' }}</td>
+                                                <td>{{ ticker.Isin ?? ticker.ISIN ?? ticker.isin ?? '-' }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </v-table>
+                                </div>
+                            </div>
+                        </section>
                     </section>
 
                     <v-dialog v-model="isCashTransactionDialogOpen" persistent max-width="480">
@@ -5235,6 +5779,341 @@ function priceRefreshScheduleFormFromSettings(settings) {
                         <v-tab v-if="canManageUsers" value="roles" prepend-icon="mdi-shield-account-outline">Roles</v-tab>
                         <v-tab value="updates" prepend-icon="mdi-update">Updates</v-tab>
                     </v-tabs>
+
+                    <section v-if="activeSection === 'data' && canManageDashboardAdmin">
+                        <v-tabs
+                            :model-value="activeDataSubsection"
+                            color="primary"
+                            class="mb-6"
+                            @update:model-value="navigateDataSubsection"
+                        >
+                            <v-tab
+                                v-for="item in dataSubmenuItems"
+                                :key="item.key"
+                                :value="item.key"
+                                :prepend-icon="item.icon"
+                            >
+                                {{ item.label }}
+                            </v-tab>
+                        </v-tabs>
+
+                        <section
+                            v-if="activeDataSubsection === 'exchanges'"
+                            aria-label="Data exchanges"
+                        >
+                            <div class="data-exchange-actions mb-4">
+                                <div>
+                                    <h2 class="text-h5">Exchanges</h2>
+                                    <div class="text-caption text-medium-emphasis">
+                                        Last updated:
+                                        {{ dataExchangesLastUpdatedAt ? formatDateTime(dataExchangesLastUpdatedAt) : 'Never' }}
+                                    </div>
+                                </div>
+                                <v-btn
+                                    color="primary"
+                                    prepend-icon="mdi-refresh"
+                                    type="button"
+                                    variant="flat"
+                                    :disabled="isDataExchangeReloadRunning"
+                                    :loading="dataExchangeReloadLoading"
+                                    @click="reloadDataExchanges"
+                                >
+                                    Reload Exchanges
+                                </v-btn>
+                            </div>
+
+                        <v-alert
+                            v-if="dataExchangesError"
+                            class="mb-4"
+                            density="compact"
+                            type="error"
+                            variant="tonal"
+                        >
+                            {{ dataExchangesError }}
+                        </v-alert>
+
+                        <v-sheet
+                            v-if="dataExchangeRefreshVisible"
+                            border
+                            rounded
+                            class="pa-4 mb-4"
+                        >
+                            <div class="d-flex align-center justify-space-between ga-3 flex-wrap">
+                                <div>
+                                    <div class="text-subtitle-2">{{ dataExchangeRefresh.message }}</div>
+                                    <div class="text-caption text-medium-emphasis">
+                                        {{ dataExchangeRefresh.step }}
+                                        <template v-if="dataExchangeRefresh.current">
+                                            · {{ dataExchangeRefresh.current }}
+                                        </template>
+                                    </div>
+                                </div>
+                                <div class="d-flex align-center ga-2">
+                                    <v-chip
+                                        size="small"
+                                        :color="dataExchangeRefresh.status === 'failed' ? 'error' : (isDataExchangeReloadRunning ? 'primary' : 'success')"
+                                        variant="tonal"
+                                    >
+                                        {{ dataExchangeRefresh.status }}
+                                    </v-chip>
+                                    <v-btn
+                                        icon="mdi-close"
+                                        size="x-small"
+                                        variant="text"
+                                        @click="dismissDataExchangeRefresh"
+                                    />
+                                </div>
+                            </div>
+                            <v-progress-linear
+                                class="mt-3"
+                                color="primary"
+                                height="8"
+                                rounded
+                                :indeterminate="dataExchangeRefresh.status === 'queued'"
+                                :model-value="dataExchangeReloadProgressValue"
+                            />
+                        </v-sheet>
+
+                        <v-progress-linear v-if="dataExchangesLoading" indeterminate color="primary" class="mb-4" />
+
+                        <div class="data-exchange-list">
+                            <section
+                                v-for="exchange in dataExchanges"
+                                :key="exchange.code"
+                                class="data-exchange-item"
+                            >
+                                <div class="data-exchange-summary">
+                                    <div>
+                                        <div class="data-exchange-meta">
+                                            {{ [exchange.country, exchange.currency, exchange.timezone, `details: ${exchange.detail_code}`].filter(Boolean).join(' · ') }}
+                                        </div>
+                                        <h2 class="data-exchange-title">{{ formatDataExchangeTitle(exchange) }}</h2>
+                                    </div>
+                                    <div class="data-exchange-code">{{ exchange.operating_mic || exchange.detail_code }}</div>
+                                </div>
+
+                                <div class="data-exchange-detail-grid">
+                                    <div class="data-exchange-detail-block">
+                                        <h3>TradingHours</h3>
+                                        <dl v-if="formatDataExchangeTradingHours(exchange).length" class="data-definition-list">
+                                            <template
+                                                v-for="(row, index) in formatDataExchangeTradingHours(exchange)"
+                                                :key="row.key"
+                                            >
+                                                <div v-if="index === 2" class="data-definition-spacer" aria-hidden="true" />
+                                                <div class="data-definition-pair">
+                                                    <dt>{{ row.label }}</dt>
+                                                    <dd>{{ formatDataExchangeHolidayValue(row.value) }}</dd>
+                                                </div>
+                                            </template>
+                                        </dl>
+                                        <p v-else class="text-body-2 text-medium-emphasis mb-0 font-medium">No trading hours stored.</p>
+                                    </div>
+
+                                    <div class="data-exchange-detail-block">
+                                        <h3>Holidays</h3>
+                                        <div v-if="formatDataExchangeHolidays(exchange).length" class="data-holiday-list">
+                                            <div
+                                                v-for="holiday in formatDataExchangeHolidays(exchange)"
+                                                :key="holiday.key"
+                                                class="data-holiday-card"
+                                            >
+                                                <div class="data-holiday-card-date">{{ holiday.date }}</div>
+                                                <div class="data-holiday-card-label">{{ holiday.label }}</div>
+                                            </div>
+                                        </div>
+                                        <p v-else class="text-body-2 text-medium-emphasis mb-0">No holidays stored.</p>
+                                    </div>
+                                </div>
+                            </section>
+                            <v-sheet
+                                v-if="!dataExchangesLoading && dataExchanges.length === 0"
+                                border
+                                rounded
+                                class="pa-4 text-medium-emphasis"
+                            >
+                                No exchanges stored yet.
+                            </v-sheet>
+                        </div>
+                        </section>
+
+                        <section
+                            v-if="activeDataSubsection === 'intraday'"
+                            aria-label="Data intraday"
+                        >
+                            <div class="data-exchange-actions mb-4">
+                                <div>
+                                    <h2 class="text-h5">Intraday</h2>
+                                    <div class="text-caption text-medium-emphasis">
+                                        Last updated:
+                                        {{ dataIntradayLastUpdatedAt ? formatDateTime(dataIntradayLastUpdatedAt) : 'Never' }}
+                                    </div>
+                                </div>
+                                <v-btn
+                                    color="primary"
+                                    prepend-icon="mdi-refresh"
+                                    type="button"
+                                    variant="flat"
+                                    :disabled="!selectedDataIntradayStockId || isDataIntradayReloadRunning"
+                                    :loading="dataIntradayReloadLoading"
+                                    @click="reloadDataIntraday"
+                                >
+                                    Reload Intraday
+                                </v-btn>
+                            </div>
+
+                            <v-alert
+                                v-if="dataIntradayError"
+                                class="mb-4"
+                                density="compact"
+                                type="error"
+                                variant="tonal"
+                            >
+                                {{ dataIntradayError }}
+                            </v-alert>
+
+                            <v-sheet
+                                v-if="dataIntradayRefreshVisible"
+                                border
+                                class="mb-4"
+                                rounded
+                            >
+                                <div class="d-flex align-center justify-space-between ga-3 flex-wrap pa-4">
+                                    <div>
+                                        <div class="text-subtitle-2">{{ formatDataIntradayReloadMessage() }}</div>
+                                        <div class="text-caption text-medium-emphasis">
+                                            {{ dataIntradayRefresh.step }}
+                                            <template v-if="dataIntradayRefresh.current">
+                                                · {{ dataIntradayRefresh.current }}
+                                            </template>
+                                        </div>
+                                    </div>
+                                    <div class="d-flex align-center ga-2">
+                                        <v-chip
+                                            size="small"
+                                            :color="dataIntradayRefresh.status === 'failed' ? 'error' : (isDataIntradayReloadRunning ? 'primary' : 'success')"
+                                            variant="tonal"
+                                        >
+                                            {{ dataIntradayRefresh.status }}
+                                        </v-chip>
+                                        <v-btn
+                                            v-if="!isDataIntradayReloadRunning"
+                                            icon="mdi-close"
+                                            size="x-small"
+                                            variant="text"
+                                            @click="dismissDataIntradayRefresh"
+                                        />
+                                    </div>
+                                </div>
+                                <div class="data-progress-wrap">
+                                    <v-progress-linear
+                                        color="primary"
+                                        height="8"
+                                        rounded
+                                        :indeterminate="dataIntradayRefresh.status === 'queued'"
+                                        :model-value="dataIntradayReloadProgressValue"
+                                    />
+                                </div>
+                            </v-sheet>
+
+                            <div class="tests-chip-group mb-4">
+                                <h2 class="tests-chip-heading">Stocks</h2>
+                                <div class="tests-chip-list" aria-label="Intraday stocks">
+                                    <button
+                                        v-for="stock in dataIntradayStocks"
+                                        :key="`data-intraday-stock-${stock.id}`"
+                                        type="button"
+                                        class="tests-chip"
+                                        :class="{ 'tests-chip--active': selectedDataIntradayStockId === stock.id || dataIntradaySelectedStockId === stock.id }"
+                                        :aria-pressed="selectedDataIntradayStockId === stock.id || dataIntradaySelectedStockId === stock.id"
+                                        :title="stock.name"
+                                        @click="selectDataIntradayStock(stock.id)"
+                                    >
+                                        <span class="tests-chip-symbol">{{ stock.symbol || '-' }}</span>
+                                        <span class="tests-chip-name">{{ stock.name || stock.symbol || `Stock ${stock.id}` }}</span>
+                                    </button>
+                                    <span v-if="!dataIntradayLoading && dataIntradayStocks.length === 0" class="tests-chip-empty">
+                                        No stocks.
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div v-if="selectedDataIntradayStock" class="text-caption text-medium-emphasis mb-3">
+                                {{ selectedDataIntradayStock.name }} · {{ selectedDataIntradayStock.symbol || '-' }} · interval 5m
+                            </div>
+
+                            <v-progress-linear v-if="dataIntradayLoading" indeterminate color="primary" class="mb-4" />
+
+                            <div class="data-intraday-panel">
+                                <section
+                                    v-for="day in dataIntradayDays"
+                                    :key="day.trading_date"
+                                    class="data-intraday-day"
+                                >
+                                    <button
+                                        type="button"
+                                        class="data-intraday-day-header"
+                                        :aria-expanded="isDataIntradayDayExpanded(day)"
+                                        @click="toggleDataIntradayDay(day)"
+                                    >
+                                        <span class="data-intraday-day-title">{{ formatDataIntradayDayTitle(day) }}</span>
+                                        <span class="data-intraday-day-count">{{ formatInteger(day.rows?.length ?? 0) }} rows</span>
+                                        <v-icon
+                                            :icon="isDataIntradayDayExpanded(day) ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+                                            size="20"
+                                        />
+                                    </button>
+                                    <div v-if="isDataIntradayDayExpanded(day)" class="data-intraday-day-body">
+                                        <div
+                                            v-if="day.overview"
+                                            class="data-intraday-day-overview"
+                                        >
+                                            {{ day.overview }}
+                                        </div>
+                                        <div class="tests-ticker-table-wrap">
+                                            <v-table class="tests-ticker-table" density="compact">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Timestamp</th>
+                                                        <th>GMT Offset</th>
+                                                        <th>Datetime</th>
+                                                        <th class="text-right">Open</th>
+                                                        <th class="text-right">High</th>
+                                                        <th class="text-right">Low</th>
+                                                        <th class="text-right">Close</th>
+                                                        <th class="text-right">Volume</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr
+                                                        v-for="(row, index) in day.rows"
+                                                        :key="row.timestamp ?? row.datetime ?? index"
+                                                    >
+                                                        <td>{{ formatAnalyzeIntradayCandleValue(row.timestamp) }}</td>
+                                                        <td>{{ formatAnalyzeIntradayCandleValue(row.gmtoffset) }}</td>
+                                                        <td>{{ formatAnalyzeIntradayCandleDateTime(row.datetime) }}</td>
+                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.open) }}</td>
+                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.high) }}</td>
+                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.low) }}</td>
+                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.close) }}</td>
+                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.volume) }}</td>
+                                                    </tr>
+                                                </tbody>
+                                            </v-table>
+                                        </div>
+                                    </div>
+                                </section>
+                                <v-sheet
+                                    v-if="!dataIntradayLoading && dataIntradayDays.length === 0"
+                                    border
+                                    rounded
+                                    class="pa-4 text-medium-emphasis"
+                                >
+                                    No intraday data stored for this stock yet.
+                                </v-sheet>
+                            </div>
+                        </section>
+                    </section>
 
                     <section v-if="activeSection === 'updates' && canManageDashboardAdmin">
                         <div class="mb-6">
@@ -6616,6 +7495,361 @@ function priceRefreshScheduleFormFromSettings(settings) {
 .analyze-detail-table :deep(td) {
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+}
+
+.tests-chip-groups {
+    display: grid;
+    gap: 18px;
+}
+
+.tests-chip-group {
+    min-width: 0;
+}
+
+.tests-chip-heading {
+    color: rgba(var(--v-theme-on-surface), 0.68);
+    font-size: 0.72rem;
+    font-weight: 800;
+    line-height: 1.2;
+    margin: 0 0 8px;
+    text-transform: uppercase;
+}
+
+.tests-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.tests-chip {
+    align-items: center;
+    background: #ffffff;
+    border: 1px solid #d4e0e4;
+    border-radius: 5px;
+    color: #0f2630;
+    cursor: pointer;
+    display: inline-flex;
+    gap: 8px;
+    height: 34px;
+    max-width: min(100%, 260px);
+    min-width: 0;
+    padding: 0 11px;
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.tests-chip:hover,
+.tests-chip--active {
+    background: rgba(var(--v-theme-primary), 0.06);
+    border-color: rgba(var(--v-theme-primary), 0.55);
+    box-shadow: 0 1px 2px rgba(15, 38, 48, 0.08);
+}
+
+.tests-chip-symbol {
+    flex: 0 0 auto;
+    font-size: 0.78rem;
+    font-weight: 900;
+    line-height: 1;
+}
+
+.tests-chip-name {
+    flex: 1 1 auto;
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.tests-chip-empty {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    font-size: 0.82rem;
+}
+
+.tests-tabs {
+    margin-top: 20px;
+}
+
+.tests-ticker-panel {
+    height: 2000px;
+    margin-top: 14px;
+    overflow: auto;
+}
+
+.tests-ticker-actions {
+    align-items: center;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.tests-ticker-table-wrap {
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 5px;
+    margin-top: 12px;
+    overflow-x: auto;
+}
+
+.tests-ticker-table {
+    min-width: 760px;
+}
+
+.tests-ticker-table :deep(th) {
+    color: rgba(var(--v-theme-on-surface), 0.68);
+    font-size: 0.72rem;
+    letter-spacing: 0;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.tests-ticker-table :deep(td) {
+    font-size: 0.78rem;
+    white-space: nowrap;
+}
+
+.tests-exchange-details {
+    margin-top: 16px;
+}
+
+.tests-exchange-detail {
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 5px;
+    margin-top: 8px;
+    overflow: hidden;
+}
+
+.tests-exchange-detail-code {
+    background: rgba(var(--v-theme-primary), 0.06);
+    color: rgba(var(--v-theme-on-surface), 0.78);
+    font-size: 0.78rem;
+    font-weight: 800;
+    padding: 8px 10px;
+}
+
+.tests-exchange-detail-json {
+    font-size: 0.78rem;
+    line-height: 1.5;
+    margin: 0;
+    max-height: 420px;
+    overflow: auto;
+    padding: 10px;
+    white-space: pre-wrap;
+}
+
+.data-page-header {
+    align-items: center;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+}
+
+.data-exchange-actions {
+    align-items: center;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+}
+
+.data-exchange-list {
+    display: grid;
+    gap: 12px;
+}
+
+.data-intraday-panel {
+    height: 2000px;
+    overflow: auto;
+}
+
+.data-progress-wrap {
+    overflow: hidden;
+    padding: 0 16px 16px;
+    width: 100%;
+}
+
+.data-intraday-day {
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 6px;
+    margin-bottom: 18px;
+    overflow: hidden;
+}
+
+.data-intraday-day-header {
+    align-items: center;
+    background: rgba(var(--v-theme-primary), 0.04);
+    color: inherit;
+    cursor: pointer;
+    display: grid;
+    font: inherit;
+    gap: 12px;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    padding: 12px 14px;
+    text-align: left;
+    width: 100%;
+}
+
+.data-intraday-day-header:focus-visible {
+    outline: 2px solid rgb(var(--v-theme-primary));
+    outline-offset: -2px;
+}
+
+.data-intraday-day-header:hover {
+    background: rgba(var(--v-theme-primary), 0.07);
+}
+
+.data-intraday-day-title {
+    font-size: 0.98rem;
+    font-weight: 700;
+    line-height: 1.3;
+    min-width: 0;
+}
+
+.data-intraday-day-count {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    font-size: 0.78rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.data-intraday-day-body {
+    padding: 12px 14px 14px;
+}
+
+.data-intraday-day-overview {
+    color: rgba(var(--v-theme-on-surface), 0.68);
+    font-size: 0.82rem;
+    font-weight: 600;
+    margin: 0 0 8px;
+}
+
+.data-exchange-item {
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.data-exchange-summary {
+    align-items: center;
+    background: rgba(var(--v-theme-primary), 0.04);
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    padding: 12px 14px;
+}
+
+.data-exchange-title {
+    font-size: 1rem;
+    font-weight: 500;
+    line-height: 1.3;
+    margin: 0;
+}
+
+.data-exchange-meta {
+    color: rgba(var(--v-theme-on-surface), 0.64);
+    font-size: 0.8rem;
+    margin-top: 2px;
+}
+
+.data-exchange-code {
+    border: 1px solid rgba(var(--v-theme-primary), 0.3);
+    border-radius: 4px;
+    color: rgb(var(--v-theme-primary));
+    flex: 0 0 auto;
+    font-size: 0.78rem;
+    font-weight: 800;
+    padding: 4px 8px;
+}
+
+.data-exchange-detail-grid {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 14px;
+}
+
+.data-exchange-detail-block h3 {
+    color: rgba(var(--v-theme-on-surface), 0.72);
+    font-size: 0.76rem;
+    font-weight: 500;
+    line-height: 1.2;
+    margin: 0 0 8px;
+    text-transform: uppercase;
+}
+
+.data-definition-list {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    gap: 0 0;
+    margin: 0;
+    padding: 0;
+}
+
+.data-definition-pair {
+    min-width: 160px;
+    padding-right: 20px;
+}
+
+.data-definition-spacer {
+    width: 20px;
+    flex-shrink: 0;
+}
+
+.data-definition-list dt {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    font-size: 0.8rem;
+}
+
+.data-definition-list dd {
+    font-size: 0.82rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.data-holiday-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.data-holiday-card {
+    background: rgba(200, 100, 20, 0.08);
+    border: 1px solid rgba(200, 100, 20, 0.18);
+    border-radius: 6px;
+    padding: 5px 9px;
+}
+
+.data-holiday-card-date {
+    color: rgba(var(--v-theme-on-surface), 0.58);
+    font-size: 0.74rem;
+    line-height: 1.3;
+}
+
+.data-holiday-card-label {
+    font-size: 0.8rem;
+    font-weight: 500;
+    line-height: 1.3;
+}
+
+@media (max-width: 900px) {
+    .data-page-header,
+    .data-exchange-actions,
+    .data-exchange-summary {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .data-definition-list {
+        flex-wrap: wrap;
+    }
+
+    .data-definition-spacer {
+        display: none;
+    }
+
+    .data-definition-pair {
+        min-width: 140px;
+    }
 }
 
 .price-refresh-status-dot {

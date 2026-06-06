@@ -211,12 +211,39 @@ class AdminDepotTest extends TestCase
             ->assertSee('<title>GKStocks</title>', false);
     }
 
+    public function test_admin_can_open_data_menu_page(): void
+    {
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->get('/admin/menu/data')
+            ->assertOk();
+    }
+
+    public function test_admin_can_open_data_exchanges_menu_page(): void
+    {
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->get('/admin/menu/data/exchanges')
+            ->assertOk();
+    }
+
     public function test_admin_can_open_nested_analyze_menu_page(): void
     {
         $admin = $this->adminUser();
 
         $this->actingAs($admin)
             ->get('/admin/menu/analyze/detail')
+            ->assertOk();
+    }
+
+    public function test_admin_can_open_nested_analyze_tests_menu_page(): void
+    {
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->get('/admin/menu/analyze/tests')
             ->assertOk();
     }
 

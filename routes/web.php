@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AdminAuthController;
+use App\Http\Controllers\AdminDataController;
 use App\Http\Controllers\AdminDepotController;
 use App\Http\Controllers\AdminDepotHoldingController;
 use App\Http\Controllers\AdminDepotTransactionController;
@@ -11,6 +12,7 @@ use App\Http\Controllers\AdminQueueStatusController;
 use App\Http\Controllers\AdminRoleController;
 use App\Http\Controllers\AdminStockHistoricalPriceController;
 use App\Http\Controllers\AdminStockSearchController;
+use App\Http\Controllers\AdminTestsController;
 use App\Http\Controllers\AdminUiPreferencesController;
 use App\Http\Controllers\AdminUserController;
 use App\Models\Depot;
@@ -160,6 +162,15 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::get('/admin/watchlist/holdings/refresh-prices/{refreshId}', [AdminDepotHoldingController::class, 'refreshPriceStatus'])->name('admin.watchlist.holdings.refresh-prices.status');
     Route::get('/admin/queue/status', [AdminQueueStatusController::class, 'show'])->name('admin.queue.status');
     Route::post('/admin/queue/clear', [AdminQueueStatusController::class, 'clear'])->name('admin.queue.clear');
+    Route::get('/admin/tests/options', [AdminTestsController::class, 'options'])->name('admin.tests.options');
+    Route::get('/admin/tests/tickers', [AdminTestsController::class, 'tickers'])->name('admin.tests.tickers');
+    Route::get('/admin/tests/exchanges', [AdminTestsController::class, 'exchanges'])->name('admin.tests.exchanges');
+    Route::get('/admin/data/exchanges', [AdminDataController::class, 'exchanges'])->name('admin.data.exchanges');
+    Route::post('/admin/data/exchanges/reload', [AdminDataController::class, 'reload'])->name('admin.data.exchanges.reload');
+    Route::get('/admin/data/exchanges/reload/{refreshId}', [AdminDataController::class, 'reloadStatus'])->name('admin.data.exchanges.reload.status');
+    Route::get('/admin/data/intraday', [AdminDataController::class, 'intraday'])->name('admin.data.intraday');
+    Route::post('/admin/data/intraday/reload', [AdminDataController::class, 'reloadIntraday'])->name('admin.data.intraday.reload');
+    Route::get('/admin/data/intraday/reload/{refreshId}', [AdminDataController::class, 'reloadIntradayStatus'])->name('admin.data.intraday.reload.status');
     Route::post('/admin/watchlist/holdings/historical-prices/ensure', [AdminStockHistoricalPriceController::class, 'ensure'])->name('admin.watchlist.holdings.historical-prices.ensure');
     Route::get('/admin/watchlist/holdings/historical-prices/{refreshId}', [AdminStockHistoricalPriceController::class, 'status'])->name('admin.watchlist.holdings.historical-prices.status');
     Route::patch('/admin/watchlist/holdings/{holding}/flatex-price', [AdminDepotHoldingController::class, 'updateFlatexPrice'])->name('admin.watchlist.holdings.flatex-price');

@@ -278,7 +278,7 @@ describe('App', () => {
 
         expect(wrapper.find('.dashboard-navigation-drawer').classes()).toContain('dashboard-navigation-drawer--compact');
         expect(wrapper.findComponent({ name: 'VNavigationDrawer' }).props('width')).toBe(64);
-        expect(wrapper.findAll('.dashboard-compact-menu-item')).toHaveLength(5);
+        expect(wrapper.findAll('.dashboard-compact-menu-item')).toHaveLength(6);
         expect(wrapper.find('.dashboard-compact-menu-item--active').exists()).toBe(true);
         expect(wrapper.find('[aria-label="Enhance dashboard menu"]').exists()).toBe(true);
         expect(wrapper.find('.dashboard-navigation-drawer').text()).not.toContain('Stocks');
@@ -879,6 +879,7 @@ describe('App', () => {
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('ALL');
         expect(wrapper.text()).toContain('Overview');
         expect(wrapper.text()).toContain('Detail');
+        expect(wrapper.text()).toContain('Tests');
 
         const overviewTab = wrapper.findAll('.v-tab')
             .find((tab) => tab.text().includes('Overview'));
@@ -1168,6 +1169,202 @@ describe('App', () => {
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Nvidia');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('924.15000000');
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/3/intraday-candles', expect.anything());
+    });
+
+    it('renders the Tests menu page with unpaginated index and stock selects', async () => {
+        window.history.pushState({}, '', '/admin/menu/analyze/tests?stock=all');
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const indices = [
+            { id: 1, symbol: 'ATX', name: 'Austrian Traded Index' },
+            { id: 2, symbol: 'DAX', name: 'DAX Index' },
+        ];
+        const stocks = Array.from({ length: 12 }, (_, index) => ({
+            id: index + 1,
+            symbol: `S${index + 1}`,
+            name: `Stock ${index + 1}`,
+        }));
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/tests/options') {
+                return Promise.resolve(jsonResponse({ indices, stocks }));
+            }
+
+            if (path === '/admin/tests/tickers') {
+                return Promise.resolve(jsonResponse({
+                    exchange_code: 'XETRA',
+                    tickers: [
+                        {
+                            Code: 'AMES',
+                            Name: 'Amundi IBEX 35 UCITS ETF Acc',
+                            Exchange: 'XETRA',
+                            Type: 'ETF',
+                            Currency: 'EUR',
+                            Isin: 'LU1681043599',
+                        },
+                        {
+                            Code: 'LEER',
+                            Name: 'Amundi MSCI Eastern Europe',
+                            Exchange: 'XETRA',
+                            Type: 'ETF',
+                            Currency: 'EUR',
+                            Isin: 'LU1681043912',
+                        },
+                    ],
+                }));
+            }
+
+            if (path === '/admin/tests/exchanges') {
+                return Promise.resolve(jsonResponse({
+                    exchanges: [
+                        {
+                            Code: 'XETRA',
+                            Name: 'XETRA',
+                            Country: 'Germany',
+                            Currency: 'EUR',
+                            Timezone: 'Europe/Berlin',
+                            exchange_detail_code: 'XETR',
+                            OperatingMIC: 'XETR',
+                        },
+                        {
+                            Code: 'NASDAQ',
+                            Name: 'NASDAQ',
+                            Country: 'USA',
+                            Currency: 'USD',
+                            Timezone: 'America/New_York',
+                            exchange_detail_code: 'XNAS',
+                            OperatingMIC: 'XNAS',
+                        },
+                    ],
+                    exchange_details: {
+                        XETR: {
+                            Code: 'XETR',
+                            Name: 'XETRA details',
+                            TradingHours: '09:00-17:30',
+                        },
+                        XNAS: {
+                            Code: 'XNAS',
+                            Name: 'NASDAQ details',
+                            TradingHours: '09:30-16:00',
+                        },
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const testsPage = wrapper.find('[aria-label="Analyze tests"]');
+        expect(testsPage.exists()).toBe(true);
+        expect(testsPage.text()).toContain('Indices');
+        expect(testsPage.text()).toContain('Stocks');
+        expect(testsPage.find('[aria-label="Test indices"]').exists()).toBe(true);
+        expect(testsPage.find('[aria-label="Test stocks"]').exists()).toBe(true);
+        expect(window.location.pathname).toBe('/admin/menu/analyze/tests');
+        expect(wrapper.find('.dashboard-navigation-drawer').text()).not.toContain('Tests');
+        expect(wrapper.findAll('.v-tab').map((tab) => tab.text()).some((label) => label.includes('Tests'))).toBe(true);
+        expect(wrapper.vm.testOptions.indices).toHaveLength(2);
+        expect(wrapper.vm.testOptions.stocks).toHaveLength(12);
+        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/options', expect.any(Object));
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/tests/options?page=1')).toBe(false);
+
+        const indexChips = testsPage.find('[aria-label="Test indices"]').findAll('button');
+        const stockChips = testsPage.find('[aria-label="Test stocks"]').findAll('button');
+        expect(indexChips).toHaveLength(2);
+        expect(stockChips).toHaveLength(12);
+        expect(indexChips[0].text()).toContain('ATX');
+        expect(indexChips[0].text()).toContain('Austrian Traded Index');
+        expect(stockChips[11].text()).toContain('S12');
+        expect(stockChips[11].text()).toContain('Stock 12');
+
+        await indexChips[0].trigger('click');
+        await stockChips[11].trigger('click');
+
+        expect(wrapper.vm.selectedTestIndexId).toBe(1);
+        expect(wrapper.vm.selectedTestStockId).toBe(12);
+        expect(indexChips[0].attributes('aria-pressed')).toBe('true');
+        expect(stockChips[11].attributes('aria-pressed')).toBe('true');
+
+        const testTabs = wrapper.findAll('.v-tab').filter((tab) => ['Tickers', 'Exchanges'].includes(tab.text()));
+        expect(testTabs).toHaveLength(2);
+        expect(wrapper.vm.selectedTestTab).toBe('tickers');
+        expect(testsPage.text()).toContain('Exchange: XETRA');
+        expect(testsPage.find('[aria-label="Ticker result"]').classes()).toContain('tests-ticker-panel');
+
+        const loadTickersButton = testsPage.findAll('button').find((button) => button.text().includes('Load'));
+        await loadTickersButton.trigger('click');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/tickers', expect.any(Object));
+        expect(wrapper.vm.testTickers).toHaveLength(2);
+        expect(testsPage.text()).toContain('AMES');
+        expect(testsPage.text()).toContain('Amundi IBEX 35 UCITS ETF Acc');
+        expect(testsPage.text()).toContain('LU1681043599');
+
+        await testTabs[1].trigger('click');
+        await flushPromises();
+
+        expect(wrapper.vm.selectedTestTab).toBe('exchanges');
+        expect(wrapper.find('[aria-label="Exchange result"]').classes()).toContain('tests-ticker-panel');
+
+        const exchangeLoadButton = wrapper.find('[aria-label="Exchange result"]')
+            .findAll('button')
+            .find((button) => button.text().includes('Load'));
+        await exchangeLoadButton.trigger('click');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/exchanges', expect.any(Object));
+        expect(wrapper.vm.testExchanges).toHaveLength(2);
+        expect(wrapper.vm.testExchangeDetails.XNAS.Name).toBe('NASDAQ details');
+        expect(wrapper.find('[aria-label="Exchange result"]').text()).toContain('XETRA');
+        expect(wrapper.find('[aria-label="Exchange result"]').text()).toContain('Germany');
+        expect(wrapper.find('[aria-label="Exchange result"]').text()).toContain('Europe/Berlin');
+        expect(wrapper.find('[aria-label="Exchange result"]').text()).toContain('NASDAQ details');
+        expect(wrapper.find('[aria-label="Exchange result"]').text()).toContain('09:30-16:00');
     });
 
     it('renders a Today chart with the actual stored EODHD intraday rows', async () => {
@@ -2852,8 +3049,9 @@ describe('App', () => {
         expect(wrapper.vm.priceRefreshScheduleForm.closed_refresh_enabled).toBe(false);
     });
 
-    it('shows Admin group with horizontal Users, Roles, and Updates submenu chips for super_admin', async () => {
+    it('shows Data as a main dashboard item and Admin group with Users, Roles, and Updates submenu chips for super_admin', async () => {
         window.history.pushState({}, '', '/admin/menu/users');
+        localStorage.removeItem('data_intraday_refresh_info_dismissed');
         const fetchMock = vi.fn((path) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -2902,6 +3100,103 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ indexes: [] }));
             }
 
+            if (path === '/admin/data/exchanges') {
+                return Promise.resolve(jsonResponse({
+                    exchanges: [
+                        {
+                            code: 'BA',
+                            detail_code: 'XBUE',
+                            name: 'Buenos Aires Exchange',
+                            country: 'Argentina',
+                            currency: 'ARS',
+                            timezone: 'America/Argentina/Buenos_Aires',
+                            trading_hours: {},
+                            holidays: {},
+                            synced_at: '2026-06-06T12:30:00+00:00',
+                        },
+                    ],
+                    refresh: {
+                        refresh_id: 'exchanges-test',
+                        status: 'partial',
+                        processed: 72,
+                        total: 72,
+                        step: '72/72',
+                        message: 'Exchange reload finished with missing details.',
+                        current: null,
+                    },
+                }));
+            }
+
+            if (path === '/admin/data/intraday') {
+                return Promise.resolve(jsonResponse({
+                    stocks: [
+                        { id: 7, symbol: 'AMES', name: 'Amundi IBEX 35 UCITS ETF' },
+                    ],
+                    selected_stock_id: 7,
+                    days: [
+                        {
+                            title: 'Intraday 05.06.2026 - 5m',
+                            trading_date: '2026-06-05',
+                            interval: '5m',
+                            rows: [
+                                {
+                                    timestamp: 1780646400,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-05 08:00:00',
+                                    open: '10.10000000',
+                                    high: '10.20000000',
+                                    low: '10.00000000',
+                                    close: '10.15000000',
+                                    volume: 1200,
+                                },
+                            ],
+                        },
+                    ],
+                    refresh: {
+                        refresh_id: 'intraday-test',
+                        status: 'finished',
+                        message: '1 intraday candles loaded/updated.',
+                        stored_count: 1,
+                        finished_at: '2026-06-06T12:40:00+00:00',
+                    },
+                }));
+            }
+
+            if (path === '/admin/data/intraday/reload') {
+                return Promise.resolve(jsonResponse({
+                    stocks: [
+                        { id: 7, symbol: 'AMES', name: 'Amundi IBEX 35 UCITS ETF' },
+                    ],
+                    selected_stock_id: 7,
+                    days: [
+                        {
+                            title: 'Intraday 05.06.2026 - 5m',
+                            trading_date: '2026-06-05',
+                            interval: '5m',
+                            rows: [
+                                {
+                                    timestamp: 1780646400,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-05 08:00:00',
+                                    open: '10.10000000',
+                                    high: '10.20000000',
+                                    low: '10.00000000',
+                                    close: '10.15000000',
+                                    volume: 1200,
+                                },
+                            ],
+                        },
+                    ],
+                    refresh: {
+                        refresh_id: 'intraday-test',
+                        status: 'finished',
+                        message: '1 intraday candles loaded/updated.',
+                        stored_count: 1,
+                        finished_at: '2026-06-06T12:40:00+00:00',
+                    },
+                }));
+            }
+
             return Promise.reject(new Error(`Unexpected request: ${path}`));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -2912,20 +3207,84 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Admin');
         expect(wrapper.text()).toContain('Users');
         expect(wrapper.text()).toContain('Roles');
+        expect(wrapper.text()).toContain('Data');
         expect(wrapper.text()).toContain('Updates');
+        expect(wrapper.find('.dashboard-navigation-drawer').text()).toContain('Data');
 
         const tabs = wrapper.findAll('.v-tab');
         const tabLabels = tabs.map((t) => t.text());
         expect(tabLabels.some((l) => l.includes('Users'))).toBe(true);
         expect(tabLabels.some((l) => l.includes('Roles'))).toBe(true);
+        expect(tabLabels.some((l) => l.includes('Data'))).toBe(false);
         expect(tabLabels.some((l) => l.includes('Updates'))).toBe(true);
 
-        const rolesTab = tabs.find((t) => t.text().includes('Roles'));
+        const rolesTab = wrapper.findAll('.v-tab').find((t) => t.text().includes('Roles'));
         await rolesTab.trigger('click');
         await flushPromises();
 
         expect(window.location.pathname).toBe('/admin/menu/roles');
         expect(wrapper.text()).toContain('admin');
+
+        const dataMenuItem = wrapper.find('.dashboard-navigation-drawer')
+            .findAll('.v-list-item')
+            .find((item) => item.text().includes('Data'));
+        await dataMenuItem.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/data/exchanges');
+        expect(wrapper.find('[aria-label="Data exchanges"]').exists()).toBe(true);
+        expect(wrapper.text()).toContain('Exchanges');
+        expect(wrapper.text()).toContain('Last updated:');
+        expect(wrapper.text()).toContain('06.06.2026');
+        expect(wrapper.text()).toContain('14:30');
+        expect(wrapper.text()).toContain('Buenos Aires Exchange · BA');
+        expect(wrapper.text()).toContain('Exchange reload finished with missing details.');
+        expect(fetchMock).toHaveBeenCalledWith('/admin/data/exchanges', expect.any(Object));
+
+        wrapper.vm.dismissDataExchangeRefresh();
+        await wrapper.vm.$nextTick();
+
+        expect(sessionStorage.getItem('exchange_refresh_dismissed_id')).toBe('exchanges-test');
+        expect(wrapper.text()).not.toContain('Exchange reload finished with missing details.');
+
+        const intradayTab = wrapper.findAll('.v-tab').find((t) => t.text().includes('Intraday'));
+        await intradayTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/data/intraday');
+        expect(wrapper.find('[aria-label="Data intraday"]').exists()).toBe(true);
+        expect(wrapper.text()).toContain('Amundi IBEX 35 UCITS ETF');
+        expect(wrapper.text()).toContain('Intraday 05.06.2026 - 5m');
+        expect(wrapper.text()).toContain('10.15000000');
+        expect(wrapper.text()).toContain('1 intraday candles loaded/updated.');
+        expect(fetchMock).toHaveBeenCalledWith('/admin/data/intraday', expect.any(Object));
+
+        const intradayDayHeader = wrapper.find('.data-intraday-day-header');
+        expect(intradayDayHeader.attributes('aria-expanded')).toBe('true');
+        await intradayDayHeader.trigger('click');
+        await wrapper.vm.$nextTick();
+
+        expect(intradayDayHeader.attributes('aria-expanded')).toBe('false');
+        expect(wrapper.text()).not.toContain('10.15000000');
+
+        await intradayDayHeader.trigger('click');
+        await wrapper.vm.$nextTick();
+
+        expect(wrapper.text()).toContain('10.15000000');
+
+        wrapper.vm.dismissDataIntradayRefresh();
+        await wrapper.vm.$nextTick();
+
+        expect(localStorage.getItem('data_intraday_refresh_info_dismissed')).toBe('1');
+        expect(wrapper.text()).not.toContain('1 intraday candles loaded/updated.');
+
+        const reloadButton = wrapper.findAll('button').find((button) => button.text().includes('Reload Intraday'));
+        await reloadButton.trigger('click');
+        await flushPromises();
+
+        const reloadCall = fetchMock.mock.calls.find(([path]) => path === '/admin/data/intraday/reload');
+        expect(reloadCall[1].body).toBe(JSON.stringify({ selected_stock_id: 7 }));
+        localStorage.removeItem('data_intraday_refresh_info_dismissed');
     });
 
     it('opens the watch-list PDF export in a new tab', async () => {

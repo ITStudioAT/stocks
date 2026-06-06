@@ -16,6 +16,21 @@ export const useDepotStore = defineStore('depots', {
         priceRefreshSettings: null,
         indexPriceRefreshSettings: null,
         queueStatus: null,
+        testOptions: {
+            indices: [],
+            stocks: [],
+        },
+        testTickers: [],
+        testTickerExchangeCode: 'XETRA',
+        testExchanges: [],
+        testExchangeDetails: {},
+        testExchangeDetailErrors: {},
+        dataExchanges: [],
+        dataExchangeRefresh: null,
+        dataIntradayStocks: [],
+        dataIntradaySelectedStockId: null,
+        dataIntradayDays: [],
+        dataIntradayRefresh: null,
         stockHistoricalPriceCoverage: null,
         stockHistoricalPriceRefresh: null,
         analyzeIntradayCandles: null,
@@ -45,6 +60,13 @@ export const useDepotStore = defineStore('depots', {
         transactionsLoading: false,
         exchangeTradingTimesLoading: false,
         queueStatusLoading: false,
+        testOptionsLoading: false,
+        testTickersLoading: false,
+        testExchangesLoading: false,
+        dataExchangesLoading: false,
+        dataExchangeReloadLoading: false,
+        dataIntradayLoading: false,
+        dataIntradayReloadLoading: false,
         stockSearchLoading: false,
         analyzeIntradayCandlesLoading: false,
         error: '',
@@ -52,6 +74,11 @@ export const useDepotStore = defineStore('depots', {
         transactionsError: '',
         exchangeTradingTimesError: '',
         queueStatusError: '',
+        testOptionsError: '',
+        testTickersError: '',
+        testExchangesError: '',
+        dataExchangesError: '',
+        dataIntradayError: '',
         stockSearchError: '',
         analyzeIntradayCandlesError: '',
     }),
@@ -153,6 +180,177 @@ export const useDepotStore = defineStore('depots', {
                 throw error;
             } finally {
                 this.queueStatusLoading = false;
+            }
+        },
+        async loadTestOptions() {
+            this.testOptionsLoading = true;
+            this.testOptionsError = '';
+
+            try {
+                const data = await request('/admin/tests/options');
+                this.testOptions = {
+                    indices: data.indices ?? [],
+                    stocks: data.stocks ?? [],
+                };
+
+                return data;
+            } catch (error) {
+                this.testOptionsError = error.message;
+                throw error;
+            } finally {
+                this.testOptionsLoading = false;
+            }
+        },
+        async loadTestTickers() {
+            this.testTickersLoading = true;
+            this.testTickersError = '';
+
+            try {
+                const data = await request('/admin/tests/tickers');
+                this.testTickerExchangeCode = data.exchange_code ?? 'XETRA';
+                this.testTickers = data.tickers ?? [];
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.testTickersError = error.message;
+                throw error;
+            } finally {
+                this.testTickersLoading = false;
+            }
+        },
+        async loadTestExchanges() {
+            this.testExchangesLoading = true;
+            this.testExchangesError = '';
+
+            try {
+                const data = await request('/admin/tests/exchanges');
+                this.testExchanges = data.exchanges ?? [];
+                this.testExchangeDetails = data.exchange_details ?? {};
+                this.testExchangeDetailErrors = data.exchange_detail_errors ?? {};
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.testExchangesError = error.message;
+                throw error;
+            } finally {
+                this.testExchangesLoading = false;
+            }
+        },
+        async loadDataExchanges() {
+            this.dataExchangesLoading = true;
+            this.dataExchangesError = '';
+
+            try {
+                const data = await request('/admin/data/exchanges');
+                this.dataExchanges = data.exchanges ?? [];
+                this.dataExchangeRefresh = data.refresh ?? this.dataExchangeRefresh;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.dataExchangesError = error.message;
+                throw error;
+            } finally {
+                this.dataExchangesLoading = false;
+            }
+        },
+        async reloadDataExchanges() {
+            this.dataExchangeReloadLoading = true;
+            this.dataExchangesError = '';
+
+            try {
+                const data = await request('/admin/data/exchanges/reload', {
+                    method: 'POST',
+                });
+                this.dataExchanges = data.exchanges ?? this.dataExchanges;
+                this.dataExchangeRefresh = data.refresh ?? null;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.dataExchangesError = error.message;
+                throw error;
+            } finally {
+                this.dataExchangeReloadLoading = false;
+            }
+        },
+        async loadDataExchangeRefresh(refreshId) {
+            this.dataExchangesError = '';
+
+            try {
+                const data = await request(`/admin/data/exchanges/reload/${refreshId}`);
+                this.dataExchanges = data.exchanges ?? this.dataExchanges;
+                this.dataExchangeRefresh = data.refresh ?? null;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.dataExchangesError = error.message;
+                throw error;
+            }
+        },
+        async loadDataIntraday(stockId = null) {
+            this.dataIntradayLoading = true;
+            this.dataIntradayError = '';
+
+            try {
+                const query = stockId ? `?stock=${encodeURIComponent(String(stockId))}` : '';
+                const data = await request(`/admin/data/intraday${query}`);
+                this.dataIntradayStocks = data.stocks ?? [];
+                this.dataIntradaySelectedStockId = data.selected_stock_id ?? null;
+                this.dataIntradayDays = data.days ?? [];
+                this.dataIntradayRefresh = data.refresh ?? null;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.dataIntradayError = error.message;
+                throw error;
+            } finally {
+                this.dataIntradayLoading = false;
+            }
+        },
+        async reloadDataIntraday(stockId) {
+            this.dataIntradayReloadLoading = true;
+            this.dataIntradayError = '';
+
+            try {
+                const data = await request('/admin/data/intraday/reload', {
+                    method: 'POST',
+                    body: JSON.stringify({ selected_stock_id: stockId }),
+                });
+                this.dataIntradayStocks = data.stocks ?? this.dataIntradayStocks;
+                this.dataIntradaySelectedStockId = data.selected_stock_id ?? stockId;
+                this.dataIntradayDays = data.days ?? [];
+                this.dataIntradayRefresh = data.refresh ?? null;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.dataIntradayError = error.message;
+                throw error;
+            } finally {
+                this.dataIntradayReloadLoading = false;
+            }
+        },
+        async loadDataIntradayRefresh(refreshId, stockId = null) {
+            this.dataIntradayError = '';
+
+            try {
+                const query = stockId ? `?stock=${encodeURIComponent(String(stockId))}` : '';
+                const data = await request(`/admin/data/intraday/reload/${refreshId}${query}`);
+                this.dataIntradayStocks = data.stocks ?? this.dataIntradayStocks;
+                this.dataIntradaySelectedStockId = data.selected_stock_id ?? this.dataIntradaySelectedStockId;
+                this.dataIntradayDays = data.days ?? this.dataIntradayDays;
+                this.dataIntradayRefresh = data.refresh ?? null;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.dataIntradayError = error.message;
+                throw error;
             }
         },
         async loadIndexWatchItems() {
