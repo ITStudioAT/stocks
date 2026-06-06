@@ -155,6 +155,8 @@ const isCompactWatchListTable = computed(() => viewportWidth.value < 1024);
 const isHandsetLandscape = computed(() => viewportWidth.value <= 960
     && viewportHeight.value <= 600
     && viewportWidth.value > viewportHeight.value);
+const isCompactDepotStocksTable = computed(() => isHandsetLandscape.value);
+const isCompactCashLedgerTable = computed(() => isHandsetLandscape.value);
 const watchListTableColumnCount = computed(() => {
     if (isHandsetLandscape.value) {
         return 6;
@@ -3465,9 +3467,9 @@ function priceRefreshScheduleFormFromSettings(settings) {
                 class="dashboard-navigation-drawer"
                 :class="{ 'dashboard-navigation-drawer--compact': isDashboardMenuCompact }"
                 permanent
-                :width="isDashboardMenuCompact ? 88 : 272"
+                :width="isDashboardMenuCompact ? 64 : 272"
             >
-                <div class="pa-6">
+                <div class="dashboard-navigation-header pa-6">
                     <div
                         class="d-flex align-center ga-3"
                         :class="{ 'justify-center': isDashboardMenuCompact }"
@@ -3482,13 +3484,28 @@ function priceRefreshScheduleFormFromSettings(settings) {
                     </div>
                 </div>
 
-                <v-list nav>
+                <div v-if="isDashboardMenuCompact" class="dashboard-compact-menu">
+                    <button
+                        v-for="item in menuItems"
+                        :key="item.key"
+                        type="button"
+                        class="dashboard-compact-menu-item"
+                        :class="{ 'dashboard-compact-menu-item--active': item.children ? item.children.some(c => activeSection === c.key) : activeSection === item.key }"
+                        :aria-label="item.label"
+                        :title="item.label"
+                        @click="item.children ? navigateSection(item.children[0].key) : navigateSection(item.key)"
+                    >
+                        <v-icon :icon="item.icon" />
+                    </button>
+                </div>
+
+                <v-list v-else nav>
                     <template v-for="item in menuItems" :key="item.key">
                         <v-list-item
                             :active="item.children ? item.children.some(c => activeSection === c.key) : activeSection === item.key"
                             :prepend-icon="item.icon"
-                            :title="isDashboardMenuCompact ? undefined : item.label"
-                            :subtitle="isDashboardMenuCompact ? undefined : (item.subtitle ?? undefined)"
+                            :title="item.label"
+                            :subtitle="item.subtitle ?? undefined"
                             @click="item.children ? navigateSection(item.children[0].key) : navigateSection(item.key)"
                         />
                     </template>
@@ -5063,7 +5080,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                         </div>
 
                         <div v-if="activeDepot" class="d-flex flex-wrap align-start ga-4">
-                            <v-card variant="outlined" width="100%" max-width="480">
+                            <v-card class="depot-balance-card" variant="outlined" width="100%" max-width="480">
                                 <v-table density="compact">
                                     <tbody>
                                         <tr>
@@ -5088,7 +5105,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                 </v-table>
                             </v-card>
 
-                            <v-card variant="outlined" width="100%" max-width="480">
+                            <v-card class="depot-balance-card" variant="outlined" width="100%" max-width="480">
                                 <v-table density="compact">
                                     <tbody>
                                         <tr>
@@ -5118,10 +5135,75 @@ function priceRefreshScheduleFormFromSettings(settings) {
                             <v-alert v-if="transactionsError" type="error" variant="tonal" density="compact" class="mb-2">
                                 {{ transactionsError }}
                             </v-alert>
-                            <v-table v-if="depotHoldings.length > 0" density="compact">
+                            <div v-if="depotHoldings.length > 0" class="mobile-depot-stocks">
+                                <div class="mobile-depot-price-source">
+                                    <button
+                                        type="button"
+                                        class="depot-price-source-button"
+                                        :class="depotPriceSourceButtonClass('latest')"
+                                        :aria-pressed="isDepotPriceSource('latest')"
+                                        @click="selectDepotPriceSource('latest')"
+                                    >
+                                        Latest price
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="depot-price-source-button"
+                                        :class="depotPriceSourceButtonClass('flatex')"
+                                        :aria-pressed="isDepotPriceSource('flatex')"
+                                        @click="selectDepotPriceSource('flatex')"
+                                    >
+                                        Flatex price
+                                    </button>
+                                </div>
+                                <article
+                                    v-for="holding in depotHoldings"
+                                    :key="`mobile-depot-holding-${holding.id}`"
+                                    class="mobile-depot-stock-card"
+                                >
+                                    <div class="mobile-depot-stock-name">
+                                        {{ holding.name || '-' }}
+                                    </div>
+                                    <div class="mobile-depot-stock-row mobile-depot-stock-row--prices">
+                                        <span>{{ formatPositionPieces(holding) }}</span>
+                                        <span>{{ formatLatestPrice(holding) }}</span>
+                                        <span>{{ formatStockHoldingValue(holding) }}</span>
+                                    </div>
+                                    <div class="mobile-depot-stock-row font-weight-medium" :class="yearStartChangeClass(holding)">
+                                        <span>
+                                            {{ yearStartChangeSymbol(holding) }}
+                                            {{ formatYearStartChangePercent(holding) }}
+                                        </span>
+                                        <span>{{ formatYearStartChangeAmount(holding) }}</span>
+                                    </div>
+                                    <div class="mobile-depot-stock-actions">
+                                        <v-btn
+                                            icon
+                                            variant="tonal"
+                                            color="success"
+                                            aria-label="Buy stock"
+                                            :disabled="!activeDepot || holdingsLoading"
+                                            @click.stop="openStockTransactionDialog(holding, 'buy')"
+                                        >
+                                            <v-icon icon="mdi-cart-plus" />
+                                        </v-btn>
+                                        <v-btn
+                                            icon
+                                            variant="tonal"
+                                            color="warning"
+                                            aria-label="Sell stock"
+                                            :disabled="!activeDepot || holdingsLoading"
+                                            @click.stop="openStockTransactionDialog(holding, 'sell')"
+                                        >
+                                            <v-icon icon="mdi-cart-minus" />
+                                        </v-btn>
+                                    </div>
+                                </article>
+                            </div>
+                            <v-table v-if="depotHoldings.length > 0" class="desktop-depot-stocks-table" density="compact">
                                 <thead>
                                     <tr>
-                                        <th>Symbol</th>
+                                        <th v-if="!isCompactDepotStocksTable">Symbol</th>
                                         <th>Name</th>
                                         <th class="text-right">Amount</th>
                                         <th class="text-right">Value</th>
@@ -5147,7 +5229,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                                 Flatex price
                                             </button>
                                         </th>
-                                        <th class="text-right">1.1.</th>
+                                        <th v-if="!isCompactDepotStocksTable" class="text-right">1.1.</th>
                                         <th class="text-right">Change</th>
                                         <th class="text-right">+/- EUR</th>
                                         <th class="text-right">Actions</th>
@@ -5155,7 +5237,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                 </thead>
                                 <tbody>
                                     <tr v-for="holding in depotHoldings" :key="holding.id" :class="depotHoldingRowClass(holding)">
-                                        <td>{{ holding.symbol || '-' }}</td>
+                                        <td v-if="!isCompactDepotStocksTable">{{ holding.symbol || '-' }}</td>
                                         <td>{{ holding.name || '-' }}</td>
                                         <td class="text-right">{{ formatPositionPieces(holding) }}</td>
                                         <td class="text-right">{{ formatStockHoldingValue(holding) }}</td>
@@ -5182,7 +5264,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                                 {{ formatPriceValue(holding.flatex_price, holding.currency) }}
                                             </button>
                                         </td>
-                                        <td class="text-right">{{ formatPriceValue(holding.year_start_price, holding.currency) }}</td>
+                                        <td v-if="!isCompactDepotStocksTable" class="text-right">{{ formatPriceValue(holding.year_start_price, holding.currency) }}</td>
                                         <td class="text-right">
                                             <span class="d-inline-flex align-center justify-end ga-1 font-weight-medium" :class="yearStartChangeClass(holding)">
                                                 <span>{{ yearStartChangeSymbol(holding) }}</span>
@@ -5220,7 +5302,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                 </tbody>
                                 <tfoot>
                                     <tr>
-                                        <td colspan="8" class="text-right font-weight-bold">Sum</td>
+                                        <td :colspan="isCompactDepotStocksTable ? 6 : 8" class="text-right font-weight-bold">Sum</td>
                                         <td class="text-right">
                                             <span class="font-weight-bold" :class="depotHoldingsChangeAmountTotalClass()">
                                                 {{ formatDepotHoldingsChangeAmountTotal() }}
@@ -5259,14 +5341,39 @@ function priceRefreshScheduleFormFromSettings(settings) {
                             <v-alert v-if="transactionsError" type="error" variant="tonal" density="compact" class="mb-2">
                                 {{ transactionsError }}
                             </v-alert>
-                            <v-table v-if="transactions.length > 0" density="compact">
+                            <div v-if="transactions.length > 0" class="mobile-cash-ledger">
+                                <article
+                                    v-for="tx in transactions"
+                                    :key="`mobile-transaction-${tx.id}`"
+                                    class="mobile-cash-ledger-card"
+                                >
+                                    <div class="mobile-cash-ledger-row">
+                                        <span>
+                                            <v-chip :color="transactionTypeColor(tx.type)" density="comfortable" size="x-small" variant="tonal">
+                                                {{ transactionTypeLabel(tx.type) }}
+                                            </v-chip>
+                                        </span>
+                                        <span>{{ formatTransactionDate(tx.booked_at) }}</span>
+                                    </div>
+                                    <div v-if="tx.stock_label" class="mobile-cash-ledger-stock">
+                                        {{ tx.stock_label }}
+                                    </div>
+                                    <div class="mobile-cash-ledger-row">
+                                        <span :class="Number(tx.cash_delta) >= 0 ? 'text-success' : 'text-error'">
+                                            {{ formatCashDelta(tx.cash_delta) }}
+                                        </span>
+                                        <span>{{ formatAccountBalance(tx.balance_after) }}</span>
+                                    </div>
+                                </article>
+                            </div>
+                            <v-table v-if="transactions.length > 0" class="desktop-cash-ledger-table" density="compact">
                                 <thead>
                                     <tr>
                                         <th>Date</th>
                                         <th>Type</th>
                                         <th>Stock</th>
                                         <th class="text-right">Pieces</th>
-                                        <th class="text-right">Amount</th>
+                                        <th v-if="!isCompactCashLedgerTable" class="text-right">Amount</th>
                                         <th class="text-right">Cash effect</th>
                                         <th class="text-right">Balance</th>
                                     </tr>
@@ -5281,7 +5388,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         </td>
                                         <td>{{ tx.stock_label ?? '–' }}</td>
                                         <td class="text-right">{{ tx.pieces != null ? Math.trunc(Number(tx.pieces)) : '–' }}</td>
-                                        <td class="text-right">{{ formatAccountBalance(tx.total_amount) }}</td>
+                                        <td v-if="!isCompactCashLedgerTable" class="text-right">{{ formatAccountBalance(tx.total_amount) }}</td>
                                         <td class="text-right" :class="Number(tx.cash_delta) >= 0 ? 'text-success' : 'text-error'">
                                             {{ formatCashDelta(tx.cash_delta) }}
                                         </td>
@@ -5748,10 +5855,45 @@ function priceRefreshScheduleFormFromSettings(settings) {
     transition: width 0.2s ease;
 }
 
-.dashboard-navigation-drawer--compact :deep(.v-list-item__prepend) {
-    margin-inline-end: 0;
+.dashboard-navigation-drawer--compact .dashboard-navigation-header {
+    padding-inline: 12px !important;
 }
 
+.dashboard-compact-menu {
+    align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-inline: 8px;
+}
+
+.dashboard-compact-menu-item {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 4px;
+    color: rgba(var(--v-theme-on-surface), 0.72);
+    cursor: pointer;
+    display: flex;
+    height: 44px;
+    justify-content: center;
+    padding: 0;
+    width: 48px;
+}
+
+.dashboard-compact-menu-item--active {
+    background: rgba(var(--v-theme-on-surface), 0.08);
+    color: rgb(var(--v-theme-primary));
+}
+
+@media (max-width: 600px), (max-width: 960px) and (max-height: 600px) and (orientation: landscape) {
+    .depot-balance-card :deep(tbody td:nth-child(2)) {
+        text-align: right;
+    }
+}
+
+.mobile-cash-ledger,
+.mobile-depot-stocks,
 .mobile-watch-list {
     display: none;
 }
@@ -5780,6 +5922,117 @@ function priceRefreshScheduleFormFromSettings(settings) {
         display: none;
     }
 
+    .desktop-depot-stocks-table {
+        display: none;
+    }
+
+    .desktop-cash-ledger-table {
+        display: none;
+    }
+
+    .mobile-cash-ledger {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .mobile-cash-ledger-card {
+        background: rgb(var(--v-theme-surface));
+        border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+        border-radius: 8px;
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(0, 1fr);
+        padding: 12px;
+    }
+
+    .mobile-cash-ledger-row {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+    }
+
+    .mobile-cash-ledger-row > span:last-child {
+        text-align: right;
+    }
+
+    .mobile-cash-ledger-stock {
+        font-weight: 600;
+        line-height: 1.25;
+        overflow-wrap: anywhere;
+    }
+
+    .mobile-depot-stocks {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .mobile-depot-price-source {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .mobile-depot-price-source .depot-price-source-button {
+        text-align: center;
+    }
+
+    .mobile-depot-stock-card {
+        background: rgb(var(--v-theme-surface));
+        border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+        border-radius: 8px;
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(0, 1fr);
+        padding: 12px;
+    }
+
+    .mobile-depot-stock-name {
+        color: rgb(var(--v-theme-primary));
+        font-size: 0.95rem;
+        font-weight: 600;
+        line-height: 1.25;
+        overflow-wrap: anywhere;
+    }
+
+    .mobile-depot-stock-row {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+    }
+
+    .mobile-depot-stock-row > span:last-child {
+        text-align: right;
+    }
+
+    .mobile-depot-stock-row--prices {
+        display: grid;
+        grid-template-columns: minmax(44px, 0.65fr) minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .mobile-depot-stock-row--prices > span {
+        min-width: 0;
+        overflow-wrap: anywhere;
+    }
+
+    .mobile-depot-stock-row--prices > span:not(:first-child) {
+        text-align: right;
+    }
+
+    .mobile-depot-stock-actions {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .mobile-depot-stock-actions :deep(.v-btn) {
+        min-width: 0;
+        width: 100%;
+    }
+
     .mobile-watch-list {
         display: flex;
         flex-direction: column;
@@ -5799,7 +6052,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
     .mobile-stock-name {
         color: rgb(var(--v-theme-primary));
         font-size: 0.95rem;
-        font-weight: 800;
+        font-weight: 600;
         line-height: 1.25;
     }
 
@@ -5811,7 +6064,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
     .mobile-stock-price {
         flex-direction: column;
         display: inline-flex;
-        font-weight: 800;
+        font-weight: 600;
         gap: 2px;
         line-height: 1.2;
         padding: 3px 6px;
@@ -5832,6 +6085,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
         min-width: 0;
         width: 100%;
     }
+
 }
 
 .analyze-dummy-page,
@@ -6072,6 +6326,13 @@ function priceRefreshScheduleFormFromSettings(settings) {
     display: block;
     height: 600px;
     width: 100%;
+}
+
+@media (max-width: 600px), (max-width: 960px) and (max-height: 600px) and (orientation: landscape) {
+    .analyze-sparkline {
+        aspect-ratio: 12 / 5;
+        height: auto !important;
+    }
 }
 
 .analyze-sparkline-plot {

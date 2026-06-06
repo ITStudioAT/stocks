@@ -277,6 +277,9 @@ describe('App', () => {
         await flushPromises();
 
         expect(wrapper.find('.dashboard-navigation-drawer').classes()).toContain('dashboard-navigation-drawer--compact');
+        expect(wrapper.findComponent({ name: 'VNavigationDrawer' }).props('width')).toBe(64);
+        expect(wrapper.findAll('.dashboard-compact-menu-item')).toHaveLength(5);
+        expect(wrapper.find('.dashboard-compact-menu-item--active').exists()).toBe(true);
         expect(wrapper.find('[aria-label="Enhance dashboard menu"]').exists()).toBe(true);
         expect(wrapper.find('.dashboard-navigation-drawer').text()).not.toContain('Stocks');
         expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
@@ -3014,6 +3017,7 @@ describe('App', () => {
         expect(wrapper.text()).toContain('1,000.00 EUR');
         expect(wrapper.text()).toContain(`Balance ${sessionHeaderDate(0).slice(0, 6)}`);
         expect(wrapper.text()).toContain('+3.30% · +33.00 EUR');
+        expect(wrapper.findAll('.depot-balance-card')).toHaveLength(2);
         expect(wrapper.text()).toContain('Symbol');
         expect(wrapper.text()).toContain('Name');
         expect(wrapper.text()).toContain('Amount');
@@ -3048,6 +3052,46 @@ describe('App', () => {
         expect(wrapper.text()).toContain('↑');
         expect(wrapper.text()).toContain('+9.43%');
         expect(wrapper.text()).toContain('+33.00');
+        const mobileDepotStockCards = wrapper.findAll('.mobile-depot-stock-card');
+        expect(mobileDepotStockCards).toHaveLength(1);
+        expect(mobileDepotStockCards[0].find('.mobile-depot-stock-name').text()).toBe('Apple Inc.');
+        expect(mobileDepotStockCards[0].text()).toContain('2');
+        expect(mobileDepotStockCards[0].text()).toContain('191.50 USD');
+        expect(mobileDepotStockCards[0].text()).toContain('383.00 USD');
+        expect(mobileDepotStockCards[0].text()).toContain('↑ +9.43%');
+        expect(mobileDepotStockCards[0].text()).toContain('+33.00');
+        expect(mobileDepotStockCards[0].text()).not.toContain('AAPL');
+        expect(mobileDepotStockCards[0].find('.mobile-depot-stock-row--prices').text()).toContain('191.50 USD');
+        expect(mobileDepotStockCards[0].findAll('.mobile-depot-stock-row')).toHaveLength(2);
+        expect(mobileDepotStockCards[0].findAll('.mobile-depot-stock-actions .v-btn')).toHaveLength(2);
+        setViewportSize(844, 390);
+        await flushPromises();
+
+        const compactDepotHeaders = wrapper
+            .find('.desktop-depot-stocks-table')
+            .findAll('th')
+            .map((header) => header.text());
+        expect(compactDepotHeaders).not.toContain('Symbol');
+        expect(compactDepotHeaders).not.toContain('1.1.');
+        expect(compactDepotHeaders).toContain('Name');
+        expect(compactDepotHeaders).toContain('Amount');
+        expect(compactDepotHeaders).toContain('Value');
+        expect(compactDepotHeaders).toContain('Latest price');
+        expect(compactDepotHeaders).toContain('Flatex price');
+        expect(compactDepotHeaders).toContain('Change');
+        expect(compactDepotHeaders).toContain('+/- EUR');
+        expect(compactDepotHeaders).toContain('Actions');
+        const compactCashLedgerHeaders = wrapper
+            .find('.desktop-cash-ledger-table')
+            .findAll('th')
+            .map((header) => header.text());
+        expect(compactCashLedgerHeaders).toContain('Date');
+        expect(compactCashLedgerHeaders).toContain('Type');
+        expect(compactCashLedgerHeaders).toContain('Stock');
+        expect(compactCashLedgerHeaders).toContain('Pieces');
+        expect(compactCashLedgerHeaders).not.toContain('Amount');
+        expect(compactCashLedgerHeaders).toContain('Cash effect');
+        expect(compactCashLedgerHeaders).toContain('Balance');
         expect(wrapper.text()).toContain('Sum');
         expect(wrapper.text()).toContain('Cash ledger');
         expect(wrapper.text()).toContain('Buy');
@@ -3055,6 +3099,19 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Add cash');
         expect(wrapper.text()).toContain('+1,000.00');
         expect(wrapper.text()).toContain('-350.00');
+        const mobileCashLedgerCards = wrapper.findAll('.mobile-cash-ledger-card');
+        expect(mobileCashLedgerCards).toHaveLength(2);
+        expect(mobileCashLedgerCards[0].text()).toContain('Buy');
+        expect(mobileCashLedgerCards[0].find('.mobile-cash-ledger-row').text()).toContain('04/06/2026, 12:00');
+        expect(mobileCashLedgerCards[0].find('.mobile-cash-ledger-row').text()).not.toContain('350.00');
+        expect(mobileCashLedgerCards[0].find('.mobile-cash-ledger-stock').text()).toBe('Apple Inc.');
+        expect(mobileCashLedgerCards[0].text()).toContain('-350.00');
+        expect(mobileCashLedgerCards[0].text()).toContain('650.00');
+        expect(mobileCashLedgerCards[1].text()).toContain('Add cash');
+        expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-row').text()).toContain('04/06/2026, 11:00');
+        expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-row').text()).not.toContain('1,000.00');
+        expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-stock').exists()).toBe(false);
+        expect(mobileCashLedgerCards[1].text()).toContain('+1,000.00');
 
         await flatexPriceHeaderButton.trigger('click');
         await flushPromises();
