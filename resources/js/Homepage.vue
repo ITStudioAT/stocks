@@ -89,6 +89,26 @@ const reducedMotion = typeof window !== 'undefined'
     && typeof window.matchMedia === 'function'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+// ── Depot sum sign ────────────────────────────────────────────────────────────
+const depotSumSign = ref(0);
+
+async function fetchDepotSumSign() {
+    try {
+        const res = await fetch('/depot-sum-sign');
+        if (!res.ok) return;
+        const data = await res.json();
+        depotSumSign.value = data.sign ?? 0;
+    } catch {
+        // silent
+    }
+}
+
+const wordmarkDotColor = computed(() => {
+    if (depotSumSign.value > 0) return 'var(--green)';
+    if (depotSumSign.value < 0) return 'var(--red)';
+    return 'var(--green)';
+});
+
 // ── Live indices ticker ───────────────────────────────────────────────────────
 const indices = ref([]);
 const updatedSymbols = ref(new Set());
@@ -224,6 +244,7 @@ function tickParallax() {
 
 onMounted(() => {
     fetchIndices();
+    fetchDepotSumSign();
     if (!reducedMotion) {
         pollTimer = window.setInterval(fetchIndices, 60_000);
         scheduleEyebrowGlitch();
@@ -273,7 +294,7 @@ onUnmounted(() => {
 
         <!-- Header -->
         <header class="header">
-            <a class="wordmark" href="/" aria-label="Stocks home">Stocks<span class="wordmark-dot">.</span></a>
+            <a class="wordmark" href="/" aria-label="Stocks home">Stocks<span class="wordmark-dot" :style="{ color: wordmarkDotColor }">.</span></a>
             <a class="admin-pill" :href="adminUrl">Admin</a>
         </header>
 
@@ -284,7 +305,7 @@ onUnmounted(() => {
                 <span v-if="eyebrowCorrupted" aria-hidden="true">T̸O̷T̴A̵L̶ H̷O̴L̸D̷I̵N̷G̸S ·̸ L̵I̷V̸E̴</span>
                 <span v-else>Total holdings · Live</span>
             </p>
-            <h1 class="headline">A quiet place to watch <span class="headline-your">your</span> money grow.</h1>
+            <h1 class="headline">A quiet place to watch <span class="headline-your">your</span> money grow<span class="headline-dot" :style="{ color: wordmarkDotColor }">.</span></h1>
         </section>
 
         <!-- Indices ticker -->
@@ -600,7 +621,7 @@ onUnmounted(() => {
 }
 
 .wordmark-dot {
-    color: var(--green);
+    transition: color 0.8s ease;
 }
 
 .admin-pill {
@@ -713,6 +734,10 @@ onUnmounted(() => {
     font-style: italic;
     color: #b8c2d4;
     text-shadow: 0 0 40px rgba(130, 20, 180, 0.2);
+}
+
+.headline-dot {
+    transition: color 0.8s ease;
 }
 
 /* ── Stage-wide aberration burst ────────────────────────────────────────── */
@@ -1065,6 +1090,18 @@ onUnmounted(() => {
     .area,
     .dot {
         opacity: 1;
+    }
+}
+
+/* ── Phone landscape: ticker pinned to bottom, hero shifted up ───────────── */
+@media (orientation: landscape) and (max-height: 500px) {
+    .ticker-wrap {
+        bottom: 0;
+        translate: none !important;
+    }
+
+    .hero {
+        top: 72px;
     }
 }
 </style>

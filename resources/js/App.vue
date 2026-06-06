@@ -134,7 +134,9 @@ const stockHistoricalPriceFetchTimer = ref(null);
 const isStockHistoricalPriceFetchPolling = ref(false);
 const isStockHistoricalPriceEnsureLoading = ref(false);
 const isAnalyzeHistoryInfoDismissed = ref(false);
-const isDashboardMenuCompact = ref(false);
+const isDashboardMenuCompact = ref(smAndDown.value);
+const viewportWidth = ref(window.visualViewport?.width ?? window.innerWidth);
+const viewportHeight = ref(window.visualViewport?.height ?? window.innerHeight);
 const cashTransactionForm = ref(emptyCashTransactionForm());
 const stockTransactionForm = ref(emptyStockTransactionForm());
 const editingFlatexHoldingId = ref(null);
@@ -149,6 +151,17 @@ const profileDisplayName = computed(() => user.value?.name || 'Loading...');
 const dashboardMenuToggleLabel = computed(() => (isDashboardMenuCompact.value
     ? 'Enhance dashboard menu'
     : 'Minify dashboard menu'));
+const isCompactWatchListTable = computed(() => viewportWidth.value < 1024);
+const isHandsetLandscape = computed(() => viewportWidth.value <= 960
+    && viewportHeight.value <= 600
+    && viewportWidth.value > viewportHeight.value);
+const watchListTableColumnCount = computed(() => {
+    if (isHandsetLandscape.value) {
+        return 6;
+    }
+
+    return isCompactWatchListTable.value ? 7 : 9;
+});
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
 const isPriceRefreshRunning = computed(() => {
     if (!priceRefresh.value || isFinishedPriceRefresh(priceRefresh.value)) {
@@ -322,6 +335,12 @@ const queueStatusClass = computed(() => {
 
     return 'text-medium-emphasis';
 });
+const canClearQueue = computed(() => queueStatus.value
+    && queueStatus.value.status !== 'ok'
+    && !queueStatusLoading.value);
+const queueClearButtonLabel = computed(() => (canClearQueue.value
+    ? `Clear queue: ${queueStatusTitle.value}`
+    : 'Queue is clean'));
 const analyzeSubmenuItems = [
     {
         key: 'overview',
@@ -505,6 +524,9 @@ watch(
 );
 
 onMounted(async () => {
+    updateViewportMetrics();
+    window.addEventListener('resize', updateViewportMetrics);
+
     if (isLoginPage.value) {
         return;
     }
@@ -522,8 +544,12 @@ onMounted(async () => {
         depotsStore.loadWatchlistHoldings(),
         depotsStore.loadIndexWatchItems(),
         depotsStore.loadWatchlistExchangeTradingTimes(),
-        depotsStore.loadQueueStatus(),
     ]);
+
+    if (activeSection.value === 'dashboard') {
+        depotsStore.loadQueueStatus();
+    }
+
     ensureAnalyzeOverviewHistoricalPrices();
     startPriceRefreshSettingsPolling();
 
@@ -545,8 +571,14 @@ onBeforeUnmount(() => {
     stopHistoricalPriceFetchPolling();
     stopStockHistoricalPriceFetchPolling();
     stopHoldingDialogKeyboardShortcuts();
+    window.removeEventListener('resize', updateViewportMetrics);
     window.removeEventListener('popstate', applyRouteFromPath);
 });
+
+function updateViewportMetrics() {
+    viewportWidth.value = window.visualViewport?.width ?? window.innerWidth;
+    viewportHeight.value = window.visualViewport?.height ?? window.innerHeight;
+}
 
 function navigateSection(section) {
     activeSection.value = section;
@@ -573,6 +605,10 @@ function navigateSection(section) {
 
     if (section === 'depots') {
         depotsStore.loadDepots(depotPagination.value.current_page);
+    }
+
+    if (section === 'dashboard') {
+        depotsStore.loadQueueStatus();
     }
 
     if (section === 'updates') {
@@ -1116,6 +1152,18 @@ async function refreshHoldingPrices() {
         startPriceRefreshPolling(data.refresh.refresh_id);
     } catch (err) {
         holdingError.value = err.message;
+    }
+}
+
+async function clearQueue() {
+    if (!canClearQueue.value) {
+        return;
+    }
+
+    try {
+        await depotsStore.clearQueue();
+    } catch (err) {
+        queueStatusError.value = err.message;
     }
 }
 
@@ -1784,19 +1832,74 @@ function formatLatestPrice(holding) {
 }
 
 function formatHoldingCardPrice(holding) {
-    if (holding.latest_price === null || holding.latest_price === undefined || holding.latest_price === '') {
-        return formatLatestPrice(holding);
+    const price = holding.latest_price === null || holding.latest_price === undefined || holding.latest_price === ''
+        ? holding.end_price
+        : holding.latest_price;
+
+    if (price === null || price === undefined || price === '') {
+        return '-';
     }
 
-    const amount = Number(holding.latest_price);
+    const amount = Number(price);
     const formattedAmount = Number.isNaN(amount)
-        ? holding.latest_price
+        ? price
         : new Intl.NumberFormat('en-US', {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
         }).format(amount);
 
     return holding.currency ? `${formattedAmount} ${holding.currency}` : formattedAmount;
+}
+
+function mobileHoldingPriceSource(holding) {
+    if (holding.latest_price !== null && holding.latest_price !== undefined && holding.latest_price !== '') {
+        return 'latest';
+    }
+
+    if (holding.end_price !== null && holding.end_price !== undefined && holding.end_price !== '') {
+        return 'end';
+    }
+
+    return null;
+}
+
+function formatMobileHoldingPrice(holding) {
+    return mobileHoldingPriceSource(holding) === 'latest'
+        ? formatLatestPrice(holding)
+        : formatSessionPrice(holding.end_price, holding);
+}
+
+function mobileHoldingPriceClass(holding) {
+    return mobileHoldingPriceSource(holding) === 'latest'
+        ? latestPriceClass(holding)
+        : endPriceValueClass(holding);
+}
+
+function mobileHoldingPriceChangePercent(holding) {
+    if (mobileHoldingPriceSource(holding) === 'latest' && formatLatestPriceChangePercent(holding)) {
+        return formatLatestPriceChangePercent(holding);
+    }
+
+    return formatEndPriceChangePercent(holding);
+}
+
+function mobileHoldingPriceReference(holding) {
+    if (holding.end_price_24 === null || holding.end_price_24 === undefined || holding.end_price_24 === '') {
+        return '';
+    }
+
+    return formatSessionPrice(holding.end_price_24, holding);
+}
+
+function mobileHoldingPriceChangeText(holding) {
+    const changePercent = mobileHoldingPriceChangePercent(holding);
+    const referencePrice = mobileHoldingPriceReference(holding);
+
+    if (!changePercent || !referencePrice || referencePrice === '-') {
+        return '';
+    }
+
+    return `${changePercent} · ${referencePrice}`;
 }
 
 function stockHoldingValue(holding) {
@@ -3407,55 +3510,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                     >
                         <v-icon :icon="isDashboardMenuCompact ? 'mdi-chevron-right' : 'mdi-chevron-left'" />
                     </v-btn>
-                    <span v-if="priceRefreshSettings" class="app-bar-group text-caption text-medium-emphasis">
-                        Stocks Last: {{ formatScheduleDateTime(priceRefreshSettings.last_refreshed_at) }}
-                        · Next: {{ formatScheduleDateTime(priceRefreshSettings.next_refresh_at) }}
-                        <span
-                            class="d-inline-flex align-center ga-1 ml-1"
-                            :class="isHeaderStatusUpdating ? 'text-error' : 'text-medium-emphasis'"
-                        >
-                            <span
-                                class="price-refresh-status-dot"
-                                :class="isHeaderStatusUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
-                            />
-                            {{ priceRefreshHeaderStatusLabel }}
-                        </span>
-                    </span>
-                    <span v-if="indexPriceRefreshSettings" class="app-bar-group text-caption text-medium-emphasis">
-                        Indices Last: {{ formatScheduleDateTime(indexPriceRefreshSettings.last_refreshed_at) }}
-                        · Next: {{ formatScheduleDateTime(indexPriceRefreshSettings.next_refresh_at) }}
-                        <span
-                            class="d-inline-flex align-center ga-1 ml-1"
-                            :class="isAutomaticIndexPriceRefreshUpdating ? 'text-error' : 'text-medium-emphasis'"
-                        >
-                            <span
-                                class="price-refresh-status-dot"
-                                :class="isAutomaticIndexPriceRefreshUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
-                            />
-                            {{ indexPriceRefreshHeaderStatusLabel }}
-                        </span>
-                    </span>
-                    <span
-                        v-if="eodhdUsageItems.length"
-                        class="app-bar-group text-caption text-medium-emphasis eodhd-header-usage"
-                    >
-                        <span class="font-weight-medium">EODHD API</span>
-                        <span v-for="item in eodhdUsageItems" :key="item.key">
-                            {{ item.label }} {{ formatInteger(item.usage.remaining) }} / {{ formatInteger(item.usage.limit) }}
-                            Used {{ formatInteger(item.usage.used) }} · Reset {{ formatEodhdUsageReset(item.usage.reset_at) }}
-                        </span>
-                    </span>
-                    <span
-                        class="app-bar-group text-caption queue-header-status"
-                        :class="queueStatusClass"
-                        :title="queueStatusTitle"
-                    >
-                        <span
-                            class="price-refresh-status-dot"
-                            :class="queueStatus?.status === 'ok' && !queueStatusError ? 'price-refresh-status-dot--waiting' : 'price-refresh-status-dot--updating'"
-                        />
-                        {{ queueStatusLabel }}
-                    </span>
+                    <v-spacer />
                     <v-btn href="/admin/logout" prepend-icon="mdi-logout" size="small" variant="text">
                         Logout
                     </v-btn>
@@ -3465,13 +3520,69 @@ function priceRefreshScheduleFormFromSettings(settings) {
             <v-main>
                 <v-container class="py-8" :fluid="lgAndDown">
                     <section v-if="activeSection === 'dashboard'">
-                        <div class="d-flex align-center justify-space-between mb-6">
+                        <v-card v-if="!smAndDown" border flat class="dashboard-status-card mb-6">
+                            <v-card-text class="dashboard-status-card-content">
+                                <span v-if="priceRefreshSettings" class="dashboard-status-item text-caption text-medium-emphasis">
+                                    Stocks Last: {{ formatScheduleDateTime(priceRefreshSettings.last_refreshed_at) }}
+                                    · Next: {{ formatScheduleDateTime(priceRefreshSettings.next_refresh_at) }}
+                                    <span
+                                        class="d-inline-flex align-center ga-1 ml-1"
+                                        :class="isHeaderStatusUpdating ? 'text-error' : 'text-medium-emphasis'"
+                                    >
+                                        <span
+                                            class="price-refresh-status-dot"
+                                            :class="isHeaderStatusUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
+                                        />
+                                        {{ priceRefreshHeaderStatusLabel }}
+                                    </span>
+                                </span>
+                                <span v-if="indexPriceRefreshSettings" class="dashboard-status-item text-caption text-medium-emphasis">
+                                    Indices Last: {{ formatScheduleDateTime(indexPriceRefreshSettings.last_refreshed_at) }}
+                                    · Next: {{ formatScheduleDateTime(indexPriceRefreshSettings.next_refresh_at) }}
+                                    <span
+                                        class="d-inline-flex align-center ga-1 ml-1"
+                                        :class="isAutomaticIndexPriceRefreshUpdating ? 'text-error' : 'text-medium-emphasis'"
+                                    >
+                                        <span
+                                            class="price-refresh-status-dot"
+                                            :class="isAutomaticIndexPriceRefreshUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
+                                        />
+                                        {{ indexPriceRefreshHeaderStatusLabel }}
+                                    </span>
+                                </span>
+                                <span
+                                    class="dashboard-status-item text-caption queue-header-status"
+                                    :class="queueStatusClass"
+                                    :title="queueStatusTitle"
+                                >
+                                    <span
+                                        class="price-refresh-status-dot"
+                                        :class="queueStatus?.status === 'ok' && !queueStatusError ? 'price-refresh-status-dot--waiting' : 'price-refresh-status-dot--updating'"
+                                    />
+                                    {{ queueStatusLabel }}
+                                </span>
+                            </v-card-text>
+                        </v-card>
+                        <div class="dashboard-heading mb-6">
                             <div>
                                 <p class="text-overline text-primary mb-1">Dashboard</p>
                                 <h1 class="text-h4">Watch-list</h1>
                             </div>
-                            <div class="d-flex align-center ga-2">
+                            <div class="dashboard-actions">
                                 <v-btn
+                                    class="dashboard-action-button"
+                                    color="error"
+                                    prepend-icon="mdi-delete-sweep-outline"
+                                    variant="tonal"
+                                    :disabled="!canClearQueue"
+                                    :loading="queueStatusLoading"
+                                    :title="queueClearButtonLabel"
+                                    @click="clearQueue"
+                                >
+                                    Clear queue
+                                </v-btn>
+                                <v-btn
+                                    class="dashboard-action-button"
                                     color="primary"
                                     prepend-icon="mdi-file-pdf-box"
                                     variant="outlined"
@@ -3481,6 +3592,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                     Export PDF
                                 </v-btn>
                                 <v-btn
+                                    class="dashboard-action-button"
                                     color="primary"
                                     prepend-icon="mdi-refresh"
                                     variant="tonal"
@@ -3491,6 +3603,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                     {{ isPriceRefreshRunning ? `Refreshing ${priceRefresh.step}` : 'Refresh prices' }}
                                 </v-btn>
                                 <v-btn
+                                    class="dashboard-action-button"
                                     color="primary"
                                     prepend-icon="mdi-plus"
                                     variant="flat"
@@ -3552,12 +3665,70 @@ function priceRefreshScheduleFormFromSettings(settings) {
                         <v-alert v-if="holdingError || holdingsError" type="error" variant="tonal" density="compact" class="mb-4">
                             {{ holdingError || holdingsError }}
                         </v-alert>
-                        <v-table>
+                        <div class="mobile-watch-list">
+                            <div v-if="!holdingsLoading && holdings.length === 0" class="mobile-stock-card">
+                                No stocks in the watch-list.
+                            </div>
+                            <article
+                                v-for="holding in holdings"
+                                :key="`mobile-holding-${holding.id}`"
+                                class="mobile-stock-card"
+                            >
+                                <div class="mobile-stock-name">
+                                    {{ holding.name || holding.symbol || '-' }}
+                                </div>
+                                <div class="mobile-stock-price-row">
+                                    <span
+                                        class="latest-price-value mobile-stock-price"
+                                        :class="mobileHoldingPriceClass(holding)"
+                                    >
+                                        <span>{{ formatMobileHoldingPrice(holding) }}</span>
+                                        <span
+                                            v-if="mobileHoldingPriceChangeText(holding)"
+                                            class="mobile-stock-price-change"
+                                        >
+                                            {{ mobileHoldingPriceChangeText(holding) }}
+                                        </span>
+                                    </span>
+                                </div>
+                                <div class="mobile-stock-actions">
+                                    <v-btn
+                                        aria-label="Add"
+                                        color="success"
+                                        icon="mdi-cart-plus"
+                                        size="small"
+                                        variant="tonal"
+                                        :disabled="!activeDepot || holdingsLoading"
+                                        @click="openStockTransactionDialog(holding, 'buy')"
+                                    />
+                                    <v-btn
+                                        aria-label="Withdraw"
+                                        color="warning"
+                                        icon="mdi-cart-minus"
+                                        size="small"
+                                        variant="tonal"
+                                        :disabled="!activeDepot || holdingsLoading || !hasPositionPieces(holding)"
+                                        @click="openStockTransactionDialog(holding, 'sell')"
+                                    />
+                                    <v-btn
+                                        aria-label="Delete"
+                                        color="error"
+                                        icon="mdi-delete-outline"
+                                        size="small"
+                                        variant="tonal"
+                                        :disabled="holdingsLoading || hasPositionPieces(holding)"
+                                        @click="openDeleteHoldingDialog(holding)"
+                                    />
+                                </div>
+                            </article>
+                        </div>
+                        <v-table class="desktop-watch-list-table">
                             <thead>
                                 <tr>
-                                    <th>Symbol</th>
+                                    <th v-if="!isCompactWatchListTable">Symbol</th>
                                     <th>Name</th>
-                                    <th>Latest price</th>
+                                    <th v-if="isHandsetLandscape">Price</th>
+                                    <th v-else>Latest price</th>
                                     <th>
                                         <span class="d-inline-flex flex-column">
                                             <span>Start price</span>
@@ -3566,7 +3737,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                             </span>
                                         </span>
                                     </th>
-                                    <th>
+                                    <th v-if="!isHandsetLandscape">
                                         <span class="d-inline-flex flex-column">
                                             <span>End price</span>
                                             <span class="text-caption text-medium-emphasis">
@@ -3590,13 +3761,13 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                             </span>
                                         </span>
                                     </th>
-                                    <th>Source time</th>
+                                    <th v-if="!isCompactWatchListTable">Source time</th>
                                     <th class="text-right">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <tr v-if="!holdingsLoading && holdings.length === 0">
-                                    <td colspan="9">No stocks in the watch-list.</td>
+                                    <td :colspan="watchListTableColumnCount">No stocks in the watch-list.</td>
                                 </tr>
                                 <template v-for="holding in holdings" :key="holding.id">
                                     <tr
@@ -3607,7 +3778,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         @keydown.enter.prevent="toggleHoldingDetails(holding)"
                                         @keydown.space.prevent="toggleHoldingDetails(holding)"
                                     >
-                                        <td>
+                                        <td v-if="!isCompactWatchListTable">
                                             <div>{{ holding.symbol || '-' }}</div>
                                             <div class="text-caption text-medium-emphasis">
                                                 Exchange: {{ holding.exchange || '-' }}
@@ -3618,7 +3789,13 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         </td>
                                         <td>
                                             <div>{{ holding.name || '-' }}</div>
-                                            <div class="text-caption text-medium-emphasis">
+                                            <div
+                                                v-if="isCompactWatchListTable"
+                                                class="text-caption text-medium-emphasis"
+                                            >
+                                                Pieces: {{ formatPositionPieces(holding) }}
+                                            </div>
+                                            <div v-else class="text-caption text-medium-emphasis">
                                                 {{ holding.isin || '-' }} · WKN: {{ holding.wkn || '-' }}
                                             </div>
                                             <div
@@ -3635,7 +3812,18 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                                 />
                                             </div>
                                         </td>
-                                        <td>
+                                        <td v-if="isHandsetLandscape">
+                                            <span class="latest-price-value d-inline-flex flex-column" :class="mobileHoldingPriceClass(holding)">
+                                                <span>{{ formatMobileHoldingPrice(holding) }}</span>
+                                                <span
+                                                    v-if="mobileHoldingPriceChangeText(holding)"
+                                                    class="latest-price-change"
+                                                >
+                                                    {{ mobileHoldingPriceChangeText(holding) }}
+                                                </span>
+                                            </span>
+                                        </td>
+                                        <td v-else>
                                             <span class="latest-price-value d-inline-flex flex-column" :class="latestPriceClass(holding)">
                                                 <span class="d-inline-flex align-center ga-1">
                                                     <span>{{ formatLatestPrice(holding) }}</span>
@@ -3670,7 +3858,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                                 </span>
                                             </span>
                                         </td>
-                                        <td>
+                                        <td v-if="!isHandsetLandscape">
                                             <span class="latest-price-value d-inline-flex flex-column" :class="endPriceValueClass(holding)">
                                                 <span>{{ formatSessionPrice(holding.end_price, holding) }}</span>
                                                 <span
@@ -3702,7 +3890,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                                 <span>{{ formatSessionPrice(holding.end_price_48, holding) }}</span>
                                             </span>
                                         </td>
-                                        <td>
+                                        <td v-if="!isCompactWatchListTable">
                                             <div>{{ formatSourceDateTime(holding.latest_price_as_of) }}</div>
                                             <div class="text-caption text-medium-emphasis">
                                                 <a
@@ -3751,7 +3939,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         </td>
                                     </tr>
                                     <tr v-if="isHoldingExpanded(holding)" class="stock-holding-detail-row">
-                                        <td colspan="9">
+                                        <td :colspan="watchListTableColumnCount">
                                             <div
                                                 v-if="holding.recent_prices?.length"
                                                 class="recent-price-strip d-flex flex-wrap ga-2"
@@ -3785,7 +3973,10 @@ function priceRefreshScheduleFormFromSettings(settings) {
                         </v-table>
 
                         <v-sheet
-                            v-if="exchangeTradingTimes.length || exchangeTradingTimesLoading || exchangeTradingTimesError"
+                            v-if="
+                                !smAndDown &&
+                                (exchangeTradingTimes.length || exchangeTradingTimesLoading || exchangeTradingTimesError)
+                            "
                             border
                             rounded
                             class="pa-4 mt-4"
@@ -5512,24 +5703,45 @@ function priceRefreshScheduleFormFromSettings(settings) {
     align-items: center;
     display: flex;
     font-size: 0.8125rem;
-    gap: 20px;
-    justify-content: space-between;
+    gap: 12px;
     line-height: 1.3;
-    overflow-x: auto;
     padding: 0 16px;
-    white-space: nowrap;
     width: 100%;
 }
 
-.app-bar-group {
+.dashboard-status-card-content {
+    align-items: flex-start;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 18px;
+}
+
+.dashboard-status-item {
     align-items: center;
-    display: inline-flex;
-    flex-shrink: 0;
+    display: flex;
+    flex-wrap: wrap;
     gap: 6px;
+    line-height: 1.35;
+    min-width: min(100%, 220px);
 }
 
 .dashboard-menu-toggle {
     flex: 0 0 auto;
+}
+
+.dashboard-heading {
+    align-items: center;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+}
+
+.dashboard-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
 }
 
 .dashboard-navigation-drawer {
@@ -5538,6 +5750,88 @@ function priceRefreshScheduleFormFromSettings(settings) {
 
 .dashboard-navigation-drawer--compact :deep(.v-list-item__prepend) {
     margin-inline-end: 0;
+}
+
+.mobile-watch-list {
+    display: none;
+}
+
+@media (max-width: 600px) {
+    .dashboard-heading {
+        align-items: stretch;
+        flex-direction: column;
+        gap: 12px;
+    }
+
+    .dashboard-actions {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        justify-content: stretch;
+        width: 100%;
+    }
+
+    .dashboard-action-button {
+        min-width: 0;
+        width: 100%;
+    }
+
+    .desktop-watch-list-table {
+        display: none;
+    }
+
+    .mobile-watch-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .mobile-stock-card {
+        background: rgb(var(--v-theme-surface));
+        border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px;
+    }
+
+    .mobile-stock-name {
+        color: rgb(var(--v-theme-primary));
+        font-size: 0.95rem;
+        font-weight: 800;
+        line-height: 1.25;
+    }
+
+    .mobile-stock-price-row {
+        align-items: center;
+        display: flex;
+    }
+
+    .mobile-stock-price {
+        flex-direction: column;
+        display: inline-flex;
+        font-weight: 800;
+        gap: 2px;
+        line-height: 1.2;
+        padding: 3px 6px;
+    }
+
+    .mobile-stock-price-change {
+        font-size: 0.78rem;
+        font-weight: 700;
+    }
+
+    .mobile-stock-actions {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .mobile-stock-actions :deep(.v-btn) {
+        min-width: 0;
+        width: 100%;
+    }
 }
 
 .analyze-dummy-page,

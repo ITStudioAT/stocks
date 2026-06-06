@@ -18,6 +18,31 @@ class AdminQueueStatusController extends Controller
 {
     public function show(): JsonResponse
     {
+        return response()->json([
+            'queue' => $this->queueStatusPayload(),
+        ]);
+    }
+
+    public function clear(): JsonResponse
+    {
+        $connection = (string) config('queue.default');
+        $queue = (string) config("queue.connections.{$connection}.queue", 'default');
+        $clearedJobs = $this->clearQueuedJobs($connection, $queue);
+        $clearedFailedJobs = $this->clearFailedJobs();
+
+        return response()->json([
+            'message' => "Cleared {$clearedJobs} queued job(s) and {$clearedFailedJobs} failed job record(s).",
+            'cleared_jobs' => $clearedJobs,
+            'cleared_failed_jobs' => $clearedFailedJobs,
+            'queue' => $this->queueStatusPayload(),
+        ]);
+    }
+
+    /**
+     * @return array{status: string, connection: string, name: string, retry_after: int, max_job_timeout: int, pending: ?int, delayed: ?int, reserved: ?int, failed: int, stale_running_refreshes: int, issues: array<int, string>, checked_at: string}
+     */
+    private function queueStatusPayload(): array
+    {
         $connection = (string) config('queue.default');
         $queue = (string) config("queue.connections.{$connection}.queue", 'default');
         $retryAfter = (int) config("queue.connections.{$connection}.retry_after", 0);
@@ -48,22 +73,20 @@ class AdminQueueStatusController extends Controller
             default => 'ok',
         };
 
-        return response()->json([
-            'queue' => [
-                'status' => $status,
-                'connection' => $connection,
-                'name' => $queue,
-                'retry_after' => $retryAfter,
-                'max_job_timeout' => $maxJobTimeout,
-                'pending' => $queueSizes['pending'],
-                'delayed' => $queueSizes['delayed'],
-                'reserved' => $queueSizes['reserved'],
-                'failed' => $failedJobs,
-                'stale_running_refreshes' => $staleRunningRuns,
-                'issues' => $issues,
-                'checked_at' => now()->toIso8601String(),
-            ],
-        ]);
+        return [
+            'status' => $status,
+            'connection' => $connection,
+            'name' => $queue,
+            'retry_after' => $retryAfter,
+            'max_job_timeout' => $maxJobTimeout,
+            'pending' => $queueSizes['pending'],
+            'delayed' => $queueSizes['delayed'],
+            'reserved' => $queueSizes['reserved'],
+            'failed' => $failedJobs,
+            'stale_running_refreshes' => $staleRunningRuns,
+            'issues' => $issues,
+            'checked_at' => now()->toIso8601String(),
+        ];
     }
 
     private function maxJobTimeout(): int
@@ -115,6 +138,26 @@ class AdminQueueStatusController extends Controller
         }
 
         return DB::table('failed_jobs')->count();
+    }
+
+    private function clearQueuedJobs(string $connection, string $queue): int
+    {
+        $queueConnection = Queue::connection($connection);
+
+        if (! method_exists($queueConnection, 'clear')) {
+            return 0;
+        }
+
+        return (int) $queueConnection->clear($queue);
+    }
+
+    private function clearFailedJobs(): int
+    {
+        if (! Schema::hasTable('failed_jobs')) {
+            return 0;
+        }
+
+        return DB::table('failed_jobs')->delete();
     }
 
     private function staleRunningRuns(int $maxJobTimeout): int

@@ -13,7 +13,10 @@ use App\Http\Controllers\AdminStockHistoricalPriceController;
 use App\Http\Controllers\AdminStockSearchController;
 use App\Http\Controllers\AdminUiPreferencesController;
 use App\Http\Controllers\AdminUserController;
+use App\Models\Depot;
+use App\Models\DepotTransaction;
 use App\Models\IndexWatchItem;
+use App\Models\StockHolding;
 use Illuminate\Support\Facades\Route;
 
 Route::view('/', 'homepage')->name('homepage');
@@ -37,6 +40,71 @@ Route::get('/indices', function () {
             ]),
     ]);
 })->name('indices');
+
+Route::get('/depot-sum-sign', function () {
+    $depot = Depot::query()->where('is_active', true)->first();
+
+    if (! $depot) {
+        return response()->json(['sign' => 0]);
+    }
+
+    $transactionsByHoldingId = DepotTransaction::query()
+        ->where('depot_id', $depot->id)
+        ->whereNotNull('stock_holding_id')
+        ->whereIn('type', ['buy', 'sell'])
+        ->get(['stock_holding_id', 'type', 'pieces', 'total_amount', 'booked_at'])
+        ->groupBy('stock_holding_id');
+
+    $positionPiecesByHoldingId = $transactionsByHoldingId
+        ->map(fn ($transactions): float => $transactions->reduce(
+            fn (float $sum, DepotTransaction $t): float => $t->type === 'buy'
+                ? $sum + (float) $t->pieces
+                : $sum - (float) $t->pieces,
+            0.0,
+        ))
+        ->filter(fn (float $pieces): bool => $pieces > 0);
+
+    if ($positionPiecesByHoldingId->isEmpty()) {
+        return response()->json(['sign' => 0]);
+    }
+
+    $yearStart = now()->startOfYear();
+    $yearStartPriceByHoldingId = $transactionsByHoldingId->map(function ($transactions) use ($yearStart): ?float {
+        $buys = $transactions->filter(
+            fn (DepotTransaction $t): bool => $t->type === 'buy' && $t->booked_at?->greaterThanOrEqualTo($yearStart),
+        );
+        $pieces = $buys->sum(fn (DepotTransaction $t): float => (float) $t->pieces);
+
+        if ($pieces <= 0) {
+            return null;
+        }
+
+        return $buys->sum(fn (DepotTransaction $t): float => (float) $t->total_amount) / $pieces;
+    });
+
+    $holdings = StockHolding::query()
+        ->with('latestStockPrice')
+        ->whereKey($positionPiecesByHoldingId->keys()->all())
+        ->get();
+
+    $sum = $holdings->reduce(function (float $total, StockHolding $holding) use ($positionPiecesByHoldingId, $yearStartPriceByHoldingId): float {
+        $yearStartPrice = $yearStartPriceByHoldingId->get($holding->id);
+
+        if ($yearStartPrice === null) {
+            return $total;
+        }
+
+        $latestPrice = (float) ($holding->latestStockPrice?->price ?? $holding->latest_price ?? 0);
+
+        if ($latestPrice === 0.0) {
+            return $total;
+        }
+
+        return $total + ($latestPrice - $yearStartPrice) * $positionPiecesByHoldingId->get($holding->id, 0.0);
+    }, 0.0);
+
+    return response()->json(['sign' => $sum > 0 ? 1 : ($sum < 0 ? -1 : 0)]);
+})->name('depot-sum-sign');
 
 Route::view('/admin/login', 'app')->name('admin.login');
 
@@ -90,6 +158,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::post('/admin/watchlist/holdings/refresh-prices', [AdminDepotHoldingController::class, 'refreshPrices'])->name('admin.watchlist.holdings.refresh-prices');
     Route::get('/admin/watchlist/holdings/refresh-prices/{refreshId}', [AdminDepotHoldingController::class, 'refreshPriceStatus'])->name('admin.watchlist.holdings.refresh-prices.status');
     Route::get('/admin/queue/status', [AdminQueueStatusController::class, 'show'])->name('admin.queue.status');
+    Route::post('/admin/queue/clear', [AdminQueueStatusController::class, 'clear'])->name('admin.queue.clear');
     Route::post('/admin/watchlist/holdings/historical-prices/ensure', [AdminStockHistoricalPriceController::class, 'ensure'])->name('admin.watchlist.holdings.historical-prices.ensure');
     Route::get('/admin/watchlist/holdings/historical-prices/{refreshId}', [AdminStockHistoricalPriceController::class, 'status'])->name('admin.watchlist.holdings.historical-prices.status');
     Route::patch('/admin/watchlist/holdings/{holding}/flatex-price', [AdminDepotHoldingController::class, 'updateFlatexPrice'])->name('admin.watchlist.holdings.flatex-price');

@@ -154,16 +154,20 @@ describe('Homepage', () => {
 
     it('marks changed prices with is-updated class on refresh', async () => {
         vi.useFakeTimers();
-        let call = 0;
-        vi.stubGlobal('fetch', vi.fn(() => {
-            call++;
+        let indicesCall = 0;
+        vi.stubGlobal('fetch', vi.fn((url) => {
+            if (url === '/indices') indicesCall++;
             return Promise.resolve({
                 ok: true,
-                json: () => Promise.resolve({
-                    indexes: call === 1
-                        ? [{ symbol: 'ATX', country: 'Austria', currency: 'EUR', latest_price: '6116.00', latest_price_change_pct: '0.33' }]
-                        : [{ symbol: 'ATX', country: 'Austria', currency: 'EUR', latest_price: '6200.00', latest_price_change_pct: '1.50' }],
-                }),
+                json: () => Promise.resolve(
+                    url === '/indices'
+                        ? {
+                            indexes: indicesCall === 1
+                                ? [{ symbol: 'ATX', country: 'Austria', currency: 'EUR', latest_price: '6116.00', latest_price_change_pct: '0.33' }]
+                                : [{ symbol: 'ATX', country: 'Austria', currency: 'EUR', latest_price: '6200.00', latest_price_change_pct: '1.50' }],
+                        }
+                        : {},
+                ),
             });
         }));
         const wrapper = mountHomepage();
@@ -191,6 +195,34 @@ describe('Homepage', () => {
         expect(wrapper.get('.eyebrow').text()).toContain('T̸');
 
         vi.useRealTimers();
+    });
+
+    it('colors the headline dot red when depot sum is negative', async () => {
+        vi.stubGlobal('fetch', vi.fn((url) => {
+            if (url === '/depot-sum-sign') {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ sign: -1 }) });
+            }
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ indexes: [] }) });
+        }));
+
+        const wrapper = mountHomepage();
+        await flushPromises();
+
+        expect(wrapper.get('.headline-dot').attributes('style')).toContain('var(--red)');
+    });
+
+    it('colors the headline dot green when depot sum is positive', async () => {
+        vi.stubGlobal('fetch', vi.fn((url) => {
+            if (url === '/depot-sum-sign') {
+                return Promise.resolve({ ok: true, json: () => Promise.resolve({ sign: 1 }) });
+            }
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ indexes: [] }) });
+        }));
+
+        const wrapper = mountHomepage();
+        await flushPromises();
+
+        expect(wrapper.get('.headline-dot').attributes('style')).toContain('var(--green)');
     });
 
     it('marks the stage still and skips loops under reduced motion', () => {

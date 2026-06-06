@@ -131,6 +131,24 @@ export const useDepotStore = defineStore('depots', {
                 this.queueStatusLoading = false;
             }
         },
+        async clearQueue() {
+            this.queueStatusLoading = true;
+            this.queueStatusError = '';
+
+            try {
+                const data = await request('/admin/queue/clear', {
+                    method: 'POST',
+                });
+                this.queueStatus = data.queue ?? null;
+
+                return data;
+            } catch (error) {
+                this.queueStatusError = error.message;
+                throw error;
+            } finally {
+                this.queueStatusLoading = false;
+            }
+        },
         async loadIndexWatchItems() {
             this.holdingsError = '';
 
