@@ -531,6 +531,7 @@ describe('App', () => {
                             venue: 'Tradegate',
                             price_type: 'indicative_mid',
                             price_spread_pct: '0.050000',
+                            recent_prices_are_fallback: false,
                             recent_prices: [
                                 {
                                     id: 10,
@@ -842,6 +843,9 @@ describe('App', () => {
         expect(drawerText.indexOf('Dashboard')).toBeLessThan(drawerText.indexOf('Analyze'));
         expect(drawerText.indexOf('Analyze')).toBeLessThan(drawerText.indexOf('Depot'));
         expect(wrapper.find('[aria-label="Analyze detail"]').exists()).toBe(true);
+        expect(window.location.pathname).toBe('/admin/menu/analyze/detail');
+        expect(window.location.search).toBe('?stock=all');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('ALL');
         expect(wrapper.text()).toContain('Overview');
         expect(wrapper.text()).toContain('Detail');
 
@@ -1041,6 +1045,15 @@ describe('App', () => {
         expect(appleCard.attributes('aria-pressed')).toBe('true');
         expect(allCard.attributes('aria-pressed')).toBe('false');
         expect(analyzeOverview.text()).toContain('1 year');
+
+        const detailTab = wrapper.findAll('.v-tab')
+            .find((tab) => tab.text().includes('Detail'));
+        await detailTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/detail');
+        expect(window.location.search).toBe('?stock=1');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Apple');
     });
 
     it('renders a visible Today chart when only one intraday price exists', async () => {
@@ -1552,7 +1565,25 @@ describe('App', () => {
                             venue: 'Tradegate',
                             price_type: 'last',
                             price_spread_pct: '0.020000',
-                            recent_prices: [],
+                            recent_prices_are_fallback: true,
+                            recent_prices: [
+                                {
+                                    id: 30,
+                                    price: '194.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-02T14:30:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                                {
+                                    id: 31,
+                                    price: '195.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-02T15:30:00+00:00',
+                                    source_name: 'Tradegate Exchange',
+                                    price_type: 'calculated_median',
+                                },
+                            ],
                             validation_errors: [],
                         },
                         {
@@ -2060,6 +2091,20 @@ describe('App', () => {
         await flushPromises();
 
         expect(wrapper.text()).not.toContain('305.55');
+
+        const closedMarketHoldingRow = wrapper.findAll('.stock-holding-row')[1];
+        await closedMarketHoldingRow.trigger('click');
+        await flushPromises();
+
+        const fallbackRecentPriceStrip = wrapper.find('.recent-price-strip');
+        expect(fallbackRecentPriceStrip.text()).toContain('No stored prices in the last 24 hours.');
+        expect(fallbackRecentPriceStrip.text()).toContain('Showing values from 02.06.2026.');
+        expect(fallbackRecentPriceStrip.text()).toContain('194');
+        expect(fallbackRecentPriceStrip.text()).toContain('195');
+
+        await closedMarketHoldingRow.trigger('click');
+        await flushPromises();
+
         expect(wrapper.text()).toContain('03.06.2026, 17:35');
         expect(wrapper.text()).not.toContain('Monday-Friday 08:00-22:00 Europe/Berlin');
         expect(wrapper.text()).toContain('Exchange trading times');

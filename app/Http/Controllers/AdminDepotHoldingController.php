@@ -34,6 +34,8 @@ use Throwable;
 
 class AdminDepotHoldingController extends Controller
 {
+    private const IntradayPriceSampleCount = 20;
+
     public function __construct(
         private StockPriceFreshness $stockPriceFreshness,
         private PriceRefreshScheduler $priceRefreshScheduler,
@@ -287,7 +289,7 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, end_price_24: ?string, end_price_48: ?string, start_price_date: ?string, end_price_date: ?string, end_price_24_date: ?string, end_price_48_date: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, intraday_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, currency: ?string}>, validation_errors: array<int, string>, created_at: ?string}
+     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, end_price_24: ?string, end_price_48: ?string, start_price_date: ?string, end_price_date: ?string, end_price_24_date: ?string, end_price_48_date: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, recent_prices_are_fallback: bool, intraday_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, currency: ?string}>, validation_errors: array<int, string>, created_at: ?string}
      */
     private function holdingPayload(StockHolding $holding, ?Depot $activeDepot): array
     {
@@ -304,6 +306,7 @@ class AdminDepotHoldingController extends Controller
             ? $this->storedStockPriceTimestamp($latestStockPrice, 'as_of')
             : $holding->latest_price_as_of;
         $tradingTimes = $latestStockPrice?->trading_times ?? $holding->trading_times;
+        $recentStoredPricePayload = $this->recentStoredPricePayload($holding);
 
         return [
             'id' => $holding->id,
@@ -343,7 +346,8 @@ class AdminDepotHoldingController extends Controller
             'venue' => $hasCurrentPrice ? $latestStockPrice?->venue : null,
             'price_type' => $hasCurrentPrice ? ($latestStockPrice?->price_type ?? $holding->latest_price_type) : null,
             'price_spread_pct' => $hasCurrentPrice ? ($latestStockPrice?->spread_pct ?? $holding->price_spread_pct) : null,
-            'recent_prices' => $this->recentStoredPrices($holding),
+            'recent_prices' => $recentStoredPricePayload['prices'],
+            'recent_prices_are_fallback' => $recentStoredPricePayload['are_fallback'],
             'intraday_prices' => $this->intradayPricePayload($holding),
             'daily_prices' => $this->dailyPricePayload($holding),
             'validation_errors' => $hasCurrentPrice ? ($latestStockPrice?->validation_errors ?? []) : [],
@@ -542,11 +546,11 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>
+     * @return array{prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, are_fallback: bool}
      */
-    private function recentStoredPrices(StockHolding $holding): array
+    private function recentStoredPricePayload(StockHolding $holding): array
     {
-        return $this->stockPriceCatalog
+        $recentPrices = $this->stockPriceCatalog
             ->pricesForHolding($holding)
             ->whereIn('source_key', EodhdMarketData::sourceKeys())
             ->whereNotNull('price')
@@ -564,6 +568,52 @@ class AdminDepotHoldingController extends Controller
                 'price_type' => $stockPrice->price_type,
             ])
             ->all();
+
+        if ($recentPrices !== []) {
+            return [
+                'prices' => $recentPrices,
+                'are_fallback' => false,
+            ];
+        }
+
+        $latestTradingDay = $this->stockPriceCatalog
+            ->pricesForHolding($holding)
+            ->whereIn('source_key', EodhdMarketData::sourceKeys())
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->latest('as_of')
+            ->value('as_of');
+
+        if ($latestTradingDay === null) {
+            return [
+                'prices' => [],
+                'are_fallback' => false,
+            ];
+        }
+
+        $fallbackPrices = $this->stockPriceCatalog
+            ->pricesForHolding($holding)
+            ->whereIn('source_key', EodhdMarketData::sourceKeys())
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->whereDate('as_of', Carbon::parse($latestTradingDay)->toDateString())
+            ->orderBy('as_of')
+            ->orderBy('id')
+            ->get(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type'])
+            ->map(fn (StockPrice $stockPrice): array => [
+                'id' => $stockPrice->id,
+                'price' => (string) $stockPrice->price,
+                'currency' => $stockPrice->currency,
+                'as_of' => $this->storedStockPriceTimestamp($stockPrice, 'as_of'),
+                'source_name' => $stockPrice->source_name,
+                'price_type' => $stockPrice->price_type,
+            ])
+            ->all();
+
+        return [
+            'prices' => $fallbackPrices,
+            'are_fallback' => $fallbackPrices !== [],
+        ];
     }
 
     /**
@@ -577,6 +627,30 @@ class AdminDepotHoldingController extends Controller
             ->where('stock_holding_id', $holding->id)
             ->latest('trading_date')
             ->value('trading_date');
+
+        if (
+            $latestStoredDate === null
+            || $this->storedIntradayPriceCount($holding, $latestStoredDate) < self::IntradayPriceSampleCount
+        ) {
+            $this->eodhdMarketData->ensureIntradaySamples($holding);
+
+            $latestStoredDate = StockHoldingIntradayPrice::query()
+                ->where('stock_holding_id', $holding->id)
+                ->latest('trading_date')
+                ->value('trading_date');
+
+            if (
+                $latestStoredDate === null
+                || $this->storedIntradayPriceCount($holding, $latestStoredDate) < self::IntradayPriceSampleCount
+            ) {
+                $this->intradayPriceSampler->persistLatestTradingDaySamples($holding, fillMissingSamples: true);
+
+                $latestStoredDate = StockHoldingIntradayPrice::query()
+                    ->where('stock_holding_id', $holding->id)
+                    ->latest('trading_date')
+                    ->value('trading_date');
+            }
+        }
 
         if ($latestStoredDate === null) {
             return [];
@@ -596,6 +670,14 @@ class AdminDepotHoldingController extends Controller
                 'price_type' => $intradayPrice->price_type,
             ])
             ->all();
+    }
+
+    private function storedIntradayPriceCount(StockHolding $holding, Carbon|string $tradingDate): int
+    {
+        return StockHoldingIntradayPrice::query()
+            ->where('stock_holding_id', $holding->id)
+            ->whereDate('trading_date', Carbon::parse($tradingDate)->toDateString())
+            ->count();
     }
 
     /**

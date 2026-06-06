@@ -255,6 +255,15 @@ const sessionHeaderDates = computed(() => {
 const selectedIndexRecentPrices = computed(() => selectedIndexWatchItem.value?.recent_prices ?? []);
 const selectedIndexChart = computed(() => buildIndexPriceChart(selectedIndexRecentPrices.value));
 const selectedAnalyzeHolding = computed(() => holdings.value.find((holding) => holding.id === selectedAnalyzeHoldingId.value) ?? null);
+const selectedAnalyzeScopeLabel = computed(() => {
+    if (selectedAnalyzeHoldingId.value === null) {
+        return 'ALL';
+    }
+
+    return selectedAnalyzeHolding.value?.name
+        || selectedAnalyzeHolding.value?.symbol
+        || `Stock ${selectedAnalyzeHoldingId.value}`;
+});
 const selectedAnalyzeDailyPrices = computed(() => filterAnalyzeDailyPrices(
     selectedAnalyzeHolding.value?.daily_prices ?? [],
     selectedAnalyzeHistoryRange.value,
@@ -512,7 +521,7 @@ watch(
 
         selectedAnalyzeHoldingId.value = null;
 
-        if (activeSection.value === 'analyze' && activeAnalyzeSubsection.value === 'overview') {
+        if (activeSection.value === 'analyze') {
             updateUrlPath({ replace: true });
         }
     },
@@ -675,7 +684,7 @@ function applyRouteFromPath() {
             activeAnalyzeSubsection.value = isAnalyzeSubsection(subsectionSegment)
                 ? subsectionSegment
                 : 'overview';
-            applyAnalyzeOverviewSelectionFromQuery(new URLSearchParams(window.location.search));
+            applyAnalyzeSelectionFromQuery(new URLSearchParams(window.location.search));
             updateUrlPath({ replace: true });
 
             return;
@@ -699,7 +708,7 @@ function updateUrlPath(options = {}) {
             : activeSection.value === 'analyze'
                 ? `/admin/menu/analyze/${activeAnalyzeSubsection.value}`
                 : `/admin/menu/${activeSection.value}`;
-    const target = activeSection.value === 'analyze' && activeAnalyzeSubsection.value === 'overview'
+    const target = activeSection.value === 'analyze'
         ? `${path}?stock=${selectedAnalyzeHoldingId.value === null ? 'all' : encodeURIComponent(String(selectedAnalyzeHoldingId.value))}`
         : path;
 
@@ -720,7 +729,7 @@ function isAnalyzeSubsection(subsection) {
     return analyzeSubmenuItems.some((item) => item.key === subsection);
 }
 
-function applyAnalyzeOverviewSelectionFromQuery(searchParams) {
+function applyAnalyzeSelectionFromQuery(searchParams) {
     const stock = searchParams.get('stock');
 
     if (stock === null || stock === '' || stock === 'all') {
@@ -2751,6 +2760,16 @@ function recentPricesForExpandedHolding(holding) {
     }));
 }
 
+function recentPricesFallbackDate(holding) {
+    const firstRecentPrice = holding.recent_prices?.[0] ?? null;
+
+    if (!holding.recent_prices_are_fallback || !firstRecentPrice?.as_of) {
+        return null;
+    }
+
+    return formatRecentStoredPriceDate(firstRecentPrice);
+}
+
 function recentPriceTrendDots(holding) {
     return recentPricesForExpandedHolding(holding).slice(-10);
 }
@@ -2951,6 +2970,21 @@ function formatRecentStoredPriceTime(recentPrice) {
         hour: '2-digit',
         minute: '2-digit',
         hourCycle: 'h23',
+    }).format(date);
+}
+
+function formatRecentStoredPriceDate(recentPrice) {
+    const date = new Date(recentPrice.as_of);
+
+    if (Number.isNaN(date.getTime())) {
+        return '-';
+    }
+
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: 'Europe/Vienna',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
     }).format(date);
 }
 
@@ -4122,6 +4156,13 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                                 v-if="holding.recent_prices?.length"
                                                 class="recent-price-strip d-flex flex-wrap ga-2"
                                             >
+                                                <div
+                                                    v-if="recentPricesFallbackDate(holding)"
+                                                    class="recent-price-fallback-note text-caption text-medium-emphasis"
+                                                >
+                                                    No stored prices in the last 24 hours. Showing values from
+                                                    {{ recentPricesFallbackDate(holding) }}.
+                                                </div>
                                                 <span
                                                     v-for="recentPrice in recentPricesForExpandedHolding(holding)"
                                                     :key="recentPrice.id"
@@ -4922,7 +4963,11 @@ function priceRefreshScheduleFormFromSettings(settings) {
                             v-if="activeAnalyzeSubsection === 'detail'"
                             class="analyze-dummy-page"
                             aria-label="Analyze detail"
-                        />
+                        >
+                            <div class="analyze-detail-scope">
+                                {{ selectedAnalyzeScopeLabel }}
+                            </div>
+                        </section>
                     </section>
 
                     <v-dialog v-model="isCashTransactionDialogOpen" persistent max-width="480">
@@ -6318,6 +6363,12 @@ function priceRefreshScheduleFormFromSettings(settings) {
     min-height: 320px;
 }
 
+.analyze-detail-scope {
+    color: #145b4b;
+    font-size: 1.125rem;
+    font-weight: 700;
+}
+
 .price-refresh-status-dot {
     width: 10px;
     height: 10px;
@@ -6971,6 +7022,10 @@ function priceRefreshScheduleFormFromSettings(settings) {
     gap: 6px;
     min-width: 118px;
     padding: 4px 6px;
+}
+
+.recent-price-fallback-note {
+    flex-basis: 100%;
 }
 
 .recent-price-trend {

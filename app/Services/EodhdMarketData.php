@@ -146,6 +146,28 @@ class EodhdMarketData
         return $quote ? $this->validatedHistoricalQuote($quote) : null;
     }
 
+    public function ensureIntradaySamples(StockHolding $holding): void
+    {
+        $session = $this->sessionPriceWindow($holding, null);
+
+        if ($session === null) {
+            return;
+        }
+
+        $until = $session['is_open']
+            ? now()->utc()
+            : $session['close'];
+
+        if ($until->lessThanOrEqualTo($session['open'])) {
+            return;
+        }
+
+        $errors = [];
+        $records = $this->intradayRecords($holding, $session['open'], $until, $errors);
+
+        $this->intradayPriceSampler->persistIntradayRecords($holding, $records);
+    }
+
     public function dailyOpenQuote(StockHolding $holding, Carbon $sessionDate, Carbon $asOf): ?ValidatedQuote
     {
         return $this->dailyQuote(
