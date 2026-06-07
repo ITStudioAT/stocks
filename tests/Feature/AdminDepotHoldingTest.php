@@ -1030,6 +1030,10 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('intraday.title', 'Intraday 05.06.2026 - 5m')
             ->assertJsonPath('intraday.trading_date', '2026-06-05')
             ->assertJsonPath('intraday.interval', '5m')
+            ->assertJsonCount(3, 'intraday_days')
+            ->assertJsonPath('intraday_days.0.trading_date', '2026-06-05')
+            ->assertJsonPath('intraday_days.1.trading_date', '2026-06-04')
+            ->assertJsonPath('intraday_days.2.trading_date', '2026-06-03')
             ->assertJsonCount(2, 'intraday.rows')
             ->assertJsonPath('intraday.rows.0.timestamp', Carbon::parse('2026-06-05 07:00:00', 'UTC')->timestamp)
             ->assertJsonPath('intraday.rows.0.gmtoffset', 0)
@@ -1051,7 +1055,7 @@ class AdminDepotHoldingTest extends TestCase
         ]);
         Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/intraday/AMES.XETRA')
             && str_contains($request->url(), 'interval=5m'));
-        Http::assertSentCount(1);
+        Http::assertSentCount(3);
     }
 
     public function test_admin_intraday_candle_detail_uses_stored_last_trading_day_rows(): void
@@ -1086,13 +1090,96 @@ class AdminDepotHoldingTest extends TestCase
             'source_key' => 'eodhd_intraday',
             'source_name' => 'EODHD intraday',
         ]);
+        StockHoldingIntradayCandle::query()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-04',
+            'interval' => '5m',
+            'as_of' => Carbon::parse('2026-06-04 07:00:00', 'UTC'),
+            'timestamp' => Carbon::parse('2026-06-04 07:00:00', 'UTC')->timestamp,
+            'gmtoffset' => 0,
+            'datetime' => '2026-06-04 07:00:00',
+            'open' => '469.10000000',
+            'high' => '470.50000000',
+            'low' => '468.90000000',
+            'close' => '469.15000000',
+            'volume' => 11345,
+            'currency' => 'EUR',
+            'source_key' => 'eodhd_intraday',
+            'source_name' => 'EODHD intraday',
+        ]);
+        StockHoldingIntradayCandle::query()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-03',
+            'interval' => '5m',
+            'as_of' => Carbon::parse('2026-06-03 07:00:00', 'UTC'),
+            'timestamp' => Carbon::parse('2026-06-03 07:00:00', 'UTC')->timestamp,
+            'gmtoffset' => 0,
+            'datetime' => '2026-06-03 07:00:00',
+            'open' => '468.10000000',
+            'high' => '469.50000000',
+            'low' => '467.90000000',
+            'close' => '468.15000000',
+            'volume' => 10345,
+            'currency' => 'EUR',
+            'source_key' => 'eodhd_intraday',
+            'source_name' => 'EODHD intraday',
+        ]);
 
         $this->actingAs($admin)
             ->getJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")
             ->assertOk()
             ->assertJsonPath('intraday.title', 'Intraday 05.06.2026 - 5m')
+            ->assertJsonCount(3, 'intraday_days')
             ->assertJsonCount(1, 'intraday.rows')
             ->assertJsonPath('intraday.rows.0.close', '470.15000000');
+
+        Http::assertNothingSent();
+    }
+
+    public function test_admin_intraday_candle_detail_returns_latest_three_stored_days(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-06 12:00:00', 'UTC'));
+        Http::fake();
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'country' => 'Germany',
+            'currency' => 'EUR',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+
+        foreach (['2026-06-05', '2026-06-04', '2026-06-03', '2026-06-02'] as $index => $tradingDate) {
+            StockHoldingIntradayCandle::query()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => $tradingDate,
+                'interval' => '5m',
+                'as_of' => Carbon::parse("{$tradingDate} 07:00:00", 'UTC'),
+                'timestamp' => Carbon::parse("{$tradingDate} 07:00:00", 'UTC')->timestamp,
+                'gmtoffset' => 0,
+                'datetime' => "{$tradingDate} 07:00:00",
+                'open' => (string) (470 + $index),
+                'high' => (string) (471 + $index),
+                'low' => (string) (469 + $index),
+                'close' => (string) (470.15 + $index),
+                'volume' => 12345 + $index,
+                'currency' => 'EUR',
+                'source_key' => 'eodhd_intraday',
+                'source_name' => 'EODHD intraday',
+            ]);
+        }
+
+        $this->actingAs($admin)
+            ->getJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")
+            ->assertOk()
+            ->assertJsonCount(3, 'intraday_days')
+            ->assertJsonPath('intraday_days.0.trading_date', '2026-06-05')
+            ->assertJsonPath('intraday_days.1.trading_date', '2026-06-04')
+            ->assertJsonPath('intraday_days.2.trading_date', '2026-06-03')
+            ->assertJsonMissingPath('intraday_days.3')
+            ->assertJsonPath('intraday.trading_date', '2026-06-05');
 
         Http::assertNothingSent();
     }

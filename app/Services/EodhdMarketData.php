@@ -192,12 +192,31 @@ class EodhdMarketData
      */
     public function ensureLastTradingDayFiveMinuteCandles(StockHolding $holding): ?array
     {
-        $session = $this->lastCompletedTradingSession($holding);
+        $session = $this->lastCompletedTradingSessions($holding, 1)[0] ?? null;
 
         if ($session === null) {
             return null;
         }
 
+        return $this->ensureFiveMinuteIntradayCandles($holding, $session);
+    }
+
+    /**
+     * @return array<int, array{title: string, trading_date: string, interval: string, rows: array<int, array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}>}>
+     */
+    public function ensureLastThreeTradingDayFiveMinuteCandles(StockHolding $holding): array
+    {
+        return collect($this->lastCompletedTradingSessions($holding, 3))
+            ->map(fn (array $session): array => $this->ensureFiveMinuteIntradayCandles($holding, $session))
+            ->all();
+    }
+
+    /**
+     * @param  array{date: Carbon, open: Carbon, close: Carbon}  $session
+     * @return array{title: string, trading_date: string, interval: string, rows: array<int, array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}>}
+     */
+    private function ensureFiveMinuteIntradayCandles(StockHolding $holding, array $session): array
+    {
         if (! $this->storedIntradayCandleQuery($holding, $session['date'], '5m')->exists()) {
             $errors = [];
             $records = $this->intradayRecordsForInterval($holding, $session['open'], $session['close'], '5m', $errors);
@@ -1066,29 +1085,34 @@ class EodhdMarketData
     }
 
     /**
-     * @return array{date: Carbon, open: Carbon, close: Carbon}|null
+     * @return array<int, array{date: Carbon, open: Carbon, close: Carbon}>
      */
-    private function lastCompletedTradingSession(StockHolding $holding): ?array
+    private function lastCompletedTradingSessions(StockHolding $holding, int $count): array
     {
         $session = $this->sessionPriceWindow($holding, null);
 
         if ($session === null) {
-            return null;
+            return [];
         }
 
-        if ($session['is_open']) {
-            return [
-                'date' => $session['previous_date'],
-                'open' => $session['previous_open'],
-                'close' => $session['previous_close'],
+        $openMinute = (int) $session['previous_date']->copy()->startOfDay()->diffInMinutes($session['previous_open']);
+        $closeMinute = (int) $session['previous_date']->copy()->startOfDay()->diffInMinutes($session['previous_close']);
+        $tradingDate = $session['is_open']
+            ? $session['previous_date']->copy()
+            : $session['date']->copy();
+        $sessions = [];
+
+        while (count($sessions) < $count) {
+            $sessions[] = [
+                'date' => $tradingDate->copy(),
+                'open' => $tradingDate->copy()->addMinutes($openMinute)->utc(),
+                'close' => $tradingDate->copy()->addMinutes($closeMinute)->utc(),
             ];
+
+            $tradingDate = $this->previousTradingDay($tradingDate);
         }
 
-        return [
-            'date' => $session['date'],
-            'open' => $session['open'],
-            'close' => $session['close'],
-        ];
+        return $sessions;
     }
 
     /**

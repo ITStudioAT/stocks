@@ -107,6 +107,7 @@ const selectedTestStockId = ref(null);
 const selectedTestTab = ref('tickers');
 const selectedDataIntradayStockId = ref(null);
 const expandedDataIntradayDays = ref({});
+const expandedAnalyzeIntradayDays = ref({});
 const profileLastName = ref('');
 const profileFirstName = ref('');
 const newPassword = ref('');
@@ -377,7 +378,16 @@ const selectedAnalyzeChartPrices = computed(() => {
 const selectedAnalyzeSparkline = computed(() => buildAnalyzeSparkline(selectedAnalyzeChartPrices.value));
 const showAnalyzeSparklineDots = computed(() => ['3m', '1m', '1w', 'today'].includes(selectedAnalyzeHistoryRange.value));
 const analyzeIntradayDetail = computed(() => analyzeIntradayCandles.value?.intraday ?? null);
-const analyzeIntradayDetailRows = computed(() => analyzeIntradayDetail.value?.rows ?? []);
+const analyzeIntradayDetailDays = computed(() => {
+    const days = analyzeIntradayCandles.value?.intraday_days;
+
+    if (Array.isArray(days)) {
+        return days;
+    }
+
+    return analyzeIntradayDetail.value ? [analyzeIntradayDetail.value] : [];
+});
+const analyzeIntradayDetailRows = computed(() => analyzeIntradayDetailDays.value.flatMap((day) => day.rows ?? []));
 const analyzeIntradayDetailTitle = computed(() => analyzeIntradayDetail.value?.title ?? 'Intraday - 5m');
 const eodhdUsageItems = computed(() => {
     if (!eodhdApiUsage.value) {
@@ -2082,7 +2092,7 @@ function formatDataIntradayDayTitle(day) {
 }
 
 function isDataIntradayDayExpanded(day) {
-    return expandedDataIntradayDays.value[day.trading_date] !== false;
+    return expandedDataIntradayDays.value[day.trading_date] === true;
 }
 
 function toggleDataIntradayDay(day) {
@@ -2090,6 +2100,23 @@ function toggleDataIntradayDay(day) {
         ...expandedDataIntradayDays.value,
         [day.trading_date]: !isDataIntradayDayExpanded(day),
     };
+}
+
+function isAnalyzeIntradayDayExpanded(day) {
+    return expandedAnalyzeIntradayDays.value[analyzeIntradayDayExpansionKey(day)] === true;
+}
+
+function toggleAnalyzeIntradayDay(day) {
+    const expansionKey = analyzeIntradayDayExpansionKey(day);
+
+    expandedAnalyzeIntradayDays.value = {
+        ...expandedAnalyzeIntradayDays.value,
+        [expansionKey]: !isAnalyzeIntradayDayExpanded(day),
+    };
+}
+
+function analyzeIntradayDayExpansionKey(day) {
+    return `${analyzeIntradayCandles.value?.holding?.id ?? selectedAnalyzeHoldingId.value ?? 'all'}:${day.trading_date}`;
 }
 
 function formatDataIntradayReloadMessage() {
@@ -2957,6 +2984,196 @@ function formatAnalyzeSparklinePrice(point) {
     }
 
     return formatPriceValue(point.chart_price, selectedAnalyzeHolding.value?.currency);
+}
+
+function analyzeIntradayCloseSummaryItems(day, dayIndex) {
+    const summary = analyzeIntradayCloseSummary(day);
+    const referenceSummary = analyzeIntradayCloseSummary(analyzeIntradayDetailDays.value[dayIndex + 1] ?? {});
+    const lastReferenceValue = referenceSummary.last ?? summary.first;
+
+    return [
+        {
+            key: 'first',
+            label: 'First',
+            value: formatAnalyzeIntradayCloseSummaryValue(summary.first),
+            changePercent: formatAnalyzeIntradayCloseChangePercent(summary.first, referenceSummary.last),
+            changeClass: analyzeIntradayCloseChangeClass(summary.first, referenceSummary.last),
+        },
+        { key: 'low', label: 'Lowest', value: formatAnalyzeIntradayCloseSummaryValue(summary.low) },
+        { key: 'high', label: 'Highest', value: formatAnalyzeIntradayCloseSummaryValue(summary.high) },
+        {
+            key: 'ups',
+            label: 'Ups',
+            value: formatInteger(summary.ups),
+            itemClass: 'is-compact',
+            valueClass: 'is-up',
+        },
+        {
+            key: 'downs',
+            label: 'Downs',
+            value: formatInteger(summary.downs),
+            itemClass: 'is-compact',
+            valueClass: 'is-down',
+        },
+        {
+            key: 'first-to-noon',
+            label: 'First -> 12:00+',
+            value: formatAnalyzeIntradayCloseDevelopmentPercent(summary.firstAfterNoon, summary.first),
+            valueClass: analyzeIntradayCloseChangeClass(summary.firstAfterNoon, summary.first),
+        },
+        {
+            key: 'noon-to-last',
+            label: '12:00+ -> End',
+            value: formatAnalyzeIntradayCloseDevelopmentPercent(summary.last, summary.firstAfterNoon),
+            valueClass: analyzeIntradayCloseChangeClass(summary.last, summary.firstAfterNoon),
+        },
+        {
+            key: 'last',
+            label: 'Last',
+            value: formatAnalyzeIntradayCloseSummaryValue(summary.last),
+            changePercent: formatAnalyzeIntradayCloseChangePercent(summary.last, lastReferenceValue),
+            changeClass: analyzeIntradayCloseChangeClass(summary.last, lastReferenceValue),
+        },
+    ];
+}
+
+function analyzeIntradayCloseSummary(day) {
+    const closePrices = (day.rows ?? [])
+        .map((row) => Number(row.close))
+        .filter((closePrice) => !Number.isNaN(closePrice));
+
+    if (closePrices.length === 0) {
+        return {
+            first: null,
+            low: null,
+            high: null,
+            last: null,
+            ups: 0,
+            downs: 0,
+            firstAfterNoon: null,
+        };
+    }
+
+    const firstAfterNoonClosePrice = (day.rows ?? [])
+        .find((row) => isAnalyzeIntradayCandleAtOrAfterViennaNoon(row) && !Number.isNaN(Number(row.close)));
+
+    const closeMoves = closePrices.slice(1).reduce((moves, closePrice, index) => {
+        const previousClosePrice = closePrices[index];
+
+        if (closePrice > previousClosePrice) {
+            moves.ups += 1;
+        }
+
+        if (closePrice < previousClosePrice) {
+            moves.downs += 1;
+        }
+
+        return moves;
+    }, { ups: 0, downs: 0 });
+
+    return {
+        first: closePrices[0],
+        low: Math.min(...closePrices),
+        high: Math.max(...closePrices),
+        last: closePrices[closePrices.length - 1],
+        ups: closeMoves.ups,
+        downs: closeMoves.downs,
+        firstAfterNoon: firstAfterNoonClosePrice ? Number(firstAfterNoonClosePrice.close) : null,
+    };
+}
+
+function formatAnalyzeIntradayCloseSummaryValue(value) {
+    if (value === null || value === undefined) {
+        return '-';
+    }
+
+    return formatPriceValue(value, selectedAnalyzeHolding.value?.currency);
+}
+
+function formatAnalyzeIntradayCloseChangePercent(value, referenceValue) {
+    const amount = analyzeIntradayCloseChangePercent(value, referenceValue);
+
+    if (amount === null) {
+        return '';
+    }
+
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${amount.toFixed(2)}%`;
+}
+
+function formatAnalyzeIntradayCloseDevelopmentPercent(value, referenceValue) {
+    return formatAnalyzeIntradayCloseChangePercent(value, referenceValue) || '-';
+}
+
+function analyzeIntradayCloseChangeClass(value, referenceValue) {
+    const amount = analyzeIntradayCloseChangePercent(value, referenceValue);
+
+    if (amount === null || amount === 0) {
+        return 'is-flat';
+    }
+
+    return amount > 0 ? 'is-up' : 'is-down';
+}
+
+function analyzeIntradayCloseChangePercent(value, referenceValue) {
+    if (value === null || value === undefined || referenceValue === null || referenceValue === undefined) {
+        return null;
+    }
+
+    if (referenceValue === 0) {
+        return null;
+    }
+
+    return ((value - referenceValue) / referenceValue) * 100;
+}
+
+function isAnalyzeIntradayCandleAtOrAfterViennaNoon(row) {
+    const viennaMinutes = analyzeIntradayCandleViennaMinutes(row);
+
+    if (viennaMinutes === null) {
+        return false;
+    }
+
+    return viennaMinutes >= 720;
+}
+
+function analyzeIntradayCandleViennaMinutes(row) {
+    const date = analyzeIntradayCandleDate(row);
+
+    if (!date) {
+        return null;
+    }
+
+    const parts = new Intl.DateTimeFormat('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+        timeZone: 'Europe/Vienna',
+    }).formatToParts(date);
+
+    const hour = Number(parts.find((part) => part.type === 'hour')?.value);
+    const minute = Number(parts.find((part) => part.type === 'minute')?.value);
+
+    if (Number.isNaN(hour) || Number.isNaN(minute)) {
+        return null;
+    }
+
+    return (hour * 60) + minute;
+}
+
+function analyzeIntradayCandleDate(row) {
+    if (Number(row?.timestamp) > 0) {
+        return new Date(Number(row.timestamp) * 1000);
+    }
+
+    if (typeof row?.datetime !== 'string' || row.datetime.trim() === '') {
+        return null;
+    }
+
+    const date = new Date(`${row.datetime.replace(' ', 'T')}Z`);
+
+    return Number.isNaN(date.getTime()) ? null : date;
 }
 
 function formatAnalyzeSparklineDate(point) {
@@ -5505,37 +5722,80 @@ function priceRefreshScheduleFormFromSettings(settings) {
                             </div>
                             <div
                                 v-else
-                                class="analyze-detail-table-wrap"
+                                class="analyze-detail-days"
                             >
-                                <v-table class="analyze-detail-table" density="compact">
-                                    <thead>
-                                        <tr>
-                                            <th>Timestamp</th>
-                                            <th>GMT offset</th>
-                                            <th>Datetime</th>
-                                            <th class="text-right">Open</th>
-                                            <th class="text-right">High</th>
-                                            <th class="text-right">Low</th>
-                                            <th class="text-right">Close</th>
-                                            <th class="text-right">Volume</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        <tr
-                                            v-for="(row, index) in analyzeIntradayDetailRows"
-                                            :key="row.timestamp ?? row.datetime ?? index"
+                                <section
+                                    v-for="(day, dayIndex) in analyzeIntradayDetailDays"
+                                    :key="day.trading_date"
+                                    class="data-intraday-day"
+                                >
+                                    <button
+                                        type="button"
+                                        class="data-intraday-day-header"
+                                        :aria-expanded="isAnalyzeIntradayDayExpanded(day)"
+                                        @click="toggleAnalyzeIntradayDay(day)"
+                                    >
+                                        <span class="data-intraday-day-title">{{ day.title }}</span>
+                                        <span class="data-intraday-day-count">{{ formatInteger(day.rows?.length ?? 0) }} rows</span>
+                                        <v-icon
+                                            :icon="isAnalyzeIntradayDayExpanded(day) ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+                                            size="20"
+                                        />
+                                    </button>
+                                    <dl class="analyze-detail-day-summary" aria-label="Close price summary">
+                                        <div
+                                            v-for="item in analyzeIntradayCloseSummaryItems(day, dayIndex)"
+                                            :key="`${day.trading_date}-${item.key}`"
+                                            class="analyze-detail-day-summary-item"
+                                            :class="item.itemClass"
                                         >
-                                            <td>{{ formatAnalyzeIntradayCandleValue(row.timestamp) }}</td>
-                                            <td>{{ formatAnalyzeIntradayCandleValue(row.gmtoffset) }}</td>
-                                            <td>{{ formatAnalyzeIntradayCandleDateTime(row.datetime) }}</td>
-                                            <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.open) }}</td>
-                                            <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.high) }}</td>
-                                            <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.low) }}</td>
-                                            <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.close) }}</td>
-                                            <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.volume) }}</td>
-                                        </tr>
-                                    </tbody>
-                                </v-table>
+                                            <dt>{{ item.label }}</dt>
+                                            <dd>
+                                                <span :class="item.valueClass">{{ item.value }}</span>
+                                                <span
+                                                    v-if="item.changePercent"
+                                                    class="analyze-detail-day-summary-change"
+                                                    :class="item.changeClass"
+                                                >
+                                                    {{ item.changePercent }}
+                                                </span>
+                                            </dd>
+                                        </div>
+                                    </dl>
+                                    <div v-if="isAnalyzeIntradayDayExpanded(day)" class="data-intraday-day-body">
+                                        <div class="analyze-detail-table-wrap">
+                                            <v-table class="analyze-detail-table" density="compact">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Timestamp</th>
+                                                        <th>GMT offset</th>
+                                                        <th>Datetime</th>
+                                                        <th class="text-right">Open</th>
+                                                        <th class="text-right">High</th>
+                                                        <th class="text-right">Low</th>
+                                                        <th class="text-right">Close</th>
+                                                        <th class="text-right">Volume</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    <tr
+                                                        v-for="(row, index) in day.rows"
+                                                        :key="row.timestamp ?? row.datetime ?? index"
+                                                    >
+                                                        <td>{{ formatAnalyzeIntradayCandleValue(row.timestamp) }}</td>
+                                                        <td>{{ formatAnalyzeIntradayCandleValue(row.gmtoffset) }}</td>
+                                                        <td>{{ formatAnalyzeIntradayCandleDateTime(row.datetime) }}</td>
+                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.open) }}</td>
+                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.high) }}</td>
+                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.low) }}</td>
+                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.close) }}</td>
+                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.volume) }}</td>
+                                                    </tr>
+                                                </tbody>
+                                            </v-table>
+                                        </div>
+                                    </div>
+                                </section>
                             </div>
                         </section>
                         <section
@@ -7474,6 +7734,75 @@ function priceRefreshScheduleFormFromSettings(settings) {
     padding: 18px;
 }
 
+.analyze-detail-days {
+    display: grid;
+    gap: 12px;
+}
+
+.analyze-detail-day-summary {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    margin: 0;
+    padding: 10px 14px 12px;
+}
+
+.analyze-detail-day-summary-item {
+    border: 1px solid rgba(20, 91, 75, 0.12);
+    border-radius: 5px;
+    grid-column: span 2;
+    min-width: 0;
+    padding: 8px 10px;
+}
+
+.analyze-detail-day-summary-item.is-compact {
+    grid-column: span 1;
+}
+
+.analyze-detail-day-summary-item dt {
+    color: #667480;
+    font-size: 0.68rem;
+    font-weight: 600;
+    line-height: 1.2;
+    text-transform: uppercase;
+}
+
+.analyze-detail-day-summary-item dd {
+    color: #102a34;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 0.9rem;
+    font-weight: 600;
+    gap: 6px;
+    line-height: 1.3;
+    margin: 3px 0 0;
+}
+
+.analyze-detail-day-summary-change {
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+
+.analyze-detail-day-summary-change.is-up {
+    color: #16794c;
+}
+
+.analyze-detail-day-summary-item dd .is-up {
+    color: #16794c;
+}
+
+.analyze-detail-day-summary-change.is-down {
+    color: #b42318;
+}
+
+.analyze-detail-day-summary-item dd .is-down {
+    color: #b42318;
+}
+
+.analyze-detail-day-summary-change.is-flat {
+    color: #667480;
+}
+
 .analyze-detail-table-wrap {
     border: 1px solid rgba(20, 91, 75, 0.16);
     border-radius: 6px;
@@ -7482,6 +7811,12 @@ function priceRefreshScheduleFormFromSettings(settings) {
 
 .analyze-detail-table {
     min-width: 820px;
+}
+
+@media (max-width: 720px) {
+    .analyze-detail-day-summary {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
 }
 
 .analyze-detail-table :deep(th) {

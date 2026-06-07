@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Jobs\FetchHistoricalSessionPrices;
 use App\Jobs\FetchStockHistoricalPrices;
 use App\Jobs\RefreshDepotHoldingPrices;
+use App\Jobs\ReloadEodhdExchanges;
+use App\Jobs\ReloadStockHoldingIntradayData;
 use App\Models\StockHistoricalPriceFetchRun;
 use App\Models\StockPriceRefreshRun;
 use Illuminate\Http\JsonResponse;
@@ -94,6 +96,8 @@ class AdminQueueStatusController extends Controller
         return max([
             (new RefreshDepotHoldingPrices('queue-status-check'))->timeout,
             (new FetchStockHistoricalPrices('queue-status-check'))->timeout,
+            (new ReloadEodhdExchanges('queue-status-check'))->timeout,
+            (new ReloadStockHoldingIntradayData('queue-status-check'))->timeout,
             (new FetchHistoricalSessionPrices('queue-status-check', [], [
                 'timezone' => 'UTC',
                 'today_date' => '2026-06-05',

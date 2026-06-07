@@ -89,8 +89,8 @@ function queueStatusResponse(overrides = {}) {
             pending: 0,
             reserved: 0,
             failed: 0,
-            retry_after: 1200,
-            max_job_timeout: 900,
+            retry_after: 2100,
+            max_job_timeout: 1800,
             issues: [],
             ...overrides,
         },
@@ -839,6 +839,99 @@ describe('App', () => {
                             },
                         ],
                     },
+                    intraday_days: [
+                        {
+                            title: 'Intraday 05.06.2026 - 5m',
+                            trading_date: '2026-06-05',
+                            interval: '5m',
+                            rows: [
+                                {
+                                    timestamp: 1780642800,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-05 07:00:00',
+                                    open: '470.10000000',
+                                    high: '480.00000000',
+                                    low: '460.00000000',
+                                    close: '470.15000000',
+                                    volume: 12345,
+                                },
+                                {
+                                    timestamp: 1780643100,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-05 07:05:00',
+                                    open: '470.15000000',
+                                    high: '472.00000000',
+                                    low: '469.00000000',
+                                    close: '469.25000000',
+                                    volume: 13345,
+                                },
+                                {
+                                    timestamp: 1780653900,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-05 10:05:00',
+                                    open: '469.25000000',
+                                    high: '473.25000000',
+                                    low: '468.50000000',
+                                    close: '472.75000000',
+                                    volume: 14345,
+                                },
+                                {
+                                    timestamp: 1780664400,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-05 13:00:00',
+                                    open: '472.75000000',
+                                    high: '473.00000000',
+                                    low: '471.50000000',
+                                    close: '471.75000000',
+                                    volume: 15345,
+                                },
+                            ],
+                        },
+                        {
+                            title: 'Intraday 04.06.2026 - 5m',
+                            trading_date: '2026-06-04',
+                            interval: '5m',
+                            rows: [
+                                {
+                                    timestamp: 1780556400,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-04 07:00:00',
+                                    open: '468.10000000',
+                                    high: '469.50000000',
+                                    low: '467.90000000',
+                                    close: '469.15000000',
+                                    volume: 11345,
+                                },
+                            ],
+                        },
+                        {
+                            title: 'Intraday 03.06.2026 - 5m',
+                            trading_date: '2026-06-03',
+                            interval: '5m',
+                            rows: [
+                                {
+                                    timestamp: 1780470000,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-03 07:00:00',
+                                    open: '466.10000000',
+                                    high: '467.50000000',
+                                    low: '465.90000000',
+                                    close: '467.15000000',
+                                    volume: 10345,
+                                },
+                                {
+                                    timestamp: 1780470300,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-03 07:05:00',
+                                    open: '467.15000000',
+                                    high: '467.20000000',
+                                    low: '466.10000000',
+                                    close: '466.15000000',
+                                    volume: 11345,
+                                },
+                            ],
+                        },
+                    ],
                 }));
             }
 
@@ -1080,6 +1173,99 @@ describe('App', () => {
                             },
                         ],
                     },
+                    intraday_days: [
+                        {
+                            title: 'Intraday 05.06.2026 - 5m',
+                            trading_date: '2026-06-05',
+                            interval: '5m',
+                            rows: [
+                                {
+                                    timestamp: 1780642800,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-05 07:00:00',
+                                    open: '470.10000000',
+                                    high: '480.00000000',
+                                    low: '460.00000000',
+                                    close: '470.15000000',
+                                    volume: 12345,
+                                },
+                                {
+                                    timestamp: 1780643100,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-05 07:05:00',
+                                    open: '470.15000000',
+                                    high: '472.00000000',
+                                    low: '469.00000000',
+                                    close: '469.25000000',
+                                    volume: 13345,
+                                },
+                                {
+                                    timestamp: 1780653900,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-05 10:05:00',
+                                    open: '469.25000000',
+                                    high: '473.25000000',
+                                    low: '468.50000000',
+                                    close: '472.75000000',
+                                    volume: 14345,
+                                },
+                                {
+                                    timestamp: 1780664400,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-05 13:00:00',
+                                    open: '472.75000000',
+                                    high: '473.00000000',
+                                    low: '471.50000000',
+                                    close: '471.75000000',
+                                    volume: 15345,
+                                },
+                            ],
+                        },
+                        {
+                            title: 'Intraday 04.06.2026 - 5m',
+                            trading_date: '2026-06-04',
+                            interval: '5m',
+                            rows: [
+                                {
+                                    timestamp: 1780556400,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-04 07:00:00',
+                                    open: '468.10000000',
+                                    high: '469.50000000',
+                                    low: '467.90000000',
+                                    close: '469.15000000',
+                                    volume: 11345,
+                                },
+                            ],
+                        },
+                        {
+                            title: 'Intraday 03.06.2026 - 5m',
+                            trading_date: '2026-06-03',
+                            interval: '5m',
+                            rows: [
+                                {
+                                    timestamp: 1780470000,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-03 07:00:00',
+                                    open: '466.10000000',
+                                    high: '467.50000000',
+                                    low: '465.90000000',
+                                    close: '467.15000000',
+                                    volume: 10345,
+                                },
+                                {
+                                    timestamp: 1780470300,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-03 07:05:00',
+                                    open: '467.15000000',
+                                    high: '467.20000000',
+                                    low: '466.10000000',
+                                    close: '466.15000000',
+                                    volume: 11345,
+                                },
+                            ],
+                        },
+                    ],
                 }));
             }
 
@@ -1151,6 +1337,47 @@ describe('App', () => {
         expect(window.location.search).toBe('?stock=1');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Apple');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Intraday 05.06.2026 - 5m');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Intraday 04.06.2026 - 5m');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Intraday 03.06.2026 - 5m');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).not.toContain('470.15000000');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).not.toContain('472.75000000');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).not.toContain('469.15000000');
+
+        const firstIntradayDaySummary = wrapper.find('.analyze-detail-day-summary');
+        expect(firstIntradayDaySummary.text()).toContain('First');
+        expect(firstIntradayDaySummary.text()).toContain('Lowest');
+        expect(firstIntradayDaySummary.text()).toContain('Highest');
+        expect(firstIntradayDaySummary.text()).toContain('Ups');
+        expect(firstIntradayDaySummary.text()).toContain('Downs');
+        expect(firstIntradayDaySummary.text()).toContain('First -> 12:00+');
+        expect(firstIntradayDaySummary.text()).toContain('12:00+ -> End');
+        expect(firstIntradayDaySummary.text()).toContain('Last');
+        expect(firstIntradayDaySummary.text()).toContain('470.15');
+        expect(firstIntradayDaySummary.text()).toContain('469.25');
+        expect(firstIntradayDaySummary.text()).toContain('472.75');
+        expect(firstIntradayDaySummary.text()).toContain('Ups1');
+        expect(firstIntradayDaySummary.text()).toContain('Downs2');
+        expect(firstIntradayDaySummary.text()).toContain('+0.21%');
+        expect(firstIntradayDaySummary.text()).toContain('+0.55%');
+        expect(firstIntradayDaySummary.text()).toContain('-0.21%');
+        expect(firstIntradayDaySummary.text()).not.toContain('3d start');
+        expect(firstIntradayDaySummary.findAll('.analyze-detail-day-summary-item.is-compact')).toHaveLength(2);
+        expect(firstIntradayDaySummary.findAll('.analyze-detail-day-summary-change.is-up')).toHaveLength(2);
+        expect(firstIntradayDaySummary.text()).not.toContain('460.00');
+        expect(firstIntradayDaySummary.text()).not.toContain('480.00');
+        expect(firstIntradayDaySummary.text()).not.toContain('473.25');
+
+        const thirdIntradayDaySummary = wrapper.findAll('.analyze-detail-day-summary')[2];
+        expect(thirdIntradayDaySummary.text()).toContain('Last');
+        expect(thirdIntradayDaySummary.text()).toContain('466.15');
+        expect(thirdIntradayDaySummary.text()).toContain('-0.21%');
+
+        const firstIntradayDayHeader = wrapper.find('.data-intraday-day-header');
+        expect(firstIntradayDayHeader.attributes('aria-expanded')).toBe('false');
+        await firstIntradayDayHeader.trigger('click');
+        await wrapper.vm.$nextTick();
+
+        expect(firstIntradayDayHeader.attributes('aria-expanded')).toBe('true');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('470.15000000');
 
         const detailStockMenu = wrapper.find('[aria-label="Analyze detail stocks"]');
@@ -1167,7 +1394,7 @@ describe('App', () => {
         expect(window.location.pathname).toBe('/admin/menu/analyze/detail');
         expect(window.location.search).toBe('?stock=3');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Nvidia');
-        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('924.15000000');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).not.toContain('924.15000000');
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/3/intraday-candles', expect.anything());
     });
 
@@ -2035,8 +2262,8 @@ describe('App', () => {
                         pending: 0,
                         reserved: 0,
                         failed: 0,
-                        retry_after: 1200,
-                        max_job_timeout: 900,
+                        retry_after: 2100,
+                        max_job_timeout: 1800,
                         issues: [],
                     },
                 }));
@@ -3255,22 +3482,22 @@ describe('App', () => {
         expect(wrapper.find('[aria-label="Data intraday"]').exists()).toBe(true);
         expect(wrapper.text()).toContain('Amundi IBEX 35 UCITS ETF');
         expect(wrapper.text()).toContain('Intraday 05.06.2026 - 5m');
-        expect(wrapper.text()).toContain('10.15000000');
+        expect(wrapper.text()).not.toContain('10.15000000');
         expect(wrapper.text()).toContain('1 intraday candles loaded/updated.');
         expect(fetchMock).toHaveBeenCalledWith('/admin/data/intraday', expect.any(Object));
 
         const intradayDayHeader = wrapper.find('.data-intraday-day-header');
-        expect(intradayDayHeader.attributes('aria-expanded')).toBe('true');
-        await intradayDayHeader.trigger('click');
-        await wrapper.vm.$nextTick();
-
         expect(intradayDayHeader.attributes('aria-expanded')).toBe('false');
-        expect(wrapper.text()).not.toContain('10.15000000');
+        await intradayDayHeader.trigger('click');
+        await wrapper.vm.$nextTick();
+
+        expect(intradayDayHeader.attributes('aria-expanded')).toBe('true');
+        expect(wrapper.text()).toContain('10.15000000');
 
         await intradayDayHeader.trigger('click');
         await wrapper.vm.$nextTick();
 
-        expect(wrapper.text()).toContain('10.15000000');
+        expect(wrapper.text()).not.toContain('10.15000000');
 
         wrapper.vm.dismissDataIntradayRefresh();
         await wrapper.vm.$nextTick();

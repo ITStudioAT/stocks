@@ -5,16 +5,19 @@ namespace Tests\Feature;
 use App\Jobs\FetchHistoricalSessionPrices;
 use App\Jobs\FetchStockHistoricalPrices;
 use App\Jobs\RefreshDepotHoldingPrices;
+use App\Jobs\ReloadEodhdExchanges;
+use App\Jobs\ReloadStockHoldingIntradayData;
 use Tests\TestCase;
 
 class QueueConfigurationTest extends TestCase
 {
-    public function test_redis_retry_after_exceeds_long_running_job_timeouts(): void
+    public function test_async_queue_retry_after_values_exceed_long_running_job_timeouts(): void
     {
-        $retryAfter = (int) config('queue.connections.redis.retry_after');
         $longestJobTimeout = max([
             (new RefreshDepotHoldingPrices('test-refresh'))->timeout,
             (new FetchStockHistoricalPrices('test-refresh'))->timeout,
+            (new ReloadEodhdExchanges('test-refresh'))->timeout,
+            (new ReloadStockHoldingIntradayData('test-refresh'))->timeout,
             (new FetchHistoricalSessionPrices('XETRA', [], [
                 'timezone' => 'Europe/Berlin',
                 'today_date' => '2026-06-05',
@@ -29,6 +32,10 @@ class QueueConfigurationTest extends TestCase
             ]))->timeout,
         ]);
 
-        $this->assertGreaterThan($longestJobTimeout, $retryAfter);
+        foreach (['database', 'redis'] as $connection) {
+            $retryAfter = (int) config("queue.connections.{$connection}.retry_after");
+
+            $this->assertGreaterThan($longestJobTimeout, $retryAfter, "{$connection} retry_after must exceed the longest queued job timeout.");
+        }
     }
 }
