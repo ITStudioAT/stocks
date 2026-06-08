@@ -59,7 +59,9 @@ class EodhdMarketData
             status: $this->resultStatus($validatedQuote),
         );
 
-        $this->persistResult($holding, $result);
+        $fetchedStockPrice = $this->storeFetchedQuote($holding, $validatedQuote);
+
+        $this->persistResult($holding, $result, $fetchedStockPrice);
         $this->persistHistoricalQuotes($holding, $historicalQuotes);
 
         $this->refreshSessionPriceFields($holding->refresh(), $validatedQuote);
@@ -206,9 +208,41 @@ class EodhdMarketData
      */
     public function ensureLastThreeTradingDayFiveMinuteCandles(StockHolding $holding): array
     {
-        return collect($this->lastCompletedTradingSessions($holding, 3))
+        $currentSession = $this->currentTradingSessionWithStoredFiveMinuteCandles($holding);
+        $sessions = collect($this->lastCompletedTradingSessions($holding, 3));
+
+        if ($currentSession !== null) {
+            $sessions = collect([$currentSession])
+                ->merge($sessions)
+                ->unique(fn (array $session): string => $session['date']->toDateString())
+                ->take(3);
+        }
+
+        return $sessions
             ->map(fn (array $session): array => $this->ensureFiveMinuteIntradayCandles($holding, $session))
             ->all();
+    }
+
+    /**
+     * @return array{date: Carbon, open: Carbon, close: Carbon}|null
+     */
+    private function currentTradingSessionWithStoredFiveMinuteCandles(StockHolding $holding): ?array
+    {
+        $session = $this->sessionPriceWindow($holding, null);
+
+        if ($session === null || ! $session['is_open']) {
+            return null;
+        }
+
+        if (! $this->hasStoredIntradayCandlePrices($holding, $session['date'], '5m')) {
+            return null;
+        }
+
+        return [
+            'date' => $session['date'],
+            'open' => $session['open'],
+            'close' => $session['close'],
+        ];
     }
 
     /**
@@ -722,7 +756,7 @@ class EodhdMarketData
             ->value('record');
     }
 
-    private function persistResult(StockHolding $holding, QuoteSelectionResult $result): void
+    private function persistResult(StockHolding $holding, QuoteSelectionResult $result, ?StockPrice $fetchedStockPrice = null): void
     {
         if (! $result->selectedQuote) {
             if (! $this->holdingHasStoredPrice($holding)) {
@@ -751,7 +785,7 @@ class EodhdMarketData
         }
 
         $quote = $result->selectedQuote->quote;
-        $selectedPrice = $this->stockPriceCatalog->store(
+        $selectedPrice = $fetchedStockPrice ?? $this->stockPriceCatalog->store(
             $holding,
             $result->selectedQuote,
             $this->marketHours->tradingTimes($quote),
@@ -764,6 +798,19 @@ class EodhdMarketData
             'source_verified_at' => now(),
             'trading_times' => $selectedPrice->trading_times,
         ]);
+    }
+
+    private function storeFetchedQuote(StockHolding $holding, ?ValidatedQuote $validatedQuote): ?StockPrice
+    {
+        if ($validatedQuote === null || $validatedQuote->quote->price === null || $validatedQuote->quote->asOf === null) {
+            return null;
+        }
+
+        return $this->stockPriceCatalog->store(
+            $holding,
+            $validatedQuote,
+            $this->marketHours->tradingTimes($validatedQuote->quote),
+        );
     }
 
     /**
@@ -1215,6 +1262,19 @@ class EodhdMarketData
             ->where('stock_holding_id', $holding->id)
             ->whereDate('trading_date', $tradingDate->toDateString())
             ->where('interval', $interval);
+    }
+
+    private function hasStoredIntradayCandlePrices(StockHolding $holding, Carbon $tradingDate, string $interval): bool
+    {
+        return $this->storedIntradayCandleQuery($holding, $tradingDate, $interval)
+            ->where(function (Builder $query): void {
+                $query
+                    ->whereNotNull('open')
+                    ->orWhereNotNull('high')
+                    ->orWhereNotNull('low')
+                    ->orWhereNotNull('close');
+            })
+            ->exists();
     }
 
     private function intradayUrl(StockHolding $holding, Carbon $from, Carbon $until, string $interval = '1m'): string

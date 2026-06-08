@@ -62,6 +62,96 @@ class EodhdMarketDataTest extends TestCase
         $this->assertSame('unavailable_now', $holding->price_status);
     }
 
+    public function test_stale_eodhd_realtime_quote_is_stored_without_updating_latest_price(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        $this->travelTo(Carbon::parse('2026-06-05 12:00:00', 'Europe/Berlin'));
+        Http::fake([
+            'eodhd.com/api/real-time/EXXX.XETRA*' => Http::response([
+                'code' => 'EXXX.XETRA',
+                'timestamp' => Carbon::parse('2026-06-05 06:45:00', 'UTC')->timestamp,
+                'close' => 65.70,
+            ]),
+            'eodhd.com/api/intraday/EXXX.XETRA*' => Http::response([]),
+            'eodhd.com/api/eod/EXXX.XETRA*' => Http::sequence()
+                ->push([[
+                    'date' => '2026-06-04',
+                    'close' => 66.46,
+                ]])
+                ->push([[
+                    'date' => '2026-06-03',
+                    'close' => 66.33,
+                ]]),
+        ]);
+
+        $holding = $this->holdingWithStoredPrice();
+
+        $result = app(EodhdMarketData::class)->resolve($holding);
+
+        $holding->refresh();
+
+        $this->assertSame('unavailable', $result->status);
+        $this->assertSame('66.260000', $holding->latest_price);
+        $this->assertSame('unavailable_now', $holding->price_status);
+        $this->assertDatabaseHas('stock_prices', [
+            'source_key' => 'eodhd_realtime',
+            'source_name' => 'EODHD real-time',
+            'symbol' => 'EXXX',
+            'price' => '65.70000000',
+            'price_type' => 'last',
+            'as_of' => '2026-06-05 06:45:00',
+            'freshness_status' => 'stale',
+            'validation_status' => 'valid',
+        ]);
+    }
+
+    public function test_delayed_eodhd_realtime_quote_within_extended_window_updates_latest_price(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        $this->travelTo(Carbon::parse('2026-06-08 16:10:00', 'Europe/Berlin'));
+        Http::fake([
+            'eodhd.com/api/real-time/EXXX.XETRA*' => Http::response([
+                'code' => 'EXXX.XETRA',
+                'timestamp' => Carbon::parse('2026-06-08 12:48:00', 'UTC')->timestamp,
+                'open' => 65.22,
+                'high' => 65.77,
+                'low' => 64.89,
+                'close' => 65.70,
+                'previousClose' => 66.26,
+            ]),
+            'eodhd.com/api/intraday/EXXX.XETRA*' => Http::response([]),
+            'eodhd.com/api/eod/EXXX.XETRA*' => Http::sequence()
+                ->push([[
+                    'date' => '2026-06-05',
+                    'close' => 66.26,
+                ]])
+                ->push([[
+                    'date' => '2026-06-04',
+                    'close' => 66.46,
+                ]]),
+        ]);
+
+        $holding = $this->holdingWithStoredPrice();
+
+        $result = app(EodhdMarketData::class)->resolve($holding);
+
+        $holding->refresh();
+
+        $this->assertSame('delayed', $result->status);
+        $this->assertSame('65.700000', $holding->latest_price);
+        $this->assertSame('delayed', $holding->price_status);
+        $this->assertDatabaseHas('stock_prices', [
+            'source_key' => 'eodhd_realtime',
+            'source_name' => 'EODHD real-time',
+            'symbol' => 'EXXX',
+            'price' => '65.70000000',
+            'price_type' => 'last',
+            'as_of' => '2026-06-08 12:48:00',
+            'freshness_status' => 'delayed',
+            'validation_status' => 'valid',
+        ]);
+    }
+
     public function test_realtime_refresh_stores_latest_and_session_prices_from_eodhd_while_exchange_is_open(): void
     {
         config(['services.eodhd.key' => 'test-token']);

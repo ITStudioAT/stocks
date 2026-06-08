@@ -117,15 +117,11 @@ class StockHoldingIntradayDataReloader
             ->each(function (array $day) use ($holding): void {
                 $tradingDate = $day['date']->toDateString();
 
-                if ($this->hasStoredCandlePrices($holding, $tradingDate)) {
-                    return;
-                }
-
                 $now = now();
-                $rows = $this->intradayPriceCandleRows($holding, $tradingDate, $now);
+                $rows = $this->missingCandleRows($holding, $this->stockPriceCandleRows($holding, $tradingDate, $now));
 
-                if ($rows === []) {
-                    $rows = $this->stockPriceCandleRows($holding, $tradingDate, $now);
+                if ($rows === [] && ! $this->hasStoredCandlePrices($holding, $tradingDate)) {
+                    $rows = $this->intradayPriceCandleRows($holding, $tradingDate, $now);
                 }
 
                 if ($rows === []) {
@@ -154,6 +150,30 @@ class StockHoldingIntradayDataReloader
                     ->orWhereNotNull('close');
             })
             ->exists();
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $rows
+     * @return array<int, array<string, mixed>>
+     */
+    private function missingCandleRows(StockHolding $holding, array $rows): array
+    {
+        if ($rows === []) {
+            return [];
+        }
+
+        $existingAsOf = StockHoldingIntradayCandle::query()
+            ->where('stock_holding_id', $holding->id)
+            ->where('interval', self::Interval)
+            ->whereIn('as_of', collect($rows)->map(fn (array $row): Carbon => $row['as_of'])->all())
+            ->pluck('as_of')
+            ->map(fn (mixed $asOf): string => Carbon::parse($asOf)->utc()->toDateTimeString())
+            ->flip();
+
+        return collect($rows)
+            ->reject(fn (array $row): bool => $existingAsOf->has($row['as_of']->copy()->utc()->toDateTimeString()))
+            ->values()
+            ->all();
     }
 
     /**

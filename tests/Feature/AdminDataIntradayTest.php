@@ -235,6 +235,86 @@ class AdminDataIntradayTest extends TestCase
         ]);
     }
 
+    public function test_admin_intraday_data_merges_missing_same_day_stock_prices_into_existing_candles(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-08 16:40:00', 'Europe/Vienna'));
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'name' => 'Amundi IBEX 35 UCITS ETF',
+            'isin' => 'FR0010655746',
+            'exchange' => 'XETRA',
+            'mic_code' => 'XETR',
+            'currency' => 'EUR',
+        ]);
+        $instrumentKey = app(StockPriceCatalog::class)->instrumentKeyForHolding($holding);
+
+        StockHoldingIntradayCandle::query()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-08',
+            'interval' => '5m',
+            'as_of' => Carbon::parse('2026-06-08 07:00:00', 'UTC'),
+            'timestamp' => Carbon::parse('2026-06-08 07:00:00', 'UTC')->timestamp,
+            'gmtoffset' => 0,
+            'datetime' => '2026-06-08 07:00:00',
+            'close' => '467.45000000',
+            'currency' => 'EUR',
+            'source_key' => 'eodhd_realtime',
+            'source_name' => 'EODHD real-time open',
+        ]);
+        StockHoldingIntradayCandle::query()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-08',
+            'interval' => '5m',
+            'as_of' => Carbon::parse('2026-06-08 08:46:00', 'UTC'),
+            'timestamp' => Carbon::parse('2026-06-08 08:46:00', 'UTC')->timestamp,
+            'gmtoffset' => 0,
+            'datetime' => '2026-06-08 08:46:00',
+            'close' => '467.90000000',
+            'currency' => 'EUR',
+            'source_key' => 'eodhd_realtime',
+            'source_name' => 'EODHD real-time',
+        ]);
+
+        StockPrice::factory()->create([
+            'instrument_key' => $instrumentKey,
+            'source_key' => 'eodhd_realtime',
+            'source_name' => 'EODHD real-time',
+            'source_url' => 'https://example.com/real-time/AMES.XETRA',
+            'source_quality' => 'market_data_vendor',
+            'venue' => 'XETRA',
+            'mic' => 'XETR',
+            'isin' => 'FR0010655746',
+            'symbol' => 'AMES',
+            'currency' => 'EUR',
+            'price' => '470.20000000',
+            'price_type' => 'last',
+            'as_of' => Carbon::parse('2026-06-08 13:01:00', 'UTC'),
+            'fetched_at' => Carbon::parse('2026-06-08 13:35:00', 'UTC'),
+            'freshness_status' => 'delayed',
+            'validation_status' => 'valid',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson("/admin/data/intraday?stock={$holding->id}")
+            ->assertOk()
+            ->assertJsonPath('days.0.trading_date', '2026-06-08')
+            ->assertJsonCount(3, 'days.0.rows')
+            ->assertJsonPath('days.0.rows.0.close', '467.45000000')
+            ->assertJsonPath('days.0.rows.1.close', '467.90000000')
+            ->assertJsonPath('days.0.rows.2.datetime', '2026-06-08 13:01:00')
+            ->assertJsonPath('days.0.rows.2.close', '470.20000000');
+
+        $this->assertDatabaseHas('stock_holding_intraday_candles', [
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-08',
+            'interval' => '5m',
+            'datetime' => '2026-06-08 13:01:00',
+            'close' => '470.20000000',
+            'source_name' => 'EODHD real-time',
+        ]);
+    }
+
     public function test_admin_intraday_data_uses_loaded_intraday_prices_when_displayed_trading_day_has_no_candles(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-08 12:00:00', 'Europe/Vienna'));

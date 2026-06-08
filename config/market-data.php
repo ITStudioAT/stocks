@@ -11,6 +11,7 @@ return [
     'ai_fallback_enabled' => env('MARKET_DATA_AI_FALLBACK_ENABLED', true),
     'realtime_window_seconds' => env('MARKET_DATA_REALTIME_WINDOW_SECONDS', 300),
     'delayed_window_seconds' => env('MARKET_DATA_DELAYED_WINDOW_SECONDS', 1800),
+    'eodhd_delayed_window_seconds' => env('MARKET_DATA_EODHD_DELAYED_WINDOW_SECONDS', 7200),
     'max_spread_pct_warning' => env('MARKET_DATA_MAX_SPREAD_PCT_WARNING', 2.0),
     'max_price_jump_pct_warning' => env('MARKET_DATA_MAX_PRICE_JUMP_PCT_WARNING', 25.0),
     'cross_check_tolerance_pct' => env('MARKET_DATA_CROSS_CHECK_TOLERANCE_PCT', 1.5),
