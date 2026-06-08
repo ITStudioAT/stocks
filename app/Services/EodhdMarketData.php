@@ -44,9 +44,18 @@ class EodhdMarketData
 
     public function resolve(StockHolding $holding): QuoteSelectionResult
     {
-        $candidate = $this->candidate($holding, self::RealtimeSourceKey, 'EODHD real-time');
         $errors = [];
-        [$quote, $historicalQuotes] = $this->realtimeQuote($holding, $candidate, $errors);
+        $historicalQuotes = [];
+        $intradayCandidate = $this->currentFiveMinuteIntradayCandidate($holding);
+        $quote = $this->currentFiveMinuteIntradayQuote($holding, $intradayCandidate, $errors);
+        $attemptedSources = [$intradayCandidate];
+
+        if ($quote === null) {
+            $realtimeCandidate = $this->candidate($holding, self::RealtimeSourceKey, 'EODHD real-time');
+            [$quote, $historicalQuotes] = $this->realtimeQuote($holding, $realtimeCandidate, $errors);
+            $attemptedSources[] = $realtimeCandidate;
+        }
+
         $validatedQuote = $quote
             ? $this->validator->validate($quote, InstrumentIdentity::fromHolding($holding))
             : null;
@@ -54,17 +63,83 @@ class EodhdMarketData
         $result = new QuoteSelectionResult(
             selectedQuote: $validatedQuote?->isSelectable() ? $validatedQuote : null,
             quotes: $validatedQuote ? [$validatedQuote] : [],
-            attemptedSources: [$candidate],
+            attemptedSources: $attemptedSources,
             errors: $errors,
             status: $this->resultStatus($validatedQuote),
         );
 
-        $this->persistResult($holding, $result);
+        $fetchedStockPrice = $this->storeFetchedQuote($holding, $validatedQuote);
+
+        $this->persistResult($holding, $result, $fetchedStockPrice);
         $this->persistHistoricalQuotes($holding, $historicalQuotes);
 
         $this->refreshSessionPriceFields($holding->refresh(), $validatedQuote);
 
         return $result;
+    }
+
+    private function currentFiveMinuteIntradayCandidate(StockHolding $holding): WebSourceCandidate
+    {
+        $session = $this->sessionPriceWindow($holding, null);
+
+        return $this->candidate(
+            $holding,
+            self::IntradaySourceKey,
+            'EODHD intraday',
+            $session === null
+                ? $this->intradayUrl($holding, now()->startOfDay(), now(), '5m')
+                : $this->intradayUrl($holding, $session['open'], $this->currentSessionIntradayUntil($session), '5m'),
+        );
+    }
+
+    /**
+     * @param  array<int, string>  $errors
+     */
+    private function currentFiveMinuteIntradayQuote(
+        StockHolding $holding,
+        WebSourceCandidate $candidate,
+        array &$errors,
+    ): ?ParsedQuote {
+        $session = $this->sessionPriceWindow($holding, null);
+
+        if ($session === null || ! $session['is_current_trading_day']) {
+            return null;
+        }
+
+        $until = $this->currentSessionIntradayUntil($session);
+
+        if ($until->lessThanOrEqualTo($session['open'])) {
+            return null;
+        }
+
+        $records = $this->intradayRecordsForInterval($holding, $session['open'], $until, '5m', $errors);
+
+        if ($records === []) {
+            return null;
+        }
+
+        $this->persistIntradayCandles(
+            $holding,
+            $session['date'],
+            '5m',
+            $records,
+            $candidate->url,
+        );
+
+        $record = $this->latestPriceRecordBetween($records, $session['open'], $until);
+
+        if ($record === null) {
+            return null;
+        }
+
+        return $this->quoteFromPayload(
+            holding: $holding,
+            candidate: $candidate,
+            payload: $record,
+            priceKey: 'close',
+            priceType: 'intraday',
+            freshnessStatus: 'fresh',
+        );
     }
 
     public function refreshSessionPriceFields(StockHolding $holding, ?ValidatedQuote $latestQuote = null): void
@@ -206,9 +281,41 @@ class EodhdMarketData
      */
     public function ensureLastThreeTradingDayFiveMinuteCandles(StockHolding $holding): array
     {
-        return collect($this->lastCompletedTradingSessions($holding, 3))
+        $currentSession = $this->currentTradingSessionWithStoredFiveMinuteCandles($holding);
+        $sessions = collect($this->lastCompletedTradingSessions($holding, 3));
+
+        if ($currentSession !== null) {
+            $sessions = collect([$currentSession])
+                ->merge($sessions)
+                ->unique(fn (array $session): string => $session['date']->toDateString())
+                ->take(3);
+        }
+
+        return $sessions
             ->map(fn (array $session): array => $this->ensureFiveMinuteIntradayCandles($holding, $session))
             ->all();
+    }
+
+    /**
+     * @return array{date: Carbon, open: Carbon, close: Carbon}|null
+     */
+    private function currentTradingSessionWithStoredFiveMinuteCandles(StockHolding $holding): ?array
+    {
+        $session = $this->sessionPriceWindow($holding, null);
+
+        if ($session === null || ! $session['is_open']) {
+            return null;
+        }
+
+        if (! $this->hasStoredIntradayCandlePrices($holding, $session['date'], '5m')) {
+            return null;
+        }
+
+        return [
+            'date' => $session['date'],
+            'open' => $session['open'],
+            'close' => $session['close'],
+        ];
     }
 
     /**
@@ -717,12 +824,48 @@ class EodhdMarketData
                 ];
             })
             ->filter()
-            ->filter(fn (array $record): bool => $record['as_of']->gte($from) && $record['as_of']->lt($until))
+            ->filter(fn (array $record): bool => $record['as_of']->gte($from) && $record['as_of']->lte($until))
             ->sortBy(fn (array $record): int => $record['as_of']->timestamp)
             ->value('record');
     }
 
-    private function persistResult(StockHolding $holding, QuoteSelectionResult $result): void
+    /**
+     * @param  array<int, array<string, mixed>>  $records
+     * @return array<string, mixed>|null
+     */
+    private function latestPriceRecordBetween(array $records, Carbon $from, Carbon $until): ?array
+    {
+        return collect($records)
+            ->map(function (array $record): ?array {
+                $asOf = $this->timestamp(Arr::get($record, 'timestamp'), Arr::get($record, 'datetime'));
+                $price = $this->decimal(Arr::get($record, 'close'));
+
+                if ($asOf === null || $price === null) {
+                    return null;
+                }
+
+                return [
+                    'record' => $record,
+                    'as_of' => $asOf,
+                ];
+            })
+            ->filter()
+            ->filter(fn (array $record): bool => $record['as_of']->gte($from) && $record['as_of']->lte($until))
+            ->sortByDesc(fn (array $record): int => $record['as_of']->timestamp)
+            ->value('record');
+    }
+
+    /**
+     * @param  array{date: Carbon, today_open: Carbon, open: Carbon, close: Carbon, previous_date: Carbon, previous_open: Carbon, previous_close: Carbon, two_ago_date: Carbon, two_ago_open: Carbon, two_ago_close: Carbon, is_open: bool, is_current_trading_day: bool}  $session
+     */
+    private function currentSessionIntradayUntil(array $session): Carbon
+    {
+        return $session['is_open']
+            ? now()->utc()
+            : $session['close'];
+    }
+
+    private function persistResult(StockHolding $holding, QuoteSelectionResult $result, ?StockPrice $fetchedStockPrice = null): void
     {
         if (! $result->selectedQuote) {
             if (! $this->holdingHasStoredPrice($holding)) {
@@ -751,7 +894,7 @@ class EodhdMarketData
         }
 
         $quote = $result->selectedQuote->quote;
-        $selectedPrice = $this->stockPriceCatalog->store(
+        $selectedPrice = $fetchedStockPrice ?? $this->stockPriceCatalog->store(
             $holding,
             $result->selectedQuote,
             $this->marketHours->tradingTimes($quote),
@@ -764,6 +907,19 @@ class EodhdMarketData
             'source_verified_at' => now(),
             'trading_times' => $selectedPrice->trading_times,
         ]);
+    }
+
+    private function storeFetchedQuote(StockHolding $holding, ?ValidatedQuote $validatedQuote): ?StockPrice
+    {
+        if ($validatedQuote === null || $validatedQuote->quote->price === null || $validatedQuote->quote->asOf === null) {
+            return null;
+        }
+
+        return $this->stockPriceCatalog->store(
+            $holding,
+            $validatedQuote,
+            $this->marketHours->tradingTimes($validatedQuote->quote),
+        );
     }
 
     /**
@@ -1161,6 +1317,17 @@ class EodhdMarketData
             return null;
         }
 
+        $prices = [
+            'open' => $this->decimal(Arr::get($record, 'open')),
+            'high' => $this->decimal(Arr::get($record, 'high')),
+            'low' => $this->decimal(Arr::get($record, 'low')),
+            'close' => $this->decimal(Arr::get($record, 'close')),
+        ];
+
+        if (! $this->hasIntradayCandlePriceData($prices)) {
+            return null;
+        }
+
         return [
             'stock_holding_id' => $holding->id,
             'trading_date' => $tradingDate->toDateString(),
@@ -1169,10 +1336,7 @@ class EodhdMarketData
             'timestamp' => $this->integerOrNull(Arr::get($record, 'timestamp')),
             'gmtoffset' => $this->integerOrNull(Arr::get($record, 'gmtoffset')),
             'datetime' => $this->stringOrNull(Arr::get($record, 'datetime')),
-            'open' => $this->decimal(Arr::get($record, 'open')),
-            'high' => $this->decimal(Arr::get($record, 'high')),
-            'low' => $this->decimal(Arr::get($record, 'low')),
-            'close' => $this->decimal(Arr::get($record, 'close')),
+            ...$prices,
             'volume' => $this->positiveIntegerOrNull(Arr::get($record, 'volume')),
             'currency' => $holding->currency,
             'source_key' => self::IntradaySourceKey,
@@ -1182,6 +1346,14 @@ class EodhdMarketData
             'created_at' => $now,
             'updated_at' => $now,
         ];
+    }
+
+    /**
+     * @param  array{open: ?string, high: ?string, low: ?string, close: ?string}  $prices
+     */
+    private function hasIntradayCandlePriceData(array $prices): bool
+    {
+        return collect($prices)->contains(fn (?string $price): bool => $price !== null);
     }
 
     /**
@@ -1215,6 +1387,19 @@ class EodhdMarketData
             ->where('stock_holding_id', $holding->id)
             ->whereDate('trading_date', $tradingDate->toDateString())
             ->where('interval', $interval);
+    }
+
+    private function hasStoredIntradayCandlePrices(StockHolding $holding, Carbon $tradingDate, string $interval): bool
+    {
+        return $this->storedIntradayCandleQuery($holding, $tradingDate, $interval)
+            ->where(function (Builder $query): void {
+                $query
+                    ->whereNotNull('open')
+                    ->orWhereNotNull('high')
+                    ->orWhereNotNull('low')
+                    ->orWhereNotNull('close');
+            })
+            ->exists();
     }
 
     private function intradayUrl(StockHolding $holding, Carbon $from, Carbon $until, string $interval = '1m'): string

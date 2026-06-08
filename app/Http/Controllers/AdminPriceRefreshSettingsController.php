@@ -13,6 +13,8 @@ class AdminPriceRefreshSettingsController extends Controller
 {
     public function show(PriceRefreshScheduler $scheduler, IndexPriceRefreshSettings $indexPriceRefreshSettings, EodhdApiUsage $eodhdApiUsage): JsonResponse
     {
+        $indexPriceRefreshSettings->dispatchOverdueRefreshes();
+
         return response()->json([
             'price_refresh_settings' => $scheduler->payload(),
             'index_price_refresh_settings' => $indexPriceRefreshSettings->payload(),

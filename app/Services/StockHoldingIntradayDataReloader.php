@@ -5,9 +5,12 @@ namespace App\Services;
 use App\Models\EodhdExchange;
 use App\Models\StockHolding;
 use App\Models\StockHoldingIntradayCandle;
+use App\Models\StockHoldingIntradayPrice;
 use App\Models\StockHoldingIntradayReloadRun;
+use App\Models\StockPrice;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
@@ -23,6 +26,7 @@ class StockHoldingIntradayDataReloader
     public function __construct(
         private EodhdApiClient $eodhdApiClient,
         private EodhdMarketData $marketData,
+        private StockPriceCatalog $stockPriceCatalog,
     ) {}
 
     /**
@@ -67,6 +71,8 @@ class StockHoldingIntradayDataReloader
             $this->deleteEmptyPriceRows($holding, Carbon::parse($tradingDate));
         }
 
+        $this->adoptStoredIntradayPricesForMissingCandleDays($holding, $days);
+
         $candlesByDate = StockHoldingIntradayCandle::query()
             ->where('stock_holding_id', $holding->id)
             ->where('interval', self::Interval)
@@ -99,6 +105,249 @@ class StockHoldingIntradayDataReloader
             ])
             ->values()
             ->all();
+    }
+
+    /**
+     * @param  Collection<int, array{date: Carbon, is_trading_day: bool, overview: ?string}>  $days
+     */
+    private function adoptStoredIntradayPricesForMissingCandleDays(StockHolding $holding, Collection $days): void
+    {
+        $days
+            ->filter(fn (array $day): bool => $day['is_trading_day'])
+            ->each(function (array $day) use ($holding): void {
+                $tradingDate = $day['date']->toDateString();
+
+                $now = now();
+                $rows = $this->missingCandleRows($holding, $this->stockPriceCandleRows($holding, $tradingDate, $now));
+
+                if ($rows === [] && ! $this->hasStoredCandlePrices($holding, $tradingDate)) {
+                    $rows = $this->intradayPriceCandleRows($holding, $tradingDate, $now);
+                }
+
+                if ($rows === []) {
+                    return;
+                }
+
+                StockHoldingIntradayCandle::query()->upsert(
+                    $rows,
+                    uniqueBy: ['stock_holding_id', 'interval', 'as_of'],
+                    update: ['trading_date', 'timestamp', 'gmtoffset', 'datetime', 'close', 'currency', 'source_key', 'source_name', 'source_url', 'raw_payload', 'updated_at'],
+                );
+            });
+    }
+
+    private function hasStoredCandlePrices(StockHolding $holding, string $tradingDate): bool
+    {
+        return StockHoldingIntradayCandle::query()
+            ->where('stock_holding_id', $holding->id)
+            ->where('interval', self::Interval)
+            ->whereDate('trading_date', $tradingDate)
+            ->where(function ($query): void {
+                $query
+                    ->whereNotNull('open')
+                    ->orWhereNotNull('high')
+                    ->orWhereNotNull('low')
+                    ->orWhereNotNull('close');
+            })
+            ->exists();
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $rows
+     * @return array<int, array<string, mixed>>
+     */
+    private function missingCandleRows(StockHolding $holding, array $rows): array
+    {
+        if ($rows === []) {
+            return [];
+        }
+
+        $existingAsOf = StockHoldingIntradayCandle::query()
+            ->where('stock_holding_id', $holding->id)
+            ->where('interval', self::Interval)
+            ->whereIn('as_of', collect($rows)->map(fn (array $row): Carbon => $row['as_of'])->all())
+            ->pluck('as_of')
+            ->map(fn (mixed $asOf): string => Carbon::parse($asOf)->utc()->toDateTimeString())
+            ->flip();
+
+        return collect($rows)
+            ->reject(fn (array $row): bool => $existingAsOf->has($row['as_of']->copy()->utc()->toDateTimeString()))
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function intradayPriceCandleRows(StockHolding $holding, string $tradingDate, Carbon $now): array
+    {
+        return $this->uniqueCandleRows(
+            StockHoldingIntradayPrice::query()
+                ->where('stock_holding_id', $holding->id)
+                ->whereDate('trading_date', $tradingDate)
+                ->whereNotNull('price')
+                ->whereNotNull('as_of')
+                ->orderBy('sample_index')
+                ->orderBy('as_of')
+                ->orderBy('id')
+                ->get(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type'])
+                ->map(fn (StockHoldingIntradayPrice $intradayPrice): ?array => $this->intradayPriceCandleRow($holding, $tradingDate, $intradayPrice, $now))
+                ->filter()
+                ->values(),
+        );
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function stockPriceCandleRows(StockHolding $holding, string $tradingDate, Carbon $now): array
+    {
+        return $this->uniqueCandleRows(
+            $this->stockPriceCatalog
+                ->pricesForHolding($holding)
+                ->where('validation_status', 'valid')
+                ->whereNotNull('price')
+                ->whereNotNull('as_of')
+                ->whereDate('as_of', $tradingDate)
+                ->orderBy('as_of')
+                ->orderBy('id')
+                ->get(['id', 'source_key', 'source_name', 'source_url', 'price', 'currency', 'as_of', 'price_type'])
+                ->map(fn (StockPrice $stockPrice): ?array => $this->stockPriceCandleRow($holding, $tradingDate, $stockPrice, $now))
+                ->filter()
+                ->values(),
+        );
+    }
+
+    /**
+     * @param  Collection<int, array<string, mixed>>  $rows
+     * @return array<int, array<string, mixed>>
+     */
+    private function uniqueCandleRows(Collection $rows): array
+    {
+        return $rows
+            ->reverse()
+            ->unique(fn (array $row): string => $row['as_of']->toDateTimeString())
+            ->reverse()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function intradayPriceCandleRow(
+        StockHolding $holding,
+        string $tradingDate,
+        StockHoldingIntradayPrice $intradayPrice,
+        Carbon $now,
+    ): ?array {
+        if ($intradayPrice->price === null) {
+            return null;
+        }
+
+        $asOf = $this->intradayPriceAsOf($intradayPrice);
+
+        if ($asOf === null) {
+            return null;
+        }
+
+        $price = (string) $intradayPrice->price;
+
+        return [
+            'stock_holding_id' => $holding->id,
+            'trading_date' => $tradingDate,
+            'interval' => self::Interval,
+            'as_of' => $asOf,
+            'timestamp' => $asOf->timestamp,
+            'gmtoffset' => 0,
+            'datetime' => $asOf->format('Y-m-d H:i:s'),
+            'open' => null,
+            'high' => null,
+            'low' => null,
+            'close' => $price,
+            'volume' => null,
+            'currency' => $intradayPrice->currency ?? $holding->currency,
+            'source_key' => self::SourceKey,
+            'source_name' => $intradayPrice->source_name ?? 'Stored intraday price',
+            'source_url' => null,
+            'raw_payload' => json_encode([
+                'source_intraday_price_id' => $intradayPrice->id,
+                'price' => $price,
+                'price_type' => $intradayPrice->price_type,
+            ]),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function stockPriceCandleRow(
+        StockHolding $holding,
+        string $tradingDate,
+        StockPrice $stockPrice,
+        Carbon $now,
+    ): ?array {
+        if ($stockPrice->price === null) {
+            return null;
+        }
+
+        $asOf = $this->stockPriceAsOf($stockPrice);
+
+        if ($asOf === null) {
+            return null;
+        }
+
+        $price = (string) $stockPrice->price;
+
+        return [
+            'stock_holding_id' => $holding->id,
+            'trading_date' => $tradingDate,
+            'interval' => self::Interval,
+            'as_of' => $asOf,
+            'timestamp' => $asOf->timestamp,
+            'gmtoffset' => 0,
+            'datetime' => $asOf->format('Y-m-d H:i:s'),
+            'open' => null,
+            'high' => null,
+            'low' => null,
+            'close' => $price,
+            'volume' => null,
+            'currency' => $stockPrice->currency ?? $holding->currency,
+            'source_key' => $stockPrice->source_key,
+            'source_name' => $stockPrice->source_name,
+            'source_url' => $stockPrice->source_url,
+            'raw_payload' => json_encode([
+                'source_stock_price_id' => $stockPrice->id,
+                'price' => $price,
+                'price_type' => $stockPrice->price_type,
+            ]),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ];
+    }
+
+    private function intradayPriceAsOf(StockHoldingIntradayPrice $intradayPrice): ?Carbon
+    {
+        $value = $intradayPrice->getRawOriginal('as_of');
+
+        if ($value === null || trim((string) $value) === '') {
+            return null;
+        }
+
+        return Carbon::parse((string) $value, 'UTC')->utc();
+    }
+
+    private function stockPriceAsOf(StockPrice $stockPrice): ?Carbon
+    {
+        $value = $stockPrice->getRawOriginal('as_of');
+
+        if ($value === null || trim((string) $value) === '') {
+            return null;
+        }
+
+        return Carbon::parse((string) $value, 'UTC')->utc();
     }
 
     public function latestRefreshPayload(?StockHolding $holding = null): ?array

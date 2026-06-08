@@ -42,6 +42,8 @@ class AdminDepotController extends Controller
             ->where('is_active', true)
             ->first();
 
+        $indexPriceRefreshSettings->dispatchOverdueRefreshes();
+
         return response()->json([
             'depot' => $depot ? $this->depotPayload($depot) : null,
             'app_version' => config('stocks.version'),

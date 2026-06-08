@@ -9,6 +9,7 @@ use App\Services\StockHistoricalDailyPriceFetcher;
 use App\Services\StockHistoricalPriceService;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Illuminate\Support\Carbon;
 use Throwable;
 
 class FetchStockHistoricalPrices implements ShouldQueue
@@ -17,11 +18,19 @@ class FetchStockHistoricalPrices implements ShouldQueue
 
     public int $timeout = 900;
 
-    public int $tries = 1;
+    public int $tries = 3;
 
     public function __construct(
         public string $refreshId,
     ) {}
+
+    /**
+     * @return array<int, int>
+     */
+    public function backoff(): array
+    {
+        return [60, 300];
+    }
 
     public function handle(StockHistoricalDailyPriceFetcher $fetcher, StockHistoricalPriceService $historicalPriceService): void
     {
@@ -71,7 +80,7 @@ class FetchStockHistoricalPrices implements ShouldQueue
 
                     $storedCount = 0;
 
-                    foreach ($missingDateRanges as $range) {
+                    foreach ($this->fetchRanges($missingDateRanges) as $range) {
                         $storedCount += $fetcher->fetch($holding, $range['from'], $range['to']);
                     }
 
@@ -105,6 +114,22 @@ class FetchStockHistoricalPrices implements ShouldQueue
                 'finished_at' => now(),
                 'error_summary' => ['message' => $exception?->getMessage() ?? 'Unknown queue failure.'],
             ]);
+    }
+
+    /**
+     * @param  array<int, array{from: Carbon, to: Carbon}>  $missingDateRanges
+     * @return array<int, array{from: Carbon, to: Carbon}>
+     */
+    private function fetchRanges(array $missingDateRanges): array
+    {
+        if (count($missingDateRanges) <= 1) {
+            return $missingDateRanges;
+        }
+
+        return [[
+            'from' => $missingDateRanges[0]['from'],
+            'to' => $missingDateRanges[array_key_last($missingDateRanges)]['to'],
+        ]];
     }
 
     private function finishItem(

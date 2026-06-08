@@ -101,11 +101,36 @@ class WebQuoteValidator
             return $quote->freshnessStatus === 'delayed' ? 'delayed' : 'realtime';
         }
 
-        if ($ageSeconds <= (int) config('market-data.delayed_window_seconds', 1800)) {
-            return $quote->freshnessStatus === 'delayed' ? 'delayed' : 'fresh';
+        if ($ageSeconds <= $this->delayedWindowSeconds($quote)) {
+            return $this->delayedFreshnessStatus($quote, $ageSeconds);
         }
 
         return $this->marketClosed($quote) ? 'closed_market' : 'stale';
+    }
+
+    private function delayedWindowSeconds(ParsedQuote $quote): int
+    {
+        if ($quote->sourceKey === 'eodhd_realtime' && ! $this->marketClosed($quote)) {
+            return (int) config('market-data.eodhd_delayed_window_seconds', 7200);
+        }
+
+        return (int) config('market-data.delayed_window_seconds', 1800);
+    }
+
+    private function delayedFreshnessStatus(ParsedQuote $quote, float $ageSeconds): string
+    {
+        if ($quote->freshnessStatus === 'delayed') {
+            return 'delayed';
+        }
+
+        if (
+            $quote->sourceKey === 'eodhd_realtime'
+            && $ageSeconds > (int) config('market-data.delayed_window_seconds', 1800)
+        ) {
+            return 'delayed';
+        }
+
+        return 'fresh';
     }
 
     private function marketClosed(ParsedQuote $quote): bool

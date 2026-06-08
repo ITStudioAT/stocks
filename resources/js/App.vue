@@ -47,6 +47,9 @@ const {
     stockHistoricalPriceCoverage,
     stockHistoricalPriceRefresh,
     analyzeIntradayCandles,
+    holdingIntradayCandles,
+    holdingIntradayCandlesLoading,
+    holdingIntradayCandlesErrors,
     uiPreferences,
     stockSearchResults,
     pagination: depotPagination,
@@ -3433,12 +3436,49 @@ function endPriceValueClass(holding) {
     return '';
 }
 
-function toggleHoldingDetails(holding) {
+async function toggleHoldingDetails(holding) {
     const holdingId = holding.id;
+    const willExpand = !expandedHoldingIds.value.includes(holdingId);
 
-    expandedHoldingIds.value = expandedHoldingIds.value.includes(holdingId)
-        ? expandedHoldingIds.value.filter((expandedHoldingId) => expandedHoldingId !== holdingId)
-        : [...expandedHoldingIds.value, holdingId];
+    expandedHoldingIds.value = willExpand
+        ? [...expandedHoldingIds.value, holdingId]
+        : expandedHoldingIds.value.filter((expandedHoldingId) => expandedHoldingId !== holdingId);
+
+    if (!willExpand || holdingIntradayCandles.value[holdingId] || holdingIntradayCandlesLoading.value[holdingId]) {
+        return;
+    }
+
+    try {
+        await depotsStore.loadExpandedHoldingIntradayCandles(holdingId);
+    } catch {
+    }
+}
+
+function expandedHoldingIntradayDay(holding) {
+    const candlePayload = holdingIntradayCandles.value[holding.id] ?? null;
+    const days = candlePayload?.intraday_days;
+
+    if (Array.isArray(days) && days.length > 0) {
+        return days[0];
+    }
+
+    return candlePayload?.intraday ?? null;
+}
+
+function expandedHoldingIntradayRows(holding) {
+    return expandedHoldingIntradayDay(holding)?.rows ?? [];
+}
+
+function expandedHoldingIntradayTitle(holding) {
+    return expandedHoldingIntradayDay(holding)?.title ?? 'Intraday - 5m';
+}
+
+function expandedHoldingIntradayLoading(holding) {
+    return holdingIntradayCandlesLoading.value[holding.id] === true;
+}
+
+function expandedHoldingIntradayError(holding) {
+    return holdingIntradayCandlesErrors.value[holding.id] ?? '';
 }
 
 function isHoldingExpanded(holding) {
@@ -4845,37 +4885,60 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                     <tr v-if="isHoldingExpanded(holding)" class="stock-holding-detail-row">
                                         <td :colspan="watchListTableColumnCount">
                                             <div
-                                                v-if="holding.recent_prices?.length"
-                                                class="recent-price-strip d-flex flex-wrap ga-2"
+                                                v-if="expandedHoldingIntradayLoading(holding)"
+                                                class="d-flex align-center ga-3 text-body-2 text-medium-emphasis"
                                             >
-                                                <div
-                                                    v-if="recentPricesFallbackDate(holding)"
-                                                    class="recent-price-fallback-note text-caption text-medium-emphasis"
-                                                >
-                                                    No stored prices in the last 24 hours. Showing values from
-                                                    {{ recentPricesFallbackDate(holding) }}.
-                                                </div>
-                                                <span
-                                                    v-for="recentPrice in recentPricesForExpandedHolding(holding)"
-                                                    :key="recentPrice.id"
-                                                    class="recent-price-item"
-                                                >
-                                                    <span class="font-weight-medium">
-                                                        {{ formatRecentStoredPrice(recentPrice, holding) }}
-                                                    </span>
+                                                <v-progress-circular color="primary" indeterminate size="18" width="2" />
+                                                <span>Loading intraday prices...</span>
+                                            </div>
+                                            <v-alert
+                                                v-else-if="expandedHoldingIntradayError(holding)"
+                                                type="warning"
+                                                variant="tonal"
+                                                density="compact"
+                                            >
+                                                {{ expandedHoldingIntradayError(holding) }}
+                                            </v-alert>
+                                            <div
+                                                v-else-if="expandedHoldingIntradayRows(holding).length"
+                                                class="holding-intraday-detail"
+                                            >
+                                                <div class="holding-intraday-detail-header">
+                                                    <span>{{ expandedHoldingIntradayTitle(holding) }}</span>
                                                     <span class="text-caption text-medium-emphasis">
-                                                        {{ formatRecentStoredPriceTime(recentPrice) }}
+                                                        {{ expandedHoldingIntradayRows(holding).length }} rows
                                                     </span>
-                                                    <span
-                                                        class="recent-price-trend text-caption font-weight-bold"
-                                                        :class="recentStoredPriceTrendClass(recentPrice)"
-                                                    >
-                                                        {{ recentStoredPriceTrendSymbol(recentPrice) }}
-                                                    </span>
-                                                </span>
+                                                </div>
+                                                <div class="holding-intraday-table-wrap">
+                                                    <table class="holding-intraday-table">
+                                                        <thead>
+                                                            <tr>
+                                                                <th>Time</th>
+                                                                <th class="text-right">Open</th>
+                                                                <th class="text-right">High</th>
+                                                                <th class="text-right">Low</th>
+                                                                <th class="text-right">Close</th>
+                                                                <th class="text-right">Volume</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody>
+                                                            <tr
+                                                                v-for="row in expandedHoldingIntradayRows(holding)"
+                                                                :key="`${holding.id}-${row.timestamp ?? row.datetime}`"
+                                                            >
+                                                                <td>{{ formatAnalyzeIntradayCandleDateTime(row.datetime) }}</td>
+                                                                <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.open) }}</td>
+                                                                <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.high) }}</td>
+                                                                <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.low) }}</td>
+                                                                <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.close) }}</td>
+                                                                <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.volume) }}</td>
+                                                            </tr>
+                                                        </tbody>
+                                                    </table>
+                                                </div>
                                             </div>
                                             <span v-else class="text-body-2 text-medium-emphasis">
-                                                No stored prices in the last 24 hours.
+                                                No EODHD intraday prices available for this session.
                                             </span>
                                         </td>
                                     </tr>
@@ -8829,6 +8892,45 @@ function priceRefreshScheduleFormFromSettings(settings) {
 
 .stock-holding-detail-row td {
     background: rgb(var(--v-theme-surface-variant));
+}
+
+.holding-intraday-detail {
+    display: grid;
+    gap: 8px;
+}
+
+.holding-intraday-detail-header {
+    align-items: baseline;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.holding-intraday-table-wrap {
+    max-height: 360px;
+    overflow: auto;
+}
+
+.holding-intraday-table {
+    background: rgb(var(--v-theme-surface));
+    border-collapse: collapse;
+    font-size: 0.8125rem;
+    min-width: 620px;
+    width: 100%;
+}
+
+.holding-intraday-table th,
+.holding-intraday-table td {
+    border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    padding: 4px 8px;
+    white-space: nowrap;
+}
+
+.holding-intraday-table th {
+    background: rgb(var(--v-theme-surface));
+    position: sticky;
+    top: 0;
+    z-index: 1;
 }
 
 .recent-price-item {

@@ -2438,6 +2438,63 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/watchlist/holdings/1/intraday-candles') {
+                return Promise.resolve(jsonResponse({
+                    holding: { id: 1 },
+                    intraday: {
+                        title: 'Intraday 05.06.2026 - 5m',
+                        trading_date: '2026-06-05',
+                        interval: '5m',
+                        rows: [
+                            {
+                                timestamp: 1780642800,
+                                gmtoffset: 0,
+                                datetime: '2026-06-05 07:00:00',
+                                open: '305.55000000',
+                                high: '305.55000000',
+                                low: '305.55000000',
+                                close: '305.55000000',
+                                volume: 12,
+                            },
+                            {
+                                timestamp: 1780643100,
+                                gmtoffset: 0,
+                                datetime: '2026-06-05 07:05:00',
+                                open: '306.32001000',
+                                high: '306.32001000',
+                                low: '306.32001000',
+                                close: '306.32001000',
+                                volume: 18,
+                            },
+                            {
+                                timestamp: 1780673400,
+                                gmtoffset: 0,
+                                datetime: '2026-06-05 15:30:00',
+                                open: '304.00000000',
+                                high: '304.00000000',
+                                low: '304.00000000',
+                                close: '304.00000000',
+                                volume: null,
+                            },
+                        ],
+                    },
+                    intraday_days: [],
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/4/intraday-candles') {
+                return Promise.resolve(jsonResponse({
+                    holding: { id: 4 },
+                    intraday: {
+                        title: 'Intraday 05.06.2026 - 5m',
+                        trading_date: '2026-06-05',
+                        interval: '5m',
+                        rows: [],
+                    },
+                    intraday_days: [],
+                }));
+            }
+
             if (path === '/admin/stocks/search?query=DAX') {
                 return Promise.resolve(jsonResponse({
                     results: [
@@ -2605,28 +2662,15 @@ describe('App', () => {
         await flushPromises();
 
         expect(wrapper.text()).toContain('305.55');
-        const recentPriceStrip = wrapper.find('.recent-price-strip');
-        expect(recentPriceStrip.text()).toContain('17:10');
-        expect(recentPriceStrip.text()).not.toContain('03.06.2026');
-        const expandedRecentPriceItems = recentPriceStrip.findAll('.recent-price-item');
-        expect(expandedRecentPriceItems[0].text()).toContain('305.55');
-        expect(expandedRecentPriceItems[0].text()).toContain('17:10');
-        expect(expandedRecentPriceItems[1].text()).toContain('306.32001');
-        expect(expandedRecentPriceItems[1].text()).toContain('17:35');
-        expect(expandedRecentPriceItems[2].text()).toContain('306.32001');
-        expect(expandedRecentPriceItems[2].text()).toContain('17:45');
-        expect(expandedRecentPriceItems[3].text()).toContain('304');
-        expect(expandedRecentPriceItems[3].text()).toContain('17:50');
-        expect(expandedRecentPriceItems[0].find('.recent-price-trend').text()).toBe('=');
-        expect(expandedRecentPriceItems[0].find('.recent-price-trend').classes()).toContain('text-medium-emphasis');
-        expect(expandedRecentPriceItems[1].find('.recent-price-trend').text()).toBe('↑');
-        expect(expandedRecentPriceItems[1].find('.recent-price-trend').classes()).toContain('text-success');
-        expect(expandedRecentPriceItems[1].text().indexOf('17:35')).toBeLessThan(
-            expandedRecentPriceItems[1].text().indexOf('↑'),
-        );
-        expect(expandedRecentPriceItems[2].find('.recent-price-trend').text()).toBe('=');
-        expect(expandedRecentPriceItems[3].find('.recent-price-trend').text()).toBe('↓');
-        expect(expandedRecentPriceItems[3].find('.recent-price-trend').classes()).toContain('text-error');
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/1/intraday-candles', expect.anything());
+        const intradayTable = wrapper.find('.holding-intraday-table');
+        expect(wrapper.find('.holding-intraday-detail-header').text()).toContain('Intraday 05.06.2026 - 5m');
+        expect(wrapper.find('.holding-intraday-detail-header').text()).toContain('3 rows');
+        expect(intradayTable.text()).toContain('2026-06-05 07:00:00');
+        expect(intradayTable.text()).toContain('2026-06-05 07:05:00');
+        expect(intradayTable.text()).toContain('2026-06-05 15:30:00');
+        expect(intradayTable.text()).toContain('306.32001000');
+        expect(wrapper.find('.recent-price-strip').exists()).toBe(false);
 
         await wrapper.find('.stock-holding-row').trigger('click');
         await flushPromises();
@@ -2637,11 +2681,8 @@ describe('App', () => {
         await closedMarketHoldingRow.trigger('click');
         await flushPromises();
 
-        const fallbackRecentPriceStrip = wrapper.find('.recent-price-strip');
-        expect(fallbackRecentPriceStrip.text()).toContain('No stored prices in the last 24 hours.');
-        expect(fallbackRecentPriceStrip.text()).toContain('Showing values from 02.06.2026.');
-        expect(fallbackRecentPriceStrip.text()).toContain('194');
-        expect(fallbackRecentPriceStrip.text()).toContain('195');
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/4/intraday-candles', expect.anything());
+        expect(wrapper.text()).toContain('No EODHD intraday prices available for this session.');
 
         await closedMarketHoldingRow.trigger('click');
         await flushPromises();
