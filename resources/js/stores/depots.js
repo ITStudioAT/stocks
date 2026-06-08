@@ -35,6 +35,9 @@ export const useDepotStore = defineStore('depots', {
         stockHistoricalPriceRefresh: null,
         analyzeIntradayCandles: null,
         analyzeIntradayCandlesRequestedId: null,
+        holdingIntradayCandles: {},
+        holdingIntradayCandlesLoading: {},
+        holdingIntradayCandlesErrors: {},
         uiPreferences: {
             depot_price_source: 'latest',
         },
@@ -623,6 +626,40 @@ export const useDepotStore = defineStore('depots', {
                 if (this.analyzeIntradayCandlesRequestedId === id) {
                     this.analyzeIntradayCandlesLoading = false;
                 }
+            }
+        },
+        async loadExpandedHoldingIntradayCandles(id) {
+            this.holdingIntradayCandlesLoading = {
+                ...this.holdingIntradayCandlesLoading,
+                [id]: true,
+            };
+            this.holdingIntradayCandlesErrors = {
+                ...this.holdingIntradayCandlesErrors,
+                [id]: '',
+            };
+
+            try {
+                const data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`);
+
+                this.holdingIntradayCandles = {
+                    ...this.holdingIntradayCandles,
+                    [id]: data,
+                };
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingIntradayCandlesErrors = {
+                    ...this.holdingIntradayCandlesErrors,
+                    [id]: error.message,
+                };
+
+                throw error;
+            } finally {
+                this.holdingIntradayCandlesLoading = {
+                    ...this.holdingIntradayCandlesLoading,
+                    [id]: false,
+                };
             }
         },
         clearHoldingIntradayCandles() {
