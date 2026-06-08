@@ -92,6 +92,26 @@ class IndexPriceRefreshSettings
         return $this->dispatchIndexRefresh($recipient);
     }
 
+    public function dispatchOverdueRefreshes(?User $recipient = null): int
+    {
+        $config = AppConfig::query()
+            ->where('key', self::ConfigKey)
+            ->first();
+
+        if (! $config) {
+            return 0;
+        }
+
+        $settings = $this->normalizeSettings($config->value);
+        $nextRefreshAt = $this->carbon($settings['next_refresh_at']);
+
+        if ($nextRefreshAt === null || $nextRefreshAt->isFuture()) {
+            return 0;
+        }
+
+        return $this->dispatchDueRefreshes($recipient);
+    }
+
     public function dispatchIndexRefresh(?User $recipient = null): int
     {
         if (IndexWatchItem::query()->count() === 0) {

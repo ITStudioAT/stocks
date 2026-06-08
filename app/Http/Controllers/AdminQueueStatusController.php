@@ -59,9 +59,6 @@ class AdminQueueStatusController extends Controller
             $retryAfter <= $maxJobTimeout
                 ? "retry_after ({$retryAfter}s) must be greater than max job timeout ({$maxJobTimeout}s)"
                 : null,
-            $reservedJobs > 0
-                ? "{$reservedJobs} reserved job(s) are currently running or stuck"
-                : null,
             $staleRunningRuns > 0
                 ? "{$staleRunningRuns} refresh run(s) are still running after {$maxJobTimeout}s"
                 : null,

@@ -81,6 +81,30 @@ class AdminQueueStatusTest extends TestCase
             ->assertJsonPath('queue.issues', []);
     }
 
+    public function test_queue_status_does_not_warn_for_a_currently_reserved_job(): void
+    {
+        Config::set('queue.default', 'database');
+        Config::set('queue.connections.database.retry_after', 2100);
+        Config::set('queue.connections.database.queue', 'default');
+
+        DB::table('jobs')->insert([
+            'queue' => 'default',
+            'payload' => '{}',
+            'attempts' => 1,
+            'reserved_at' => now()->timestamp,
+            'available_at' => now()->timestamp,
+            'created_at' => now()->timestamp,
+        ]);
+
+        $this->actingAs($this->adminUser())
+            ->getJson('/admin/queue/status')
+            ->assertOk()
+            ->assertJsonPath('queue.status', 'ok')
+            ->assertJsonPath('queue.pending', 0)
+            ->assertJsonPath('queue.reserved', 1)
+            ->assertJsonPath('queue.issues', []);
+    }
+
     public function test_guest_cannot_view_queue_status(): void
     {
         $this->getJson('/admin/queue/status')->assertUnauthorized();

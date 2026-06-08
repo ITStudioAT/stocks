@@ -508,6 +508,39 @@ class PriceRefreshSettingsTest extends TestCase
         $this->assertSame('2026-06-03T10:30:00+02:00', $indexConfig->value['next_refresh_at']);
     }
 
+    public function test_dashboard_poll_dispatches_an_overdue_index_refresh(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-08 12:58:00', 'Europe/Vienna'));
+        IndexWatchItem::factory()->create([
+            'symbol' => 'ATX',
+            'trading_times' => 'Monday-Friday 08:55:00-17:35:00 Europe/Vienna',
+        ]);
+        AppConfig::query()->create([
+            'key' => 'index_price_refresh.schedule',
+            'value' => [
+                'trading_interval_minutes' => 20,
+                'trading_starts_before_minutes' => 0,
+                'trading_ends_after_minutes' => 0,
+                'closed_refresh_enabled' => true,
+                'closed_interval_minutes' => 60,
+                'last_refreshed_at' => '2026-06-08T11:29:00+02:00',
+                'next_refresh_at' => '2026-06-08T11:49:00+02:00',
+            ],
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/depots/active')
+            ->assertOk()
+            ->assertJsonPath('index_price_refresh_settings.last_refreshed_at', '2026-06-08T12:58:00+02:00')
+            ->assertJsonPath('index_price_refresh_settings.next_refresh_at', '2026-06-08T13:18:00+02:00');
+
+        $config = AppConfig::query()->where('key', 'index_price_refresh.schedule')->firstOrFail();
+
+        $this->assertSame('2026-06-08T12:58:00+02:00', $config->value['last_refreshed_at']);
+        $this->assertSame('2026-06-08T13:18:00+02:00', $config->value['next_refresh_at']);
+    }
+
     public function test_due_price_refresh_command_recalculates_the_next_refresh_from_current_settings(): void
     {
         Queue::fake();
