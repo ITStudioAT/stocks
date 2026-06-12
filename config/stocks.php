@@ -4,5 +4,5 @@ return [
 
     'name' => 'GKStocks',
 
-    'version' => '0.1.8',
+    'version' => '0.1.9',
 ];

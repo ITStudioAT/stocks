@@ -10,6 +10,7 @@ use App\Services\DepotTransactionBooker;
 use App\Services\UiPreferences;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -147,7 +148,9 @@ class AdminDepotTransactionController extends Controller
             ->where('depot_id', $depot->id)
             ->whereNotNull('stock_holding_id')
             ->whereIn('type', ['buy', 'sell'])
-            ->get(['stock_holding_id', 'type', 'pieces', 'total_amount', 'booked_at'])
+            ->orderBy('booked_at')
+            ->orderBy('id')
+            ->get(['id', 'stock_holding_id', 'type', 'pieces', 'total_amount', 'booked_at'])
             ->groupBy('stock_holding_id');
 
         $positionPiecesByHoldingId = $transactionsByHoldingId
@@ -193,18 +196,67 @@ class AdminDepotTransactionController extends Controller
 
         return $transactionsByHoldingId
             ->map(function ($transactions) use ($yearStart): ?string {
-                $buyTransactions = $transactions->filter(fn (DepotTransaction $transaction): bool => $transaction->type === 'buy'
-                    && $transaction->booked_at?->greaterThanOrEqualTo($yearStart));
-                $pieces = $buyTransactions->sum(fn (DepotTransaction $transaction): float => (float) $transaction->pieces);
+                $openLots = collect($this->openBuyLots($transactions))
+                    ->filter(fn (array $lot): bool => $lot['booked_at']?->greaterThanOrEqualTo($yearStart) ?? false);
+                $pieces = $openLots->sum(fn (array $lot): float => $lot['pieces']);
 
                 if ($pieces <= 0) {
                     return null;
                 }
 
-                $totalAmount = $buyTransactions->sum(fn (DepotTransaction $transaction): float => (float) $transaction->total_amount);
+                $totalAmount = $openLots->sum(fn (array $lot): float => $lot['total_amount']);
 
                 return number_format($totalAmount / $pieces, 8, '.', '');
             });
+    }
+
+    /**
+     * @param  Collection<int, DepotTransaction>  $transactions
+     * @return array<int, array{pieces: float, total_amount: float, booked_at: ?Carbon}>
+     */
+    private function openBuyLots(Collection $transactions): array
+    {
+        $lots = [];
+
+        foreach ($transactions as $transaction) {
+            $transactionPieces = (float) $transaction->pieces;
+
+            if ($transactionPieces <= 0) {
+                continue;
+            }
+
+            if ($transaction->type === 'buy') {
+                $lots[] = [
+                    'pieces' => $transactionPieces,
+                    'total_amount' => (float) $transaction->total_amount,
+                    'booked_at' => $transaction->booked_at,
+                ];
+
+                continue;
+            }
+
+            $piecesToSell = $transactionPieces;
+
+            foreach ($lots as $index => $lot) {
+                if ($piecesToSell <= 0) {
+                    break;
+                }
+
+                $consumedPieces = min($lot['pieces'], $piecesToSell);
+                $consumedRatio = $consumedPieces / $lot['pieces'];
+
+                $lots[$index]['pieces'] = $lot['pieces'] - $consumedPieces;
+                $lots[$index]['total_amount'] = $lot['total_amount'] - ($lot['total_amount'] * $consumedRatio);
+                $piecesToSell -= $consumedPieces;
+            }
+
+            $lots = array_values(array_filter(
+                $lots,
+                fn (array $lot): bool => $lot['pieces'] > 0.000000004,
+            ));
+        }
+
+        return $lots;
     }
 
     /**

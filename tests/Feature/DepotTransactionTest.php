@@ -7,6 +7,7 @@ use App\Models\DepotTransaction;
 use App\Models\StockHolding;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -332,6 +333,67 @@ class DepotTransactionTest extends TestCase
 
         $this->assertSame(['AAPL'], collect($response->json('depot_holdings'))->pluck('symbol')->all());
         $this->assertSame('710.00', $depot->refresh()->account_balance);
+    }
+
+    public function test_depot_year_start_price_uses_only_current_open_lots_after_sells(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-12 12:00:00', 'UTC'));
+
+        try {
+            $admin = $this->adminUser();
+            Depot::factory()->create([
+                'account_balance' => '50000.00',
+                'is_active' => true,
+            ]);
+            $holding = StockHolding::factory()->create([
+                'symbol' => 'SEC0',
+                'name' => 'iShares MSCI Global Semiconductors UCITS ETF USD Acc',
+                'currency' => 'EUR',
+            ]);
+
+            $this->actingAs($admin)
+                ->postJson('/admin/depot-transactions/stocks', [
+                    'type' => 'buy',
+                    'stock_holding_id' => $holding->id,
+                    'pieces' => '700',
+                    'total_amount' => '12670.00',
+                    'booked_at' => '2026-06-05',
+                ])
+                ->assertCreated();
+
+            $this->actingAs($admin)
+                ->postJson('/admin/depot-transactions/stocks', [
+                    'type' => 'sell',
+                    'stock_holding_id' => $holding->id,
+                    'pieces' => '700',
+                    'total_amount' => '12358.17',
+                    'booked_at' => '2026-06-08',
+                ])
+                ->assertCreated();
+
+            $response = $this->actingAs($admin)
+                ->postJson('/admin/depot-transactions/stocks', [
+                    'type' => 'buy',
+                    'stock_holding_id' => $holding->id,
+                    'pieces' => '800',
+                    'total_amount' => '14158.40',
+                    'booked_at' => '2026-06-10',
+                ])
+                ->assertCreated()
+                ->assertJsonPath('transaction.unit_price', '17.69800000')
+                ->assertJsonPath('depot_holdings.0.position_pieces', '800.00000000')
+                ->assertJsonPath('depot_holdings.0.year_start_price', '17.69800000');
+
+            $depotHolding = $response->json('depot_holdings.0');
+            $this->assertSame('14158.40', number_format(
+                ((float) $depotHolding['year_start_price']) * ((float) $depotHolding['position_pieces']),
+                2,
+                '.',
+                '',
+            ));
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     private function adminUser(): User
