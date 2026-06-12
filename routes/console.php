@@ -15,3 +15,7 @@ Schedule::command('price-refresh:dispatch-due')
 Schedule::command('historical-session-prices:dispatch-due')
     ->everyMinute()
     ->withoutOverlapping(10);
+
+Schedule::command('intraday-candles:dispatch-due')
+    ->everyMinute()
+    ->withoutOverlapping(10);

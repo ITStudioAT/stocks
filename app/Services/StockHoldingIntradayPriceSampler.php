@@ -30,14 +30,11 @@ class StockHoldingIntradayPriceSampler
         }
 
         $latestRawDate = Carbon::parse((string) $prices->last()['as_of'], 'UTC')->toDateString();
-        $sampledPrices = $this->sampleArrays(
-            $prices
-                ->filter(fn (array $price): bool => Carbon::parse((string) $price['as_of'], 'UTC')->toDateString() === $latestRawDate)
-                ->values(),
-            20,
-        );
+        $latestDatePrices = $prices
+            ->filter(fn (array $price): bool => Carbon::parse((string) $price['as_of'], 'UTC')->toDateString() === $latestRawDate)
+            ->values();
 
-        $this->persistArraySamples($holding, $latestRawDate, $sampledPrices);
+        $this->persistArraySamples($holding, $latestRawDate, $latestDatePrices);
     }
 
     /**
@@ -122,23 +119,5 @@ class StockHoldingIntradayPriceSampler
         }
 
         return number_format((float) $value, 8, '.', '');
-    }
-
-    private function sampleArrays(Collection $prices, int $maximumPoints): Collection
-    {
-        if ($prices->count() <= $maximumPoints) {
-            return $prices->values();
-        }
-
-        $lastIndex = $prices->count() - 1;
-        $prices = $prices->values();
-
-        return collect(range(0, $maximumPoints - 1))
-            ->map(fn (int $index): int => (int) round(($index / ($maximumPoints - 1)) * $lastIndex))
-            ->unique()
-            ->values()
-            ->map(fn (int $index): array => $prices->get($index))
-            ->filter()
-            ->values();
     }
 }

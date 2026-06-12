@@ -83,6 +83,7 @@ class AdminDepotHoldingTest extends TestCase
                         'price_spread_pct',
                         'recent_prices',
                         'intraday_prices',
+                        'intraday_candles',
                         'daily_prices',
                         'validation_errors',
                         'created_at',
@@ -124,6 +125,57 @@ class AdminDepotHoldingTest extends TestCase
                 ->assertJsonPath('holdings.0.daily_prices.0.trading_date', '2026-06-04')
                 ->assertJsonPath('holdings.0.daily_prices.0.price', '124.56000000')
                 ->assertJsonPath('holdings.0.daily_prices.0.currency', 'USD');
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_admin_listing_includes_recent_stored_intraday_candles_for_analyze_charts(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-12 12:00:00', 'UTC'));
+
+        try {
+            $admin = $this->adminUser();
+            $holding = StockHolding::factory()->create([
+                'symbol' => 'LEER',
+                'name' => 'Amundi MSCI Eastern Europe Ex Russia UCITS ETF Acc',
+                'currency' => 'EUR',
+            ]);
+
+            StockHoldingIntradayCandle::query()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-06-12',
+                'interval' => '5m',
+                'as_of' => Carbon::parse('2026-06-12 09:00:00', 'UTC'),
+                'close' => '42.60000000',
+                'currency' => 'EUR',
+            ]);
+            StockHoldingIntradayCandle::query()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-06-12',
+                'interval' => '1h',
+                'as_of' => Carbon::parse('2026-06-12 10:00:00', 'UTC'),
+                'close' => '99.00000000',
+                'currency' => 'EUR',
+            ]);
+            StockHoldingIntradayCandle::query()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-05-01',
+                'interval' => '5m',
+                'as_of' => Carbon::parse('2026-05-01 09:00:00', 'UTC'),
+                'close' => '41.00000000',
+                'currency' => 'EUR',
+            ]);
+
+            $this->actingAs($admin)
+                ->getJson('/admin/watchlist/holdings')
+                ->assertOk()
+                ->assertJsonCount(2, 'holdings.0.intraday_candles')
+                ->assertJsonPath('holdings.0.intraday_candles.0.trading_date', '2026-05-01')
+                ->assertJsonPath('holdings.0.intraday_candles.0.price', '41.00000000')
+                ->assertJsonPath('holdings.0.intraday_candles.1.trading_date', '2026-06-12')
+                ->assertJsonPath('holdings.0.intraday_candles.1.price', '42.60000000')
+                ->assertJsonPath('holdings.0.intraday_candles.1.as_of', '2026-06-12T09:00:00+00:00');
         } finally {
             Carbon::setTestNow();
         }
@@ -1235,9 +1287,9 @@ class AdminDepotHoldingTest extends TestCase
         $this->travelTo(Carbon::parse('2026-06-05 18:10:00', 'Europe/Berlin'));
         Http::fake([
             'eodhd.com/api/intraday/AMES.XETRA*' => Http::response(
-                collect(range(0, 24))
+                collect(range(0, 300))
                     ->map(fn (int $index): array => [
-                        'timestamp' => Carbon::parse('2026-06-05 07:00:00', 'UTC')->addMinutes($index * 20)->timestamp,
+                        'timestamp' => Carbon::parse('2026-06-05 07:00:00', 'UTC')->addMinutes($index)->timestamp,
                         'close' => 470.15 + $index,
                     ])
                     ->all(),
@@ -1255,16 +1307,16 @@ class AdminDepotHoldingTest extends TestCase
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
-            ->assertJsonCount(20, 'holdings.0.intraday_prices')
+            ->assertJsonCount(301, 'holdings.0.intraday_prices')
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '470.15000000')
-            ->assertJsonPath('holdings.0.intraday_prices.19.price', '494.15000000');
+            ->assertJsonPath('holdings.0.intraday_prices.300.price', '770.15000000');
 
-        $this->assertSame(20, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
+        $this->assertSame(301, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
         $this->assertDatabaseHas('stock_holding_intraday_prices', [
             'stock_holding_id' => $holding->id,
             'trading_date' => '2026-06-05',
-            'sample_index' => 19,
-            'price' => '494.15000000',
+            'sample_index' => 300,
+            'price' => '770.15000000',
             'source_name' => 'EODHD intraday',
             'price_type' => 'intraday',
         ]);
@@ -1299,12 +1351,12 @@ class AdminDepotHoldingTest extends TestCase
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
-            ->assertJsonCount(20, 'holdings.0.intraday_prices')
+            ->assertJsonCount(103, 'holdings.0.intraday_prices')
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '42.60000000')
             ->assertJsonPath('holdings.0.intraday_prices.0.as_of', '2026-06-05T07:00:00+00:00')
-            ->assertJsonPath('holdings.0.intraday_prices.19.price', '43.62000000');
+            ->assertJsonPath('holdings.0.intraday_prices.102.price', '43.62000000');
 
-        $this->assertSame(20, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
+        $this->assertSame(103, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
         Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/intraday/LEER.XETRA')
             && str_contains($request->url(), 'interval=1m'));
         Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/intraday/LEER.XETRA')
@@ -1421,6 +1473,7 @@ class AdminDepotHoldingTest extends TestCase
     {
         config(['services.eodhd.key' => 'test-token']);
         $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-05 18:10:00', 'Europe/Berlin'));
         Http::fake();
         $holding = StockHolding::factory()->create([
             'symbol' => 'AMES',
@@ -1545,6 +1598,9 @@ class AdminDepotHoldingTest extends TestCase
         $this->travelTo(Carbon::parse('2026-06-02 12:00:00'));
         $this->mock(EodhdMarketData::class, function (MockInterface $mock): void {
             $mock
+                ->shouldReceive('intradaySessionDate')
+                ->andReturn(null);
+            $mock
                 ->shouldReceive('resolve')
                 ->once()
                 ->andReturnUsing(function (StockHolding $holding): QuoteSelectionResult {
@@ -1615,6 +1671,9 @@ class AdminDepotHoldingTest extends TestCase
         $this->travelTo(Carbon::parse('2026-06-02 13:00:00'));
         $this->mock(EodhdMarketData::class, function (MockInterface $mock): void {
             $mock
+                ->shouldReceive('intradaySessionDate')
+                ->andReturn(null);
+            $mock
                 ->shouldReceive('resolve')
                 ->once()
                 ->andReturn(new QuoteSelectionResult(null, [], [], status: 'unavailable'));
@@ -1663,6 +1722,9 @@ class AdminDepotHoldingTest extends TestCase
     {
         $admin = $this->adminUser();
         $this->mock(EodhdMarketData::class, function (MockInterface $mock): void {
+            $mock
+                ->shouldReceive('intradaySessionDate')
+                ->andReturn(null);
             $mock
                 ->shouldReceive('resolve')
                 ->once()

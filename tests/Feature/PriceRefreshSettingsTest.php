@@ -2,11 +2,13 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\BackfillMissingStockHoldingIntradayCandles;
 use App\Jobs\FetchHistoricalSessionPrices;
 use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\AppConfig;
 use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
+use App\Models\StockHoldingIntradayReloadRun;
 use App\Models\StockPriceRefreshRun;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -569,6 +571,106 @@ class PriceRefreshSettingsTest extends TestCase
 
         $this->assertSame('2026-06-03T10:20:00+02:00', $config->value['last_refreshed_at']);
         $this->assertSame('2026-06-03T10:35:00+02:00', $config->value['next_refresh_at']);
+    }
+
+    public function test_admin_can_update_intraday_backfill_schedule_and_queue_missing_backfill(): void
+    {
+        Queue::fake();
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-12 12:00:00', 'Europe/Vienna'));
+        StockHolding::factory()->count(2)->create();
+
+        $this->actingAs($admin)
+            ->getJson('/admin/price-refresh-settings')
+            ->assertOk()
+            ->assertJsonPath('intraday_backfill_settings.daily_time', '18:30')
+            ->assertJsonPath('intraday_backfill_settings.timezone', 'Europe/Vienna')
+            ->assertJsonPath('intraday_backfill_settings.status', 'waiting');
+
+        $this->actingAs($admin)
+            ->patchJson('/admin/intraday-backfill-settings', [
+                'daily_time' => '21:15',
+            ])
+            ->assertOk()
+            ->assertJsonPath('message', 'Intraday backfill schedule updated.')
+            ->assertJsonPath('intraday_backfill_settings.daily_time', '21:15');
+
+        $response = $this->actingAs($admin)
+            ->postJson('/admin/intraday-backfill/run')
+            ->assertAccepted()
+            ->assertJsonPath('message', 'Missing intraday backfill queued.')
+            ->assertJsonPath('intraday_backfill_refresh.status', 'queued')
+            ->assertJsonPath('intraday_backfill_refresh.total', 2)
+            ->assertJsonPath('intraday_backfill_refresh.date_to', '2026-06-12');
+
+        $refreshId = $response->json('intraday_backfill_refresh.refresh_id');
+
+        Queue::assertPushed(BackfillMissingStockHoldingIntradayCandles::class, fn (BackfillMissingStockHoldingIntradayCandles $job): bool => $job->refreshId === $refreshId);
+
+        $config = AppConfig::query()->where('key', 'intraday_candle_backfill.schedule')->firstOrFail();
+
+        $this->assertSame('21:15', $config->value['daily_time']);
+        $this->assertSame('2026-06-12', $config->value['last_dispatched_on']);
+    }
+
+    public function test_due_intraday_backfill_command_dispatches_once_per_local_day(): void
+    {
+        Queue::fake();
+        $this->travelTo(Carbon::parse('2026-06-12 18:31:00', 'Europe/Vienna'));
+        StockHolding::factory()->create();
+        AppConfig::query()->create([
+            'key' => 'intraday_candle_backfill.schedule',
+            'value' => [
+                'daily_time' => '18:30',
+                'timezone' => 'Europe/Vienna',
+                'last_dispatched_at' => null,
+                'last_dispatched_on' => null,
+                'next_refresh_at' => '2026-06-12T18:30:00+02:00',
+            ],
+        ]);
+
+        $this->artisan('intraday-candles:dispatch-due')
+            ->assertExitCode(0);
+
+        Queue::assertPushedTimes(BackfillMissingStockHoldingIntradayCandles::class, 1);
+
+        $this->artisan('intraday-candles:dispatch-due')
+            ->assertExitCode(0);
+
+        Queue::assertPushedTimes(BackfillMissingStockHoldingIntradayCandles::class, 1);
+
+        $config = AppConfig::query()->where('key', 'intraday_candle_backfill.schedule')->firstOrFail();
+
+        $this->assertSame('2026-06-12', $config->value['last_dispatched_on']);
+        $this->assertSame('2026-06-13T18:30:00+02:00', $config->value['next_refresh_at']);
+    }
+
+    public function test_intraday_backfill_status_returns_progress_payload(): void
+    {
+        $admin = $this->adminUser();
+        $run = StockHoldingIntradayReloadRun::query()->create([
+            'id' => 'intraday-missing-test',
+            'stock_holding_id' => null,
+            'status' => 'running',
+            'total_count' => 2,
+            'processed_count' => 1,
+            'stored_count' => 25,
+            'current' => 'Amundi IBEX 35',
+            'date_from' => '2025-06-13',
+            'date_to' => '2026-06-12',
+            'started_at' => now(),
+            'message' => 'Fetching data for Amundi IBEX 35: 2025-06-13 to 2026-06-12...',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson("/admin/intraday-backfill/{$run->id}")
+            ->assertOk()
+            ->assertJsonPath('intraday_backfill_refresh.refresh_id', $run->id)
+            ->assertJsonPath('intraday_backfill_refresh.status', 'running')
+            ->assertJsonPath('intraday_backfill_refresh.step', '1/2')
+            ->assertJsonPath('intraday_backfill_refresh.message', 'Fetching data for Amundi IBEX 35: 2025-06-13 to 2026-06-12...')
+            ->assertJsonPath('intraday_backfill_refresh.stored_count', 25)
+            ->assertJsonPath('intraday_backfill_settings.status', 'updating');
     }
 
     private function adminUser(): User

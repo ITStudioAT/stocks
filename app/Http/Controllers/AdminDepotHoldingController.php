@@ -6,6 +6,7 @@ use App\Models\Depot;
 use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
 use App\Models\StockHoldingDailyPrice;
+use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockHoldingIntradayPrice;
 use App\Models\StockPrice;
 use App\Models\User;
@@ -60,6 +61,12 @@ class AdminDepotHoldingController extends Controller
                     ->whereDate('trading_date', '<=', $historyRange['to']->toDateString())
                     ->orderBy('trading_date')
                     ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'adjusted_close', 'currency']),
+                'intradayCandles' => fn ($query) => $query
+                    ->whereDate('trading_date', '>=', now()->subYear()->toDateString())
+                    ->where('interval', '5m')
+                    ->whereNotNull('close')
+                    ->orderBy('as_of')
+                    ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'currency', 'as_of']),
             ])
             ->orderBy('name')
             ->orderBy('isin')
@@ -302,7 +309,7 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, end_price_24: ?string, end_price_48: ?string, start_price_date: ?string, end_price_date: ?string, end_price_24_date: ?string, end_price_48_date: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, recent_prices_are_fallback: bool, intraday_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, currency: ?string}>, validation_errors: array<int, string>, created_at: ?string}
+     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, end_price_24: ?string, end_price_48: ?string, start_price_date: ?string, end_price_date: ?string, end_price_24_date: ?string, end_price_48_date: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, recent_prices_are_fallback: bool, intraday_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, intraday_candles: array<int, array{id: int, trading_date: string, price: string, currency: ?string, as_of: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, currency: ?string}>, validation_errors: array<int, string>, created_at: ?string}
      */
     private function holdingPayload(StockHolding $holding, ?Depot $activeDepot): array
     {
@@ -362,6 +369,7 @@ class AdminDepotHoldingController extends Controller
             'recent_prices' => $recentStoredPricePayload['prices'],
             'recent_prices_are_fallback' => $recentStoredPricePayload['are_fallback'],
             'intraday_prices' => $this->intradayPricePayload($holding),
+            'intraday_candles' => $this->intradayCandlePayload($holding),
             'daily_prices' => $this->dailyPricePayload($holding),
             'validation_errors' => $hasCurrentPrice ? ($latestStockPrice?->validation_errors ?? []) : [],
             'created_at' => $holding->created_at?->toIso8601String(),
@@ -800,6 +808,39 @@ class AdminDepotHoldingController extends Controller
     private function storedIntradayPriceTimestamp(StockHoldingIntradayPrice $intradayPrice): ?string
     {
         $value = $intradayPrice->getRawOriginal('as_of');
+
+        if ($value === null || trim((string) $value) === '') {
+            return null;
+        }
+
+        return Carbon::parse((string) $value, 'UTC')->toIso8601String();
+    }
+
+    /**
+     * @return array<int, array{id: int, trading_date: string, price: string, currency: ?string, as_of: ?string}>
+     */
+    private function intradayCandlePayload(StockHolding $holding): array
+    {
+        if (! $holding->relationLoaded('intradayCandles')) {
+            return [];
+        }
+
+        return $holding->intradayCandles
+            ->map(fn (StockHoldingIntradayCandle $intradayCandle): array => [
+                'id' => $intradayCandle->id,
+                'trading_date' => $intradayCandle->trading_date->toDateString(),
+                'price' => (string) $intradayCandle->close,
+                'currency' => $intradayCandle->currency,
+                'as_of' => $this->storedIntradayCandleTimestamp($intradayCandle),
+            ])
+            ->filter(fn (array $intradayCandle): bool => $intradayCandle['price'] !== '')
+            ->values()
+            ->all();
+    }
+
+    private function storedIntradayCandleTimestamp(StockHoldingIntradayCandle $intradayCandle): ?string
+    {
+        $value = $intradayCandle->getRawOriginal('as_of');
 
         if ($value === null || trim((string) $value) === '') {
             return null;

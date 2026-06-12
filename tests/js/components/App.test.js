@@ -51,6 +51,30 @@ function jsonResponse(data) {
     };
 }
 
+function weekdayIntradayCandles(startDate, endDate) {
+    const candles = [];
+    const currentDate = new Date(`${startDate}T09:00:00Z`);
+    const latestDate = new Date(`${endDate}T09:00:00Z`);
+
+    while (currentDate.getTime() <= latestDate.getTime()) {
+        const day = currentDate.getUTCDay();
+
+        if (day !== 0 && day !== 6) {
+            candles.push({
+                id: 5000 + candles.length,
+                trading_date: currentDate.toISOString().slice(0, 10),
+                price: (100 + candles.length).toFixed(8),
+                currency: 'EUR',
+                as_of: currentDate.toISOString(),
+            });
+        }
+
+        currentDate.setUTCDate(currentDate.getUTCDate() + 1);
+    }
+
+    return candles;
+}
+
 function priceRefreshSettings(overrides = {}) {
     return {
         trading_interval_minutes: 20,
@@ -78,6 +102,19 @@ function indexPriceRefreshSettings(overrides = {}) {
         current_interval_minutes: 30,
         ...overrides,
     });
+}
+
+function intradayBackfillSettings(overrides = {}) {
+    return {
+        daily_time: '18:30',
+        timezone: 'Europe/Vienna',
+        last_dispatched_at: null,
+        last_dispatched_on: null,
+        next_refresh_at: '2026-06-12T18:30:00+02:00',
+        status: 'waiting',
+        status_label: 'waiting',
+        ...overrides,
+    };
 }
 
 function queueStatusResponse(overrides = {}) {
@@ -791,6 +828,15 @@ describe('App', () => {
                                 currency: 'EUR',
                                 as_of: new Date(Date.UTC(2026, 5, 5, 10, index * 5)).toISOString(),
                             })),
+                            intraday_candles: Array.from({ length: 300 }, (_, index) => ({
+                                id: index + 1,
+                                trading_date: '2026-06-04',
+                                price: index === 0
+                                    ? '290.00000000'
+                                    : (index === 299 ? '306.32001000' : (295 + index * 0.02).toFixed(8)),
+                                currency: 'EUR',
+                                as_of: new Date(Date.UTC(2026, 5, 4, 9, index * 5)).toISOString(),
+                            })),
                         },
                         {
                             id: 2,
@@ -800,6 +846,31 @@ describe('App', () => {
                             latest_price: null,
                             end_price: '429.950000',
                             daily_prices: [],
+                        },
+                        {
+                            id: 3,
+                            symbol: 'SMALL',
+                            name: 'Small Price Fund',
+                            currency: 'EUR',
+                            latest_price: '44.220000',
+                            daily_prices: [],
+                        },
+                        {
+                            id: 4,
+                            symbol: 'TINY',
+                            name: 'Tiny Price Fund',
+                            currency: 'EUR',
+                            latest_price: '2.680000',
+                            daily_prices: [],
+                        },
+                        {
+                            id: 5,
+                            symbol: 'MONTH',
+                            name: 'Month Marker Fund',
+                            currency: 'EUR',
+                            latest_price: '365.000000',
+                            daily_prices: [],
+                            intraday_candles: weekdayIntradayCandles('2025-06-15', '2026-06-14'),
                         },
                     ],
                     meta: pagination,
@@ -989,9 +1060,14 @@ describe('App', () => {
         expect(analyzeOverview.text()).toContain('306.32 EUR');
         expect(analyzeOverview.text()).toContain('Microsoft');
         expect(analyzeOverview.text()).toContain('429.95 USD');
+        expect(analyzeOverview.text()).toContain('Small Price Fund');
+        expect(analyzeOverview.text()).toContain('44.220 EUR');
+        expect(analyzeOverview.text()).toContain('Tiny Price Fund');
+        expect(analyzeOverview.text()).toContain('2.6800 EUR');
         expect(analyzeOverview.text()).not.toContain('INDEX');
         expect(analyzeOverview.text()).not.toContain('History');
-        expect(analyzeOverview.text()).toContain('0 historical price records loaded/updated.');
+        expect(analyzeOverview.text()).not.toContain('historical price records loaded/updated.');
+        expect(analyzeOverview.text()).not.toContain('Checking historical prices');
         expect(analyzeOverview.text()).not.toContain('2/2');
         expect(analyzeOverview.text()).not.toContain('6 months');
 
@@ -1007,54 +1083,103 @@ describe('App', () => {
         expect(analyzeOverview.text()).toContain('1 month');
         expect(analyzeOverview.text()).toContain('1 week');
         expect(analyzeOverview.text()).toContain('today');
+        expect(analyzeOverview.text()).toContain('today-1');
 
         const oneYearRangeButton = analyzeOverview.findAll('.analyze-range-button')
             .find((button) => button.text() === '1 year');
+        const sixMonthRangeButton = analyzeOverview.findAll('.analyze-range-button')
+            .find((button) => button.text() === '6 months');
+        const threeMonthRangeButton = analyzeOverview.findAll('.analyze-range-button')
+            .find((button) => button.text() === '3 months');
         const oneMonthRangeButton = analyzeOverview.findAll('.analyze-range-button')
             .find((button) => button.text() === '1 month');
+        const oneWeekRangeButton = analyzeOverview.findAll('.analyze-range-button')
+            .find((button) => button.text() === '1 week');
         const todayRangeButton = analyzeOverview.findAll('.analyze-range-button')
             .find((button) => button.text() === 'today');
+        const todayMinusOneRangeButton = analyzeOverview.findAll('.analyze-range-button')
+            .find((button) => button.text() === 'today-1');
 
         expect(oneYearRangeButton.attributes('aria-pressed')).toBe('true');
+        expect(analyzeOverview.text()).toContain('365-day capture');
         await oneMonthRangeButton.trigger('click');
         await flushPromises();
 
         expect(oneMonthRangeButton.attributes('aria-pressed')).toBe('true');
         expect(oneYearRangeButton.attributes('aria-pressed')).toBe('false');
+        expect(analyzeOverview.text()).toContain('31-day capture');
         expect(analyzeOverview.find('.analyze-sparkline').exists()).toBe(true);
         expect(analyzeOverview.find('.analyze-sparkline').attributes('viewBox')).toBe('0 0 1440 600');
         expect(analyzeOverview.findAll('.analyze-sparkline-label').length).toBeGreaterThanOrEqual(4);
         expect(analyzeOverview.findAll('.analyze-sparkline-y-label').map((label) => label.text())).toEqual([
-            '307.136011',
-            '302.648008',
-            '298.160005',
-            '293.672002',
-            '289.184',
+            '307.14',
+            '302.65',
+            '298.16',
+            '293.67',
+            '289.18',
         ]);
-        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(3);
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(0);
         expect(analyzeOverview.find('.analyze-sparkline-trend-line').exists()).toBe(true);
         expect(Number(analyzeOverview.find('.analyze-sparkline-trend-line').attributes('x2'))).toBeGreaterThan(
             Number(analyzeOverview.find('.analyze-sparkline-trend-line').attributes('x1')),
         );
         expect(analyzeOverview.findAll('.analyze-sparkline-endpoint-label')).toHaveLength(2);
         expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Start 290.00');
-        expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--latest').text()).toBe('End 306.32001');
+        expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--latest').text()).toBe('End 306.32 +5.63%');
         expect(Number(analyzeOverview.find('.analyze-sparkline-endpoint-label--start').attributes('y'))).toBeGreaterThan(500);
         expect(Number(analyzeOverview.find('.analyze-sparkline-endpoint-label--latest').attributes('y'))).toBeLessThan(30);
         expect(analyzeOverview.find('.analyze-sparkline-extremum--high').exists()).toBe(true);
         expect(analyzeOverview.find('.analyze-sparkline-extremum--low').exists()).toBe(true);
         expect(analyzeOverview.findAll('.analyze-sparkline-extremum-ring')).toHaveLength(2);
         expect(analyzeOverview.findAll('.analyze-sparkline-extremum-dot')).toHaveLength(2);
-        expect(analyzeOverview.find('.analyze-sparkline-extremum--high .analyze-sparkline-extremum-label').text()).toBe('306.32001');
+        expect(analyzeOverview.find('.analyze-sparkline-extremum--high .analyze-sparkline-extremum-label').text()).toBe('306.32');
         expect(analyzeOverview.find('.analyze-sparkline-extremum--low .analyze-sparkline-extremum-label').text()).toBe('290.00');
+
+        await oneWeekRangeButton.trigger('click');
+        await flushPromises();
+
+        expect(oneWeekRangeButton.attributes('aria-pressed')).toBe('true');
+        expect(analyzeOverview.text()).toContain('7-day capture');
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(0);
+        expect(analyzeOverview.find('.analyze-sparkline-line').attributes('d').match(/[ML]/g)).toHaveLength(256);
 
         await todayRangeButton.trigger('click');
         await flushPromises();
 
         expect(todayRangeButton.attributes('aria-pressed')).toBe('true');
-        expect(analyzeOverview.text()).toContain('13:35');
-        expect(analyzeOverview.text()).toContain('307.25');
-        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(20);
+        expect(analyzeOverview.text()).toContain('05.06.26, 11:55');
+        expect(analyzeOverview.text()).toContain('306.32');
+        expect(analyzeOverview.text()).toContain('all prices captured');
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(120);
+        const todayLabels = analyzeOverview.findAll('.analyze-sparkline-month-label').map((label) => label.text());
+        const todayDateRangeLabels = analyzeOverview.findAll('.analyze-sparkline-date-range-label');
+        expect(todayLabels).toEqual([
+            '03:00',
+            '04:00',
+            '05:00',
+            '06:00',
+            '07:00',
+            '08:00',
+            '09:00',
+            '10:00',
+            '11:00',
+        ]);
+        expect(todayDateRangeLabels.map((label) => label.text())).toEqual(['02:00', '11:55']);
+        expect(analyzeOverview.findAll('.analyze-sparkline-month-line')).toHaveLength(9);
+        expect(analyzeOverview.findAll('.analyze-sparkline-grid-line--vertical')).toHaveLength(0);
+        expect(analyzeOverview.find('.analyze-sparkline-previous-close-line').exists()).toBe(false);
+
+        await todayMinusOneRangeButton.trigger('click');
+        await flushPromises();
+
+        expect(todayMinusOneRangeButton.attributes('aria-pressed')).toBe('true');
+        expect(analyzeOverview.text()).toContain('with previous close');
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(121);
+        expect(analyzeOverview.find('.analyze-sparkline-previous-close-line').exists()).toBe(false);
+        expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Prev 298.58 · Start 298.60 +0.01%');
+        expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--today-start').exists()).toBe(false);
+        expect(analyzeOverview.find('.analyze-sparkline-endpoint-label-change--up').text()).toBe('Start 298.60 +0.01%');
+        expect(analyzeOverview.findAll('.analyze-sparkline-date-range-label').map((label) => label.text())).toEqual(['11:55']);
 
         const highMarkerLine = analyzeOverview.find('.analyze-sparkline-extremum--high .analyze-sparkline-extremum-line');
         const lowMarkerLine = analyzeOverview.find('.analyze-sparkline-extremum--low .analyze-sparkline-extremum-line');
@@ -1071,6 +1196,167 @@ describe('App', () => {
 
         expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(0);
 
+        const monthMarkerCard = analyzeOverview.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Month Marker Fund'));
+        await monthMarkerCard.trigger('click');
+        await flushPromises();
+
+        const monthLabels = analyzeOverview.findAll('.analyze-sparkline-month-label').map((label) => label.text());
+        const dateRangeLabels = analyzeOverview.findAll('.analyze-sparkline-date-range-label');
+        const monthPriceLabels = analyzeOverview.findAll('.analyze-sparkline-month-price-label');
+        expect(analyzeOverview.findAll('.analyze-sparkline-month-line')).toHaveLength(12);
+        expect(monthPriceLabels).toHaveLength(12);
+        expect(monthPriceLabels.every((label) => label.text().length > 0)).toBe(true);
+        expect(monthLabels).toEqual([
+            '01.07.',
+            '01.08.',
+            '01.09.',
+            '01.10.',
+            '31.10.',
+            '01.12.',
+            '01.01.',
+            '02.02.',
+            '02.03.',
+            '01.04.',
+            '01.05.',
+            '01.06.',
+        ]);
+        expect(dateRangeLabels.map((label) => label.text())).toEqual(['16.06.', '12.06.']);
+        expect(dateRangeLabels[0].attributes('text-anchor')).toBe('start');
+        expect(dateRangeLabels[1].attributes('text-anchor')).toBe('end');
+        expect(analyzeOverview.find('.analyze-sparkline-line').attributes('d').match(/[ML]/g)).toHaveLength(256);
+        expect(analyzeOverview.findAll('.analyze-sparkline-grid-line--vertical')).toHaveLength(0);
+
+        await sixMonthRangeButton.trigger('click');
+        await flushPromises();
+
+        const sixMonthLabels = analyzeOverview.findAll('.analyze-sparkline-month-label').map((label) => label.text());
+        const sixMonthDateRangeLabels = analyzeOverview.findAll('.analyze-sparkline-date-range-label');
+        const sixMonthPriceLabels = analyzeOverview.findAll('.analyze-sparkline-month-price-label');
+        expect(sixMonthRangeButton.attributes('aria-pressed')).toBe('true');
+        expect(analyzeOverview.findAll('.analyze-sparkline-month-line')).toHaveLength(12);
+        expect(sixMonthPriceLabels).toHaveLength(12);
+        expect(sixMonthPriceLabels.every((label) => label.text().length > 0)).toBe(true);
+        expect(sixMonthLabels).toEqual([
+            '15.12.',
+            '01.01.',
+            '15.01.',
+            '02.02.',
+            '16.02.',
+            '02.03.',
+            '16.03.',
+            '01.04.',
+            '15.04.',
+            '01.05.',
+            '15.05.',
+            '01.06.',
+        ]);
+        expect(sixMonthDateRangeLabels.map((label) => label.text())).toEqual(['11.12.', '12.06.']);
+        expect(sixMonthDateRangeLabels[0].attributes('text-anchor')).toBe('start');
+        expect(sixMonthDateRangeLabels[1].attributes('text-anchor')).toBe('end');
+        expect(analyzeOverview.find('.analyze-sparkline-line').attributes('d').match(/[ML]/g)).toHaveLength(256);
+        expect(analyzeOverview.findAll('.analyze-sparkline-grid-line--vertical')).toHaveLength(0);
+
+        await threeMonthRangeButton.trigger('click');
+        await flushPromises();
+
+        const threeMonthLabels = analyzeOverview.findAll('.analyze-sparkline-month-label').map((label) => label.text());
+        const threeMonthDateRangeLabels = analyzeOverview.findAll('.analyze-sparkline-date-range-label');
+        const threeMonthPriceLabels = analyzeOverview.findAll('.analyze-sparkline-month-price-label');
+        expect(threeMonthRangeButton.attributes('aria-pressed')).toBe('true');
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(0);
+        expect(analyzeOverview.findAll('.analyze-sparkline-month-line')).toHaveLength(9);
+        expect(threeMonthPriceLabels).toHaveLength(9);
+        expect(threeMonthPriceLabels.every((label) => label.text().length > 0)).toBe(true);
+        expect(threeMonthLabels).toEqual([
+            '20.03.',
+            '01.04.',
+            '10.04.',
+            '20.04.',
+            '01.05.',
+            '11.05.',
+            '20.05.',
+            '01.06.',
+            '10.06.',
+        ]);
+        expect(threeMonthDateRangeLabels.map((label) => label.text())).toEqual(['12.03.', '12.06.']);
+        expect(threeMonthDateRangeLabels[0].attributes('text-anchor')).toBe('start');
+        expect(threeMonthDateRangeLabels[1].attributes('text-anchor')).toBe('end');
+        expect(analyzeOverview.find('.analyze-sparkline-line').attributes('d').match(/[ML]/g)).toHaveLength(256);
+        const threeMonthMarkerPositions = analyzeOverview.findAll('.analyze-sparkline-month-line')
+            .map((line) => Number(line.attributes('x1')));
+        const threeMonthMarkerDistances = threeMonthMarkerPositions.slice(1)
+            .map((position, index) => position - threeMonthMarkerPositions[index]);
+        const threeMonthEndGap = Number(threeMonthDateRangeLabels[1].attributes('x')) - threeMonthMarkerPositions.at(-1);
+        expect(Math.abs(threeMonthEndGap - (threeMonthMarkerDistances.at(-1) * (2 / 9)))).toBeLessThan(0.01);
+        expect(analyzeOverview.findAll('.analyze-sparkline-grid-line--vertical')).toHaveLength(0);
+
+        await oneMonthRangeButton.trigger('click');
+        await flushPromises();
+
+        const oneMonthLabels = analyzeOverview.findAll('.analyze-sparkline-month-label').map((label) => label.text());
+        const oneMonthDateRangeLabels = analyzeOverview.findAll('.analyze-sparkline-date-range-label');
+        const oneMonthPriceLabels = analyzeOverview.findAll('.analyze-sparkline-month-price-label');
+        expect(oneMonthRangeButton.attributes('aria-pressed')).toBe('true');
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(0);
+        expect(analyzeOverview.findAll('.analyze-sparkline-month-line')).toHaveLength(10);
+        expect(oneMonthLabels).toEqual([
+            '15.05.',
+            '18.05.',
+            '21.05.',
+            '25.05.',
+            '27.05.',
+            '29.05.',
+            '02.06.',
+            '05.06.',
+            '08.06.',
+            '11.06.',
+        ]);
+        expect(oneMonthDateRangeLabels.map((label) => label.text())).toEqual(['12.05.', '12.06.']);
+        expect(oneMonthDateRangeLabels[0].attributes('text-anchor')).toBe('start');
+        expect(oneMonthDateRangeLabels[1].attributes('text-anchor')).toBe('end');
+        expect(oneMonthPriceLabels).toHaveLength(10);
+        expect(oneMonthPriceLabels.every((label) => label.text().length > 0)).toBe(true);
+        expect(analyzeOverview.find('.analyze-sparkline-line').attributes('d').match(/[ML]/g)).toHaveLength(256);
+        const oneMonthMarkerPositions = analyzeOverview.findAll('.analyze-sparkline-month-line')
+            .map((line) => Number(line.attributes('x1')));
+        const oneMonthMarkerDistances = oneMonthMarkerPositions.slice(1)
+            .map((position, index) => position - oneMonthMarkerPositions[index]);
+        const firstOneMonthMarkerDistance = oneMonthMarkerDistances[0];
+        expect(oneMonthMarkerDistances.slice(0, -1).every((distance) => Math.abs(distance - firstOneMonthMarkerDistance) < 0.01)).toBe(true);
+        const oneMonthEndGap = Number(oneMonthDateRangeLabels[1].attributes('x')) - oneMonthMarkerPositions.at(-1);
+        expect(Math.abs(oneMonthEndGap - (firstOneMonthMarkerDistance / 3))).toBeLessThan(0.01);
+        expect(analyzeOverview.findAll('.analyze-sparkline-grid-line--vertical')).toHaveLength(0);
+
+        await oneWeekRangeButton.trigger('click');
+        await flushPromises();
+
+        const oneWeekLabels = analyzeOverview.findAll('.analyze-sparkline-month-label').map((label) => label.text());
+        const oneWeekDateRangeLabels = analyzeOverview.findAll('.analyze-sparkline-date-range-label');
+        const oneWeekPriceLabels = analyzeOverview.findAll('.analyze-sparkline-month-price-label');
+        expect(oneWeekRangeButton.attributes('aria-pressed')).toBe('true');
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(0);
+        expect(analyzeOverview.findAll('.analyze-sparkline-month-line')).toHaveLength(4);
+        expect(oneWeekLabels).toEqual([
+            '08.06.',
+            '09.06.',
+            '10.06.',
+            '11.06.',
+        ]);
+        expect(oneWeekDateRangeLabels.map((label) => label.text())).toEqual(['05.06.', '12.06.']);
+        expect(oneWeekPriceLabels).toHaveLength(4);
+        expect(oneWeekPriceLabels.every((label) => label.text().length > 0)).toBe(true);
+        expect(analyzeOverview.find('.analyze-sparkline-line').attributes('d').match(/[ML]/g)).toHaveLength(256);
+        const oneWeekMarkerPositions = analyzeOverview.findAll('.analyze-sparkline-month-line')
+            .map((line) => Number(line.attributes('x1')));
+        const oneWeekMarkerDistances = oneWeekMarkerPositions.slice(1)
+            .map((position, index) => position - oneWeekMarkerPositions[index]);
+        const firstOneWeekMarkerDistance = oneWeekMarkerDistances[0];
+        expect(oneWeekMarkerDistances.every((distance) => Math.abs(distance - firstOneWeekMarkerDistance) < 0.01)).toBe(true);
+        const oneWeekEndGap = Number(oneWeekDateRangeLabels[1].attributes('x')) - oneWeekMarkerPositions.at(-1);
+        expect(Math.abs(oneWeekEndGap - firstOneWeekMarkerDistance)).toBeLessThan(0.01);
+        expect(analyzeOverview.findAll('.analyze-sparkline-grid-line--vertical')).toHaveLength(0);
+
         const allCard = analyzeOverview.findAll('.analyze-holding-card')
             .find((button) => button.text().includes('ALL'));
         await allCard.trigger('click');
@@ -1078,9 +1364,7 @@ describe('App', () => {
 
         expect(window.location.search).toBe('?stock=all');
         expect(analyzeOverview.text()).not.toContain('6 months');
-        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/historical-prices/ensure', expect.objectContaining({
-            method: 'POST',
-        }));
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/holdings/historical-prices/ensure')).toBe(false);
     });
 
     it('restores the selected Analyze overview stock from the URL', async () => {
@@ -1594,7 +1878,7 @@ describe('App', () => {
         expect(wrapper.find('[aria-label="Exchange result"]').text()).toContain('09:30-16:00');
     });
 
-    it('renders a Today chart with the actual stored EODHD intraday rows', async () => {
+    it('renders a Today chart with stored EODHD intraday candle rows', async () => {
         window.history.pushState({}, '', '/admin/menu/analyze/overview?stock=1');
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
         const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
@@ -1632,7 +1916,16 @@ describe('App', () => {
                                 { trading_date: '2026-06-05', price: '307.250000', currency: 'EUR' },
                             ],
                             intraday_prices: [
-                                { id: 1, price: '307.25000000', currency: 'EUR', as_of: '2026-06-05T10:30:00+00:00' },
+                                { id: 1, price: '999.25000000', currency: 'EUR', as_of: '2026-06-05T10:30:00+00:00' },
+                            ],
+                            intraday_candles: [
+                                {
+                                    id: 1,
+                                    trading_date: '2026-06-05',
+                                    price: '307.25000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-05T10:30:00+00:00',
+                                },
                             ],
                         },
                     ],
@@ -1678,36 +1971,14 @@ describe('App', () => {
         expect(wrapper.find('.analyze-sparkline-trend-line').exists()).toBe(false);
         expect(wrapper.findAll('.analyze-sparkline-dot')).toHaveLength(1);
         expect(wrapper.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Start 307.25');
-        expect(wrapper.find('.analyze-sparkline-endpoint-label--latest').text()).toBe('End 307.25');
+        expect(wrapper.find('.analyze-sparkline-endpoint-label--latest').text()).toBe('End 307.25 0.00%');
         expect(wrapper.text()).not.toContain('No EODHD intraday prices available for this session.');
     });
 
-    it('shows historical stock price fetch progress on the Analyze overview', async () => {
+    it('does not fetch historical stock prices on the Analyze overview', async () => {
         window.history.pushState({}, '', '/admin/menu/analyze/overview');
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
         const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
-        const runningHistoryRefresh = {
-            refresh_id: 'history-1',
-            status: 'running',
-            processed: 1,
-            total: 2,
-            step: '1/2',
-            message: 'Fetching historical stock prices (1/2)...',
-            current: 'AAPL Apple',
-            started_at: '2026-06-05T12:00:00+00:00',
-            finished_at: null,
-            error: null,
-        };
-        const historyCoverage = {
-            date_from: '2025-06-05',
-            date_to: '2026-06-05',
-            required_to: '2026-06-04',
-            is_complete: false,
-            total_count: 2,
-            available_count: 1,
-            missing_count: 1,
-            holdings: [],
-        };
         const fetchMock = vi.fn((path, options = {}) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -1739,16 +2010,8 @@ describe('App', () => {
             if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options.method === 'POST') {
                 return Promise.resolve(jsonResponse({
                     message: 'Historical stock prices are being fetched.',
-                    coverage: historyCoverage,
-                    refresh: runningHistoryRefresh,
-                }));
-            }
-
-            if (path === '/admin/watchlist/holdings/historical-prices/history-1') {
-                return Promise.resolve(jsonResponse({
-                    message: runningHistoryRefresh.message,
-                    coverage: historyCoverage,
-                    refresh: runningHistoryRefresh,
+                    coverage: {},
+                    refresh: {},
                 }));
             }
 
@@ -1774,44 +2037,18 @@ describe('App', () => {
 
         const analyzeOverview = wrapper.find('[aria-label="Analyze overview"]');
 
-        expect(analyzeOverview.text()).toContain('Checking historical prices');
-        expect(analyzeOverview.text()).toContain('1/2');
-        expect(analyzeOverview.text()).toContain('AAPL Apple');
-        expect(analyzeOverview.find('.v-progress-linear').exists()).toBe(true);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/holdings/historical-prices/ensure')).toBe(false);
+        expect(analyzeOverview.text()).not.toContain('Checking historical prices');
+        expect(analyzeOverview.text()).not.toContain('historical price records loaded/updated.');
+        expect(analyzeOverview.find('.analyze-history-status').exists()).toBe(false);
 
         wrapper.unmount();
     });
 
-    it('shows loaded historical stock price records after a finished partial update', async () => {
+    it('does not show historical stock price result messages on the Analyze overview', async () => {
         window.history.pushState({}, '', '/admin/menu/analyze/overview');
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
         const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
-        const partialHistoryRefresh = {
-            refresh_id: 'history-1',
-            status: 'partial',
-            processed: 2,
-            total: 2,
-            step: '2/2',
-            message: 'Historical stock price fetching finished with missing data.',
-            current: null,
-            started_at: '2026-06-05T12:00:00+00:00',
-            finished_at: '2026-06-05T12:05:00+00:00',
-            error: null,
-            success_count: 0,
-            unavailable_count: 2,
-            failed_count: 0,
-            stored_count: 0,
-        };
-        const historyCoverage = {
-            date_from: '2025-06-05',
-            date_to: '2026-06-05',
-            required_to: '2026-06-04',
-            is_complete: false,
-            total_count: 2,
-            available_count: 0,
-            missing_count: 2,
-            holdings: [],
-        };
         const fetchMock = vi.fn((path, options = {}) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -1842,9 +2079,9 @@ describe('App', () => {
 
             if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options.method === 'POST') {
                 return Promise.resolve(jsonResponse({
-                    message: partialHistoryRefresh.message,
-                    coverage: historyCoverage,
-                    refresh: partialHistoryRefresh,
+                    message: 'Historical stock price fetching finished with missing data.',
+                    coverage: {},
+                    refresh: {},
                 }));
             }
 
@@ -1871,10 +2108,11 @@ describe('App', () => {
         const analyzeOverview = wrapper.find('[aria-label="Analyze overview"]');
 
         expect(analyzeOverview.text()).not.toContain('History');
-        expect(analyzeOverview.text()).toContain('0 historical price records loaded/updated.');
+        expect(analyzeOverview.text()).not.toContain('historical price records loaded/updated.');
         expect(analyzeOverview.text()).not.toContain('2 missing');
         expect(analyzeOverview.text()).not.toContain('2/2');
-        expect(analyzeOverview.find('.v-progress-linear').exists()).toBe(false);
+        expect(analyzeOverview.find('.analyze-history-status').exists()).toBe(false);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/holdings/historical-prices/ensure')).toBe(false);
 
         wrapper.unmount();
     });
@@ -2585,11 +2823,11 @@ describe('App', () => {
         expect(wrapper.text()).toContain('US0378331005');
         expect(wrapper.text()).toContain('865985');
         expect(wrapper.text()).toContain('US0378331005 · WKN: 865985');
-        expect(wrapper.text()).toContain('306.32001');
-        expect(wrapper.text()).not.toContain('306.32001 EUR');
-        expect(wrapper.text()).toContain('300.1');
-        expect(wrapper.text()).toContain('305.9');
-        expect(wrapper.text()).toContain('299.5');
+        expect(wrapper.text()).toContain('306.32');
+        expect(wrapper.text()).not.toContain('306.32 EUR');
+        expect(wrapper.text()).toContain('300.10');
+        expect(wrapper.text()).toContain('305.90');
+        expect(wrapper.text()).toContain('299.50');
         expect(wrapper.text()).toContain('298.75');
         expect(wrapper.text()).toContain('+2.28%');
         expect(wrapper.text()).toContain('+2.14%');
@@ -2896,7 +3134,7 @@ describe('App', () => {
         expect(indexWatchStrip.text()).toContain('Germany');
         expect(indexWatchStrip.text()).toContain('DAX Index');
         expect(indexWatchStrip.text()).toContain('+0.33%');
-        expect(indexWatchStrip.text()).toContain('6,116.5298');
+        expect(indexWatchStrip.text()).toContain('6,116.53');
         expect(wrapper.find('.index-watch-card').text()).not.toContain('2026-06-07');
         expect(wrapper.find('.index-watch-card').text()).not.toContain('DE0008469008');
         expect(indexWatchStrip.text().indexOf('DAX')).toBeLessThan(indexWatchStrip.text().indexOf('+INDEX'));
@@ -2912,7 +3150,7 @@ describe('App', () => {
         expect(document.body.textContent).toContain('Evolution');
         expect(document.body.textContent).toContain('07.06.2026');
         expect(document.body.textContent).toContain('09.05.2026');
-        expect(document.body.textContent).toContain('6,116.5298');
+        expect(document.body.textContent).toContain('6,116.53');
         expect(document.body.querySelectorAll('.index-price-history-table tbody tr')).toHaveLength(30);
         expect(Array.from(document.body.querySelectorAll('.index-price-history-table th')).map((heading) => heading.textContent.trim())).toEqual([
             'Date',
@@ -2933,7 +3171,7 @@ describe('App', () => {
         expect(document.body.querySelector('.index-price-chart-endpoint-label--latest').textContent.trim()).toMatch(/^End /);
         expect(Number(document.body.querySelector('.index-price-chart-endpoint-label--start').getAttribute('y'))).toBeGreaterThan(220);
         expect(Number(document.body.querySelector('.index-price-chart-endpoint-label--latest').getAttribute('y'))).toBeLessThan(10);
-        expect(document.body.textContent).toContain('6,116.5298');
+        expect(document.body.textContent).toContain('6,116.53');
         expect(document.body.textContent).toContain('09.05');
 
         const closeIndexPriceButton = Array.from(document.body.querySelectorAll('button'))
@@ -3192,6 +3430,134 @@ describe('App', () => {
         expect(fetchMock).not.toHaveBeenCalledWith('/admin/price-refresh-settings', expect.objectContaining({ method: 'PATCH' }));
         expect(wrapper.text()).toContain('Index price refresh schedule updated.');
         expect(wrapper.find('#index-price-refresh-schedule-form').findAll('input')).toHaveLength(0);
+    });
+
+    it('allows scheduling and immediately queuing the intraday 5m missing backfill', async () => {
+        vi.useFakeTimers();
+        window.history.pushState({}, '', '/admin/menu/updates');
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        const refresh = {
+            refresh_id: 'intraday-missing-test',
+            status: 'queued',
+            processed: 0,
+            total: 5,
+            step: '0/5',
+            message: 'Missing intraday backfill queued.',
+            current: null,
+            started_at: '2026-06-12T10:00:00+00:00',
+            finished_at: null,
+            date_from: '2025-06-13',
+            date_to: '2026-06-12',
+            stored_count: 0,
+            success_count: 0,
+            failed_count: 0,
+            error: null,
+        };
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({ user: { id: 1, name: 'Admin', email: 'a@b.com', roles: ['admin'] } }));
+            }
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+            if (path === '/admin/intraday-backfill-settings' && options?.method === 'PATCH') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Intraday backfill schedule updated.',
+                    intraday_backfill_settings: intradayBackfillSettings({ daily_time: '21:15' }),
+                }));
+            }
+            if (path === '/admin/intraday-backfill/run' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Missing intraday backfill queued.',
+                    intraday_backfill_settings: intradayBackfillSettings({
+                        daily_time: '21:15',
+                        status: 'updating',
+                        status_label: 'Backfilling intraday data',
+                    }),
+                    intraday_backfill_refresh: refresh,
+                }));
+            }
+            if (path === '/admin/intraday-backfill/intraday-missing-test') {
+                return Promise.resolve(jsonResponse({
+                    intraday_backfill_settings: intradayBackfillSettings({ daily_time: '21:15' }),
+                    intraday_backfill_refresh: {
+                        ...refresh,
+                        status: 'finished',
+                        processed: 5,
+                        step: '5/5',
+                        finished_at: '2026-06-12T10:02:00+00:00',
+                        stored_count: 25,
+                    },
+                }));
+            }
+            if (path === '/admin/price-refresh-settings') {
+                return Promise.resolve(jsonResponse({
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                    intraday_backfill_settings: intradayBackfillSettings(),
+                    intraday_backfill_refresh: null,
+                }));
+            }
+
+            return Promise.resolve(jsonResponse({}));
+        });
+        global.fetch = fetchMock;
+
+        try {
+            const wrapper = mountApp();
+            await flushPromises();
+
+            expect(wrapper.find('#intraday-backfill-schedule-form').text()).toContain('18:30');
+            expect(wrapper.find('#intraday-backfill-schedule-form').text()).toContain('Europe/Vienna');
+
+            const editButton = wrapper.find('#intraday-backfill-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
+            await editButton.trigger('click');
+            await flushPromises();
+
+            await wrapper.find('#intraday-backfill-schedule-form input[type="time"]').setValue('21:15');
+            await wrapper.find('#intraday-backfill-schedule-form').trigger('submit');
+            await flushPromises();
+
+            expect(fetchMock).toHaveBeenCalledWith('/admin/intraday-backfill-settings', expect.objectContaining({
+                method: 'PATCH',
+                body: JSON.stringify({ daily_time: '21:15' }),
+            }));
+            expect(wrapper.text()).toContain('Intraday backfill schedule updated.');
+            expect(wrapper.find('#intraday-backfill-schedule-form').text()).toContain('21:15');
+
+            const runButton = wrapper.find('#intraday-backfill-schedule-form').findAll('button').find((button) => button.text().includes('Fetch missing now'));
+            await runButton.trigger('click');
+            await flushPromises();
+
+            expect(fetchMock).toHaveBeenCalledWith('/admin/intraday-backfill/run', expect.objectContaining({
+                method: 'POST',
+            }));
+            expect(wrapper.text()).toContain('Missing intraday backfill queued.');
+            expect(wrapper.text()).toContain('Backfill: 5/5');
+            expect(wrapper.text()).toContain('25 candles loaded/updated');
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('does not reset schedule draft values while settings polling refreshes', async () => {

@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { formatPriceValue } from './utils/numberFormatters';
 
 const adminUrl = '/admin/login';
 const logoMarkUrl = '/images/gkstocks-logo-mark.png';
@@ -192,14 +193,17 @@ const moodBlobRedBg = computed(() => {
 });
 
 function formatTickerPrice(item) {
-    if (item.latest_price == null) return '–';
-    const num = Number(item.latest_price);
-    if (Number.isNaN(num)) return '–';
-    const formatted = num.toLocaleString('en-US', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 4,
-    });
-    return item.currency && item.currency !== 'EUR' ? `${formatted} ${item.currency}` : formatted;
+    if (item.latest_price == null) {
+        return '–';
+    }
+
+    const amount = Number(item.latest_price);
+
+    if (Number.isNaN(amount)) {
+        return '–';
+    }
+
+    return formatPriceValue(item.latest_price, item.currency);
 }
 
 function formatTickerChange(item) {

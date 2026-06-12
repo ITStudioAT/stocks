@@ -142,6 +142,9 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::get('/admin/price-refresh-settings', [AdminPriceRefreshSettingsController::class, 'show'])->name('admin.price-refresh-settings.show');
     Route::patch('/admin/price-refresh-settings', [AdminPriceRefreshSettingsController::class, 'update'])->name('admin.price-refresh-settings.update');
     Route::patch('/admin/index-price-refresh-settings', [AdminPriceRefreshSettingsController::class, 'updateIndex'])->name('admin.index-price-refresh-settings.update');
+    Route::patch('/admin/intraday-backfill-settings', [AdminPriceRefreshSettingsController::class, 'updateIntradayBackfill'])->name('admin.intraday-backfill-settings.update');
+    Route::post('/admin/intraday-backfill/run', [AdminPriceRefreshSettingsController::class, 'runIntradayBackfill'])->name('admin.intraday-backfill.run');
+    Route::get('/admin/intraday-backfill/{refreshId}', [AdminPriceRefreshSettingsController::class, 'intradayBackfillStatus'])->name('admin.intraday-backfill.status');
     Route::get('/admin/ui-preferences', [AdminUiPreferencesController::class, 'show'])->name('admin.ui-preferences.show');
     Route::patch('/admin/ui-preferences', [AdminUiPreferencesController::class, 'update'])->name('admin.ui-preferences.update');
     Route::post('/admin/depots', [AdminDepotController::class, 'store'])->name('admin.depots.store');

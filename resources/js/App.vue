@@ -6,6 +6,7 @@ import { useAuthStore } from './stores/auth';
 import { useDepotStore } from './stores/depots';
 import { useRoleStore } from './stores/roles';
 import { useUserStore } from './stores/users';
+import { formatAdaptiveNumber, formatPriceValue } from './utils/numberFormatters';
 
 const indexRecentPriceLimit = 30;
 const logoMarkUrl = '/images/gkstocks-logo-mark.png';
@@ -31,6 +32,8 @@ const {
     priceRefresh,
     priceRefreshSettings,
     indexPriceRefreshSettings,
+    intradayBackfillSettings,
+    intradayBackfillRefresh,
     queueStatus,
     testOptions,
     testTickerExchangeCode,
@@ -44,8 +47,6 @@ const {
     dataIntradaySelectedStockId,
     dataIntradayDays,
     dataIntradayRefresh,
-    stockHistoricalPriceCoverage,
-    stockHistoricalPriceRefresh,
     analyzeIntradayCandles,
     holdingIntradayCandles,
     holdingIntradayCandlesLoading,
@@ -161,21 +162,21 @@ const indexPriceDialogError = ref('');
 const expandedHoldingIds = ref([]);
 const priceRefreshScheduleForm = ref(emptyPriceRefreshScheduleForm());
 const indexPriceRefreshScheduleForm = ref(emptyPriceRefreshScheduleForm());
+const intradayBackfillScheduleForm = ref(emptyIntradayBackfillScheduleForm());
 const priceRefreshScheduleMessage = ref('');
 const priceRefreshScheduleError = ref('');
 const isPriceRefreshScheduleEditing = ref(false);
 const isIndexPriceRefreshScheduleEditing = ref(false);
+const isIntradayBackfillScheduleEditing = ref(false);
+const isIntradayBackfillRunningNow = ref(false);
 const priceRefreshTimer = ref(null);
+const intradayBackfillTimer = ref(null);
 const priceRefreshSettingsTimer = ref(null);
 const isPriceRefreshSettingsPolling = ref(false);
 const historicalPriceFetchTimer = ref(null);
 const isHistoricalPriceFetchPolling = ref(false);
-const stockHistoricalPriceFetchTimer = ref(null);
-const isStockHistoricalPriceFetchPolling = ref(false);
 const dataExchangeReloadTimer = ref(null);
 const dataIntradayReloadTimer = ref(null);
-const isStockHistoricalPriceEnsureLoading = ref(false);
-const isAnalyzeHistoryInfoDismissed = ref(false);
 const isDashboardMenuCompact = ref(smAndDown.value);
 const viewportWidth = ref(window.visualViewport?.width ?? window.innerWidth);
 const viewportHeight = ref(window.visualViewport?.height ?? window.innerHeight);
@@ -252,35 +253,19 @@ const priceRefreshProgressValue = computed(() => {
 
     return Math.round((priceRefresh.value.processed / priceRefresh.value.total) * 100);
 });
-const isStockHistoricalPriceFetchRunning = computed(() => ['queued', 'running'].includes(stockHistoricalPriceRefresh.value?.status));
-const showAnalyzeHistoryProgress = computed(() => isStockHistoricalPriceEnsureLoading.value || isStockHistoricalPriceFetchRunning.value);
-const showAnalyzeHistoryResultInfo = computed(() => !showAnalyzeHistoryProgress.value
-    && !isAnalyzeHistoryInfoDismissed.value
-    && Boolean(stockHistoricalPriceCoverage.value || stockHistoricalPriceRefresh.value));
-const showAnalyzeHistoryStatus = computed(() => showAnalyzeHistoryProgress.value || showAnalyzeHistoryResultInfo.value);
-const stockHistoricalPriceStoredCount = computed(() => Number(stockHistoricalPriceRefresh.value?.stored_count ?? 0));
-const stockHistoricalPriceResultMessage = computed(() => {
-    const recordCount = stockHistoricalPriceStoredCount.value;
-    const recordLabel = recordCount === 1 ? 'record' : 'records';
-
-    return `${formatInteger(recordCount)} historical price ${recordLabel} loaded/updated.`;
-});
-const stockHistoricalPriceStatusLabel = computed(() => {
-    if (isStockHistoricalPriceFetchRunning.value) {
-        return [
-            stockHistoricalPriceRefresh.value?.step,
-            stockHistoricalPriceRefresh.value?.current,
-        ].filter(Boolean).join(' · ');
+const isIntradayBackfillRunning = computed(() => {
+    if (!intradayBackfillRefresh.value || isFinishedPriceRefresh(intradayBackfillRefresh.value)) {
+        return false;
     }
 
-    return '';
+    return ['queued', 'running'].includes(intradayBackfillRefresh.value.status);
 });
-const stockHistoricalPriceFetchProgressValue = computed(() => {
-    if (!stockHistoricalPriceRefresh.value || stockHistoricalPriceRefresh.value.total === 0) {
+const intradayBackfillProgressValue = computed(() => {
+    if (!intradayBackfillRefresh.value || intradayBackfillRefresh.value.total === 0) {
         return 0;
     }
 
-    return Math.round((stockHistoricalPriceRefresh.value.processed / stockHistoricalPriceRefresh.value.total) * 100);
+    return Math.round((intradayBackfillRefresh.value.processed / intradayBackfillRefresh.value.total) * 100);
 });
 const isDataExchangeReloadRunning = computed(() => ['queued', 'running'].includes(dataExchangeRefresh.value?.status));
 const selectedDataIntradayStock = computed(() => dataIntradayStocks.value.find((stock) => stock.id === selectedDataIntradayStockId.value) ?? null);
@@ -364,22 +349,37 @@ const selectedAnalyzeScopeLabel = computed(() => {
         || selectedAnalyzeHolding.value?.symbol
         || `Stock ${selectedAnalyzeHoldingId.value}`;
 });
-const selectedAnalyzeDailyPrices = computed(() => filterAnalyzeDailyPrices(
-    selectedAnalyzeHolding.value?.daily_prices ?? [],
+const selectedAnalyzeIntradayCandlePrices = computed(() => filterAnalyzeIntradayCandlePrices(
+    selectedAnalyzeHolding.value?.intraday_candles ?? [],
     selectedAnalyzeHistoryRange.value,
 ));
-const selectedAnalyzeIntradayPrices = computed(() => mapAnalyzeIntradayPrices(
-    selectedAnalyzeHolding.value?.intraday_prices ?? [],
-));
-const selectedAnalyzeChartPrices = computed(() => {
-    if (selectedAnalyzeHistoryRange.value === 'today') {
-        return selectedAnalyzeIntradayPrices.value;
-    }
-
-    return selectedAnalyzeDailyPrices.value;
+const analyzeChartMaxPoints = 256;
+const analyzeCalendarNormalizedRangeKeys = ['1y', '6m', '3m', '1m', '1w'];
+const selectedAnalyzeRawChartPrices = computed(() => {
+    return selectedAnalyzeIntradayCandlePrices.value;
 });
-const selectedAnalyzeSparkline = computed(() => buildAnalyzeSparkline(selectedAnalyzeChartPrices.value));
-const showAnalyzeSparklineDots = computed(() => ['3m', '1m', '1w', 'today'].includes(selectedAnalyzeHistoryRange.value));
+const selectedAnalyzeChartPrices = computed(() => normalizeAnalyzeChartPrices(
+    selectedAnalyzeRawChartPrices.value,
+    selectedAnalyzeHistoryRange.value,
+));
+const selectedAnalyzePreviousTradingClose = computed(() => previousAnalyzeTradingClose(
+    selectedAnalyzeHolding.value?.intraday_candles ?? [],
+    selectedAnalyzeChartPrices.value,
+    selectedAnalyzeHistoryRange.value,
+));
+const selectedAnalyzeChartPricesWithPreviousClose = computed(() => withAnalyzePreviousTradingClosePoint(
+    selectedAnalyzeChartPrices.value,
+    selectedAnalyzePreviousTradingClose.value,
+    selectedAnalyzeHistoryRange.value,
+));
+const selectedAnalyzeSparkline = computed(() => buildAnalyzeSparkline(
+    selectedAnalyzeChartPricesWithPreviousClose.value,
+    selectedAnalyzeHistoryRange.value,
+));
+const selectedAnalyzeRangeCaptureLabel = computed(() => (
+    analyzeHistoryRangeItems.find((item) => item.key === selectedAnalyzeHistoryRange.value)?.captureLabel ?? ''
+));
+const showAnalyzeSparklineDots = computed(() => isAnalyzeTodayRange(selectedAnalyzeHistoryRange.value));
 const analyzeIntradayDetail = computed(() => analyzeIntradayCandles.value?.intraday ?? null);
 const analyzeIntradayDetailDays = computed(() => {
     const days = analyzeIntradayCandles.value?.intraday_days;
@@ -510,26 +510,37 @@ const analyzeHistoryRangeItems = [
     {
         key: '1y',
         label: '1 year',
+        captureLabel: '365-day capture',
     },
     {
         key: '6m',
         label: '6 months',
+        captureLabel: '183-day capture',
     },
     {
         key: '3m',
         label: '3 months',
+        captureLabel: '92-day capture',
     },
     {
         key: '1m',
         label: '1 month',
+        captureLabel: '31-day capture',
     },
     {
         key: '1w',
         label: '1 week',
+        captureLabel: '7-day capture',
+    },
+    {
+        key: 'today-1',
+        label: 'today-1',
+        captureLabel: 'with previous close',
     },
     {
         key: 'today',
         label: 'today',
+        captureLabel: 'all prices captured',
     },
 ];
 const analyzeHistoryRangeDays = {
@@ -539,6 +550,7 @@ const analyzeHistoryRangeDays = {
     '1m': 31,
     '1w': 7,
     today: 0,
+    'today-1': 0,
 };
 
 const menuItems = computed(() => [
@@ -637,6 +649,18 @@ watch(
 );
 
 watch(
+    intradayBackfillSettings,
+    (settings) => {
+        if (isIntradayBackfillScheduleEditing.value) {
+            return;
+        }
+
+        intradayBackfillScheduleForm.value = intradayBackfillScheduleFormFromSettings(settings);
+    },
+    { immediate: true },
+);
+
+watch(
     uiPreferences,
     (preferences) => {
         if (['latest', 'flatex'].includes(preferences?.depot_price_source)) {
@@ -668,10 +692,6 @@ watch(
 watch(
     [activeSection, activeAnalyzeSubsection, activeDataSubsection],
     ([section, subsection, dataSubsection]) => {
-        if (section === 'analyze' && subsection === 'overview') {
-            ensureAnalyzeOverviewHistoricalPrices();
-        }
-
         if (section === 'analyze' && subsection === 'tests') {
             depotsStore.loadTestOptions();
         }
@@ -720,6 +740,19 @@ watch(
     },
 );
 
+watch(
+    isIntradayBackfillRunning,
+    (isRunning) => {
+        if (isRunning && intradayBackfillRefresh.value?.refresh_id) {
+            startIntradayBackfillPolling(intradayBackfillRefresh.value.refresh_id);
+
+            return;
+        }
+
+        stopIntradayBackfillPolling();
+    },
+);
+
 onMounted(async () => {
     updateViewportMetrics();
     window.addEventListener('resize', updateViewportMetrics);
@@ -747,7 +780,6 @@ onMounted(async () => {
         depotsStore.loadQueueStatus();
     }
 
-    ensureAnalyzeOverviewHistoricalPrices();
     ensureAnalyzeDetailIntradayCandles();
     startPriceRefreshSettingsPolling();
 
@@ -765,9 +797,9 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
     stopPriceRefreshPolling();
+    stopIntradayBackfillPolling();
     stopPriceRefreshSettingsPolling();
     stopHistoricalPriceFetchPolling();
-    stopStockHistoricalPriceFetchPolling();
     stopDataExchangeReloadPolling();
     stopDataIntradayReloadPolling();
     stopHoldingDialogKeyboardShortcuts();
@@ -1564,6 +1596,44 @@ async function saveIndexPriceRefreshSchedule() {
     }
 }
 
+async function saveIntradayBackfillSchedule() {
+    priceRefreshScheduleError.value = '';
+    priceRefreshScheduleMessage.value = '';
+
+    try {
+        const data = await depotsStore.updateIntradayBackfillSettings({
+            daily_time: intradayBackfillScheduleForm.value.daily_time,
+        });
+
+        priceRefreshScheduleMessage.value = data.message;
+        isIntradayBackfillScheduleEditing.value = false;
+        intradayBackfillScheduleForm.value = intradayBackfillScheduleFormFromSettings(
+            data.intraday_backfill_settings ?? intradayBackfillSettings.value,
+        );
+    } catch (err) {
+        priceRefreshScheduleError.value = err.message;
+    }
+}
+
+async function runIntradayBackfillNow() {
+    priceRefreshScheduleError.value = '';
+    priceRefreshScheduleMessage.value = '';
+    isIntradayBackfillRunningNow.value = true;
+
+    try {
+        const data = await depotsStore.runIntradayBackfillNow();
+        priceRefreshScheduleMessage.value = data.message;
+
+        if (data.intraday_backfill_refresh?.refresh_id) {
+            startIntradayBackfillPolling(data.intraday_backfill_refresh.refresh_id);
+        }
+    } catch (err) {
+        priceRefreshScheduleError.value = err.message;
+    } finally {
+        isIntradayBackfillRunningNow.value = false;
+    }
+}
+
 function editPriceRefreshSchedule() {
     priceRefreshScheduleMessage.value = '';
     priceRefreshScheduleError.value = '';
@@ -1576,6 +1646,13 @@ function editIndexPriceRefreshSchedule() {
     priceRefreshScheduleError.value = '';
     indexPriceRefreshScheduleForm.value = priceRefreshScheduleFormFromSettings(indexPriceRefreshSettings.value);
     isIndexPriceRefreshScheduleEditing.value = true;
+}
+
+function editIntradayBackfillSchedule() {
+    priceRefreshScheduleMessage.value = '';
+    priceRefreshScheduleError.value = '';
+    intradayBackfillScheduleForm.value = intradayBackfillScheduleFormFromSettings(intradayBackfillSettings.value);
+    isIntradayBackfillScheduleEditing.value = true;
 }
 
 async function loadPriceRefreshSettings() {
@@ -1612,6 +1689,16 @@ async function pollPriceRefreshSettings() {
     try {
         const data = await depotsStore.loadPriceRefreshSettings();
         const refresh = data.refresh;
+        const intradayRefresh = data.intraday_backfill_refresh;
+
+        if (intradayRefresh && !isFinishedPriceRefresh(intradayRefresh) && intradayRefresh.refresh_id) {
+            const isPollingCurrentIntradayRefresh = intradayBackfillTimer.value
+                && intradayBackfillRefresh.value?.refresh_id === intradayRefresh.refresh_id;
+
+            if (!isPollingCurrentIntradayRefresh) {
+                startIntradayBackfillPolling(intradayRefresh.refresh_id);
+            }
+        }
 
         if (!refresh || isFinishedPriceRefresh(refresh)) {
             if (priceRefreshTimer.value) {
@@ -1640,6 +1727,38 @@ function startPriceRefreshPolling(refreshId) {
     stopPriceRefreshPolling();
     pollPriceRefreshStatus(refreshId);
     priceRefreshTimer.value = window.setInterval(() => pollPriceRefreshStatus(refreshId), 2000);
+}
+
+function startIntradayBackfillPolling(refreshId) {
+    stopIntradayBackfillPolling();
+    pollIntradayBackfillStatus(refreshId);
+    intradayBackfillTimer.value = window.setInterval(() => pollIntradayBackfillStatus(refreshId), 3000);
+}
+
+function stopIntradayBackfillPolling() {
+    if (!intradayBackfillTimer.value) {
+        return;
+    }
+
+    window.clearInterval(intradayBackfillTimer.value);
+    intradayBackfillTimer.value = null;
+}
+
+async function pollIntradayBackfillStatus(refreshId) {
+    try {
+        const data = await depotsStore.loadIntradayBackfillRefresh(refreshId);
+        const refresh = data.intraday_backfill_refresh;
+
+        if (!refresh || isFinishedPriceRefresh(refresh)) {
+            stopIntradayBackfillPolling();
+        }
+    } catch (err) {
+        stopIntradayBackfillPolling();
+
+        if (activeSection.value === 'updates') {
+            priceRefreshScheduleError.value = err.message;
+        }
+    }
 }
 
 function stopPriceRefreshPolling() {
@@ -1683,36 +1802,6 @@ async function pollHistoricalPriceFetches() {
     }
 }
 
-async function ensureAnalyzeOverviewHistoricalPrices() {
-    if (activeSection.value !== 'analyze' || activeAnalyzeSubsection.value !== 'overview') {
-        return;
-    }
-
-    if (isStockHistoricalPriceEnsureLoading.value || isStockHistoricalPriceFetchRunning.value) {
-        return;
-    }
-
-    isStockHistoricalPriceEnsureLoading.value = true;
-    isAnalyzeHistoryInfoDismissed.value = false;
-
-    try {
-        const data = await depotsStore.ensureStockHistoricalPrices();
-        await depotsStore.loadQueueStatus();
-
-        if (data.refresh && !isFinishedPriceRefresh(data.refresh)) {
-            startStockHistoricalPriceFetchPolling(data.refresh.refresh_id);
-
-            return;
-        }
-
-        stopStockHistoricalPriceFetchPolling();
-    } catch (err) {
-        holdingError.value = err.message;
-    } finally {
-        isStockHistoricalPriceEnsureLoading.value = false;
-    }
-}
-
 async function ensureAnalyzeDetailIntradayCandles() {
     if (activeSection.value !== 'analyze' || activeAnalyzeSubsection.value !== 'detail') {
         return;
@@ -1739,42 +1828,6 @@ async function ensureAnalyzeDetailIntradayCandles() {
     try {
         await depotsStore.loadHoldingIntradayCandles(selectedAnalyzeHoldingId.value);
     } catch {
-    }
-}
-
-function startStockHistoricalPriceFetchPolling(refreshId) {
-    stopStockHistoricalPriceFetchPolling();
-    pollStockHistoricalPriceFetch(refreshId);
-    stockHistoricalPriceFetchTimer.value = window.setInterval(() => pollStockHistoricalPriceFetch(refreshId), 3000);
-}
-
-function stopStockHistoricalPriceFetchPolling() {
-    if (!stockHistoricalPriceFetchTimer.value) {
-        return;
-    }
-
-    window.clearInterval(stockHistoricalPriceFetchTimer.value);
-    stockHistoricalPriceFetchTimer.value = null;
-}
-
-async function pollStockHistoricalPriceFetch(refreshId) {
-    if (isStockHistoricalPriceFetchPolling.value) {
-        return;
-    }
-
-    isStockHistoricalPriceFetchPolling.value = true;
-
-    try {
-        const data = await depotsStore.loadStockHistoricalPriceRefresh(refreshId);
-
-        if (isFinishedPriceRefresh(data.refresh)) {
-            stopStockHistoricalPriceFetchPolling();
-        }
-    } catch (err) {
-        stopStockHistoricalPriceFetchPolling();
-        holdingError.value = err.message;
-    } finally {
-        isStockHistoricalPriceFetchPolling.value = false;
     }
 }
 
@@ -2296,26 +2349,6 @@ function hasPositionPieces(holding) {
     return !Number.isNaN(pieces) && pieces > 0;
 }
 
-function formatPriceValue(value, currency) {
-    if (value === null || value === undefined || value === '') {
-        return '-';
-    }
-
-    const amount = Number(value);
-    const formattedAmount = Number.isNaN(amount)
-        ? value
-        : new Intl.NumberFormat('en-US', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 6,
-        }).format(amount);
-
-    if (!currency || currency === 'EUR') {
-        return formattedAmount;
-    }
-
-    return `${formattedAmount} ${currency}`;
-}
-
 function isEditingFlatexPrice(holding) {
     return editingFlatexHoldingId.value === holding.id;
 }
@@ -2386,15 +2419,7 @@ function formatHoldingCardPrice(holding) {
         return '-';
     }
 
-    const amount = Number(price);
-    const formattedAmount = Number.isNaN(amount)
-        ? price
-        : new Intl.NumberFormat('en-US', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-        }).format(amount);
-
-    return holding.currency ? `${formattedAmount} ${holding.currency}` : formattedAmount;
+    return formatPriceValue(price, holding.currency, { showCurrency: true });
 }
 
 function mobileHoldingPriceSource(holding) {
@@ -2562,12 +2587,7 @@ function formatIndexChartDate(value) {
 }
 
 function formatIndexChartValue(value) {
-    const maximumFractionDigits = Math.abs(value) >= 100 ? 2 : 4;
-
-    return new Intl.NumberFormat('en-US', {
-        maximumFractionDigits,
-        minimumFractionDigits: 0,
-    }).format(value);
+    return formatAdaptiveNumber(value);
 }
 
 function formatIndexChartEndpointPrice(point) {
@@ -2684,33 +2704,13 @@ function buildIndexPriceChart(prices) {
         first: points[0],
         latest: points[points.length - 1],
         firstLabel: chartEndpointLabel(points[0], plot, 'start'),
-        latestLabel: chartEndpointLabel(points[points.length - 1], plot, 'end'),
+        latestLabel: chartEndpointLabel(points[points.length - 1], plot, 'end', points[0]),
         trendLine: chartRegressionLine(points, chartMin, chartRange, plot),
     };
 }
 
-function filterAnalyzeDailyPrices(prices, rangeKey) {
+function filterAnalyzeIntradayCandlePrices(prices, rangeKey) {
     const chartPrices = [...prices]
-        .map((price) => ({
-            ...price,
-            chart_price: analyzeDailyPriceValue(price),
-        }))
-        .filter((price) => price.trading_date && !Number.isNaN(price.chart_price))
-        .sort((first, second) => first.trading_date.localeCompare(second.trading_date));
-
-    if (chartPrices.length === 0) {
-        return [];
-    }
-
-    const latestDate = chartPrices[chartPrices.length - 1].trading_date;
-    const days = analyzeHistoryRangeDays[rangeKey] ?? analyzeHistoryRangeDays['1y'];
-    const startDate = dateStringDaysBefore(latestDate, days);
-
-    return chartPrices.filter((price) => price.trading_date >= startDate);
-}
-
-function mapAnalyzeIntradayPrices(prices) {
-    return [...prices]
         .map((price) => ({
             ...price,
             trading_date: price.as_of,
@@ -2718,6 +2718,275 @@ function mapAnalyzeIntradayPrices(prices) {
         }))
         .filter((price) => price.as_of && !Number.isNaN(price.chart_price))
         .sort((first, second) => first.as_of.localeCompare(second.as_of));
+
+    if (chartPrices.length === 0) {
+        return [];
+    }
+
+    const latestDate = chartPrices[chartPrices.length - 1].as_of.slice(0, 10);
+    const days = analyzeHistoryRangeDays[rangeKey] ?? analyzeHistoryRangeDays['1y'];
+    const startDate = dateStringDaysBefore(latestDate, days);
+
+    return chartPrices.filter((price) => price.as_of.slice(0, 10) >= startDate);
+}
+
+function limitAnalyzeChartPrices(prices) {
+    if (prices.length <= analyzeChartMaxPoints) {
+        return prices;
+    }
+
+    const lastIndex = prices.length - 1;
+
+    return Array.from({ length: analyzeChartMaxPoints }, (_, index) => {
+        const sourceIndex = Math.round((index / (analyzeChartMaxPoints - 1)) * lastIndex);
+
+        return prices[sourceIndex];
+    }).filter((price) => price);
+}
+
+function normalizeAnalyzeChartPrices(prices, rangeKey) {
+    if (!analyzeCalendarNormalizedRangeKeys.includes(rangeKey)) {
+        return limitAnalyzeChartPrices(prices);
+    }
+
+    return normalizeAnalyzeCalendarChartPrices(prices);
+}
+
+function previousAnalyzeTradingClose(prices, currentPrices, rangeKey) {
+    if (rangeKey !== 'today-1' || currentPrices.length === 0) {
+        return null;
+    }
+
+    const currentDate = currentPrices[0].as_of?.slice(0, 10);
+
+    if (!currentDate) {
+        return null;
+    }
+
+    return [...prices]
+        .map((price) => ({
+            ...price,
+            trading_date: price.as_of,
+            chart_price: analyzeDailyPriceValue(price),
+        }))
+        .filter((price) => price.as_of && price.as_of.slice(0, 10) < currentDate && !Number.isNaN(price.chart_price))
+        .sort((first, second) => first.as_of.localeCompare(second.as_of))
+        .at(-1) ?? null;
+}
+
+function withAnalyzePreviousTradingClosePoint(prices, previousTradingClose, rangeKey) {
+    if (rangeKey !== 'today-1' || !previousTradingClose || prices.length === 0) {
+        return prices;
+    }
+
+    const firstPriceTime = analyzeSparklinePointTime(prices[0]);
+
+    if (firstPriceTime === null) {
+        return prices;
+    }
+
+    const secondPriceTime = prices[1] ? analyzeSparklinePointTime(prices[1]) : null;
+    const chartInterval = secondPriceTime !== null && secondPriceTime > firstPriceTime
+        ? secondPriceTime - firstPriceTime
+        : 5 * 60 * 1000;
+    const previousChartAsOf = new Date(firstPriceTime - chartInterval).toISOString();
+
+    return [
+        {
+            ...previousTradingClose,
+            id: `previous-close-${previousTradingClose.id ?? previousTradingClose.as_of}`,
+            chart_as_of: previousChartAsOf,
+            chart_label: 'Prev',
+            endpoint_label: 'Prev',
+            is_previous_trading_close: true,
+        },
+        {
+            ...prices[0],
+            endpoint_label: 'Start',
+        },
+        ...prices.slice(1),
+    ];
+}
+
+function isAnalyzeTodayRange(rangeKey) {
+    return ['today', 'today-1'].includes(rangeKey);
+}
+
+function normalizeAnalyzeCalendarChartPrices(prices) {
+    if (prices.length === 0) {
+        return [];
+    }
+
+    const sortedPrices = [...prices].sort((first, second) => first.as_of.localeCompare(second.as_of));
+    const pricesByDate = sortedPrices.reduce((groupedPrices, price) => {
+        const dateString = price.as_of.slice(0, 10);
+
+        groupedPrices.set(dateString, [
+            ...(groupedPrices.get(dateString) ?? []),
+            price,
+        ]);
+
+        return groupedPrices;
+    }, new Map());
+    const dateStrings = [...pricesByDate.keys()].sort();
+    const pointCounts = distributeAnalyzeChartPointCounts(dateStrings.length, analyzeChartMaxPoints);
+
+    return dateStrings.flatMap((dateString, index) => normalizeAnalyzeChartDatePrices(
+        pricesByDate.get(dateString),
+        pointCounts[index] ?? 0,
+        dateString,
+    )).filter((price) => price);
+}
+
+function normalizeAnalyzeChartDatePrices(dayPrices, pointCount, dateString) {
+    if (pointCount <= 0) {
+        return [];
+    }
+
+    if (dayPrices.length >= pointCount) {
+        return sampleAnalyzeChartDatePrices(dayPrices, pointCount, dateString);
+    }
+
+    return interpolateAnalyzeChartDatePrices(dayPrices, pointCount, dateString);
+}
+
+function sampleAnalyzeChartDatePrices(dayPrices, pointCount, dateString) {
+    if (pointCount === 1) {
+        return [
+            withAnalyzeChartTime(
+                dayPrices[Math.floor((dayPrices.length - 1) / 2)],
+                analyzeDateSampleTime(dateString, 0, pointCount),
+            ),
+        ];
+    }
+
+    const lastIndex = dayPrices.length - 1;
+
+    return Array.from({ length: pointCount }, (_, index) => {
+        const sourceIndex = Math.round((index / (pointCount - 1)) * lastIndex);
+
+        return withAnalyzeChartTime(dayPrices[sourceIndex], analyzeDateSampleTime(dateString, index, pointCount));
+    });
+}
+
+function interpolateAnalyzeChartDatePrices(dayPrices, pointCount, dateString) {
+    if (dayPrices.length === 1) {
+        return Array.from({ length: pointCount }, (_, index) => withAnalyzeChartTime(
+            dayPrices[0],
+            analyzeDateSampleTime(dateString, index, pointCount),
+        ));
+    }
+
+    return Array.from({ length: pointCount }, (_, index) => {
+        const ratio = pointCount === 1 ? 0.5 : index / (pointCount - 1);
+        const scaledIndex = ratio * (dayPrices.length - 1);
+        const previousIndex = Math.floor(scaledIndex);
+        const nextIndex = Math.ceil(scaledIndex);
+        const segmentRatio = scaledIndex - previousIndex;
+
+        return interpolateAnalyzeChartPrice(
+            dayPrices[previousIndex],
+            dayPrices[nextIndex],
+            segmentRatio,
+            analyzeDateSampleTime(dateString, index, pointCount),
+            dateString,
+        );
+    });
+}
+
+function interpolateAnalyzeChartPrice(previousPrice, nextPrice, ratio, chartAsOf, dateString) {
+    if (!previousPrice || !nextPrice) {
+        return null;
+    }
+
+    if (previousPrice === nextPrice || ratio === 0) {
+        return withAnalyzeChartTime(previousPrice, chartAsOf);
+    }
+
+    if (ratio === 1) {
+        return withAnalyzeChartTime(nextPrice, chartAsOf);
+    }
+
+    const chartPrice = previousPrice.chart_price + ((nextPrice.chart_price - previousPrice.chart_price) * ratio);
+
+    return {
+        ...previousPrice,
+        id: undefined,
+        as_of: chartAsOf,
+        trading_date: dateString,
+        chart_as_of: chartAsOf,
+        chart_price: chartPrice,
+        price: chartPrice.toFixed(8),
+        is_interpolated: true,
+    };
+}
+
+function withAnalyzeChartTime(price, chartAsOf) {
+    if (!price) {
+        return null;
+    }
+
+    return {
+        ...price,
+        chart_as_of: chartAsOf,
+    };
+}
+
+function distributeAnalyzeChartPointCounts(bucketCount, totalCount) {
+    if (bucketCount <= 0) {
+        return [];
+    }
+
+    if (bucketCount > totalCount && totalCount >= 2) {
+        const middleCounts = distributeAnalyzeChartPointCountsEvenly(bucketCount - 2, totalCount - 2);
+
+        return [
+            1,
+            ...middleCounts,
+            1,
+        ];
+    }
+
+    return distributeAnalyzeChartPointCountsEvenly(bucketCount, totalCount);
+}
+
+function distributeAnalyzeChartPointCountsEvenly(bucketCount, totalCount) {
+    if (bucketCount <= 0) {
+        return [];
+    }
+
+    const baseCount = Math.floor(totalCount / bucketCount);
+    const remainder = totalCount % bucketCount;
+
+    return Array.from({ length: bucketCount }, (_, index) => {
+        const previousRemainderShare = Math.floor((index * remainder) / bucketCount);
+        const currentRemainderShare = Math.floor(((index + 1) * remainder) / bucketCount);
+
+        return baseCount + (currentRemainderShare - previousRemainderShare);
+    });
+}
+
+function dateStringToUtcTime(dateString) {
+    const [year, month, day] = dateString.split('-').map((part) => Number(part));
+
+    if ([year, month, day].some((part) => Number.isNaN(part))) {
+        return null;
+    }
+
+    return Date.UTC(year, month - 1, day);
+}
+
+function analyzeDateSampleTime(dateString, index, pointCount) {
+    const startTime = dateStringToUtcTime(dateString);
+
+    if (startTime === null) {
+        return dateString;
+    }
+
+    const ratio = pointCount <= 1 ? 0.5 : index / (pointCount - 1);
+    const dayDuration = (24 * 60 * 60 * 1000) - 1;
+
+    return new Date(startTime + (ratio * dayDuration)).toISOString();
 }
 
 function analyzeDailyPriceValue(price) {
@@ -2743,7 +3012,7 @@ function dateStringDaysBefore(dateString, days) {
     return date.toISOString().slice(0, 10);
 }
 
-function buildAnalyzeSparkline(prices) {
+function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.value) {
     const width = 1440;
     const height = 600;
     const plot = {
@@ -2764,10 +3033,13 @@ function buildAnalyzeSparkline(prices) {
             areaPath: '',
             horizontalGridLines: [],
             verticalGridLines: [],
+            monthStartMarkers: [],
+            dateRangeLabels: [],
             first: null,
             latest: null,
             firstLabel: null,
             latestLabel: null,
+            todayStartLabel: null,
             trendLine: null,
             highMarker: null,
             lowMarker: null,
@@ -2777,20 +3049,28 @@ function buildAnalyzeSparkline(prices) {
         };
     }
 
-    const values = chartPrices.map((price) => price.chart_price);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const range = max - min;
-    const rangePadding = range === 0 ? Math.max(Math.abs(max) * 0.05, 1) : range * 0.05;
-    const chartMin = min - rangePadding;
-    const chartMax = max + rangePadding;
+    const chartPriceValues = chartPrices.map((price) => price.chart_price);
+    const min = Math.min(...chartPriceValues);
+    const max = Math.max(...chartPriceValues);
+    const scaleMin = min;
+    const scaleMax = max;
+    const range = scaleMax - scaleMin;
+    const rangePadding = range === 0 ? Math.max(Math.abs(scaleMax) * 0.05, 1) : range * 0.05;
+    const chartMin = scaleMin - rangePadding;
+    const chartMax = scaleMax + rangePadding;
     const chartRange = chartMax - chartMin;
     const plotWidth = plot.right - plot.left;
     const plotHeight = plot.bottom - plot.top;
+    const firstChartTime = isAnalyzeTodayRange(rangeKey) ? analyzeSparklinePointTime(chartPrices[0]) : null;
+    const latestChartTime = isAnalyzeTodayRange(rangeKey) ? analyzeSparklinePointTime(chartPrices[chartPrices.length - 1]) : null;
+    const useTimeScale = firstChartTime !== null && latestChartTime !== null && firstChartTime < latestChartTime;
     const points = chartPrices.map((price, index) => {
+        const priceTime = useTimeScale ? analyzeSparklinePointTime(price) : null;
         const x = chartPrices.length === 1
             ? plot.left + plotWidth / 2
-            : plot.left + (index / (chartPrices.length - 1)) * plotWidth;
+            : (useTimeScale && priceTime !== null
+                ? plot.left + ((priceTime - firstChartTime) / (latestChartTime - firstChartTime)) * plotWidth
+                : plot.left + (index / (chartPrices.length - 1)) * plotWidth);
         const normalized = (price.chart_price - chartMin) / chartRange;
         const y = plot.bottom - normalized * plotHeight;
 
@@ -2802,6 +3082,9 @@ function buildAnalyzeSparkline(prices) {
     });
     const highPoint = points.find((point) => point.chart_price === max);
     const lowPoint = points.find((point) => point.chart_price === min);
+    const todayStartPoint = rangeKey === 'today-1'
+        ? points.find((point) => !point.is_previous_trading_close)
+        : null;
 
     return {
         width,
@@ -2811,14 +3094,27 @@ function buildAnalyzeSparkline(prices) {
         linePath: analyzeSparklinePath(points),
         areaPath: analyzeSparklineAreaPath(points, plot),
         horizontalGridLines: analyzeSparklineHorizontalGridLines(chartMin, chartMax, plot),
-        verticalGridLines: analyzeSparklineTickPoints(points).map((point) => ({
+        verticalGridLines: shouldUseAnalyzeDateMarkers(rangeKey) ? [] : analyzeSparklineTickPoints(points).map((point) => ({
             x: point.x,
             label: formatAnalyzeSparklineDate(point),
         })),
+        monthStartMarkers: shouldUseAnalyzeDateMarkers(rangeKey)
+            ? analyzeSparklineDateMarkers(points, plot, rangeKey)
+            : [],
+        dateRangeLabels: shouldUseAnalyzeDateMarkers(rangeKey)
+            ? analyzeSparklineDateRangeLabels(points, rangeKey)
+            : [],
         first: points[0],
         latest: points[points.length - 1],
         firstLabel: chartEndpointLabel(points[0], plot, 'start'),
-        latestLabel: chartEndpointLabel(points[points.length - 1], plot, 'end'),
+        latestLabel: chartEndpointLabel(points[points.length - 1], plot, 'end', points[0]),
+        todayStartLabel: chartEndpointLabel(todayStartPoint, plot, 'start', null, {
+            changeClass: chartValueDirectionClass(todayStartPoint, points[0]),
+            changePercent: formatChartEndpointChangePercent(todayStartPoint, points[0]),
+            labelPrefix: 'Start',
+            labelX: points[0].x,
+            labelY: plot.bottom + 38,
+        }),
         trendLine: chartRegressionLine(points, chartMin, chartRange, plot),
         highMarker: analyzeSparklineExtremumMarker(highPoint, 'high', plot),
         lowMarker: analyzeSparklineExtremumMarker(lowPoint, 'low', plot),
@@ -2828,6 +3124,523 @@ function buildAnalyzeSparkline(prices) {
             ? 'up'
             : (points[points.length - 1].chart_price < points[0].chart_price ? 'down' : 'flat'),
     };
+}
+
+function shouldUseAnalyzeMonthMarkers(rangeKey) {
+    return analyzeCalendarNormalizedRangeKeys.includes(rangeKey);
+}
+
+function shouldUseAnalyzeDateMarkers(rangeKey) {
+    return shouldUseAnalyzeMonthMarkers(rangeKey) || isAnalyzeTodayRange(rangeKey);
+}
+
+function analyzeMarkerDaysForRange(rangeKey) {
+    if (rangeKey === '3m') {
+        return [1, 10, 20];
+    }
+
+    return rangeKey === '6m' ? [1, 15] : [1];
+}
+
+function analyzeMarkerIntervalDaysForRange(rangeKey) {
+    if (rangeKey === '1w') {
+        return 1;
+    }
+
+    return rangeKey === '1m' ? 3 : null;
+}
+
+function analyzeSparklineDateRangeLabels(points, rangeKey) {
+    const first = points[0];
+    const latest = points[points.length - 1];
+
+    if (!first || !latest) {
+        return [];
+    }
+
+    return [
+        {
+            x: first.x,
+            label: formatAnalyzeRangeBoundaryLabel(first, rangeKey),
+            anchor: 'start',
+        },
+        {
+            x: latest.x,
+            label: formatAnalyzeRangeBoundaryLabel(latest, rangeKey),
+            anchor: 'end',
+        },
+    ].filter((label) => label.label);
+}
+
+function formatAnalyzeRangeBoundaryLabel(point, rangeKey) {
+    if (point?.is_previous_trading_close) {
+        return '';
+    }
+
+    return isAnalyzeTodayRange(rangeKey) ? formatAnalyzeTimeLabel(point) : formatAnalyzeDateLabel(point);
+}
+
+function analyzeSparklineDateMarkers(points, plot, rangeKey) {
+    const intervalDays = analyzeMarkerIntervalDaysForRange(rangeKey);
+
+    if (isAnalyzeTodayRange(rangeKey)) {
+        return analyzeSparklineHourlyMarkers(points, plot);
+    }
+
+    if (rangeKey === '1w') {
+        return analyzeSparklineTradingDateCalendarMarkers(points, plot);
+    }
+
+    if (rangeKey === '1m') {
+        return analyzeSparklineCalendarIntervalMarkers(points, plot, intervalDays);
+    }
+
+    if (intervalDays) {
+        return analyzeSparklineIntervalMarkers(points, plot, intervalDays);
+    }
+
+    if (rangeKey === '3m') {
+        return analyzeSparklineTargetDateMonthMarkers(points, plot, analyzeMarkerDaysForRange(rangeKey));
+    }
+
+    return analyzeSparklineMonthMarkers(points, plot, analyzeMarkerDaysForRange(rangeKey));
+}
+
+function analyzeSparklineHourlyMarkers(points, plot) {
+    if (points.length < 2) {
+        return [];
+    }
+
+    const firstTime = analyzeSparklinePointTime(points[0]);
+    const latestTime = analyzeSparklinePointTime(points[points.length - 1]);
+
+    if (firstTime === null || latestTime === null || firstTime >= latestTime) {
+        return [];
+    }
+
+    const markers = [];
+    const markerDate = new Date(firstTime);
+    markerDate.setMinutes(0, 0, 0);
+
+    if (markerDate.getTime() <= firstTime) {
+        markerDate.setHours(markerDate.getHours() + 1);
+    }
+
+    while (markerDate.getTime() < latestTime) {
+        const markerTime = markerDate.getTime();
+        const markerPosition = analyzeSparklineMarkerPosition(points, markerTime, plot);
+
+        if (markerPosition) {
+            markers.push({
+                ...markerPosition,
+                label: formatAnalyzeTimeLabel(new Date(markerTime)),
+            });
+        }
+
+        markerDate.setHours(markerDate.getHours() + 1);
+    }
+
+    return markers;
+}
+
+function analyzeSparklineIntervalMarkers(points, plot, intervalDays) {
+    if (points.length < 2) {
+        return [];
+    }
+
+    const tradingDates = analyzeSparklineTradingDates(points);
+
+    if (tradingDates.length < 3) {
+        return [];
+    }
+
+    const markers = [];
+    for (let index = intervalDays; index < tradingDates.length - 1; index += intervalDays) {
+        const markerDateString = tradingDates[index];
+        const markerTime = dateStringToUtcTime(markerDateString);
+
+        if (markerTime === null) {
+            continue;
+        }
+
+        const markerPosition = analyzeSparklineMarkerPosition(points, markerTime, plot);
+
+        if (markerPosition) {
+            markers.push({
+                ...markerPosition,
+                label: formatAnalyzeMonthStartLabel(new Date(markerTime)),
+            });
+        }
+    }
+
+    return markers;
+}
+
+function analyzeSparklineTradingDateCalendarMarkers(points, plot) {
+    if (points.length < 2) {
+        return [];
+    }
+
+    const tradingDates = analyzeSparklineTradingDates(points);
+
+    if (tradingDates.length < 3) {
+        return [];
+    }
+
+    return tradingDates.slice(1, -1).map((markerDateString, index) => {
+        const markerTime = dateStringToUtcTime(markerDateString);
+
+        if (markerTime === null) {
+            return null;
+        }
+
+        const markerPosition = analyzeSparklineMarkerPositionAtRatio(
+            points,
+            (index + 1) / (tradingDates.length - 1),
+            plot,
+        );
+
+        if (!markerPosition) {
+            return null;
+        }
+
+        return {
+            ...markerPosition,
+            label: formatAnalyzeMonthStartLabel(new Date(markerTime)),
+        };
+    }).filter((marker) => marker);
+}
+
+function analyzeSparklineCalendarIntervalMarkers(points, plot, intervalDays) {
+    if (points.length < 2 || !intervalDays) {
+        return [];
+    }
+
+    const firstTime = analyzeSparklinePointTime(points[0]);
+    const latestTime = analyzeSparklinePointTime(points[points.length - 1]);
+
+    if (firstTime === null || latestTime === null || firstTime >= latestTime) {
+        return [];
+    }
+
+    const markers = [];
+    const tradingDates = analyzeSparklineTradingDates(points);
+    const usedMarkerDateStrings = new Set();
+    const firstDateString = analyzeSparklineTradingDateString(points[0]);
+    const latestDateString = analyzeSparklineTradingDateString(points[points.length - 1]);
+    const firstDateTime = firstDateString ? dateStringToUtcTime(firstDateString) : null;
+    const latestDateTime = latestDateString ? dateStringToUtcTime(latestDateString) : null;
+
+    if (firstDateTime === null || latestDateTime === null || firstDateTime >= latestDateTime) {
+        return [];
+    }
+
+    const markerDate = new Date(firstTime);
+    markerDate.setUTCHours(0, 0, 0, 0);
+    markerDate.setUTCDate(markerDate.getUTCDate() + intervalDays);
+
+    while (markerDate.getTime() < latestTime) {
+        const nearestMarkerDateString = nearestAnalyzeSparklineTradingDate(
+            tradingDates,
+            markerDate.toISOString().slice(0, 10),
+            firstTime,
+            latestTime,
+        );
+
+        if (nearestMarkerDateString && !usedMarkerDateStrings.has(nearestMarkerDateString)) {
+            usedMarkerDateStrings.add(nearestMarkerDateString);
+            markers.push({
+                markerDateString: nearestMarkerDateString,
+                targetDateString: markerDate.toISOString().slice(0, 10),
+            });
+        }
+
+        markerDate.setUTCDate(markerDate.getUTCDate() + intervalDays);
+    }
+
+    return markers.map(({ markerDateString, targetDateString }) => {
+        const targetDateTime = dateStringToUtcTime(targetDateString);
+        const markerTime = dateStringToUtcTime(markerDateString);
+
+        if (targetDateTime === null || markerTime === null) {
+            return null;
+        }
+
+        const markerPosition = analyzeSparklineMarkerPositionAtRatio(
+            points,
+            (targetDateTime - firstDateTime) / (latestDateTime - firstDateTime),
+            plot,
+        );
+
+        if (!markerPosition) {
+            return null;
+        }
+
+        return {
+            ...markerPosition,
+            label: formatAnalyzeMonthStartLabel(new Date(markerTime)),
+        };
+    }).filter((marker) => marker);
+}
+
+function analyzeSparklineTradingDates(points) {
+    return [...new Set(points.map((point) => analyzeSparklineTradingDateString(point)).filter((dateString) => dateString))].sort();
+}
+
+function analyzeSparklineTradingDateString(point) {
+    const value = point?.chart_as_of ?? point?.as_of ?? point?.trading_date;
+
+    return typeof value === 'string' && value.length >= 10 ? value.slice(0, 10) : null;
+}
+
+function analyzeSparklineMonthMarkers(points, plot, markerDays) {
+    return analyzeSparklineMonthMarkerDates(points, markerDays).map(({ markerDateString }) => {
+        const markerTime = dateStringToUtcTime(markerDateString);
+
+        if (markerTime === null) {
+            return null;
+        }
+
+        const markerPosition = analyzeSparklineMarkerPosition(points, markerTime, plot);
+
+        if (!markerPosition) {
+            return null;
+        }
+
+        return {
+            ...markerPosition,
+            label: formatAnalyzeMonthStartLabel(new Date(markerTime)),
+        };
+    }).filter((marker) => marker);
+}
+
+function analyzeSparklineTargetDateMonthMarkers(points, plot, markerDays) {
+    const markerDates = analyzeSparklineMonthMarkerDates(points, markerDays);
+    const firstDateString = analyzeSparklineTradingDateString(points[0]);
+    const latestDateString = analyzeSparklineTradingDateString(points[points.length - 1]);
+    const firstDateTime = firstDateString ? dateStringToUtcTime(firstDateString) : null;
+    const latestDateTime = latestDateString ? dateStringToUtcTime(latestDateString) : null;
+
+    if (firstDateTime === null || latestDateTime === null || firstDateTime >= latestDateTime) {
+        return [];
+    }
+
+    return markerDates.map(({ markerDateString, targetDateString }) => {
+        const markerTime = dateStringToUtcTime(markerDateString);
+        const targetDateTime = dateStringToUtcTime(targetDateString);
+
+        if (markerTime === null || targetDateTime === null) {
+            return null;
+        }
+
+        const markerPosition = analyzeSparklineMarkerPositionAtRatio(
+            points,
+            (targetDateTime - firstDateTime) / (latestDateTime - firstDateTime),
+            plot,
+        );
+
+        if (!markerPosition) {
+            return null;
+        }
+
+        return {
+            ...markerPosition,
+            label: formatAnalyzeMonthStartLabel(new Date(markerTime)),
+        };
+    }).filter((marker) => marker);
+}
+
+function analyzeSparklineMonthMarkerDates(points, markerDays) {
+    if (points.length < 2) {
+        return [];
+    }
+
+    const firstTime = analyzeSparklinePointTime(points[0]);
+    const latestTime = analyzeSparklinePointTime(points[points.length - 1]);
+
+    if (firstTime === null || latestTime === null || firstTime >= latestTime) {
+        return [];
+    }
+
+    const markers = [];
+    const tradingDates = analyzeSparklineTradingDates(points);
+    const markerDateStrings = new Set();
+    const firstDate = new Date(firstTime);
+    const markerMonth = new Date(Date.UTC(firstDate.getUTCFullYear(), firstDate.getUTCMonth(), 1));
+
+    while (markerMonth.getTime() < latestTime) {
+        markerDays.forEach((day) => {
+            const markerDate = new Date(Date.UTC(markerMonth.getUTCFullYear(), markerMonth.getUTCMonth(), day));
+            const markerTime = markerDate.getTime();
+            const nearestMarkerDateString = nearestAnalyzeSparklineTradingDate(
+                tradingDates,
+                markerDate.toISOString().slice(0, 10),
+                firstTime,
+                latestTime,
+            );
+
+            if (
+                markerTime > firstTime
+                && markerTime < latestTime
+                && nearestMarkerDateString
+                && !markerDateStrings.has(nearestMarkerDateString)
+            ) {
+                markerDateStrings.add(nearestMarkerDateString);
+                markers.push({
+                    markerDateString: nearestMarkerDateString,
+                    targetDateString: markerDate.toISOString().slice(0, 10),
+                });
+            }
+        });
+
+        markerMonth.setUTCMonth(markerMonth.getUTCMonth() + 1);
+    }
+
+    return markers;
+}
+
+function analyzeSparklineMarkerPositionAtRatio(points, ratio, plot) {
+    if (points.length === 0) {
+        return null;
+    }
+
+    if (points.length === 1) {
+        return {
+            x: points[0].x,
+            y: points[0].y,
+            priceLabelY: Math.max(plot.top + 12, points[0].y - 10),
+            chart_price: points[0].chart_price,
+        };
+    }
+
+    const scaledIndex = ratio * (points.length - 1);
+    const previousIndex = Math.floor(scaledIndex);
+    const currentIndex = Math.ceil(scaledIndex);
+    const segmentRatio = scaledIndex - previousIndex;
+    const previousPoint = points[previousIndex];
+    const currentPoint = points[currentIndex];
+    const y = previousPoint.y + (segmentRatio * (currentPoint.y - previousPoint.y));
+
+    return {
+        x: previousPoint.x + (segmentRatio * (currentPoint.x - previousPoint.x)),
+        y,
+        priceLabelY: Math.max(plot.top + 12, y - 10),
+        chart_price: previousPoint.chart_price + (segmentRatio * (currentPoint.chart_price - previousPoint.chart_price)),
+    };
+}
+
+function nearestAnalyzeSparklineTradingDate(tradingDates, targetDateString, firstTime, latestTime) {
+    const targetTime = dateStringToUtcTime(targetDateString);
+
+    if (targetTime === null) {
+        return null;
+    }
+
+    const nearestDate = tradingDates.reduce((nearest, tradingDate) => {
+        const tradingTime = dateStringToUtcTime(tradingDate);
+
+        if (tradingTime === null || tradingTime <= firstTime || tradingTime >= latestTime) {
+            return nearest;
+        }
+
+        if (!nearest) {
+            return {
+                dateString: tradingDate,
+                time: tradingTime,
+            };
+        }
+
+        const currentDistance = Math.abs(tradingTime - targetTime);
+        const nearestDistance = Math.abs(nearest.time - targetTime);
+
+        if (currentDistance < nearestDistance) {
+            return {
+                dateString: tradingDate,
+                time: tradingTime,
+            };
+        }
+
+        if (currentDistance === nearestDistance && tradingTime < nearest.time) {
+            return {
+                dateString: tradingDate,
+                time: tradingTime,
+            };
+        }
+
+        return nearest;
+    }, null);
+
+    return nearestDate?.dateString ?? null;
+}
+
+function analyzeSparklineMarkerPosition(points, markerTime, plot) {
+    for (let index = 1; index < points.length; index++) {
+        const previousPoint = points[index - 1];
+        const currentPoint = points[index];
+        const previousTime = analyzeSparklinePointTime(previousPoint);
+        const currentTime = analyzeSparklinePointTime(currentPoint);
+
+        if (previousTime === null || currentTime === null || previousTime === currentTime) {
+            continue;
+        }
+
+        if (markerTime >= previousTime && markerTime <= currentTime) {
+            const ratio = (markerTime - previousTime) / (currentTime - previousTime);
+            const y = previousPoint.y + ratio * (currentPoint.y - previousPoint.y);
+
+            return {
+                x: previousPoint.x + ratio * (currentPoint.x - previousPoint.x),
+                y,
+                priceLabelY: Math.max(plot.top + 12, y - 10),
+                chart_price: previousPoint.chart_price + ratio * (currentPoint.chart_price - previousPoint.chart_price),
+            };
+        }
+    }
+
+    return null;
+}
+
+function analyzeSparklinePointTime(point) {
+    const value = point?.chart_as_of ?? point?.as_of ?? point?.trading_date;
+
+    if (!value) {
+        return null;
+    }
+
+    const time = new Date(value).getTime();
+
+    return Number.isNaN(time) ? null : time;
+}
+
+function formatAnalyzeMonthStartLabel(date) {
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: 'UTC',
+        day: '2-digit',
+        month: '2-digit',
+    }).format(date);
+}
+
+function formatAnalyzeDateLabel(point) {
+    const time = analyzeSparklinePointTime(point);
+
+    if (time === null) {
+        return '-';
+    }
+
+    return formatAnalyzeMonthStartLabel(new Date(time));
+}
+
+function formatAnalyzeTimeLabel(point) {
+    const time = point instanceof Date ? point.getTime() : analyzeSparklinePointTime(point);
+
+    if (time === null || Number.isNaN(time)) {
+        return '-';
+    }
+
+    return new Intl.DateTimeFormat('de-AT', {
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(new Date(time));
 }
 
 function chartRegressionLine(points, chartMin, chartRange, plot) {
@@ -2873,7 +3686,7 @@ function chartValueToY(value, chartMin, chartRange, plot) {
     return plot.bottom - normalized * (plot.bottom - plot.top);
 }
 
-function chartEndpointLabel(point, plot, side) {
+function chartEndpointLabel(point, plot, side, referencePoint = null, options = {}) {
     if (!point) {
         return null;
     }
@@ -2882,12 +3695,50 @@ function chartEndpointLabel(point, plot, side) {
 
     return {
         ...point,
-        labelX: point.x,
-        labelY: side === 'start'
+        labelX: options.labelX ?? point.x,
+        labelY: options.labelY ?? (side === 'start'
             ? plot.bottom + verticalOffset
-            : plot.top - verticalOffset,
+            : plot.top - verticalOffset),
         labelAnchor: side === 'start' ? 'start' : 'end',
+        labelPrefix: options.labelPrefix ?? point.endpoint_label ?? (side === 'start' ? 'Start' : 'End'),
+        changeClass: options.changeClass ?? '',
+        changePercent: options.changePercent ?? (side === 'end' ? formatChartEndpointChangePercent(point, referencePoint) : ''),
     };
+}
+
+function chartValueDirectionClass(point, referencePoint) {
+    if (!point || !referencePoint) {
+        return '';
+    }
+
+    const referenceValue = Number(referencePoint.chart_price);
+    const value = Number(point.chart_price);
+
+    if (Number.isNaN(referenceValue) || Number.isNaN(value) || value === referenceValue) {
+        return '';
+    }
+
+    return value > referenceValue
+        ? 'analyze-sparkline-endpoint-label-change--up'
+        : 'analyze-sparkline-endpoint-label-change--down';
+}
+
+function formatChartEndpointChangePercent(point, referencePoint) {
+    if (!point || !referencePoint) {
+        return '';
+    }
+
+    const referenceValue = Number(referencePoint.chart_price);
+    const value = Number(point.chart_price);
+
+    if (Number.isNaN(referenceValue) || Number.isNaN(value) || referenceValue === 0) {
+        return '';
+    }
+
+    const changePercent = ((value - referenceValue) / Math.abs(referenceValue)) * 100;
+    const sign = changePercent > 0 ? '+' : '';
+
+    return `${sign}${changePercent.toFixed(2)}%`;
 }
 
 function analyzeSparklineExtremumMarker(point, direction, plot) {
@@ -3180,10 +4031,15 @@ function analyzeIntradayCandleDate(row) {
 }
 
 function formatAnalyzeSparklineDate(point) {
+    if (point?.is_previous_trading_close) {
+        return 'Prev';
+    }
+
     if (point?.as_of) {
         return new Intl.DateTimeFormat('de-AT', {
             day: '2-digit',
             month: '2-digit',
+            year: '2-digit',
             hour: '2-digit',
             minute: '2-digit',
         }).format(new Date(point.as_of));
@@ -4304,6 +5160,18 @@ function priceRefreshScheduleFormFromSettings(settings) {
         closed_interval_minutes: settings?.closed_interval_minutes ?? 60,
     };
 }
+
+function emptyIntradayBackfillScheduleForm() {
+    return {
+        daily_time: '18:30',
+    };
+}
+
+function intradayBackfillScheduleFormFromSettings(settings) {
+    return {
+        daily_time: settings?.daily_time ?? '18:30',
+    };
+}
 </script>
 
 <template>
@@ -5363,6 +6231,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                                 :text-anchor="selectedIndexChart.latestLabel.labelAnchor"
                                             >
                                                 End {{ formatIndexChartEndpointPrice(selectedIndexChart.latestLabel) }}
+                                                {{ selectedIndexChart.latestLabel.changePercent }}
                                             </text>
                                         </svg>
                                         <div v-else class="text-body-2 text-medium-emphasis">
@@ -5437,38 +6306,6 @@ function priceRefreshScheduleFormFromSettings(settings) {
                             class="analyze-overview-page"
                             aria-label="Analyze overview"
                         >
-                            <v-alert
-                                v-if="showAnalyzeHistoryStatus"
-                                class="mb-4 analyze-history-status"
-                                :closable="showAnalyzeHistoryResultInfo"
-                                density="compact"
-                                type="info"
-                                variant="tonal"
-                                @click:close="isAnalyzeHistoryInfoDismissed = true"
-                            >
-                                <div class="d-flex align-center justify-space-between flex-wrap ga-3">
-                                    <span>
-                                        <template v-if="showAnalyzeHistoryProgress">
-                                            Checking historical prices
-                                        </template>
-                                        <template v-else>
-                                            {{ stockHistoricalPriceResultMessage }}
-                                        </template>
-                                    </span>
-                                    <span v-if="stockHistoricalPriceStatusLabel" class="text-caption">
-                                        {{ stockHistoricalPriceStatusLabel }}
-                                    </span>
-                                </div>
-                                <v-progress-linear
-                                    v-if="isStockHistoricalPriceEnsureLoading || isStockHistoricalPriceFetchRunning"
-                                    class="mt-2"
-                                    color="primary"
-                                    height="6"
-                                    rounded
-                                    :indeterminate="isStockHistoricalPriceEnsureLoading || stockHistoricalPriceRefresh?.status === 'queued'"
-                                    :model-value="stockHistoricalPriceFetchProgressValue"
-                                />
-                            </v-alert>
                             <div class="index-watch-strip">
                                 <button
                                     type="button"
@@ -5528,6 +6365,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         -
                                         {{ formatAnalyzeSparklineDate(selectedAnalyzeSparkline.latest) }}
                                         · {{ formatAnalyzeSparklinePrice(selectedAnalyzeSparkline.latest) }}
+                                        · {{ selectedAnalyzeRangeCaptureLabel }}
                                     </span>
                                 </div>
                                 <svg
@@ -5577,6 +6415,15 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         :x2="gridLine.x"
                                         :y2="selectedAnalyzeSparkline.plot.bottom"
                                     />
+                                    <line
+                                        v-for="(marker, index) in selectedAnalyzeSparkline.monthStartMarkers"
+                                        :key="`analyze-month-start-line-${index}`"
+                                        class="analyze-sparkline-month-line"
+                                        :x1="marker.x"
+                                        :y1="selectedAnalyzeSparkline.plot.top"
+                                        :x2="marker.x"
+                                        :y2="selectedAnalyzeSparkline.plot.bottom"
+                                    />
                                     <path
                                         class="analyze-sparkline-area"
                                         :d="selectedAnalyzeSparkline.areaPath"
@@ -5594,6 +6441,15 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         :class="`analyze-sparkline-line--${selectedAnalyzeSparkline.trend}`"
                                         :d="selectedAnalyzeSparkline.linePath"
                                     />
+                                    <text
+                                        v-for="(marker, index) in selectedAnalyzeSparkline.monthStartMarkers"
+                                        :key="`analyze-month-price-label-${index}`"
+                                        class="analyze-sparkline-month-price-label"
+                                        :x="marker.x"
+                                        :y="marker.priceLabelY"
+                                    >
+                                        {{ formatAnalyzeSparklineAxisPrice(marker.chart_price) }}
+                                    </text>
                                     <template v-if="showAnalyzeSparklineDots">
                                         <circle
                                             v-for="(point, index) in selectedAnalyzeSparkline.points"
@@ -5623,7 +6479,22 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         :y="selectedAnalyzeSparkline.firstLabel.labelY"
                                         :text-anchor="selectedAnalyzeSparkline.firstLabel.labelAnchor"
                                     >
-                                        Start {{ formatAnalyzeSparklineAxisPrice(selectedAnalyzeSparkline.firstLabel.chart_price) }}
+                                        <template v-if="selectedAnalyzeSparkline.todayStartLabel">
+                                            <tspan>
+                                                {{ selectedAnalyzeSparkline.firstLabel.labelPrefix }}
+                                                {{ formatAnalyzeSparklineAxisPrice(selectedAnalyzeSparkline.firstLabel.chart_price) }}
+                                            </tspan>
+                                            <tspan> · </tspan>
+                                            <tspan :class="selectedAnalyzeSparkline.todayStartLabel.changeClass">
+                                                {{ selectedAnalyzeSparkline.todayStartLabel.labelPrefix }}
+                                                {{ formatAnalyzeSparklineAxisPrice(selectedAnalyzeSparkline.todayStartLabel.chart_price) }}
+                                                {{ selectedAnalyzeSparkline.todayStartLabel.changePercent }}
+                                            </tspan>
+                                        </template>
+                                        <template v-else>
+                                            {{ selectedAnalyzeSparkline.firstLabel.labelPrefix }}
+                                            {{ formatAnalyzeSparklineAxisPrice(selectedAnalyzeSparkline.firstLabel.chart_price) }}
+                                        </template>
                                     </text>
                                     <text
                                         v-if="selectedAnalyzeSparkline.latestLabel"
@@ -5632,7 +6503,9 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                         :y="selectedAnalyzeSparkline.latestLabel.labelY"
                                         :text-anchor="selectedAnalyzeSparkline.latestLabel.labelAnchor"
                                     >
-                                        End {{ formatAnalyzeSparklineAxisPrice(selectedAnalyzeSparkline.latestLabel.chart_price) }}
+                                        {{ selectedAnalyzeSparkline.latestLabel.labelPrefix }}
+                                        {{ formatAnalyzeSparklineAxisPrice(selectedAnalyzeSparkline.latestLabel.chart_price) }}
+                                        {{ selectedAnalyzeSparkline.latestLabel.changePercent }}
                                     </text>
                                     <g
                                         v-if="selectedAnalyzeSparkline.highMarker"
@@ -5708,9 +6581,28 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                     >
                                         {{ gridLine.label }}
                                     </text>
+                                    <text
+                                        v-for="(marker, index) in selectedAnalyzeSparkline.monthStartMarkers"
+                                        :key="`analyze-month-start-label-${index}`"
+                                        class="analyze-sparkline-label analyze-sparkline-month-label"
+                                        :x="marker.x"
+                                        :y="selectedAnalyzeSparkline.height - 12"
+                                    >
+                                        {{ marker.label }}
+                                    </text>
+                                    <text
+                                        v-for="(dateLabel, index) in selectedAnalyzeSparkline.dateRangeLabels"
+                                        :key="`analyze-date-range-label-${index}`"
+                                        class="analyze-sparkline-label analyze-sparkline-date-range-label"
+                                        :x="dateLabel.x"
+                                        :y="selectedAnalyzeSparkline.height - 30"
+                                        :text-anchor="dateLabel.anchor"
+                                    >
+                                        {{ dateLabel.label }}
+                                    </text>
                                 </svg>
                                 <div v-else class="text-body-2 text-medium-emphasis">
-                                    <template v-if="selectedAnalyzeHistoryRange === 'today'">
+                                    <template v-if="isAnalyzeTodayRange(selectedAnalyzeHistoryRange)">
                                         No EODHD intraday prices available for this session.
                                     </template>
                                     <template v-else>
@@ -6681,6 +7573,106 @@ function priceRefreshScheduleFormFromSettings(settings) {
                                     Current interval: {{ indexPriceRefreshSettings?.current_interval_minutes ?? '-' }} min
                                 </span>
                             </form>
+                        </v-sheet>
+                        <v-sheet border rounded class="pa-4 mb-4">
+                            <form
+                                id="intraday-backfill-schedule-form"
+                                class="d-flex align-center flex-wrap ga-3"
+                                @submit.prevent="saveIntradayBackfillSchedule"
+                            >
+                                <div class="text-subtitle-2 mr-2">Daily intraday 5m backfill</div>
+                                <template v-if="!isIntradayBackfillScheduleEditing">
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">Local time</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ intradayBackfillScheduleForm.daily_time }}
+                                        </div>
+                                    </div>
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">Timezone</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ intradayBackfillSettings?.timezone ?? 'Europe/Vienna' }}
+                                        </div>
+                                    </div>
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">Last queued</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ intradayBackfillSettings?.last_dispatched_at ? formatDateTime(intradayBackfillSettings.last_dispatched_at) : 'Never' }}
+                                        </div>
+                                    </div>
+                                    <div class="px-3 py-2 rounded border">
+                                        <div class="text-caption text-medium-emphasis">Next</div>
+                                        <div class="text-body-2 font-weight-medium">
+                                            {{ intradayBackfillSettings?.next_refresh_at ? formatDateTime(intradayBackfillSettings.next_refresh_at) : '-' }}
+                                        </div>
+                                    </div>
+                                </template>
+                                <template v-else>
+                                    <v-text-field
+                                        v-model="intradayBackfillScheduleForm.daily_time"
+                                        density="compact"
+                                        hide-details
+                                        label="Local time"
+                                        type="time"
+                                        style="max-width: 180px"
+                                    />
+                                </template>
+                                <v-btn
+                                    v-if="!isIntradayBackfillScheduleEditing"
+                                    type="button"
+                                    color="primary"
+                                    prepend-icon="mdi-pencil-outline"
+                                    variant="tonal"
+                                    :disabled="isPriceRefreshScheduleEditing || isIndexPriceRefreshScheduleEditing"
+                                    @click="editIntradayBackfillSchedule"
+                                >
+                                    Edit
+                                </v-btn>
+                                <v-btn
+                                    v-else
+                                    type="submit"
+                                    color="primary"
+                                    prepend-icon="mdi-content-save-outline"
+                                    variant="tonal"
+                                    :loading="holdingsLoading"
+                                >
+                                    Save
+                                </v-btn>
+                                <v-btn
+                                    type="button"
+                                    color="primary"
+                                    prepend-icon="mdi-database-sync-outline"
+                                    variant="flat"
+                                    :loading="isIntradayBackfillRunningNow"
+                                    :disabled="isIntradayBackfillRunning"
+                                    @click="runIntradayBackfillNow"
+                                >
+                                    Fetch missing now
+                                </v-btn>
+                                <span class="text-caption text-medium-emphasis">
+                                    {{ intradayBackfillSettings?.status_label ?? 'waiting' }}
+                                </span>
+                            </form>
+                            <div v-if="intradayBackfillRefresh" class="mt-4">
+                                <div v-if="intradayBackfillRefresh.message" class="text-body-2 font-weight-medium mb-2">
+                                    {{ intradayBackfillRefresh.message }}
+                                </div>
+                                <div class="d-flex align-center flex-wrap ga-2 text-caption text-medium-emphasis mb-2">
+                                    <span>Backfill: {{ intradayBackfillRefresh.step }}</span>
+                                    <span v-if="intradayBackfillRefresh.current">{{ intradayBackfillRefresh.current }}</span>
+                                    <span>{{ formatInteger(intradayBackfillRefresh.stored_count ?? 0) }} candles loaded/updated</span>
+                                    <span v-if="intradayBackfillRefresh.date_from && intradayBackfillRefresh.date_to">
+                                        {{ intradayBackfillRefresh.date_from }} to {{ intradayBackfillRefresh.date_to }}
+                                    </span>
+                                </div>
+                                <v-progress-linear
+                                    height="6"
+                                    color="primary"
+                                    rounded
+                                    :indeterminate="intradayBackfillRefresh.status === 'queued'"
+                                    :model-value="intradayBackfillProgressValue"
+                                />
+                            </div>
                         </v-sheet>
                         <v-alert v-if="priceRefreshScheduleMessage" type="success" variant="tonal" density="compact" class="mb-4">
                             {{ priceRefreshScheduleMessage }}
@@ -8509,6 +9501,12 @@ function priceRefreshScheduleFormFromSettings(settings) {
     stroke: rgba(var(--v-theme-on-surface), 0.055);
 }
 
+.analyze-sparkline-month-line {
+    stroke: rgba(var(--v-theme-on-surface), 0.085);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
 .analyze-sparkline-label {
     fill: rgba(var(--v-theme-on-surface), 0.6);
     font-size: 11px;
@@ -8527,6 +9525,31 @@ function priceRefreshScheduleFormFromSettings(settings) {
 
 .analyze-sparkline-x-label--end {
     text-anchor: end;
+}
+
+.analyze-sparkline-month-label {
+    dominant-baseline: middle;
+    fill: rgba(var(--v-theme-on-surface), 0.56);
+    text-anchor: middle;
+}
+
+.analyze-sparkline-month-price-label {
+    dominant-baseline: middle;
+    fill: rgba(var(--v-theme-on-surface), 0.72);
+    font-size: 10px;
+    font-weight: 400;
+    paint-order: stroke;
+    stroke: rgb(var(--v-theme-surface));
+    stroke-linejoin: round;
+    stroke-width: 3;
+    text-anchor: middle;
+}
+
+.analyze-sparkline-date-range-label {
+    dominant-baseline: middle;
+    fill: rgba(var(--v-theme-on-surface), 0.72);
+    font-size: 11px;
+    font-weight: 800;
 }
 
 .analyze-sparkline-area {
@@ -8548,7 +9571,7 @@ function priceRefreshScheduleFormFromSettings(settings) {
     stroke: rgb(var(--v-theme-primary));
     stroke-linecap: butt;
     stroke-linejoin: miter;
-    stroke-width: 2.75;
+    stroke-width: 2.25;
     vector-effect: non-scaling-stroke;
 }
 
@@ -8659,6 +9682,14 @@ function priceRefreshScheduleFormFromSettings(settings) {
 
 .analyze-sparkline-endpoint-label--latest {
     fill: rgb(var(--v-theme-primary));
+}
+
+.analyze-sparkline-endpoint-label-change--up {
+    fill: rgb(var(--v-theme-success));
+}
+
+.analyze-sparkline-endpoint-label-change--down {
+    fill: rgb(var(--v-theme-error));
 }
 
 .index-price-dialog-title {

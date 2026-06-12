@@ -15,6 +15,8 @@ export const useDepotStore = defineStore('depots', {
         priceRefresh: null,
         priceRefreshSettings: null,
         indexPriceRefreshSettings: null,
+        intradayBackfillSettings: null,
+        intradayBackfillRefresh: null,
         queueStatus: null,
         testOptions: {
             indices: [],
@@ -96,6 +98,8 @@ export const useDepotStore = defineStore('depots', {
                 this.appVersion = data.app_version ?? this.appVersion;
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
+                this.intradayBackfillSettings = data.intraday_backfill_settings ?? this.intradayBackfillSettings;
+                this.intradayBackfillRefresh = data.intraday_backfill_refresh ?? this.intradayBackfillRefresh;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
                 this.uiPreferences = data.ui_preferences ?? this.uiPreferences;
 
@@ -135,6 +139,8 @@ export const useDepotStore = defineStore('depots', {
                 this.activeDepot = data.depot ?? this.activeDepot;
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
+                this.intradayBackfillSettings = data.intraday_backfill_settings ?? this.intradayBackfillSettings;
+                this.intradayBackfillRefresh = data.intraday_backfill_refresh ?? this.intradayBackfillRefresh;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
                 this.uiPreferences = data.ui_preferences ?? this.uiPreferences;
                 this.holdings = data.holdings;
@@ -677,6 +683,7 @@ export const useDepotStore = defineStore('depots', {
                 });
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
+                this.intradayBackfillSettings = data.intraday_backfill_settings ?? this.intradayBackfillSettings;
                 this.priceRefresh = data.refresh ?? this.priceRefresh;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
@@ -693,6 +700,8 @@ export const useDepotStore = defineStore('depots', {
                 const data = await request('/admin/price-refresh-settings');
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
+                this.intradayBackfillSettings = data.intraday_backfill_settings ?? this.intradayBackfillSettings;
+                this.intradayBackfillRefresh = data.intraday_backfill_refresh ?? this.intradayBackfillRefresh;
                 this.priceRefresh = data.refresh;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
@@ -711,6 +720,55 @@ export const useDepotStore = defineStore('depots', {
                     body: JSON.stringify(payload),
                 });
                 this.indexPriceRefreshSettings = data.index_price_refresh_settings;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async updateIntradayBackfillSettings(payload) {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/intraday-backfill-settings', {
+                    method: 'PATCH',
+                    body: JSON.stringify(payload),
+                });
+                this.intradayBackfillSettings = data.intraday_backfill_settings;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async runIntradayBackfillNow() {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/intraday-backfill/run', {
+                    method: 'POST',
+                });
+                this.intradayBackfillSettings = data.intraday_backfill_settings ?? this.intradayBackfillSettings;
+                this.intradayBackfillRefresh = data.intraday_backfill_refresh ?? null;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async loadIntradayBackfillRefresh(refreshId) {
+            this.holdingsError = '';
+
+            try {
+                const data = await request(`/admin/intraday-backfill/${refreshId}`);
+                this.intradayBackfillSettings = data.intraday_backfill_settings ?? this.intradayBackfillSettings;
+                this.intradayBackfillRefresh = data.intraday_backfill_refresh ?? null;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
                 return data;

@@ -81,6 +81,8 @@ describe('Homepage', () => {
         expect(text).toContain('DAX');
         expect(text).toContain('Germany');
         expect(text).toContain('DJI');
+        expect(text).toContain('6,116.53');
+        expect(text).toContain('51,561.93 USD');
         // Positive change renders green arrow
         expect(text).toContain('▲ +0.33%');
         // Negative change renders red arrow

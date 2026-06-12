@@ -17,6 +17,8 @@ use Throwable;
 
 class StockHoldingIntradayDataReloader
 {
+    private const BackfillDayCount = 365;
+
     private const DayCount = 3;
 
     private const Interval = '5m';
@@ -378,6 +380,22 @@ class StockHoldingIntradayDataReloader
         ]);
     }
 
+    public function createMissingYearRun(): StockHoldingIntradayReloadRun
+    {
+        $date = now('Europe/Vienna')->startOfDay();
+
+        return StockHoldingIntradayReloadRun::query()->create([
+            'id' => 'intraday-missing-'.Str::uuid()->toString(),
+            'stock_holding_id' => null,
+            'status' => 'queued',
+            'total_count' => StockHolding::query()->count(),
+            'date_from' => $date->copy()->subDays(self::BackfillDayCount - 1)->toDateString(),
+            'date_to' => $date->toDateString(),
+            'started_at' => now(),
+            'message' => 'Missing intraday backfill queued.',
+        ]);
+    }
+
     public function runningRun(): ?StockHoldingIntradayReloadRun
     {
         return StockHoldingIntradayReloadRun::query()
@@ -463,6 +481,64 @@ class StockHoldingIntradayDataReloader
                     try {
                         $holdingRun = $this->reload($holding);
                         $run->increment('stored_count', $holdingRun->stored_count);
+                        $run->increment('success_count');
+                    } catch (Throwable $exception) {
+                        $run->increment('failed_count');
+                        $run->update([
+                            'error_summary' => ['message' => Str::limit($exception->getMessage(), 255, '')],
+                        ]);
+                    } finally {
+                        $run->increment('processed_count');
+                    }
+                }
+            });
+
+        $run->refresh();
+        $run->update([
+            'status' => $run->failed_count > 0 ? ($run->success_count > 0 ? 'partial' : 'failed') : 'finished',
+            'current' => null,
+            'message' => $this->reloadAllMessage([
+                'total' => $run->total_count,
+                'success_count' => $run->success_count,
+                'failed_count' => $run->failed_count,
+                'stored_count' => $run->stored_count,
+                'message' => '',
+            ]),
+            'finished_at' => now(),
+        ]);
+    }
+
+    public function importMissingYear(string $runId): void
+    {
+        $run = StockHoldingIntradayReloadRun::query()->find($runId);
+
+        if (! $run) {
+            return;
+        }
+
+        $dateTo = $run->date_to ?? now('Europe/Vienna')->startOfDay();
+        $dateFrom = $run->date_from ?? $dateTo->copy()->subDays(self::BackfillDayCount - 1);
+
+        $run->update([
+            'status' => 'running',
+            'started_at' => $run->started_at ?? now(),
+            'total_count' => StockHolding::query()->count(),
+            'date_from' => $dateFrom->toDateString(),
+            'date_to' => $dateTo->toDateString(),
+            'message' => 'Backfilling missing intraday candles...',
+        ]);
+
+        StockHolding::query()
+            ->orderBy('id')
+            ->chunkById(50, function ($holdings) use ($dateFrom, $dateTo, $run): void {
+                foreach ($holdings as $holding) {
+                    $run->update([
+                        'current' => $holding->name ?: $holding->symbol,
+                    ]);
+
+                    try {
+                        $storedCount = $this->backfillMissingForHolding($holding, $dateFrom, $dateTo, $run);
+                        $run->increment('stored_count', $storedCount);
                         $run->increment('success_count');
                     } catch (Throwable $exception) {
                         $run->increment('failed_count');
@@ -595,6 +671,141 @@ class StockHoldingIntradayDataReloader
         return "{$summary['stored_count']} intraday candles loaded/updated for {$summary['total']} stocks.";
     }
 
+    private function backfillMissingForHolding(
+        StockHolding $holding,
+        Carbon $dateFrom,
+        Carbon $dateTo,
+        StockHoldingIntradayReloadRun $run,
+    ): int {
+        $storedCount = 0;
+        $exchange = $this->exchangeForHolding($holding);
+        $timezone = $exchange?->timezone ?: 'Europe/Vienna';
+        $tradingDays = $this->tradingDaysInRange($holding, $dateFrom, $dateTo);
+        $existingDates = $this->storedEodhdCandleDates($holding, $dateFrom, $dateTo);
+        $holdingName = $holding->name ?: ($holding->symbol ?: "Stock {$holding->id}");
+
+        foreach ($this->missingTradingDayRanges($tradingDays, $existingDates) as $range) {
+            $missingDateKeys = collect($range['days'])
+                ->map(fn (Carbon $day): string => $day->toDateString())
+                ->flip()
+                ->all();
+
+            foreach ($range['days'] as $day) {
+                $this->deleteEmptyPriceRows($holding, $day);
+            }
+
+            $run->update([
+                'current' => "Fetching data for {$holdingName}",
+                'message' => "Fetching data for {$holdingName}: {$range['from']->toDateString()} to {$range['to']->toDateString()}...",
+            ]);
+
+            $records = $this->fetchIntradayRecords($holding, $range['from'], $range['to']);
+
+            $run->update([
+                'current' => "Storing data for {$holdingName}",
+                'message' => "Storing data for {$holdingName}: preparing ".count($records).' rows...',
+            ]);
+
+            $storedCount += $this->storeRangeRecords($holding, $range['from'], $range['to'], $records, $timezone, $missingDateKeys, $run, $holdingName);
+        }
+
+        return $storedCount;
+    }
+
+    /**
+     * @return array<int, Carbon>
+     */
+    private function tradingDaysInRange(StockHolding $holding, Carbon $dateFrom, Carbon $dateTo): array
+    {
+        $exchange = $this->exchangeForHolding($holding);
+        $timezone = $exchange?->timezone ?: 'Europe/Vienna';
+        $holidayLabels = $this->holidayLabels($exchange);
+        $workingDays = $this->workingDays($exchange);
+        $date = $dateFrom->copy()->setTimezone($timezone)->startOfDay();
+        $lastDate = $dateTo->copy()->setTimezone($timezone)->startOfDay();
+        $days = [];
+
+        while ($date->lessThanOrEqualTo($lastDate)) {
+            $dayName = Str::lower($date->format('D'));
+            $dateKey = $date->toDateString();
+
+            if (! array_key_exists($dateKey, $holidayLabels) && in_array($dayName, $workingDays, true)) {
+                $days[] = $date->copy();
+            }
+
+            $date->addDay();
+        }
+
+        return $days;
+    }
+
+    /**
+     * @return array<string, true>
+     */
+    private function storedEodhdCandleDates(StockHolding $holding, Carbon $dateFrom, Carbon $dateTo): array
+    {
+        return StockHoldingIntradayCandle::query()
+            ->where('stock_holding_id', $holding->id)
+            ->where('interval', self::Interval)
+            ->where('source_key', self::SourceKey)
+            ->whereBetween('trading_date', [$dateFrom->toDateString(), $dateTo->toDateString()])
+            ->where(function ($query): void {
+                $query
+                    ->whereNotNull('open')
+                    ->orWhereNotNull('high')
+                    ->orWhereNotNull('low')
+                    ->orWhereNotNull('close');
+            })
+            ->pluck('trading_date')
+            ->map(fn (mixed $tradingDate): string => Carbon::parse((string) $tradingDate)->toDateString())
+            ->flip()
+            ->map(fn (): bool => true)
+            ->all();
+    }
+
+    /**
+     * @param  array<int, Carbon>  $tradingDays
+     * @param  array<string, true>  $existingDates
+     * @return array<int, array{from: Carbon, to: Carbon, days: array<int, Carbon>}>
+     */
+    private function missingTradingDayRanges(array $tradingDays, array $existingDates): array
+    {
+        $ranges = [];
+        $currentDays = [];
+
+        foreach ($tradingDays as $day) {
+            if (array_key_exists($day->toDateString(), $existingDates)) {
+                if ($currentDays !== []) {
+                    $ranges[] = $this->tradingDayRange($currentDays);
+                    $currentDays = [];
+                }
+
+                continue;
+            }
+
+            $currentDays[] = $day;
+        }
+
+        if ($currentDays !== []) {
+            $ranges[] = $this->tradingDayRange($currentDays);
+        }
+
+        return $ranges;
+    }
+
+    /**
+     * @param  array<int, Carbon>  $days
+     * @return array{from: Carbon, to: Carbon, days: array<int, Carbon>}
+     */
+    private function tradingDayRange(array $days): array
+    {
+        return [
+            'from' => $days[0],
+            'to' => $days[array_key_last($days)],
+            'days' => $days,
+        ];
+    }
+
     /**
      * @return array<int, array{date: Carbon, is_trading_day: bool, overview: ?string}>
      */
@@ -635,10 +846,11 @@ class StockHoldingIntradayDataReloader
     /**
      * @return array<int, array<string, mixed>>
      */
-    private function fetchIntradayRecords(StockHolding $holding, Carbon $day): array
+    private function fetchIntradayRecords(StockHolding $holding, Carbon $fromDay, ?Carbon $toDay = null): array
     {
-        $from = $day->copy()->startOfDay()->utc();
-        $to = $day->copy()->endOfDay()->utc();
+        $toDay ??= $fromDay;
+        $from = $fromDay->copy()->startOfDay()->utc();
+        $to = $toDay->copy()->endOfDay()->utc();
         $response = $this->eodhdApiClient->get('intraday/'.$this->eodhdSymbol($holding), [
             'fmt' => 'json',
             'interval' => self::Interval,
@@ -674,7 +886,7 @@ class StockHoldingIntradayDataReloader
     private function storeRecords(StockHolding $holding, Carbon $tradingDate, array $records): int
     {
         $now = now();
-        $sourceUrl = $this->sourceUrl($holding, $tradingDate);
+        $sourceUrl = $this->sourceUrl($holding, $tradingDate, $tradingDate);
         $this->deleteEmptyPriceRows($holding, $tradingDate);
 
         $rows = collect($records)
@@ -694,6 +906,66 @@ class StockHoldingIntradayDataReloader
         );
 
         return count($rows);
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $records
+     * @param  array<string, true>  $missingDateKeys
+     */
+    private function storeRangeRecords(
+        StockHolding $holding,
+        Carbon $fromDay,
+        Carbon $toDay,
+        array $records,
+        string $timezone,
+        array $missingDateKeys,
+        StockHoldingIntradayReloadRun $run,
+        string $holdingName,
+    ): int {
+        $now = now();
+        $sourceUrl = $this->sourceUrl($holding, $fromDay, $toDay);
+
+        $rows = collect($records)
+            ->map(function (array $record) use ($holding, $missingDateKeys, $now, $sourceUrl, $timezone): ?array {
+                $tradingDate = $this->recordTradingDate($record, $timezone);
+
+                if ($tradingDate === null || ! array_key_exists($tradingDate->toDateString(), $missingDateKeys)) {
+                    return null;
+                }
+
+                return $this->row($holding, $tradingDate, $record, $sourceUrl, $now);
+            })
+            ->filter()
+            ->values()
+            ->all();
+
+        if ($rows === []) {
+            $run->update([
+                'current' => "Storing data for {$holdingName}",
+                'message' => "Storing data for {$holdingName}: 0/0 saved.",
+            ]);
+
+            return 0;
+        }
+
+        $storedCount = 0;
+        $totalCount = count($rows);
+
+        foreach (array_chunk($rows, 100) as $chunk) {
+            StockHoldingIntradayCandle::query()->upsert(
+                $chunk,
+                uniqueBy: ['stock_holding_id', 'interval', 'as_of'],
+                update: ['trading_date', 'timestamp', 'gmtoffset', 'datetime', 'open', 'high', 'low', 'close', 'volume', 'currency', 'source_key', 'source_name', 'source_url', 'raw_payload', 'updated_at'],
+            );
+
+            $storedCount += count($chunk);
+            $run->update([
+                'current' => "Storing data for {$holdingName}",
+                'message' => "Storing data for {$holdingName}: {$storedCount}/{$totalCount} saved...",
+            ]);
+        }
+
+        return $storedCount;
     }
 
     /**
@@ -772,6 +1044,20 @@ class StockHoldingIntradayDataReloader
     }
 
     /**
+     * @param  array<string, mixed>  $record
+     */
+    private function recordTradingDate(array $record, string $timezone): ?Carbon
+    {
+        $asOf = $this->timestamp(Arr::get($record, 'timestamp'), Arr::get($record, 'datetime'));
+
+        if ($asOf === null) {
+            return null;
+        }
+
+        return $asOf->copy()->setTimezone($timezone)->startOfDay();
+    }
+
+    /**
      * @return array<string, mixed>
      */
     private function candlePayload(StockHoldingIntradayCandle $candle): array
@@ -788,10 +1074,10 @@ class StockHoldingIntradayDataReloader
         ];
     }
 
-    private function sourceUrl(StockHolding $holding, Carbon $tradingDate): string
+    private function sourceUrl(StockHolding $holding, Carbon $fromDay, Carbon $toDay): string
     {
-        $from = $tradingDate->copy()->startOfDay()->utc()->timestamp;
-        $to = $tradingDate->copy()->endOfDay()->utc()->timestamp;
+        $from = $fromDay->copy()->startOfDay()->utc()->timestamp;
+        $to = $toDay->copy()->endOfDay()->utc()->timestamp;
         $baseUrl = rtrim((string) config('services.eodhd.base_url', 'https://eodhd.com/api'), '/');
 
         return "{$baseUrl}/intraday/{$this->eodhdSymbol($holding)}?fmt=json&interval=".self::Interval."&from={$from}&to={$to}";

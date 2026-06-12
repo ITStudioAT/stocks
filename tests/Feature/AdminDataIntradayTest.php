@@ -586,6 +586,171 @@ class AdminDataIntradayTest extends TestCase
         Http::assertSentCount(4);
     }
 
+    public function test_missing_year_backfill_fetches_only_days_without_stored_eodhd_candles(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-12 12:00:00', 'Europe/Vienna'));
+        config(['services.eodhd.key' => 'test-token']);
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'name' => 'Amundi IBEX 35 UCITS ETF',
+            'exchange' => 'XETRA',
+            'mic_code' => 'XETR',
+            'currency' => 'EUR',
+        ]);
+        EodhdExchange::query()->create([
+            'code' => 'XETRA',
+            'detail_code' => 'XETR',
+            'name' => 'XETRA',
+            'country' => 'Germany',
+            'currency' => 'EUR',
+            'timezone' => 'Europe/Berlin',
+            'operating_mic' => 'XETR',
+            'trading_hours' => [
+                'WorkingDays' => 'Mon, Tue, Wed, Thu, Fri',
+            ],
+            'holidays' => [],
+            'synced_at' => now(),
+        ]);
+        StockHoldingIntradayCandle::query()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-11',
+            'interval' => '5m',
+            'as_of' => Carbon::parse('2026-06-11 07:00:00', 'UTC'),
+            'timestamp' => Carbon::parse('2026-06-11 07:00:00', 'UTC')->timestamp,
+            'datetime' => '2026-06-11 07:00:00',
+            'close' => '470.15000000',
+            'currency' => 'EUR',
+            'source_key' => 'eodhd_intraday',
+            'source_name' => 'EODHD intraday',
+        ]);
+        $todayFrom = Carbon::parse('2026-06-12 00:00:00', 'Europe/Berlin')->utc()->timestamp;
+        $existingDayFrom = Carbon::parse('2026-06-11 00:00:00', 'Europe/Berlin')->utc()->timestamp;
+
+        Http::fake(function ($request) use ($todayFrom) {
+            if ((int) $request['from'] === $todayFrom) {
+                return Http::response([
+                    [
+                        'timestamp' => Carbon::parse('2026-06-12 07:00:00', 'UTC')->timestamp,
+                        'gmtoffset' => 0,
+                        'datetime' => '2026-06-12 07:00:00',
+                        'open' => 471.1,
+                        'high' => 472.2,
+                        'low' => 470.9,
+                        'close' => 471.15,
+                        'volume' => 1200,
+                    ],
+                ]);
+            }
+
+            return Http::response([]);
+        });
+
+        $run = app(StockHoldingIntradayDataReloader::class)->createMissingYearRun();
+        app(StockHoldingIntradayDataReloader::class)->importMissingYear($run->id);
+
+        $this->assertDatabaseHas('stock_holding_intraday_candles', [
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-12',
+            'interval' => '5m',
+            'datetime' => '2026-06-12 07:00:00',
+            'close' => '471.15000000',
+            'source_key' => 'eodhd_intraday',
+        ]);
+        $this->assertDatabaseHas('stock_holding_intraday_reload_runs', [
+            'id' => $run->id,
+            'status' => 'finished',
+            'stored_count' => 1,
+            'processed_count' => 1,
+            'success_count' => 1,
+            'date_from' => '2025-06-13 00:00:00',
+            'date_to' => '2026-06-12 00:00:00',
+        ]);
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/intraday/AMES.XETRA')
+            && (int) $request['from'] === $existingDayFrom);
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), '/intraday/AMES.XETRA')
+            && $request['fmt'] === 'json'
+            && $request['interval'] === '5m'
+            && $request['api_token'] === 'test-token'
+            && (int) $request['from'] === $todayFrom);
+    }
+
+    public function test_missing_year_backfill_fetches_a_whole_missing_year_in_one_request(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-12 12:00:00', 'Europe/Vienna'));
+        config(['services.eodhd.key' => 'test-token']);
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'name' => 'Amundi IBEX 35 UCITS ETF',
+            'exchange' => 'XETRA',
+            'mic_code' => 'XETR',
+            'currency' => 'EUR',
+        ]);
+        EodhdExchange::query()->create([
+            'code' => 'XETRA',
+            'detail_code' => 'XETR',
+            'name' => 'XETRA',
+            'country' => 'Germany',
+            'currency' => 'EUR',
+            'timezone' => 'Europe/Berlin',
+            'operating_mic' => 'XETR',
+            'trading_hours' => [
+                'WorkingDays' => 'Mon, Tue, Wed, Thu, Fri',
+            ],
+            'holidays' => [],
+            'synced_at' => now(),
+        ]);
+        $yearFrom = Carbon::parse('2025-06-13 00:00:00', 'Europe/Berlin')->utc()->timestamp;
+        $yearTo = Carbon::parse('2026-06-12 23:59:59', 'Europe/Berlin')->utc()->timestamp;
+
+        Http::fake([
+            'eodhd.com/api/intraday/AMES.XETRA*' => Http::response([
+                [
+                    'timestamp' => Carbon::parse('2025-06-13 07:00:00', 'UTC')->timestamp,
+                    'gmtoffset' => 0,
+                    'datetime' => '2025-06-13 07:00:00',
+                    'open' => 450.1,
+                    'high' => 451.2,
+                    'low' => 449.9,
+                    'close' => 450.15,
+                    'volume' => 1200,
+                ],
+                [
+                    'timestamp' => Carbon::parse('2026-06-12 07:00:00', 'UTC')->timestamp,
+                    'gmtoffset' => 0,
+                    'datetime' => '2026-06-12 07:00:00',
+                    'open' => 471.1,
+                    'high' => 472.2,
+                    'low' => 470.9,
+                    'close' => 471.15,
+                    'volume' => 2200,
+                ],
+            ]),
+        ]);
+
+        $run = app(StockHoldingIntradayDataReloader::class)->createMissingYearRun();
+        app(StockHoldingIntradayDataReloader::class)->importMissingYear($run->id);
+
+        $this->assertDatabaseHas('stock_holding_intraday_candles', [
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2025-06-13',
+            'interval' => '5m',
+            'datetime' => '2025-06-13 07:00:00',
+            'close' => '450.15000000',
+        ]);
+        $this->assertDatabaseHas('stock_holding_intraday_candles', [
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-12',
+            'interval' => '5m',
+            'datetime' => '2026-06-12 07:00:00',
+            'close' => '471.15000000',
+        ]);
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), '/intraday/AMES.XETRA')
+            && (int) $request['from'] === $yearFrom
+            && (int) $request['to'] === $yearTo
+            && $request['interval'] === '5m');
+    }
+
     public function test_guest_cannot_reload_intraday_data(): void
     {
         $this->postJson('/admin/data/intraday/reload', ['stock_id' => 1])->assertUnauthorized();

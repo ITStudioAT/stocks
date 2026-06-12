@@ -2,23 +2,40 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\StockHoldingIntradayReloadRun;
 use App\Models\User;
 use App\Services\EodhdApiUsage;
 use App\Services\IndexPriceRefreshSettings;
+use App\Services\IntradayCandleBackfillScheduler;
 use App\Services\PriceRefreshScheduler;
+use App\Services\StockHoldingIntradayDataReloader;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class AdminPriceRefreshSettingsController extends Controller
 {
-    public function show(PriceRefreshScheduler $scheduler, IndexPriceRefreshSettings $indexPriceRefreshSettings, EodhdApiUsage $eodhdApiUsage): JsonResponse
-    {
+    public function show(
+        PriceRefreshScheduler $scheduler,
+        IndexPriceRefreshSettings $indexPriceRefreshSettings,
+        IntradayCandleBackfillScheduler $intradayBackfillScheduler,
+        StockHoldingIntradayDataReloader $intradayDataReloader,
+        EodhdApiUsage $eodhdApiUsage,
+    ): JsonResponse {
         $indexPriceRefreshSettings->dispatchOverdueRefreshes();
+        $intradayBackfillRun = $intradayDataReloader->runningRun()
+            ?? StockHoldingIntradayReloadRun::query()
+                ->whereNull('stock_holding_id')
+                ->where('id', 'like', 'intraday-missing-%')
+                ->latest('finished_at')
+                ->latest()
+                ->first();
 
         return response()->json([
             'price_refresh_settings' => $scheduler->payload(),
             'index_price_refresh_settings' => $indexPriceRefreshSettings->payload(),
+            'intraday_backfill_settings' => $intradayBackfillScheduler->payload(),
             'refresh' => $scheduler->activeRefreshProgress(),
+            'intraday_backfill_refresh' => $intradayBackfillRun ? $intradayDataReloader->refreshPayload($intradayBackfillRun) : null,
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
     }
@@ -72,6 +89,58 @@ class AdminPriceRefreshSettingsController extends Controller
         return response()->json([
             'message' => 'Index price refresh schedule updated.',
             'index_price_refresh_settings' => $indexPriceRefreshSettings->payload(),
+            'eodhd_api_usage' => $eodhdApiUsage->payload(),
+        ]);
+    }
+
+    public function updateIntradayBackfill(
+        Request $request,
+        IntradayCandleBackfillScheduler $intradayBackfillScheduler,
+        EodhdApiUsage $eodhdApiUsage,
+    ): JsonResponse {
+        $validated = $request->validate([
+            'daily_time' => ['required', 'date_format:H:i'],
+        ]);
+
+        return response()->json([
+            'message' => 'Intraday backfill schedule updated.',
+            'intraday_backfill_settings' => $intradayBackfillScheduler->updateSettings((string) $validated['daily_time']),
+            'eodhd_api_usage' => $eodhdApiUsage->payload(),
+        ]);
+    }
+
+    public function runIntradayBackfill(
+        IntradayCandleBackfillScheduler $intradayBackfillScheduler,
+        StockHoldingIntradayDataReloader $intradayDataReloader,
+        EodhdApiUsage $eodhdApiUsage,
+    ): JsonResponse {
+        $run = $intradayBackfillScheduler->dispatchNow();
+
+        return response()->json([
+            'message' => 'Missing intraday backfill queued.',
+            'intraday_backfill_settings' => $intradayBackfillScheduler->payload(),
+            'intraday_backfill_refresh' => $run ? $intradayDataReloader->refreshPayload($run) : null,
+            'eodhd_api_usage' => $eodhdApiUsage->payload(),
+        ], 202);
+    }
+
+    public function intradayBackfillStatus(
+        string $refreshId,
+        IntradayCandleBackfillScheduler $intradayBackfillScheduler,
+        StockHoldingIntradayDataReloader $intradayDataReloader,
+        EodhdApiUsage $eodhdApiUsage,
+    ): JsonResponse {
+        $run = StockHoldingIntradayReloadRun::query()->find($refreshId);
+
+        if (! $run) {
+            return response()->json([
+                'message' => 'Intraday backfill not found.',
+            ], 404);
+        }
+
+        return response()->json([
+            'intraday_backfill_settings' => $intradayBackfillScheduler->payload(),
+            'intraday_backfill_refresh' => $intradayDataReloader->refreshPayload($run),
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
     }

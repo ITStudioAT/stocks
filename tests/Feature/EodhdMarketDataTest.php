@@ -220,7 +220,7 @@ class EodhdMarketDataTest extends TestCase
             'as_of' => '2026-06-05 09:41:00',
         ]);
         Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), '/real-time/AMES.XETRA'));
-        $this->assertSame(20, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
+        $this->assertSame(25, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
         $this->assertDatabaseHas('stock_holding_intraday_prices', [
             'stock_holding_id' => $holding->id,
             'trading_date' => '2026-06-05',
@@ -233,7 +233,7 @@ class EodhdMarketDataTest extends TestCase
         $this->assertDatabaseHas('stock_holding_intraday_prices', [
             'stock_holding_id' => $holding->id,
             'trading_date' => '2026-06-05',
-            'sample_index' => 19,
+            'sample_index' => 24,
             'price' => '494.15000000',
             'as_of' => '2026-06-05 15:01:00',
             'source_name' => 'EODHD intraday',
