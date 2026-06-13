@@ -9,6 +9,7 @@ use App\Models\StockHoldingDailyPrice;
 use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockHoldingIntradayPrice;
 use App\Models\StockPrice;
+use App\Models\StockRealtimePrice;
 use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\DepotTransactionBooker;
@@ -27,6 +28,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\Response;
@@ -55,6 +57,7 @@ class AdminDepotHoldingController extends Controller
         $historyRange = $this->stockHistoricalPriceService->range();
         $holdings = StockHolding::query()
             ->with([
+                'latestRealtimePrice',
                 'latestStockPrice',
                 'dailyPrices' => fn ($query) => $query
                     ->whereDate('trading_date', '>=', $historyRange['from']->toDateString())
@@ -64,9 +67,10 @@ class AdminDepotHoldingController extends Controller
                 'intradayCandles' => fn ($query) => $query
                     ->whereDate('trading_date', '>=', now()->subYear()->toDateString())
                     ->where('interval', '5m')
+                    ->where('source_key', 'eodhd_intraday')
                     ->whereNotNull('close')
                     ->orderBy('as_of')
-                    ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'currency', 'as_of']),
+                    ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'currency', 'as_of', 'timestamp', 'source_key']),
             ])
             ->orderBy('name')
             ->orderBy('isin')
@@ -156,7 +160,9 @@ class AdminDepotHoldingController extends Controller
 
         $this->eodhdMarketData->resolve($holding);
         $holding->refresh();
-        $initialFlatexPrice = $holding->latestStockPrice?->price ?? $holding->latest_price;
+        $initialFlatexPrice = $holding->latestRealtimePrice?->price
+            ?? $holding->latestStockPrice?->price
+            ?? $holding->latest_price;
 
         if ($holding->flatex_price === null && $initialFlatexPrice !== null) {
             $holding->update([
@@ -314,6 +320,7 @@ class AdminDepotHoldingController extends Controller
     private function holdingPayload(StockHolding $holding, ?Depot $activeDepot): array
     {
         $latestStockPrice = $holding->latestStockPrice;
+        $latestStoredPrice = $holding->latestRealtimePrice ?? $latestStockPrice;
         $latestPriceStatus = $this->latestPriceStatus($holding);
         $hasCurrentPrice = in_array($latestPriceStatus, ['realtime', 'fresh', 'delayed', 'suspicious', 'unavailable_now'], true);
         $latestPrice = $hasCurrentPrice ? $this->pricePayload($holding->latest_price) : null;
@@ -322,10 +329,10 @@ class AdminDepotHoldingController extends Controller
         $end24Price = $this->pricePayload($holding->end_price_24);
         $sessionPrices = $this->tradingSessionPriceResolver->resolve($holding, $latestPrice);
         $sessionPriceDates = $this->sessionPriceDates($holding);
-        $latestPriceAsOf = $latestStockPrice
-            ? $this->storedStockPriceTimestamp($latestStockPrice, 'as_of')
+        $latestPriceAsOf = $latestStoredPrice
+            ? $this->storedStockPriceTimestamp($latestStoredPrice, 'as_of')
             : $holding->latest_price_as_of;
-        $tradingTimes = $latestStockPrice?->trading_times ?? $holding->trading_times;
+        $tradingTimes = $latestStoredPrice?->trading_times ?? $holding->trading_times;
         $recentStoredPricePayload = $this->recentStoredPricePayload($holding);
 
         return [
@@ -355,31 +362,31 @@ class AdminDepotHoldingController extends Controller
                 : '0.00000000',
             'latest_price_trend' => $this->latestPriceTrend($latestPrice, $end24Price),
             'latest_price_change_pct' => $this->latestPriceChangePercent($latestPrice, $end24Price),
-            'latest_price_tick_trend' => $this->latestPriceTrend($latestPrice, $this->previousStoredPrice($holding, $latestStockPrice)),
+            'latest_price_tick_trend' => $this->latestPriceTrend($latestPrice, $this->previousStoredPrice($holding, $latestStoredPrice)),
             'latest_price_status' => $latestPriceStatus,
             'price_status' => $latestPriceStatus,
-            'latest_price_fetched_at' => $latestStockPrice?->fetched_at?->toIso8601String() ?? $holding->latest_price_fetched_at?->toIso8601String(),
-            'latest_price_source' => $hasCurrentPrice ? ($latestStockPrice?->source_name ?? $holding->latest_price_source) : null,
-            'latest_price_source_url' => $hasCurrentPrice ? ($latestStockPrice?->source_url ?? $holding->latest_price_source_url) : null,
+            'latest_price_fetched_at' => $latestStoredPrice?->fetched_at?->toIso8601String() ?? $holding->latest_price_fetched_at?->toIso8601String(),
+            'latest_price_source' => $hasCurrentPrice ? ($latestStoredPrice?->source_name ?? $holding->latest_price_source) : null,
+            'latest_price_source_url' => $hasCurrentPrice ? ($latestStoredPrice?->source_url ?? $holding->latest_price_source_url) : null,
             'latest_price_as_of' => $this->sourceDateTimePayload($latestPriceAsOf, $hasCurrentPrice),
             'trading_times' => $tradingTimes,
-            'venue' => $hasCurrentPrice ? $latestStockPrice?->venue : null,
-            'price_type' => $hasCurrentPrice ? ($latestStockPrice?->price_type ?? $holding->latest_price_type) : null,
-            'price_spread_pct' => $hasCurrentPrice ? ($latestStockPrice?->spread_pct ?? $holding->price_spread_pct) : null,
+            'venue' => $hasCurrentPrice ? $latestStoredPrice?->venue : null,
+            'price_type' => $hasCurrentPrice ? ($latestStoredPrice?->price_type ?? $holding->latest_price_type) : null,
+            'price_spread_pct' => $hasCurrentPrice ? ($latestStoredPrice?->spread_pct ?? $holding->price_spread_pct) : null,
             'recent_prices' => $recentStoredPricePayload['prices'],
             'recent_prices_are_fallback' => $recentStoredPricePayload['are_fallback'],
             'intraday_prices' => $this->intradayPricePayload($holding),
             'intraday_candles' => $this->intradayCandlePayload($holding),
             'daily_prices' => $this->dailyPricePayload($holding),
-            'validation_errors' => $hasCurrentPrice ? ($latestStockPrice?->validation_errors ?? []) : [],
+            'validation_errors' => $hasCurrentPrice ? ($latestStoredPrice?->validation_errors ?? []) : [],
             'created_at' => $holding->created_at?->toIso8601String(),
         ];
     }
 
     private function latestPriceStatus(StockHolding $holding): string
     {
-        $latestStockPrice = $holding->latestStockPrice;
-        $storedPriceStatus = $this->storedPriceStatus($latestStockPrice);
+        $latestStoredPrice = $holding->latestRealtimePrice ?? $holding->latestStockPrice;
+        $storedPriceStatus = $this->storedPriceStatus($latestStoredPrice);
 
         if ($storedPriceStatus !== null) {
             return $storedPriceStatus;
@@ -389,14 +396,14 @@ class AdminDepotHoldingController extends Controller
             return $holding->price_status;
         }
 
-        if ($latestStockPrice?->price === null && $holding->latest_price === null) {
+        if ($latestStoredPrice?->price === null && $holding->latest_price === null) {
             return $holding->latest_price_fetched_at === null ? 'missing' : 'unavailable';
         }
 
-        $latestPriceAsOf = $latestStockPrice
-            ? $this->storedStockPriceTimestamp($latestStockPrice, 'as_of')
+        $latestPriceAsOf = $latestStoredPrice
+            ? $this->storedStockPriceTimestamp($latestStoredPrice, 'as_of')
             : $holding->latest_price_as_of;
-        $tradingTimes = $latestStockPrice?->trading_times ?? $holding->trading_times;
+        $tradingTimes = $latestStoredPrice?->trading_times ?? $holding->trading_times;
 
         if ($this->stockPriceFreshness->isFresh($latestPriceAsOf, $tradingTimes)) {
             return 'fresh';
@@ -405,7 +412,7 @@ class AdminDepotHoldingController extends Controller
         return 'stale';
     }
 
-    private function storedPriceStatus(?StockPrice $stockPrice): ?string
+    private function storedPriceStatus(StockPrice|StockRealtimePrice|null $stockPrice): ?string
     {
         if ($stockPrice?->price === null) {
             return null;
@@ -536,17 +543,21 @@ class AdminDepotHoldingController extends Controller
         return number_format((((float) $latestPrice - (float) $referencePrice) / (float) $referencePrice) * 100, 2, '.', '');
     }
 
-    private function previousStoredPrice(StockHolding $holding, ?StockPrice $latestStockPrice): ?string
+    private function previousStoredPrice(StockHolding $holding, StockPrice|StockRealtimePrice|null $latestStockPrice): ?string
     {
         if ($latestStockPrice === null) {
             return null;
         }
 
-        $query = $this->stockPriceCatalog
-            ->pricesForHolding($holding)
-            ->whereKeyNot($latestStockPrice->id)
-            ->whereIn('source_key', EodhdMarketData::sourceKeys())
-            ->whereNotNull('price');
+        $query = $latestStockPrice instanceof StockRealtimePrice
+            ? $holding->realtimePrices()
+                ->whereKeyNot($latestStockPrice->id)
+                ->whereNotNull('price')
+            : $this->stockPriceCatalog
+                ->pricesForHolding($holding)
+                ->whereKeyNot($latestStockPrice->id)
+                ->whereIn('source_key', EodhdMarketData::sourceKeys())
+                ->whereNotNull('price');
 
         if ($latestStockPrice->as_of !== null) {
             $query->where(function ($query) use ($latestStockPrice): void {
@@ -571,35 +582,7 @@ class AdminDepotHoldingController extends Controller
      */
     private function recentStoredPricePayload(StockHolding $holding): array
     {
-        $recentPrices = $this->stockPriceCatalog
-            ->pricesForHolding($holding)
-            ->whereIn('source_key', EodhdMarketData::sourceKeys())
-            ->whereNotNull('price')
-            ->whereNotNull('as_of')
-            ->where('as_of', '>=', now()->subDay())
-            ->orderBy('as_of')
-            ->orderBy('id')
-            ->get(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type'])
-            ->map(fn (StockPrice $stockPrice): array => [
-                'id' => $stockPrice->id,
-                'price' => (string) $stockPrice->price,
-                'currency' => $stockPrice->currency,
-                'as_of' => $this->storedStockPriceTimestamp($stockPrice, 'as_of'),
-                'source_name' => $stockPrice->source_name,
-                'price_type' => $stockPrice->price_type,
-            ])
-            ->all();
-
-        if ($recentPrices !== []) {
-            return [
-                'prices' => $recentPrices,
-                'are_fallback' => false,
-            ];
-        }
-
-        $latestTradingDay = $this->stockPriceCatalog
-            ->pricesForHolding($holding)
-            ->whereIn('source_key', EodhdMarketData::sourceKeys())
+        $latestTradingDay = $holding->realtimePrices()
             ->whereNotNull('price')
             ->whereNotNull('as_of')
             ->latest('as_of')
@@ -612,29 +595,68 @@ class AdminDepotHoldingController extends Controller
             ];
         }
 
-        $fallbackPrices = $this->stockPriceCatalog
-            ->pricesForHolding($holding)
-            ->whereIn('source_key', EodhdMarketData::sourceKeys())
+        $latestTradingDate = Carbon::parse($latestTradingDay)->toDateString();
+
+        $latestTradingDayRealtimePriceModels = $holding->realtimePrices()
             ->whereNotNull('price')
             ->whereNotNull('as_of')
-            ->whereDate('as_of', Carbon::parse($latestTradingDay)->toDateString())
+            ->whereDate('as_of', $latestTradingDate)
             ->orderBy('as_of')
             ->orderBy('id')
-            ->get(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type'])
-            ->map(fn (StockPrice $stockPrice): array => [
+            ->get(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type']);
+        $previousRealtimePrice = $this->previousTradingDayLastRealtimePrice($holding, $latestTradingDayRealtimePriceModels);
+        $latestTradingDayRealtimePrices = $latestTradingDayRealtimePriceModels
+            ->when($previousRealtimePrice !== null, fn ($prices) => $prices->prepend($previousRealtimePrice))
+            ->map(fn (StockRealtimePrice $stockPrice): array => [
                 'id' => $stockPrice->id,
                 'price' => (string) $stockPrice->price,
                 'currency' => $stockPrice->currency,
                 'as_of' => $this->storedStockPriceTimestamp($stockPrice, 'as_of'),
                 'source_name' => $stockPrice->source_name,
                 'price_type' => $stockPrice->price_type,
-            ])
+            ]);
+        $latestTradingDayPrices = $latestTradingDayRealtimePrices
+            ->toBase()
+            ->sortBy('as_of')
+            ->values()
             ->all();
 
         return [
-            'prices' => $fallbackPrices,
-            'are_fallback' => $fallbackPrices !== [],
+            'prices' => $latestTradingDayPrices,
+            'are_fallback' => Carbon::parse($latestTradingDay)->lt(now()->subDay()) && $latestTradingDayPrices !== [],
         ];
+    }
+
+    /**
+     * @param  Collection<int, StockRealtimePrice>  $recentRealtimePrices
+     */
+    private function previousTradingDayLastRealtimePrice(
+        StockHolding $holding,
+        Collection $recentRealtimePrices,
+    ): ?StockRealtimePrice {
+        $latestTradingDate = $recentRealtimePrices
+            ->last()
+            ?->as_of
+            ?->toDateString();
+
+        if ($latestTradingDate === null) {
+            return null;
+        }
+
+        $hasPreviousTradingDate = $recentRealtimePrices
+            ->contains(fn (StockRealtimePrice $stockPrice): bool => $stockPrice->as_of?->toDateString() < $latestTradingDate);
+
+        if ($hasPreviousTradingDate) {
+            return null;
+        }
+
+        return $holding->realtimePrices()
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->whereDate('as_of', '<', $latestTradingDate)
+            ->orderByDesc('as_of')
+            ->orderByDesc('id')
+            ->first(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type']);
     }
 
     /**
@@ -670,19 +692,22 @@ class AdminDepotHoldingController extends Controller
      */
     private function storedEodhdIntradayPayload(StockHolding $holding, Carbon|string $tradingDate): array
     {
-        return StockHoldingIntradayPrice::query()
+        return StockHoldingIntradayCandle::query()
             ->where('stock_holding_id', $holding->id)
             ->whereDate('trading_date', Carbon::parse($tradingDate)->toDateString())
-            ->where('source_name', 'EODHD intraday')
-            ->orderBy('sample_index')
-            ->get(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type'])
-            ->map(fn (StockHoldingIntradayPrice $intradayPrice): array => [
-                'id' => $intradayPrice->id,
-                'price' => (string) $intradayPrice->price,
-                'currency' => $intradayPrice->currency,
-                'as_of' => $this->storedIntradayPriceTimestamp($intradayPrice),
-                'source_name' => $intradayPrice->source_name,
-                'price_type' => $intradayPrice->price_type,
+            ->where('interval', '5m')
+            ->where('source_key', 'eodhd_intraday')
+            ->whereNotNull('close')
+            ->orderBy('as_of')
+            ->orderBy('id')
+            ->get(['id', 'close', 'currency', 'as_of', 'timestamp', 'source_name'])
+            ->map(fn (StockHoldingIntradayCandle $intradayCandle): array => [
+                'id' => $intradayCandle->id,
+                'price' => (string) $intradayCandle->close,
+                'currency' => $intradayCandle->currency,
+                'as_of' => $this->storedIntradayCandleTimestamp($intradayCandle),
+                'source_name' => $intradayCandle->source_name,
+                'price_type' => 'intraday',
             ])
             ->all();
     }
@@ -699,24 +724,7 @@ class AdminDepotHoldingController extends Controller
             return $legacyIntradayPrices;
         }
 
-        return $this->stockPriceCatalog
-            ->pricesForHolding($holding)
-            ->where('validation_status', 'valid')
-            ->whereNotNull('price')
-            ->whereNotNull('as_of')
-            ->whereDate('as_of', $date)
-            ->orderBy('as_of')
-            ->orderBy('id')
-            ->get(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type'])
-            ->map(fn (StockPrice $stockPrice): array => [
-                'id' => $stockPrice->id,
-                'price' => (string) $stockPrice->price,
-                'currency' => $stockPrice->currency,
-                'as_of' => $this->storedStockPriceTimestamp($stockPrice, 'as_of'),
-                'source_name' => $stockPrice->source_name,
-                'price_type' => $stockPrice->price_type,
-            ])
-            ->all();
+        return [];
     }
 
     /**
@@ -745,19 +753,23 @@ class AdminDepotHoldingController extends Controller
 
     private function latestStoredIntradayDate(StockHolding $holding): Carbon|string|null
     {
-        return StockHoldingIntradayPrice::query()
+        return StockHoldingIntradayCandle::query()
             ->where('stock_holding_id', $holding->id)
-            ->where('source_name', 'EODHD intraday')
+            ->where('interval', '5m')
+            ->where('source_key', 'eodhd_intraday')
+            ->whereNotNull('close')
             ->latest('trading_date')
             ->value('trading_date');
     }
 
     private function storedIntradayPriceCount(StockHolding $holding, Carbon|string $tradingDate): int
     {
-        return StockHoldingIntradayPrice::query()
+        return StockHoldingIntradayCandle::query()
             ->where('stock_holding_id', $holding->id)
             ->whereDate('trading_date', Carbon::parse($tradingDate)->toDateString())
-            ->where('source_name', 'EODHD intraday')
+            ->where('interval', '5m')
+            ->where('source_key', 'eodhd_intraday')
+            ->whereNotNull('close')
             ->count();
     }
 
@@ -794,26 +806,26 @@ class AdminDepotHoldingController extends Controller
         }
     }
 
-    private function storedStockPriceTimestamp(StockPrice $stockPrice, string $column): ?string
+    private function storedStockPriceTimestamp(StockPrice|StockRealtimePrice $stockPrice, string $column): ?string
     {
-        $value = $stockPrice->getRawOriginal($column);
+        $value = $stockPrice->{$column};
 
-        if ($value === null || trim((string) $value) === '') {
+        if ($value === null) {
             return null;
         }
 
-        return Carbon::parse((string) $value, 'UTC')->toIso8601String();
+        return Carbon::parse($value)->toIso8601String();
     }
 
     private function storedIntradayPriceTimestamp(StockHoldingIntradayPrice $intradayPrice): ?string
     {
-        $value = $intradayPrice->getRawOriginal('as_of');
+        $value = $intradayPrice->as_of;
 
-        if ($value === null || trim((string) $value) === '') {
+        if ($value === null) {
             return null;
         }
 
-        return Carbon::parse((string) $value, 'UTC')->toIso8601String();
+        return Carbon::parse($value)->toIso8601String();
     }
 
     /**
@@ -840,13 +852,19 @@ class AdminDepotHoldingController extends Controller
 
     private function storedIntradayCandleTimestamp(StockHoldingIntradayCandle $intradayCandle): ?string
     {
-        $value = $intradayCandle->getRawOriginal('as_of');
+        if ($intradayCandle->timestamp !== null) {
+            return Carbon::createFromTimestampUTC($intradayCandle->timestamp)
+                ->setTimezone(config('app.timezone'))
+                ->toIso8601String();
+        }
 
-        if ($value === null || trim((string) $value) === '') {
+        $value = $intradayCandle->as_of;
+
+        if ($value === null) {
             return null;
         }
 
-        return Carbon::parse((string) $value, 'UTC')->toIso8601String();
+        return Carbon::parse($value)->toIso8601String();
     }
 
     /**

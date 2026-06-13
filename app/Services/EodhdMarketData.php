@@ -6,6 +6,7 @@ use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
 use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockPrice;
+use App\Models\StockRealtimePrice;
 use App\Services\WebMarketData\DTO\InstrumentIdentity;
 use App\Services\WebMarketData\DTO\ParsedQuote;
 use App\Services\WebMarketData\DTO\QuoteSelectionResult;
@@ -36,7 +37,7 @@ class EodhdMarketData
 
     public function __construct(
         private StockPriceCatalog $stockPriceCatalog,
-        private StockHoldingIntradayPriceSampler $intradayPriceSampler,
+        private StockRealtimePriceCatalog $stockRealtimePriceCatalog,
         private WebQuoteValidator $validator,
         private MarketHours $marketHours,
         private EodhdApiClient $apiClient,
@@ -46,14 +47,14 @@ class EodhdMarketData
     {
         $errors = [];
         $historicalQuotes = [];
-        $intradayCandidate = $this->currentFiveMinuteIntradayCandidate($holding);
-        $quote = $this->currentFiveMinuteIntradayQuote($holding, $intradayCandidate, $errors);
-        $attemptedSources = [$intradayCandidate];
+        $realtimeCandidate = $this->candidate($holding, self::RealtimeSourceKey, 'EODHD real-time');
+        [$quote, $historicalQuotes] = $this->realtimeQuote($holding, $realtimeCandidate, $errors);
+        $attemptedSources = [$realtimeCandidate];
 
         if ($quote === null) {
-            $realtimeCandidate = $this->candidate($holding, self::RealtimeSourceKey, 'EODHD real-time');
-            [$quote, $historicalQuotes] = $this->realtimeQuote($holding, $realtimeCandidate, $errors);
-            $attemptedSources[] = $realtimeCandidate;
+            $intradayCandidate = $this->currentFiveMinuteIntradayCandidate($holding);
+            $quote = $this->currentFiveMinuteIntradayQuote($holding, $intradayCandidate, $errors);
+            $attemptedSources[] = $intradayCandidate;
         }
 
         $validatedQuote = $quote
@@ -207,7 +208,6 @@ class EodhdMarketData
             $this->intradayUrl($holding, $from, $until),
         );
         $records = $this->intradayRecords($holding, $from, $until, $errors);
-        $this->intradayPriceSampler->persistIntradayRecords($holding, $records);
         $record = $this->firstPriceRecordBetween($records, $from, $until);
 
         if ($record === null) {
@@ -249,7 +249,7 @@ class EodhdMarketData
         }
 
         $errors = [];
-        $records = $this->intradayRecords($holding, $session['open'], $until, $errors);
+        $records = $this->intradayRecordsForInterval($holding, $session['open'], $until, '5m', $errors);
 
         if ($records === []) {
             Cache::put($emptySessionCacheKey, true, now()->addHours(6));
@@ -259,7 +259,13 @@ class EodhdMarketData
 
         Cache::forget($emptySessionCacheKey);
 
-        $this->intradayPriceSampler->persistIntradayRecords($holding, $records);
+        $this->persistIntradayCandles(
+            $holding,
+            $session['date'],
+            '5m',
+            $records,
+            $this->intradayUrl($holding, $session['open'], $until, '5m'),
+        );
     }
 
     /**
@@ -865,12 +871,16 @@ class EodhdMarketData
             : $session['close'];
     }
 
-    private function persistResult(StockHolding $holding, QuoteSelectionResult $result, ?StockPrice $fetchedStockPrice = null): void
-    {
+    private function persistResult(
+        StockHolding $holding,
+        QuoteSelectionResult $result,
+        StockPrice|StockRealtimePrice|null $fetchedStockPrice = null,
+    ): void {
         if (! $result->selectedQuote) {
             if (! $this->holdingHasStoredPrice($holding)) {
                 $holding->update([
                     'latest_stock_price_id' => null,
+                    'latest_realtime_price_id' => null,
                     'latest_price_source' => null,
                     'latest_price_source_url' => null,
                     'latest_price_as_of' => null,
@@ -894,32 +904,38 @@ class EodhdMarketData
         }
 
         $quote = $result->selectedQuote->quote;
-        $selectedPrice = $fetchedStockPrice ?? $this->stockPriceCatalog->store(
-            $holding,
-            $result->selectedQuote,
-            $this->marketHours->tradingTimes($quote),
-        );
+        $selectedPrice = $fetchedStockPrice ?? $this->storeSelectedQuote($holding, $result->selectedQuote);
+        $latestPriceColumn = $selectedPrice instanceof StockRealtimePrice
+            ? 'latest_realtime_price_id'
+            : 'latest_stock_price_id';
 
         $holding->update([
             'currency' => $quote->currency ?? $holding->currency,
-            'latest_stock_price_id' => $selectedPrice->id,
+            $latestPriceColumn => $selectedPrice->id,
             'price_status' => $result->status,
             'source_verified_at' => now(),
             'trading_times' => $selectedPrice->trading_times,
         ]);
     }
 
-    private function storeFetchedQuote(StockHolding $holding, ?ValidatedQuote $validatedQuote): ?StockPrice
+    private function storeFetchedQuote(StockHolding $holding, ?ValidatedQuote $validatedQuote): StockPrice|StockRealtimePrice|null
     {
         if ($validatedQuote === null || $validatedQuote->quote->price === null || $validatedQuote->quote->asOf === null) {
             return null;
         }
 
-        return $this->stockPriceCatalog->store(
-            $holding,
-            $validatedQuote,
-            $this->marketHours->tradingTimes($validatedQuote->quote),
-        );
+        return $this->storeSelectedQuote($holding, $validatedQuote);
+    }
+
+    private function storeSelectedQuote(StockHolding $holding, ValidatedQuote $validatedQuote): StockPrice|StockRealtimePrice
+    {
+        $tradingTimes = $this->marketHours->tradingTimes($validatedQuote->quote);
+
+        if ($validatedQuote->quote->sourceKey === self::RealtimeSourceKey) {
+            return $this->stockRealtimePriceCatalog->store($holding, $validatedQuote, $tradingTimes);
+        }
+
+        return $this->stockPriceCatalog->store($holding, $validatedQuote, $tradingTimes);
     }
 
     /**
@@ -1021,7 +1037,16 @@ class EodhdMarketData
             ->orderBy('as_of')
             ->orderBy('id')
             ->value('price')
+            ?? $this->storedSessionRealtimePriceQuery($holding, $from, $until)
+                ->where('price_type', 'historical_session_start')
+                ->orderBy('as_of')
+                ->orderBy('id')
+                ->value('price')
             ?? $this->storedSessionPriceQuery($holding, $from, $until)
+                ->orderBy('as_of')
+                ->orderBy('id')
+                ->value('price')
+            ?? $this->storedSessionRealtimePriceQuery($holding, $from, $until)
                 ->orderBy('as_of')
                 ->orderBy('id')
                 ->value('price');
@@ -1034,7 +1059,16 @@ class EodhdMarketData
             ->orderByDesc('as_of')
             ->orderByDesc('id')
             ->value('price')
+            ?? $this->storedSessionRealtimePriceQuery($holding, $from, $until)
+                ->where('price_type', 'historical_session_end')
+                ->orderByDesc('as_of')
+                ->orderByDesc('id')
+                ->value('price')
             ?? $this->storedSessionPriceQuery($holding, $from, $until)
+                ->orderByDesc('as_of')
+                ->orderByDesc('id')
+                ->value('price')
+            ?? $this->storedSessionRealtimePriceQuery($holding, $from, $until)
                 ->orderByDesc('as_of')
                 ->orderByDesc('id')
                 ->value('price');
@@ -1042,8 +1076,7 @@ class EodhdMarketData
 
     private function storedSessionLatestRealtimePrice(StockHolding $holding, Carbon $from, Carbon $until): ?string
     {
-        return $this->storedSessionPriceQuery($holding, $from, $until)
-            ->where('source_key', self::RealtimeSourceKey)
+        return $this->storedSessionRealtimePriceQuery($holding, $from, $until)
             ->where('price_type', 'last')
             ->orderByDesc('as_of')
             ->orderByDesc('id')
@@ -1066,11 +1099,36 @@ class EodhdMarketData
     }
 
     /**
+     * @return Builder<StockRealtimePrice>
+     */
+    private function storedSessionRealtimePriceQuery(StockHolding $holding, Carbon $from, Carbon $until): Builder
+    {
+        return $this->stockRealtimePriceCatalog
+            ->pricesForHolding($holding)
+            ->where('source_key', self::RealtimeSourceKey)
+            ->where('validation_status', 'valid')
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->where('as_of', '>=', $from->copy()->utc())
+            ->where('as_of', '<', $until->copy()->utc());
+    }
+
+    /**
      * @param  array<int, ValidatedQuote>  $historicalQuotes
      */
     private function persistHistoricalQuotes(StockHolding $holding, array $historicalQuotes): void
     {
         foreach ($historicalQuotes as $historicalQuote) {
+            if ($historicalQuote->quote->sourceKey === self::RealtimeSourceKey) {
+                $this->stockRealtimePriceCatalog->store(
+                    $holding,
+                    $historicalQuote,
+                    $holding->trading_times ?? $this->marketHours->tradingTimes($historicalQuote->quote),
+                );
+
+                continue;
+            }
+
             $this->storeHistoricalQuote($holding, $historicalQuote);
         }
     }
@@ -1386,7 +1444,8 @@ class EodhdMarketData
         return StockHoldingIntradayCandle::query()
             ->where('stock_holding_id', $holding->id)
             ->whereDate('trading_date', $tradingDate->toDateString())
-            ->where('interval', $interval);
+            ->where('interval', $interval)
+            ->where('source_key', self::IntradaySourceKey);
     }
 
     private function hasStoredIntradayCandlePrices(StockHolding $holding, Carbon $tradingDate, string $interval): bool
@@ -1577,15 +1636,17 @@ class EodhdMarketData
 
     private function timestamp(mixed $timestamp, mixed $datetime = null): ?Carbon
     {
-        if (is_string($datetime) && trim($datetime) !== '') {
-            try {
-                return Carbon::parse($datetime, 'UTC')->utc();
-            } catch (Throwable) {
-            }
+        if (is_numeric($timestamp) && (int) $timestamp > 0) {
+            return Carbon::createFromTimestampUTC((int) $timestamp)
+                ->setTimezone(config('app.timezone'));
         }
 
-        if (is_numeric($timestamp) && (int) $timestamp > 0) {
-            return Carbon::createFromTimestampUTC((int) $timestamp);
+        if (is_string($datetime) && trim($datetime) !== '') {
+            try {
+                return Carbon::parse($datetime, 'UTC')
+                    ->setTimezone(config('app.timezone'));
+            } catch (Throwable) {
+            }
         }
 
         return null;
@@ -1617,6 +1678,12 @@ class EodhdMarketData
 
     private function holdingLatestPriceAsOf(StockHolding $holding): ?Carbon
     {
+        $realtimePrice = $holding->latestRealtimePrice ?? $holding->latestRealtimePrice()->first();
+
+        if ($realtimePrice?->as_of !== null) {
+            return $realtimePrice->as_of;
+        }
+
         $stockPrice = $holding->latestStockPrice ?? $holding->latestStockPrice()->first();
 
         if ($stockPrice?->as_of !== null) {
@@ -1636,6 +1703,8 @@ class EodhdMarketData
 
     private function holdingHasStoredPrice(StockHolding $holding): bool
     {
-        return $holding->latest_stock_price_id !== null || $holding->latest_price !== null;
+        return $holding->latest_realtime_price_id !== null
+            || $holding->latest_stock_price_id !== null
+            || $holding->latest_price !== null;
     }
 }

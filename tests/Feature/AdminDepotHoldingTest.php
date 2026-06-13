@@ -10,6 +10,7 @@ use App\Models\StockHoldingDailyPrice;
 use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockHoldingIntradayPrice;
 use App\Models\StockPrice;
+use App\Models\StockRealtimePrice;
 use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\EodhdMarketData;
@@ -788,7 +789,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->assertDatabaseCount('stock_prices', 0);
     }
 
-    public function test_admin_listing_serializes_stored_stock_price_source_time_as_utc(): void
+    public function test_admin_listing_serializes_stored_stock_price_source_time_with_timezone_offset(): void
     {
         $admin = $this->adminUser();
         $stockPrice = StockPrice::query()->create([
@@ -827,7 +828,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
-            ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-03T15:35:00+00:00');
+            ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-03T15:35:00+02:00');
     }
 
     public function test_admin_listing_compares_latest_price_to_previous_stored_price(): void
@@ -910,10 +911,10 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.latest_price_tick_trend', 'up');
     }
 
-    public function test_admin_listing_includes_recent_stored_prices_from_last_24_hours(): void
+    public function test_admin_listing_includes_previous_trading_day_last_realtime_price_with_latest_trading_day_prices(): void
     {
         $admin = $this->adminUser();
-        $this->travelTo(Carbon::parse('2026-06-03 18:00:00', 'UTC'));
+        $this->travelTo(Carbon::parse('2026-06-04 15:00:00', 'UTC'));
 
         $holding = StockHolding::factory()->create([
             'symbol' => 'RECENT',
@@ -922,9 +923,10 @@ class AdminDepotHoldingTest extends TestCase
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
         ]);
 
-        $this->createMedianQuote($holding, '2026-06-02 17:50:00', '98.00');
-        $this->createMedianQuote($holding, '2026-06-03 12:00:00', '100.00');
-        $this->createMedianQuote($holding, '2026-06-03 12:00:00', '100.25');
+        $this->createRealtimeQuote($holding, '2026-06-02 17:50:00', '98.00');
+        $this->createRealtimeQuote($holding, '2026-06-03 09:00:00', '99.00');
+        $this->createRealtimeQuote($holding, '2026-06-03 12:00:00', '100.00');
+        $this->createRealtimeQuote($holding, '2026-06-03 12:00:00', '100.25');
         StockPrice::query()->create([
             'instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($holding),
             'quote_hash' => hash('sha256', "{$holding->id}|raw-source|2026-06-03 13:00:00"),
@@ -943,16 +945,19 @@ class AdminDepotHoldingTest extends TestCase
             'freshness_status' => 'fresh',
             'validation_status' => 'valid',
         ]);
-        $latestPrice = $this->createMedianQuote($holding, '2026-06-03 17:00:00', '101.00');
-        $holding->update(['latest_stock_price_id' => $latestPrice->id]);
+        $latestPrice = $this->createRealtimeQuote($holding, '2026-06-03 17:00:00', '101.00');
+        $holding->update(['latest_realtime_price_id' => $latestPrice->id]);
 
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
-            ->assertJsonPath('holdings.0.recent_prices.0.price', '100.00000000')
-            ->assertJsonPath('holdings.0.recent_prices.1.price', '100.25000000')
-            ->assertJsonPath('holdings.0.recent_prices.2.price', '101.00000000')
-            ->assertJsonMissingPath('holdings.0.recent_prices.3');
+            ->assertJsonPath('holdings.0.recent_prices.0.price', '98.00000000')
+            ->assertJsonPath('holdings.0.recent_prices.1.price', '99.00000000')
+            ->assertJsonPath('holdings.0.recent_prices.2.price', '100.00000000')
+            ->assertJsonPath('holdings.0.recent_prices.3.price', '100.25000000')
+            ->assertJsonPath('holdings.0.recent_prices.4.price', '101.00000000')
+            ->assertJsonPath('holdings.0.recent_prices.1.as_of', '2026-06-03T09:00:00+00:00')
+            ->assertJsonMissingPath('holdings.0.recent_prices.5');
     }
 
     public function test_admin_listing_falls_back_to_latest_available_trading_day_prices(): void
@@ -967,18 +972,41 @@ class AdminDepotHoldingTest extends TestCase
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
         ]);
 
-        $this->createMedianQuote($holding, '2026-06-02 17:00:00', '98.00');
-        $this->createMedianQuote($holding, '2026-06-03 12:00:00', '100.00');
+        $this->createRealtimeQuote($holding, '2026-06-02 17:00:00', '98.00');
+        $this->createRealtimeQuote($holding, '2026-06-03 12:00:00', '100.00');
+        $latestPrice = $this->createRealtimeQuote($holding, '2026-06-03 17:00:00', '101.00');
+        $holding->update(['latest_realtime_price_id' => $latestPrice->id]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.recent_prices_are_fallback', true)
+            ->assertJsonPath('holdings.0.recent_prices.0.price', '98.00000000')
+            ->assertJsonPath('holdings.0.recent_prices.1.price', '100.00000000')
+            ->assertJsonPath('holdings.0.recent_prices.2.price', '101.00000000')
+            ->assertJsonMissingPath('holdings.0.recent_prices.3');
+    }
+
+    public function test_admin_listing_does_not_use_legacy_stock_prices_for_realtime_price_rows(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-04 15:00:00', 'UTC'));
+
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'LEGACY',
+            'currency' => 'EUR',
+            'price_status' => 'fresh',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+
         $latestPrice = $this->createMedianQuote($holding, '2026-06-03 17:00:00', '101.00');
         $holding->update(['latest_stock_price_id' => $latestPrice->id]);
 
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
-            ->assertJsonPath('holdings.0.recent_prices_are_fallback', true)
-            ->assertJsonPath('holdings.0.recent_prices.0.price', '100.00000000')
-            ->assertJsonPath('holdings.0.recent_prices.1.price', '101.00000000')
-            ->assertJsonMissingPath('holdings.0.recent_prices.2');
+            ->assertJsonCount(0, 'holdings.0.recent_prices')
+            ->assertJsonPath('holdings.0.recent_prices_are_fallback', false);
     }
 
     public function test_admin_listing_includes_stored_eodhd_intraday_prices_from_latest_available_day(): void
@@ -992,30 +1020,26 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         foreach (range(0, 4) as $index) {
-            StockHoldingIntradayPrice::query()->create([
+            StockHoldingIntradayCandle::query()->create([
                 'stock_holding_id' => $holding->id,
                 'trading_date' => '2026-06-03',
-                'sample_index' => $index,
-                'source_stock_price_id' => null,
-                'price' => number_format(90 + $index, 8, '.', ''),
+                'interval' => '5m',
+                'close' => number_format(90 + $index, 8, '.', ''),
                 'currency' => 'EUR',
                 'as_of' => Carbon::parse('2026-06-03 09:00:00', 'UTC')->addMinutes($index * 20),
                 'source_name' => 'EODHD intraday',
-                'price_type' => 'intraday',
             ]);
         }
 
         foreach (range(0, 19) as $index) {
-            StockHoldingIntradayPrice::query()->create([
+            StockHoldingIntradayCandle::query()->create([
                 'stock_holding_id' => $holding->id,
                 'trading_date' => '2026-06-04',
-                'sample_index' => $index,
-                'source_stock_price_id' => null,
-                'price' => number_format(100 + $index, 8, '.', ''),
+                'interval' => '5m',
+                'close' => number_format(100 + $index, 8, '.', ''),
                 'currency' => 'EUR',
                 'as_of' => Carbon::parse('2026-06-04 09:00:00', 'UTC')->addMinutes($index * 5),
                 'source_name' => 'EODHD intraday',
-                'price_type' => 'intraday',
             ]);
         }
 
@@ -1024,17 +1048,47 @@ class AdminDepotHoldingTest extends TestCase
             ->assertOk()
             ->assertJsonCount(20, 'holdings.0.intraday_prices')
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '100.00000000')
-            ->assertJsonPath('holdings.0.intraday_prices.0.as_of', '2026-06-04T09:00:00+00:00')
+            ->assertJsonPath('holdings.0.intraday_prices.0.as_of', '2026-06-04T09:00:00+02:00')
             ->assertJsonPath('holdings.0.intraday_prices.19.price', '119.00000000')
-            ->assertJsonPath('holdings.0.intraday_prices.19.as_of', '2026-06-04T10:35:00+00:00');
+            ->assertJsonPath('holdings.0.intraday_prices.19.as_of', '2026-06-04T10:35:00+02:00');
 
         $this->assertSame(
             20,
-            StockHoldingIntradayPrice::query()
+            StockHoldingIntradayCandle::query()
                 ->where('stock_holding_id', $holding->id)
                 ->whereDate('trading_date', '2026-06-04')
                 ->count(),
         );
+    }
+
+    public function test_admin_listing_serializes_eodhd_intraday_candle_time_from_timestamp(): void
+    {
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'LYMH',
+            'currency' => 'EUR',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+
+        StockHoldingIntradayCandle::query()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-12',
+            'interval' => '5m',
+            'as_of' => Carbon::parse('2026-06-12 07:05:00', 'Europe/Vienna'),
+            'timestamp' => 1781247900,
+            'gmtoffset' => 0,
+            'datetime' => '2026-06-12 07:05:00',
+            'close' => '2.66300000',
+            'currency' => 'EUR',
+            'source_key' => 'eodhd_intraday',
+            'source_name' => 'EODHD intraday',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.intraday_prices.0.price', '2.66300000')
+            ->assertJsonPath('holdings.0.intraday_prices.0.as_of', '2026-06-12T09:05:00+02:00');
     }
 
     public function test_admin_can_fetch_and_store_last_trading_day_five_minute_intraday_candles(): void
@@ -1262,8 +1316,8 @@ class AdminDepotHoldingTest extends TestCase
                 'datetime' => "{$tradingDate} 13:00:00",
                 'close' => (string) (470.20 + $index),
                 'currency' => 'EUR',
-                'source_key' => 'eodhd_realtime',
-                'source_name' => 'EODHD real-time',
+                'source_key' => 'eodhd_intraday',
+                'source_name' => 'EODHD intraday',
             ]);
         }
 
@@ -1280,7 +1334,7 @@ class AdminDepotHoldingTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_admin_listing_fetches_and_stores_eodhd_intraday_prices_when_session_has_no_stored_intraday_rows(): void
+    public function test_admin_listing_fetches_and_stores_eodhd_intraday_candles_when_session_has_no_stored_intraday_rows(): void
     {
         config(['services.eodhd.key' => 'test-token']);
         $admin = $this->adminUser();
@@ -1311,19 +1365,18 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '470.15000000')
             ->assertJsonPath('holdings.0.intraday_prices.300.price', '770.15000000');
 
-        $this->assertSame(301, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
-        $this->assertDatabaseHas('stock_holding_intraday_prices', [
+        $this->assertSame(301, StockHoldingIntradayCandle::query()->where('stock_holding_id', $holding->id)->count());
+        $this->assertDatabaseHas('stock_holding_intraday_candles', [
             'stock_holding_id' => $holding->id,
             'trading_date' => '2026-06-05',
-            'sample_index' => 300,
-            'price' => '770.15000000',
+            'interval' => '5m',
+            'close' => '770.15000000',
             'source_name' => 'EODHD intraday',
-            'price_type' => 'intraday',
         ]);
         Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/intraday/AMES.XETRA'));
     }
 
-    public function test_admin_listing_falls_back_to_five_minute_eodhd_intraday_prices_when_one_minute_data_is_empty(): void
+    public function test_admin_listing_fetches_five_minute_eodhd_intraday_candles(): void
     {
         config(['services.eodhd.key' => 'test-token']);
         $admin = $this->adminUser();
@@ -1353,12 +1406,10 @@ class AdminDepotHoldingTest extends TestCase
             ->assertOk()
             ->assertJsonCount(103, 'holdings.0.intraday_prices')
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '42.60000000')
-            ->assertJsonPath('holdings.0.intraday_prices.0.as_of', '2026-06-05T07:00:00+00:00')
+            ->assertJsonPath('holdings.0.intraday_prices.0.as_of', '2026-06-05T09:00:00+02:00')
             ->assertJsonPath('holdings.0.intraday_prices.102.price', '43.62000000');
 
-        $this->assertSame(103, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
-        Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/intraday/LEER.XETRA')
-            && str_contains($request->url(), 'interval=1m'));
+        $this->assertSame(103, StockHoldingIntradayCandle::query()->where('stock_holding_id', $holding->id)->count());
         Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/intraday/LEER.XETRA')
             && str_contains($request->url(), 'interval=5m'));
     }
@@ -1379,16 +1430,14 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         foreach (range(0, 3) as $index) {
-            StockHoldingIntradayPrice::query()->create([
+            StockHoldingIntradayCandle::query()->create([
                 'stock_holding_id' => $holding->id,
                 'trading_date' => '2026-06-05',
-                'sample_index' => $index,
-                'source_stock_price_id' => null,
-                'price' => number_format(460 + $index, 8, '.', ''),
+                'interval' => '5m',
+                'close' => number_format(460 + $index, 8, '.', ''),
                 'currency' => 'EUR',
                 'as_of' => Carbon::parse('2026-06-05 07:00:00', 'UTC')->addMinutes($index * 10),
                 'source_name' => 'EODHD intraday',
-                'price_type' => 'intraday',
             ]);
         }
 
@@ -1429,12 +1478,12 @@ class AdminDepotHoldingTest extends TestCase
             ->assertOk()
             ->assertJsonCount(0, 'holdings.0.intraday_prices');
 
-        $this->assertSame(0, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
+        $this->assertSame(0, StockHoldingIntradayCandle::query()->where('stock_holding_id', $holding->id)->count());
         Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/intraday/AMES.XETRA'));
-        Http::assertSentCount(3);
+        Http::assertSentCount(1);
     }
 
-    public function test_admin_listing_uses_same_day_stored_prices_when_eodhd_intraday_has_no_valid_rows(): void
+    public function test_admin_listing_does_not_use_realtime_prices_when_eodhd_intraday_has_no_valid_rows(): void
     {
         config(['services.eodhd.key' => 'test-token']);
         $admin = $this->adminUser();
@@ -1451,22 +1500,18 @@ class AdminDepotHoldingTest extends TestCase
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
         ]);
 
-        $this->createMedianQuote($holding, '2026-06-04 15:30:00', '17.12');
-        $this->createMedianQuote($holding, '2026-06-05 07:00:00', '17.50');
-        $this->createMedianQuote($holding, '2026-06-05 12:20:00', '17.75');
-        $this->createMedianQuote($holding, '2026-06-05 15:30:00', '17.87');
+        $this->createRealtimeQuote($holding, '2026-06-04 15:30:00', '17.12');
+        $this->createRealtimeQuote($holding, '2026-06-05 07:00:00', '17.50');
+        $this->createRealtimeQuote($holding, '2026-06-05 12:20:00', '17.75');
+        $this->createRealtimeQuote($holding, '2026-06-05 15:30:00', '17.87');
 
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
-            ->assertJsonCount(3, 'holdings.0.intraday_prices')
-            ->assertJsonPath('holdings.0.intraday_prices.0.price', '17.50000000')
-            ->assertJsonPath('holdings.0.intraday_prices.0.source_name', 'EODHD real-time')
-            ->assertJsonPath('holdings.0.intraday_prices.2.price', '17.87000000')
-            ->assertJsonPath('holdings.0.intraday_prices.2.as_of', '2026-06-05T15:30:00+00:00');
+            ->assertJsonCount(0, 'holdings.0.intraday_prices');
 
         $this->assertSame(0, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
-        Http::assertSentCount(3);
+        Http::assertSentCount(1);
     }
 
     public function test_admin_listing_does_not_fetch_eodhd_intraday_prices_when_samples_are_complete(): void
@@ -1485,16 +1530,14 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         foreach (range(0, 19) as $index) {
-            StockHoldingIntradayPrice::query()->create([
+            StockHoldingIntradayCandle::query()->create([
                 'stock_holding_id' => $holding->id,
                 'trading_date' => '2026-06-05',
-                'sample_index' => $index,
-                'source_stock_price_id' => null,
-                'price' => number_format(470 + $index, 8, '.', ''),
+                'interval' => '5m',
+                'close' => number_format(470 + $index, 8, '.', ''),
                 'currency' => 'EUR',
                 'as_of' => Carbon::parse('2026-06-05 07:00:00', 'UTC')->addMinutes($index * 20),
                 'source_name' => 'EODHD intraday',
-                'price_type' => 'intraday',
             ]);
         }
 
@@ -2207,6 +2250,29 @@ class AdminDepotHoldingTest extends TestCase
         return StockPrice::query()->create([
             'instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($holding),
             'quote_hash' => hash('sha256', "{$holding->id}|{$asOf}|{$price}|{$priceType}"),
+            'source_key' => 'eodhd_realtime',
+            'source_name' => 'EODHD real-time',
+            'source_url' => 'https://example.com',
+            'source_quality' => 'market_data_vendor',
+            'isin' => $holding->isin,
+            'wkn' => $holding->wkn,
+            'symbol' => $holding->symbol,
+            'currency' => $holding->currency,
+            'price' => $price,
+            'price_type' => $priceType,
+            'as_of' => Carbon::parse($asOf, 'UTC'),
+            'fetched_at' => Carbon::parse($asOf, 'UTC'),
+            'freshness_status' => 'fresh',
+            'validation_status' => 'valid',
+        ]);
+    }
+
+    private function createRealtimeQuote(StockHolding $holding, string $asOf, string $price, string $priceType = 'last'): StockRealtimePrice
+    {
+        return StockRealtimePrice::query()->create([
+            'stock_holding_id' => $holding->id,
+            'instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($holding),
+            'quote_hash' => hash('sha256', "{$holding->id}|realtime|{$asOf}|{$price}|{$priceType}"),
             'source_key' => 'eodhd_realtime',
             'source_name' => 'EODHD real-time',
             'source_url' => 'https://example.com',

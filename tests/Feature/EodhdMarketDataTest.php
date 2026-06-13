@@ -6,6 +6,7 @@ use App\Models\StockHolding;
 use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockHoldingIntradayPrice;
 use App\Models\StockPrice;
+use App\Models\StockRealtimePrice;
 use App\Services\EodhdMarketData;
 use App\Services\StockPriceCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -29,14 +30,14 @@ class EodhdMarketDataTest extends TestCase
         ]);
 
         $holding = $this->holdingWithStoredPrice();
-        $storedPriceId = $holding->latest_stock_price_id;
+        $storedPriceId = $holding->latest_realtime_price_id;
 
         $result = app(EodhdMarketData::class)->resolve($holding);
 
         $holding->refresh();
 
         $this->assertSame('unavailable', $result->status);
-        $this->assertSame($storedPriceId, $holding->latest_stock_price_id);
+        $this->assertSame($storedPriceId, $holding->latest_realtime_price_id);
         $this->assertSame('66.260000', $holding->latest_price);
         $this->assertSame('unavailable_now', $holding->price_status);
     }
@@ -95,7 +96,7 @@ class EodhdMarketDataTest extends TestCase
         $this->assertSame('unavailable', $result->status);
         $this->assertSame('66.260000', $holding->latest_price);
         $this->assertSame('unavailable_now', $holding->price_status);
-        $this->assertDatabaseHas('stock_prices', [
+        $this->assertDatabaseHas('stock_realtime_prices', [
             'source_key' => 'eodhd_realtime',
             'source_name' => 'EODHD real-time',
             'symbol' => 'EXXX',
@@ -142,7 +143,7 @@ class EodhdMarketDataTest extends TestCase
         $this->assertSame('delayed', $result->status);
         $this->assertSame('65.700000', $holding->latest_price);
         $this->assertSame('delayed', $holding->price_status);
-        $this->assertDatabaseHas('stock_prices', [
+        $this->assertDatabaseHas('stock_realtime_prices', [
             'source_key' => 'eodhd_realtime',
             'source_name' => 'EODHD real-time',
             'symbol' => 'EXXX',
@@ -154,7 +155,7 @@ class EodhdMarketDataTest extends TestCase
         ]);
     }
 
-    public function test_refresh_prefers_five_minute_intraday_prices_while_exchange_is_open(): void
+    public function test_refresh_stores_realtime_prices_separately_while_exchange_is_open(): void
     {
         config(['services.eodhd.key' => 'test-token']);
         $this->travelTo(Carbon::parse('2026-06-05 12:00:00', 'Europe/Berlin'));
@@ -206,39 +207,22 @@ class EodhdMarketDataTest extends TestCase
         $holding->refresh();
 
         $this->assertSame('fresh', $result->status);
-        $this->assertSame('478.150000', $holding->latest_price);
+        $this->assertSame('472.400000', $holding->latest_price);
         $this->assertSame('470.15000000', $holding->start_price);
         $this->assertNull($holding->end_price);
         $this->assertSame('469.20000000', $holding->end_price_24);
         $this->assertSame('468.10000000', $holding->end_price_48);
-        $this->assertDatabaseHas('stock_prices', [
-            'source_key' => 'eodhd_intraday',
-            'source_name' => 'EODHD intraday',
+        $this->assertDatabaseHas('stock_realtime_prices', [
+            'source_key' => 'eodhd_realtime',
+            'source_name' => 'EODHD real-time',
             'symbol' => 'AMES',
-            'price' => '478.15000000',
-            'price_type' => 'intraday',
-            'as_of' => '2026-06-05 09:41:00',
+            'price' => '472.40000000',
+            'price_type' => 'last',
+            'as_of' => '2026-06-05 09:36:00',
         ]);
-        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), '/real-time/AMES.XETRA'));
-        $this->assertSame(25, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
-        $this->assertDatabaseHas('stock_holding_intraday_prices', [
-            'stock_holding_id' => $holding->id,
-            'trading_date' => '2026-06-05',
-            'sample_index' => 0,
-            'price' => '470.15000000',
-            'as_of' => '2026-06-05 07:01:00',
-            'source_name' => 'EODHD intraday',
-            'price_type' => 'intraday',
-        ]);
-        $this->assertDatabaseHas('stock_holding_intraday_prices', [
-            'stock_holding_id' => $holding->id,
-            'trading_date' => '2026-06-05',
-            'sample_index' => 24,
-            'price' => '494.15000000',
-            'as_of' => '2026-06-05 15:01:00',
-            'source_name' => 'EODHD intraday',
-            'price_type' => 'intraday',
-        ]);
+        $this->assertNotNull($holding->latest_realtime_price_id);
+        $this->assertSame(0, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
+        Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/real-time/AMES.XETRA'));
     }
 
     public function test_realtime_refresh_clears_latest_price_and_rolls_end_prices_after_exchange_close(): void
@@ -398,9 +382,8 @@ class EodhdMarketDataTest extends TestCase
             }
 
             return Http::response([
-                'code' => 'AMES.XETRA',
-                'timestamp' => Carbon::parse('2026-06-05 15:35:00', 'UTC')->timestamp,
-                'close' => 471.2,
+                'status' => 'error',
+                'message' => 'Real-time quote unavailable.',
             ]);
         });
 
@@ -440,7 +423,7 @@ class EodhdMarketDataTest extends TestCase
             'price_type' => 'intraday',
         ]);
 
-        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), '/real-time/AMES.XETRA'));
+        Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/real-time/AMES.XETRA'));
     }
 
     private function holdingWithStoredPrice(): StockHolding
@@ -464,6 +447,26 @@ class EodhdMarketDataTest extends TestCase
 
         $stockPrice = StockPrice::factory()->create([
             'instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($holding),
+            'source_key' => 'eodhd_eod',
+            'source_name' => 'EODHD previous close',
+            'source_url' => 'https://eodhd.com/api/eod/EXXX.XETRA?fmt=json',
+            'source_quality' => 'market_data_vendor',
+            'venue' => 'Xetra',
+            'mic' => 'XETR',
+            'isin' => 'DE000A0D8Q23',
+            'wkn' => 'A0D8Q2',
+            'symbol' => 'EXXX',
+            'currency' => 'EUR',
+            'price' => '66.26000000',
+            'price_type' => 'last',
+            'as_of' => '2026-06-04 15:36:00',
+            'fetched_at' => '2026-06-04 20:47:04',
+            'freshness_status' => 'closed_market',
+            'validation_status' => 'valid',
+        ]);
+        $realtimePrice = StockRealtimePrice::factory()->create([
+            'stock_holding_id' => $holding->id,
+            'instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($holding),
             'source_key' => 'eodhd_realtime',
             'source_name' => 'EODHD real-time',
             'source_url' => 'https://eodhd.com/api/real-time/EXXX.XETRA?fmt=json',
@@ -484,6 +487,7 @@ class EodhdMarketDataTest extends TestCase
 
         $holding->update([
             'latest_stock_price_id' => $stockPrice->id,
+            'latest_realtime_price_id' => $realtimePrice->id,
         ]);
 
         return $holding->refresh();

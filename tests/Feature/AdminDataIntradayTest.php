@@ -164,7 +164,7 @@ class AdminDataIntradayTest extends TestCase
         ]);
     }
 
-    public function test_admin_intraday_data_uses_valid_same_day_stock_prices_when_today_has_no_intraday_samples(): void
+    public function test_admin_intraday_data_does_not_use_same_day_stock_prices_when_today_has_no_intraday_samples(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-08 12:00:00', 'Europe/Vienna'));
         $admin = $this->adminUser();
@@ -219,23 +219,18 @@ class AdminDataIntradayTest extends TestCase
             ->getJson("/admin/data/intraday?stock={$holding->id}")
             ->assertOk()
             ->assertJsonPath('days.0.trading_date', '2026-06-08')
-            ->assertJsonCount(2, 'days.0.rows')
-            ->assertJsonPath('days.0.rows.0.datetime', '2026-06-08 07:00:00')
-            ->assertJsonPath('days.0.rows.0.close', '17.39400000')
-            ->assertJsonPath('days.0.rows.1.datetime', '2026-06-08 08:55:00')
-            ->assertJsonPath('days.0.rows.1.close', '17.59000000');
+            ->assertJsonCount(0, 'days.0.rows');
 
-        $this->assertDatabaseHas('stock_holding_intraday_candles', [
+        $this->assertDatabaseMissing('stock_holding_intraday_candles', [
             'stock_holding_id' => $holding->id,
             'trading_date' => '2026-06-08',
             'interval' => '5m',
             'datetime' => '2026-06-08 08:55:00',
-            'close' => '17.59000000',
             'source_name' => 'EODHD real-time',
         ]);
     }
 
-    public function test_admin_intraday_data_merges_missing_same_day_stock_prices_into_existing_candles(): void
+    public function test_admin_intraday_data_does_not_merge_same_day_stock_prices_into_intraday_candles(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-08 16:40:00', 'Europe/Vienna'));
         $admin = $this->adminUser();
@@ -299,18 +294,13 @@ class AdminDataIntradayTest extends TestCase
             ->getJson("/admin/data/intraday?stock={$holding->id}")
             ->assertOk()
             ->assertJsonPath('days.0.trading_date', '2026-06-08')
-            ->assertJsonCount(3, 'days.0.rows')
-            ->assertJsonPath('days.0.rows.0.close', '467.45000000')
-            ->assertJsonPath('days.0.rows.1.close', '467.90000000')
-            ->assertJsonPath('days.0.rows.2.datetime', '2026-06-08 13:01:00')
-            ->assertJsonPath('days.0.rows.2.close', '470.20000000');
+            ->assertJsonCount(0, 'days.0.rows');
 
-        $this->assertDatabaseHas('stock_holding_intraday_candles', [
+        $this->assertDatabaseMissing('stock_holding_intraday_candles', [
             'stock_holding_id' => $holding->id,
             'trading_date' => '2026-06-08',
             'interval' => '5m',
             'datetime' => '2026-06-08 13:01:00',
-            'close' => '470.20000000',
             'source_name' => 'EODHD real-time',
         ]);
     }

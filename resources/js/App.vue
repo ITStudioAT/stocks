@@ -10,6 +10,7 @@ import { formatAdaptiveNumber, formatPriceValue } from './utils/numberFormatters
 
 const indexRecentPriceLimit = 30;
 const logoMarkUrl = '/images/gkstocks-logo-mark.png';
+const displayTimeZone = 'Europe/Vienna';
 
 const { lgAndDown, mdAndDown, smAndDown } = useDisplay();
 
@@ -105,6 +106,7 @@ const activeSection = ref('dashboard');
 const activeAnalyzeSubsection = ref('overview');
 const activeDataSubsection = ref('exchanges');
 const selectedAnalyzeHistoryRange = ref('1y');
+const selectedAnalyzeHistoryWindowOffset = ref(0);
 const selectedAnalyzeHoldingId = ref(null);
 const selectedTestIndexId = ref(null);
 const selectedTestStockId = ref(null);
@@ -349,10 +351,14 @@ const selectedAnalyzeScopeLabel = computed(() => {
         || selectedAnalyzeHolding.value?.symbol
         || `Stock ${selectedAnalyzeHoldingId.value}`;
 });
-const selectedAnalyzeIntradayCandlePrices = computed(() => filterAnalyzeIntradayCandlePrices(
+const selectedAnalyzeHistoryWindow = computed(() => analyzeChartWindow(
     selectedAnalyzeHolding.value?.intraday_candles ?? [],
     selectedAnalyzeHistoryRange.value,
+    selectedAnalyzeHistoryWindowOffset.value,
 ));
+const selectedAnalyzeIntradayCandlePrices = computed(() => selectedAnalyzeHistoryWindow.value.prices);
+const canMoveAnalyzeChartBackward = computed(() => selectedAnalyzeHistoryWindow.value.canMoveBackward);
+const canMoveAnalyzeChartForward = computed(() => selectedAnalyzeHistoryWindow.value.canMoveForward);
 const analyzeChartMaxPoints = 256;
 const analyzeCalendarNormalizedRangeKeys = ['1y', '6m', '3m', '1m', '1w'];
 const selectedAnalyzeRawChartPrices = computed(() => {
@@ -391,7 +397,162 @@ const analyzeIntradayDetailDays = computed(() => {
     return analyzeIntradayDetail.value ? [analyzeIntradayDetail.value] : [];
 });
 const analyzeIntradayDetailRows = computed(() => analyzeIntradayDetailDays.value.flatMap((day) => day.rows ?? []));
-const analyzeIntradayDetailTitle = computed(() => analyzeIntradayDetail.value?.title ?? 'Intraday - 5m');
+const selectedAnalyzeRealtimePriceRows = computed(() => {
+    const recentPrices = selectedAnalyzeHolding.value?.recent_prices;
+
+    if (!Array.isArray(recentPrices)) {
+        return [];
+    }
+
+    return sortPriceRowsByTime(recentPrices.filter(isRealtimePriceRow));
+});
+const selectedAnalyzeRealtimePriceRowsWithChanges = computed(() => priceRowsWithPercentChanges(
+    selectedAnalyzeRealtimePriceRows.value,
+));
+const selectedAnalyzeIntradayPriceRows = computed(() => {
+    const intradayPrices = selectedAnalyzeHolding.value?.intraday_candles;
+
+    if (!Array.isArray(intradayPrices)) {
+        return [];
+    }
+
+    const sortedIntradayPrices = sortPriceRowsByTime(
+        intradayPrices.filter((intradayPrice) => intradayPrice.price !== null && intradayPrice.price !== undefined),
+    );
+
+    const selectedTradingDate = selectedAnalyzeIntradayTradingDate(sortedIntradayPrices);
+
+    if (selectedTradingDate === null) {
+        return sortedIntradayPrices;
+    }
+
+    const previousDayLastPrice = previousTradingDayLastIntradayPrice(sortedIntradayPrices, selectedTradingDate);
+    const selectedDayPrices = sortedIntradayPrices
+        .filter((intradayPrice) => intradayPriceTradingDate(intradayPrice) === selectedTradingDate);
+
+    return previousDayLastPrice === null
+        ? selectedDayPrices
+        : [previousDayLastPrice, ...selectedDayPrices];
+});
+const selectedAnalyzeIntradayPriceRowsWithChanges = computed(() => priceRowsWithPercentChanges(
+    selectedAnalyzeIntradayPriceRows.value,
+));
+
+function priceRowsWithPercentChanges(priceRows) {
+    const firstPrice = numericPrice(priceRows[0]);
+
+    return priceRows.map((priceRow, priceRowIndex) => {
+        const price = numericPrice(priceRow);
+        const previousPrice = priceRowIndex === 0 ? null : numericPrice(priceRows[priceRowIndex - 1]);
+
+        return {
+            ...priceRow,
+            firstChangePercent: priceChangePercent(price, firstPrice),
+            previousChangePercent: priceChangePercent(price, previousPrice),
+        };
+    });
+}
+
+function numericPrice(priceRow) {
+    const price = Number(priceRow?.price);
+
+    return Number.isFinite(price) ? price : null;
+}
+
+function priceChangePercent(price, referencePrice) {
+    if (price === null || referencePrice === null || referencePrice === 0) {
+        return null;
+    }
+
+    return ((price - referencePrice) / referencePrice) * 100;
+}
+
+function isRealtimePriceRow(priceRow) {
+    const sourceName = typeof priceRow.source_name === 'string' ? priceRow.source_name.toLowerCase() : '';
+
+    return sourceName.includes('real-time') || sourceName.includes('realtime');
+}
+
+function sortPriceRowsByTime(priceRows) {
+    return [...priceRows].sort((firstPrice, secondPrice) => {
+        const firstTime = new Date(firstPrice.as_of ?? '').getTime();
+        const secondTime = new Date(secondPrice.as_of ?? '').getTime();
+
+        if (Number.isNaN(firstTime) && Number.isNaN(secondTime)) {
+            return 0;
+        }
+
+        if (Number.isNaN(firstTime)) {
+            return 1;
+        }
+
+        if (Number.isNaN(secondTime)) {
+            return -1;
+        }
+
+        return firstTime - secondTime;
+    });
+}
+
+function previousTradingDayLastIntradayPrice(intradayPrices, selectedTradingDate) {
+    const previousTradingDate = intradayPrices
+        .map((intradayPrice) => intradayPriceTradingDate(intradayPrice))
+        .filter((tradingDate) => tradingDate !== null && tradingDate < selectedTradingDate)
+        .sort()
+        .at(-1);
+
+    if (!previousTradingDate) {
+        return null;
+    }
+
+    return intradayPrices
+        .filter((intradayPrice) => intradayPriceTradingDate(intradayPrice) === previousTradingDate)
+        .at(-1) ?? null;
+}
+
+function selectedAnalyzeIntradayTradingDate(intradayPrices) {
+    const tradingDates = intradayPrices
+        .map((intradayPrice) => intradayPriceTradingDate(intradayPrice))
+        .filter(Boolean);
+
+    if (tradingDates.length === 0) {
+        return null;
+    }
+
+    const today = localDateKey(new Date());
+
+    if (tradingDates.includes(today)) {
+        return today;
+    }
+
+    return [...tradingDates].sort().at(-1) ?? null;
+}
+
+function intradayPriceTradingDate(intradayPrice) {
+    if (typeof intradayPrice.trading_date === 'string' && intradayPrice.trading_date.trim() !== '') {
+        return intradayPrice.trading_date.slice(0, 10);
+    }
+
+    if (!intradayPrice.as_of) {
+        return null;
+    }
+
+    const date = new Date(intradayPrice.as_of);
+
+    if (Number.isNaN(date.getTime())) {
+        return null;
+    }
+
+    return localDateKey(date);
+}
+
+function localDateKey(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+}
 const eodhdUsageItems = computed(() => {
     if (!eodhdApiUsage.value) {
         return [];
@@ -480,8 +641,13 @@ const queueClearButtonLabel = computed(() => (canClearQueue.value
 const analyzeSubmenuItems = [
     {
         key: 'overview',
-        label: 'Overview',
+        label: 'Charts',
         icon: 'mdi-view-grid-outline',
+    },
+    {
+        key: 'intraday',
+        label: 'Intraday',
+        icon: 'mdi-chart-timeline-variant',
     },
     {
         key: 'detail',
@@ -690,6 +856,13 @@ watch(
 );
 
 watch(
+    [selectedAnalyzeHistoryRange, selectedAnalyzeHoldingId],
+    () => {
+        selectedAnalyzeHistoryWindowOffset.value = 0;
+    },
+);
+
+watch(
     [activeSection, activeAnalyzeSubsection, activeDataSubsection],
     ([section, subsection, dataSubsection]) => {
         if (section === 'analyze' && subsection === 'tests') {
@@ -877,6 +1050,22 @@ function navigateDataSubsection(subsection) {
 function selectAnalyzeHolding(holdingId) {
     selectedAnalyzeHoldingId.value = holdingId;
     updateUrlPath();
+}
+
+function moveAnalyzeChartWindowBackward() {
+    if (!canMoveAnalyzeChartBackward.value) {
+        return;
+    }
+
+    selectedAnalyzeHistoryWindowOffset.value += 1;
+}
+
+function moveAnalyzeChartWindowForward() {
+    if (!canMoveAnalyzeChartForward.value) {
+        return;
+    }
+
+    selectedAnalyzeHistoryWindowOffset.value = Math.max(0, selectedAnalyzeHistoryWindowOffset.value - 1);
 }
 
 function toggleDashboardMenuCompact() {
@@ -2325,6 +2514,7 @@ function depotBalanceChangeClass() {
 
 function formatCurrentDayMonth() {
     return new Intl.DateTimeFormat('de-AT', {
+        timeZone: displayTimeZone,
         day: '2-digit',
         month: '2-digit',
     }).format(new Date());
@@ -2709,7 +2899,7 @@ function buildIndexPriceChart(prices) {
     };
 }
 
-function filterAnalyzeIntradayCandlePrices(prices, rangeKey) {
+function analyzeChartWindow(prices, rangeKey, windowOffset = 0) {
     const chartPrices = [...prices]
         .map((price) => ({
             ...price,
@@ -2720,14 +2910,69 @@ function filterAnalyzeIntradayCandlePrices(prices, rangeKey) {
         .sort((first, second) => first.as_of.localeCompare(second.as_of));
 
     if (chartPrices.length === 0) {
-        return [];
+        return {
+            prices: [],
+            canMoveBackward: false,
+            canMoveForward: false,
+        };
     }
 
-    const latestDate = chartPrices[chartPrices.length - 1].as_of.slice(0, 10);
-    const days = analyzeHistoryRangeDays[rangeKey] ?? analyzeHistoryRangeDays['1y'];
-    const startDate = dateStringDaysBefore(latestDate, days);
+    const normalizedWindowOffset = Math.max(0, Math.trunc(Number(windowOffset)) || 0);
 
-    return chartPrices.filter((price) => price.as_of.slice(0, 10) >= startDate);
+    if (isAnalyzeTodayRange(rangeKey)) {
+        return analyzeTodayChartWindow(chartPrices, normalizedWindowOffset);
+    }
+
+    return analyzePeriodChartWindow(chartPrices, rangeKey, normalizedWindowOffset);
+}
+
+function analyzeTodayChartWindow(chartPrices, windowOffset) {
+    const tradingDates = [...new Set(chartPrices.map((price) => price.as_of.slice(0, 10)))].sort();
+    const maximumWindowOffset = Math.max(tradingDates.length - 1, 0);
+    const currentWindowOffset = Math.min(windowOffset, maximumWindowOffset);
+    const selectedTradingDate = tradingDates[tradingDates.length - 1 - currentWindowOffset];
+
+    return {
+        prices: chartPrices.filter((price) => price.as_of.slice(0, 10) === selectedTradingDate),
+        canMoveBackward: currentWindowOffset < maximumWindowOffset,
+        canMoveForward: currentWindowOffset > 0,
+    };
+}
+
+function analyzePeriodChartWindow(chartPrices, rangeKey, windowOffset) {
+    const days = analyzeHistoryRangeDays[rangeKey] ?? analyzeHistoryRangeDays['1y'];
+    const latestDate = chartPrices[chartPrices.length - 1].as_of.slice(0, 10);
+    let currentWindowOffset = windowOffset;
+    let bounds = analyzePeriodChartWindowBounds(latestDate, days, currentWindowOffset);
+    let prices = chartPrices.filter((price) => isAnalyzePriceInWindow(price, bounds));
+
+    while (prices.length === 0 && currentWindowOffset > 0) {
+        currentWindowOffset -= 1;
+        bounds = analyzePeriodChartWindowBounds(latestDate, days, currentWindowOffset);
+        prices = chartPrices.filter((price) => isAnalyzePriceInWindow(price, bounds));
+    }
+
+    return {
+        prices,
+        canMoveBackward: chartPrices.some((price) => price.as_of.slice(0, 10) < bounds.startDate),
+        canMoveForward: currentWindowOffset > 0,
+    };
+}
+
+function analyzePeriodChartWindowBounds(latestDate, days, windowOffset) {
+    const stepDays = Math.max(days + 1, 1);
+    const endDate = dateStringDaysBefore(latestDate, stepDays * windowOffset);
+
+    return {
+        startDate: dateStringDaysBefore(endDate, days),
+        endDate,
+    };
+}
+
+function isAnalyzePriceInWindow(price, bounds) {
+    const priceDate = price.as_of.slice(0, 10);
+
+    return priceDate >= bounds.startDate && priceDate <= bounds.endDate;
 }
 
 function limitAnalyzeChartPrices(prices) {
@@ -3612,6 +3857,23 @@ function analyzeSparklinePointTime(point) {
     return Number.isNaN(time) ? null : time;
 }
 
+function dateFromUtcValue(value) {
+    if (!value) {
+        return null;
+    }
+
+    const date = value instanceof Date ? value : new Date(value);
+
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatViennaDateTime(date, options) {
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: displayTimeZone,
+        ...options,
+    }).format(date);
+}
+
 function formatAnalyzeMonthStartLabel(date) {
     return new Intl.DateTimeFormat('de-AT', {
         timeZone: 'UTC',
@@ -3637,10 +3899,10 @@ function formatAnalyzeTimeLabel(point) {
         return '-';
     }
 
-    return new Intl.DateTimeFormat('de-AT', {
+    return formatViennaDateTime(new Date(time), {
         hour: '2-digit',
         minute: '2-digit',
-    }).format(new Date(time));
+    });
 }
 
 function chartRegressionLine(points, chartMin, chartRange, plot) {
@@ -4003,7 +4265,7 @@ function analyzeIntradayCandleViennaMinutes(row) {
         hour: '2-digit',
         minute: '2-digit',
         hourCycle: 'h23',
-        timeZone: 'Europe/Vienna',
+        timeZone: displayTimeZone,
     }).formatToParts(date);
 
     const hour = Number(parts.find((part) => part.type === 'hour')?.value);
@@ -4036,13 +4298,19 @@ function formatAnalyzeSparklineDate(point) {
     }
 
     if (point?.as_of) {
-        return new Intl.DateTimeFormat('de-AT', {
+        const date = dateFromUtcValue(point.as_of);
+
+        if (!date) {
+            return '-';
+        }
+
+        return formatViennaDateTime(date, {
             day: '2-digit',
             month: '2-digit',
             year: '2-digit',
             hour: '2-digit',
             minute: '2-digit',
-        }).format(new Date(point.as_of));
+        });
     }
 
     if (!point?.trading_date) {
@@ -4052,12 +4320,20 @@ function formatAnalyzeSparklineDate(point) {
     return formatIndexHistoryDate(point.trading_date);
 }
 
-function formatAnalyzeIntradayCandleDateTime(value) {
-    if (!value) {
+function formatAnalyzeIntradayCandleDateTime(row) {
+    const date = analyzeIntradayCandleDate(row);
+
+    if (!date) {
         return '-';
     }
 
-    return value;
+    return formatViennaDateTime(date, {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    });
 }
 
 function formatAnalyzeIntradayCandleValue(value) {
@@ -4540,6 +4816,24 @@ function formatSessionPrice(value, holding) {
 
 function formatRecentStoredPrice(recentPrice, holding) {
     return formatPriceValue(recentPrice.price, recentPrice.currency ?? holding.currency);
+}
+
+function formatPriceChangePercent(changePercent) {
+    if (changePercent === null) {
+        return '-';
+    }
+
+    const sign = changePercent > 0 ? '+' : '';
+
+    return `${sign}${changePercent.toFixed(2)}%`;
+}
+
+function priceChangePercentClass(changePercent) {
+    return {
+        'text-success': changePercent !== null && changePercent > 0,
+        'text-error': changePercent !== null && changePercent < 0,
+        'text-medium-emphasis': changePercent === null || changePercent === 0,
+    };
 }
 
 function formatRecentStoredPriceTime(recentPrice) {
@@ -5794,7 +6088,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                                 v-for="row in expandedHoldingIntradayRows(holding)"
                                                                 :key="`${holding.id}-${row.timestamp ?? row.datetime}`"
                                                             >
-                                                                <td>{{ formatAnalyzeIntradayCandleDateTime(row.datetime) }}</td>
+                                                                <td>{{ formatAnalyzeIntradayCandleDateTime(row) }}</td>
                                                                 <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.open) }}</td>
                                                                 <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.high) }}</td>
                                                                 <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.low) }}</td>
@@ -6306,16 +6600,16 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             class="analyze-overview-page"
                             aria-label="Analyze overview"
                         >
+                            <div class="analyze-detail-header">
+                                <div>
+                                    <h2 class="analyze-detail-title">Charts</h2>
+                                    <div class="analyze-detail-scope">
+                                        {{ selectedAnalyzeScopeLabel }}
+                                    </div>
+                                </div>
+                            </div>
+
                             <div class="index-watch-strip">
-                                <button
-                                    type="button"
-                                    class="index-watch-card analyze-holding-card analyze-holding-card--all"
-                                    :class="{ 'analyze-holding-card--active': selectedAnalyzeHoldingId === null }"
-                                    :aria-pressed="selectedAnalyzeHoldingId === null"
-                                    @click="selectAnalyzeHolding(null)"
-                                >
-                                    <span class="index-watch-card-symbol">ALL</span>
-                                </button>
                                 <button
                                     v-for="holding in holdings"
                                     :key="holding.id"
@@ -6335,19 +6629,41 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             </div>
                             <div
                                 v-if="selectedAnalyzeHolding"
-                                class="analyze-range-menu"
-                                aria-label="Analyze history range"
+                                class="analyze-range-selector"
                             >
                                 <button
-                                    v-for="rangeItem in analyzeHistoryRangeItems"
-                                    :key="rangeItem.key"
                                     type="button"
-                                    class="analyze-range-button"
-                                    :class="{ 'analyze-range-button--active': selectedAnalyzeHistoryRange === rangeItem.key }"
-                                    :aria-pressed="selectedAnalyzeHistoryRange === rangeItem.key"
-                                    @click="selectedAnalyzeHistoryRange = rangeItem.key"
+                                    class="analyze-range-step-button"
+                                    aria-label="Previous chart window"
+                                    :disabled="!canMoveAnalyzeChartBackward"
+                                    @click="moveAnalyzeChartWindowBackward"
                                 >
-                                    {{ rangeItem.label }}
+                                    <v-icon icon="mdi-chevron-left" size="16" />
+                                </button>
+                                <div
+                                    class="analyze-range-menu"
+                                    aria-label="Analyze history range"
+                                >
+                                    <button
+                                        v-for="rangeItem in analyzeHistoryRangeItems"
+                                        :key="rangeItem.key"
+                                        type="button"
+                                        class="analyze-range-button"
+                                        :class="{ 'analyze-range-button--active': selectedAnalyzeHistoryRange === rangeItem.key }"
+                                        :aria-pressed="selectedAnalyzeHistoryRange === rangeItem.key"
+                                        @click="selectedAnalyzeHistoryRange = rangeItem.key"
+                                    >
+                                        {{ rangeItem.label }}
+                                    </button>
+                                </div>
+                                <button
+                                    type="button"
+                                    class="analyze-range-step-button"
+                                    aria-label="Next chart window"
+                                    :disabled="!canMoveAnalyzeChartForward"
+                                    @click="moveAnalyzeChartWindowForward"
+                                >
+                                    <v-icon icon="mdi-chevron-right" size="16" />
                                 </button>
                             </div>
                             <div
@@ -6612,6 +6928,127 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             </div>
                         </section>
                         <section
+                            v-if="activeAnalyzeSubsection === 'intraday'"
+                            class="analyze-detail-page"
+                            aria-label="Analyze intraday"
+                        >
+                            <div class="analyze-detail-header">
+                                <div>
+                                    <h2 class="analyze-detail-title">Intraday prices</h2>
+                                    <div class="analyze-detail-scope">
+                                        {{ selectedAnalyzeScopeLabel }}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="index-watch-strip analyze-detail-stock-menu" aria-label="Analyze intraday stocks">
+                                <button
+                                    v-for="holding in holdings"
+                                    :key="holding.id"
+                                    type="button"
+                                    class="index-watch-card analyze-holding-card"
+                                    :class="{ 'analyze-holding-card--active': selectedAnalyzeHoldingId === holding.id }"
+                                    :aria-pressed="selectedAnalyzeHoldingId === holding.id"
+                                    @click="selectAnalyzeHolding(holding.id)"
+                                >
+                                    <span class="index-watch-card-label analyze-holding-card-name">
+                                        {{ holding.name || holding.symbol || '-' }}
+                                    </span>
+                                    <span class="index-watch-card-price analyze-holding-card-price">
+                                        {{ formatHoldingCardPrice(holding) }}
+                                    </span>
+                                </button>
+                            </div>
+
+                            <v-alert
+                                v-if="selectedAnalyzeHoldingId === null"
+                                class="mb-4"
+                                type="info"
+                                variant="tonal"
+                            >
+                                No stock selected.
+                            </v-alert>
+                            <div v-else class="analyze-intraday-card-grid">
+                                <section class="analyze-intraday-card" aria-label="Analyze real-time prices">
+                                    <h3 class="analyze-intraday-card-title">Real-time</h3>
+                                    <div
+                                        v-if="selectedAnalyzeRealtimePriceRows.length === 0"
+                                        class="analyze-detail-empty analyze-intraday-card-empty"
+                                    >
+                                        No real-time prices stored for this stock.
+                                    </div>
+                                    <div v-else class="analyze-detail-table-wrap analyze-intraday-price-table-wrap">
+                                        <v-table class="analyze-detail-table analyze-intraday-price-table" density="compact">
+                                            <thead>
+                                                <tr>
+                                                    <th>Date</th>
+                                                    <th>Time</th>
+                                                    <th class="text-right">Price</th>
+                                                    <th class="text-right">Prev %</th>
+                                                    <th class="text-right">First %</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr
+                                                    v-for="realtimePrice in selectedAnalyzeRealtimePriceRowsWithChanges"
+                                                    :key="realtimePrice.id ?? realtimePrice.as_of"
+                                                >
+                                                    <td>{{ formatRecentStoredPriceDate(realtimePrice) }}</td>
+                                                    <td>{{ formatRecentStoredPriceTime(realtimePrice) }}</td>
+                                                    <td class="text-right">{{ formatRecentStoredPrice(realtimePrice, selectedAnalyzeHolding) }}</td>
+                                                    <td class="text-right" :class="priceChangePercentClass(realtimePrice.previousChangePercent)">
+                                                        {{ formatPriceChangePercent(realtimePrice.previousChangePercent) }}
+                                                    </td>
+                                                    <td class="text-right" :class="priceChangePercentClass(realtimePrice.firstChangePercent)">
+                                                        {{ formatPriceChangePercent(realtimePrice.firstChangePercent) }}
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </v-table>
+                                    </div>
+                                </section>
+
+                                <section class="analyze-intraday-card" aria-label="Analyze stored intraday prices">
+                                    <h3 class="analyze-intraday-card-title">Intraday</h3>
+                                    <div
+                                        v-if="selectedAnalyzeIntradayPriceRows.length === 0"
+                                        class="analyze-detail-empty analyze-intraday-card-empty"
+                                    >
+                                        No intraday prices stored for this stock.
+                                    </div>
+                                    <div v-else class="analyze-detail-table-wrap analyze-intraday-price-table-wrap">
+                                        <v-table class="analyze-detail-table analyze-intraday-price-table" density="compact">
+                                            <thead>
+                                                <tr>
+                                                    <th>Date</th>
+                                                    <th>Time</th>
+                                                    <th class="text-right">Price</th>
+                                                    <th class="text-right">Prev %</th>
+                                                    <th class="text-right">First %</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr
+                                                    v-for="intradayPrice in selectedAnalyzeIntradayPriceRowsWithChanges"
+                                                    :key="intradayPrice.id ?? intradayPrice.as_of"
+                                                >
+                                                    <td>{{ formatRecentStoredPriceDate(intradayPrice) }}</td>
+                                                    <td>{{ formatRecentStoredPriceTime(intradayPrice) }}</td>
+                                                    <td class="text-right">{{ formatRecentStoredPrice(intradayPrice, selectedAnalyzeHolding) }}</td>
+                                                    <td class="text-right" :class="priceChangePercentClass(intradayPrice.previousChangePercent)">
+                                                        {{ formatPriceChangePercent(intradayPrice.previousChangePercent) }}
+                                                    </td>
+                                                    <td class="text-right" :class="priceChangePercentClass(intradayPrice.firstChangePercent)">
+                                                        {{ formatPriceChangePercent(intradayPrice.firstChangePercent) }}
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </v-table>
+                                    </div>
+                                </section>
+                            </div>
+                        </section>
+                        <section
                             v-if="activeAnalyzeSubsection === 'detail'"
                             class="analyze-detail-page"
                             aria-label="Analyze detail"
@@ -6619,7 +7056,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             <div class="analyze-detail-header">
                                 <div>
                                     <h2 class="analyze-detail-title">
-                                        {{ analyzeIntradayDetailTitle }}
+                                        Details
                                     </h2>
                                     <div class="analyze-detail-scope">
                                         {{ selectedAnalyzeScopeLabel }}
@@ -6634,21 +7071,21 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 />
                             </div>
 
-                            <div class="analyze-detail-stock-menu" aria-label="Analyze detail stocks">
+                            <div class="index-watch-strip analyze-detail-stock-menu" aria-label="Analyze detail stocks">
                                 <button
                                     v-for="holding in holdings"
-                                    :key="`analyze-detail-stock-${holding.id}`"
+                                    :key="holding.id"
                                     type="button"
-                                    class="analyze-detail-stock-button"
-                                    :class="{ 'analyze-detail-stock-button--active': selectedAnalyzeHoldingId === holding.id }"
+                                    class="index-watch-card analyze-holding-card"
+                                    :class="{ 'analyze-holding-card--active': selectedAnalyzeHoldingId === holding.id }"
                                     :aria-pressed="selectedAnalyzeHoldingId === holding.id"
                                     @click="selectAnalyzeHolding(holding.id)"
                                 >
-                                    <span class="analyze-detail-stock-symbol">
-                                        {{ holding.symbol || '-' }}
+                                    <span class="index-watch-card-label analyze-holding-card-name">
+                                        {{ holding.name || holding.symbol || '-' }}
                                     </span>
-                                    <span class="analyze-detail-stock-name">
-                                        {{ holding.name || holding.symbol || `Stock ${holding.id}` }}
+                                    <span class="index-watch-card-price analyze-holding-card-price">
+                                        {{ formatHoldingCardPrice(holding) }}
                                     </span>
                                 </button>
                             </div>
@@ -6739,7 +7176,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                     >
                                                         <td>{{ formatAnalyzeIntradayCandleValue(row.timestamp) }}</td>
                                                         <td>{{ formatAnalyzeIntradayCandleValue(row.gmtoffset) }}</td>
-                                                        <td>{{ formatAnalyzeIntradayCandleDateTime(row.datetime) }}</td>
+                                                        <td>{{ formatAnalyzeIntradayCandleDateTime(row) }}</td>
                                                         <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.open) }}</td>
                                                         <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.high) }}</td>
                                                         <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.low) }}</td>
@@ -7306,7 +7743,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                     >
                                                         <td>{{ formatAnalyzeIntradayCandleValue(row.timestamp) }}</td>
                                                         <td>{{ formatAnalyzeIntradayCandleValue(row.gmtoffset) }}</td>
-                                                        <td>{{ formatAnalyzeIntradayCandleDateTime(row.datetime) }}</td>
+                                                        <td>{{ formatAnalyzeIntradayCandleDateTime(row) }}</td>
                                                         <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.open) }}</td>
                                                         <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.high) }}</td>
                                                         <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.low) }}</td>
@@ -8738,48 +9175,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 }
 
 .analyze-detail-stock-menu {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
     margin-bottom: 18px;
-}
-
-.analyze-detail-stock-button {
-    align-items: center;
-    background: #ffffff;
-    border: 1px solid rgba(20, 91, 75, 0.18);
-    border-radius: 6px;
-    color: #30414d;
-    display: inline-flex;
-    gap: 8px;
-    min-height: 36px;
-    max-width: 240px;
-    padding: 6px 10px;
-    transition: border-color 0.16s ease, box-shadow 0.16s ease, color 0.16s ease;
-}
-
-.analyze-detail-stock-button:hover,
-.analyze-detail-stock-button--active {
-    border-color: #145b4b;
-    box-shadow: 0 1px 0 rgba(20, 91, 75, 0.12);
-    color: #145b4b;
-}
-
-.analyze-detail-stock-symbol {
-    font-size: 0.78rem;
-    font-weight: 800;
-    line-height: 1;
-    white-space: nowrap;
-}
-
-.analyze-detail-stock-name {
-    font-size: 0.78rem;
-    font-weight: 600;
-    line-height: 1.1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
 }
 
 .analyze-detail-empty {
@@ -8866,6 +9262,41 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 
 .analyze-detail-table {
     min-width: 820px;
+}
+
+.analyze-intraday-card-grid {
+    align-items: start;
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 520px));
+}
+
+.analyze-intraday-card {
+    background: #ffffff;
+    border: 1px solid rgba(20, 91, 75, 0.16);
+    border-radius: 6px;
+    padding: 14px;
+}
+
+.analyze-intraday-card-title {
+    color: #1b1f24;
+    font-size: 0.95rem;
+    font-weight: 800;
+    line-height: 1.25;
+    margin: 0 0 12px;
+}
+
+.analyze-intraday-card-empty {
+    min-height: 88px;
+}
+
+.analyze-intraday-price-table-wrap {
+    max-width: 520px;
+    width: 100%;
+}
+
+.analyze-intraday-price-table {
+    min-width: 0;
 }
 
 @media (max-width: 720px) {
@@ -9409,12 +9840,45 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     font-size: 0.7rem;
 }
 
-.analyze-range-menu {
+.analyze-range-selector {
     align-items: center;
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
     margin-top: 10px;
+}
+
+.analyze-range-menu {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.analyze-range-step-button {
+    align-items: center;
+    background: rgb(var(--v-theme-surface));
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 4px;
+    color: rgba(var(--v-theme-on-surface), 0.72);
+    display: inline-flex;
+    height: 26px;
+    justify-content: center;
+    line-height: 1;
+    padding: 0;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+    width: 30px;
+}
+
+.analyze-range-step-button:not(:disabled):hover {
+    background: rgba(var(--v-theme-primary), 0.08);
+    border-color: rgba(var(--v-theme-primary), 0.58);
+    color: rgb(var(--v-theme-primary));
+}
+
+.analyze-range-step-button:disabled {
+    cursor: default;
+    opacity: 0.38;
 }
 
 .analyze-range-button {

@@ -872,6 +872,56 @@ describe('App', () => {
                             daily_prices: [],
                             intraday_candles: weekdayIntradayCandles('2025-06-15', '2026-06-14'),
                         },
+                        {
+                            id: 6,
+                            symbol: 'DAY',
+                            name: 'Intraday Filter Fund',
+                            currency: 'EUR',
+                            latest_price: '306.320010',
+                            recent_prices: [
+                                {
+                                    id: 600,
+                                    price: '303.80000000',
+                                    currency: 'EUR',
+                                    as_of: new Date(Date.UTC(2026, 5, 4, 10, 55)).toISOString(),
+                                    source_name: 'EODHD real-time',
+                                    price_type: 'last',
+                                },
+                                {
+                                    id: 601,
+                                    price: '304.50000000',
+                                    currency: 'EUR',
+                                    as_of: new Date(Date.UTC(2026, 5, 5, 9, 50)).toISOString(),
+                                    source_name: 'EODHD real-time',
+                                    price_type: 'last',
+                                },
+                                {
+                                    id: 602,
+                                    price: '305.20000000',
+                                    currency: 'EUR',
+                                    as_of: new Date(Date.UTC(2026, 5, 5, 10, 10)).toISOString(),
+                                    source_name: 'EODHD real-time',
+                                    price_type: 'last',
+                                },
+                            ],
+                            daily_prices: [],
+                            intraday_candles: [
+                                ...Array.from({ length: 12 }, (_, index) => ({
+                                    id: index + 1,
+                                    trading_date: '2026-06-04',
+                                    price: (290 + index * 0.1).toFixed(8),
+                                    currency: 'EUR',
+                                    as_of: new Date(Date.UTC(2026, 5, 4, 10, index * 5)).toISOString(),
+                                })),
+                                ...Array.from({ length: 20 }, (_, index) => ({
+                                    id: index + 13,
+                                    trading_date: '2026-06-05',
+                                    price: index === 19 ? '306.32001000' : (305 + index * 0.1).toFixed(8),
+                                    currency: 'EUR',
+                                    as_of: new Date(Date.UTC(2026, 5, 5, 10, index * 5)).toISOString(),
+                                })),
+                            ],
+                        },
                     ],
                     meta: pagination,
                     price_refresh_settings: priceRefreshSettings(),
@@ -1040,22 +1090,99 @@ describe('App', () => {
         expect(wrapper.find('[aria-label="Analyze detail"]').exists()).toBe(true);
         expect(window.location.pathname).toBe('/admin/menu/analyze/detail');
         expect(window.location.search).toBe('?stock=all');
-        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('ALL');
-        expect(wrapper.text()).toContain('Overview');
+        expect(wrapper.find('[aria-label="Analyze detail stocks"]').find('.analyze-holding-card--all').exists()).toBe(false);
+        expect(wrapper.text()).toContain('Charts');
+        expect(wrapper.text()).toContain('Intraday');
         expect(wrapper.text()).toContain('Detail');
         expect(wrapper.text()).toContain('Tests');
+        const analyzeTabsText = wrapper.findAll('.v-tab').map((tab) => tab.text()).join(' ');
+        expect(analyzeTabsText.indexOf('Charts')).toBeLessThan(analyzeTabsText.indexOf('Intraday'));
+        expect(analyzeTabsText.indexOf('Intraday')).toBeLessThan(analyzeTabsText.indexOf('Detail'));
+
+        const intradayTab = wrapper.findAll('.v-tab')
+            .find((tab) => tab.text().includes('Intraday'));
+        await intradayTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/intraday');
+        expect(window.location.search).toBe('?stock=all');
+        expect(wrapper.find('[aria-label="Analyze intraday stocks"]').find('.analyze-holding-card--all').exists()).toBe(false);
+        expect(wrapper.find('[aria-label="Analyze intraday"]').text()).toContain('ALL');
+        expect(wrapper.find('[aria-label="Analyze intraday"]').text()).toContain('No stock selected.');
+
+        const intradayFilterCard = wrapper.find('[aria-label="Analyze intraday stocks"]').findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Intraday Filter Fund'));
+        await intradayFilterCard.trigger('click');
+        await flushPromises();
+
+        const analyzeIntraday = wrapper.find('[aria-label="Analyze intraday"]');
+        expect(window.location.pathname).toBe('/admin/menu/analyze/intraday');
+        expect(window.location.search).toBe('?stock=6');
+        expect(analyzeIntraday.text()).toContain('Intraday prices');
+        expect(analyzeIntraday.findAll('.analyze-intraday-card')).toHaveLength(2);
+        expect(analyzeIntraday.find('[aria-label="Analyze real-time prices"]').text()).toContain('Real-time');
+        expect(analyzeIntraday.find('[aria-label="Analyze stored intraday prices"]').text()).toContain('Intraday');
+        expect(analyzeIntraday.text()).toContain('Date');
+        expect(analyzeIntraday.text()).toContain('Time');
+        expect(analyzeIntraday.text()).toContain('Price');
+        expect(analyzeIntraday.text()).toContain('Prev %');
+        expect(analyzeIntraday.text()).toContain('First %');
+        expect(analyzeIntraday.text()).not.toContain('Timestamp');
+        expect(analyzeIntraday.text()).not.toContain('Currency');
+        expect(analyzeIntraday.text()).not.toContain('Source');
+        expect(analyzeIntraday.text()).toContain('05.06.2026');
+        expect(analyzeIntraday.text()).toContain('04.06.2026');
+        const realTimeCard = analyzeIntraday.find('[aria-label="Analyze real-time prices"]');
+        const intradayCard = analyzeIntraday.find('[aria-label="Analyze stored intraday prices"]');
+        expect(realTimeCard.findAll('tbody tr')).toHaveLength(3);
+        expect(realTimeCard.find('tbody tr').findAll('td').map((cell) => cell.text())).toEqual([
+            '04.06.2026',
+            '12:55',
+            '303.80',
+            '-',
+            '0.00%',
+        ]);
+        expect(realTimeCard.findAll('tbody tr')[1].findAll('td').map((cell) => cell.text())).toEqual([
+            '05.06.2026',
+            '11:50',
+            '304.50',
+            '+0.23%',
+            '+0.23%',
+        ]);
+        expect(intradayCard.findAll('tbody tr')).toHaveLength(21);
+        expect(intradayCard.find('tbody tr').findAll('td').map((cell) => cell.text())).toEqual([
+            '04.06.2026',
+            '12:55',
+            '291.10',
+            '-',
+            '0.00%',
+        ]);
+        expect(intradayCard.findAll('tbody tr')[1].findAll('td').map((cell) => cell.text())).toEqual([
+            '05.06.2026',
+            '12:00',
+            '305.00',
+            '+4.77%',
+            '+4.77%',
+        ]);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/holdings/1/intraday-candles')).toBe(false);
+
+        const intradayAppleCard = wrapper.find('[aria-label="Analyze intraday stocks"]').findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Apple'));
+        await intradayAppleCard.trigger('click');
+        await flushPromises();
 
         const overviewTab = wrapper.findAll('.v-tab')
-            .find((tab) => tab.text().includes('Overview'));
+            .find((tab) => tab.text().includes('Charts'));
         await overviewTab.trigger('click');
         await flushPromises();
         await flushPromises();
 
         expect(window.location.pathname).toBe('/admin/menu/analyze/overview');
-        expect(window.location.search).toBe('?stock=all');
+        expect(window.location.search).toBe('?stock=1');
         const analyzeOverview = wrapper.find('[aria-label="Analyze overview"]');
         expect(analyzeOverview.exists()).toBe(true);
-        expect(analyzeOverview.text()).toContain('ALL');
+        expect(analyzeOverview.find('.analyze-detail-title').text()).toBe('Charts');
+        expect(analyzeOverview.find('.analyze-holding-card--all').exists()).toBe(false);
         expect(analyzeOverview.text()).toContain('Apple');
         expect(analyzeOverview.text()).toContain('306.32 EUR');
         expect(analyzeOverview.text()).toContain('Microsoft');
@@ -1069,7 +1196,6 @@ describe('App', () => {
         expect(analyzeOverview.text()).not.toContain('historical price records loaded/updated.');
         expect(analyzeOverview.text()).not.toContain('Checking historical prices');
         expect(analyzeOverview.text()).not.toContain('2/2');
-        expect(analyzeOverview.text()).not.toContain('6 months');
 
         const appleCard = analyzeOverview.findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Apple'));
@@ -1099,8 +1225,12 @@ describe('App', () => {
             .find((button) => button.text() === 'today');
         const todayMinusOneRangeButton = analyzeOverview.findAll('.analyze-range-button')
             .find((button) => button.text() === 'today-1');
+        const previousChartWindowButton = analyzeOverview.find('[aria-label="Previous chart window"]');
+        const nextChartWindowButton = analyzeOverview.find('[aria-label="Next chart window"]');
 
         expect(oneYearRangeButton.attributes('aria-pressed')).toBe('true');
+        expect(previousChartWindowButton.attributes('disabled')).toBe('');
+        expect(nextChartWindowButton.attributes('disabled')).toBe('');
         expect(analyzeOverview.text()).toContain('365-day capture');
         await oneMonthRangeButton.trigger('click');
         await flushPromises();
@@ -1256,6 +1386,23 @@ describe('App', () => {
         expect(sixMonthDateRangeLabels[1].attributes('text-anchor')).toBe('end');
         expect(analyzeOverview.find('.analyze-sparkline-line').attributes('d').match(/[ML]/g)).toHaveLength(256);
         expect(analyzeOverview.findAll('.analyze-sparkline-grid-line--vertical')).toHaveLength(0);
+        expect(previousChartWindowButton.attributes('disabled')).toBeUndefined();
+        expect(nextChartWindowButton.attributes('disabled')).toBe('');
+
+        await previousChartWindowButton.trigger('click');
+        await flushPromises();
+
+        const previousSixMonthDateRangeLabels = analyzeOverview.findAll('.analyze-sparkline-date-range-label');
+        expect(previousSixMonthDateRangeLabels.map((label) => label.text())).toEqual(['16.06.', '10.12.']);
+        expect(previousChartWindowButton.attributes('disabled')).toBe('');
+        expect(nextChartWindowButton.attributes('disabled')).toBeUndefined();
+
+        await nextChartWindowButton.trigger('click');
+        await flushPromises();
+
+        expect(analyzeOverview.findAll('.analyze-sparkline-date-range-label').map((label) => label.text())).toEqual(['11.12.', '12.06.']);
+        expect(previousChartWindowButton.attributes('disabled')).toBeUndefined();
+        expect(nextChartWindowButton.attributes('disabled')).toBe('');
 
         await threeMonthRangeButton.trigger('click');
         await flushPromises();
@@ -1357,13 +1504,6 @@ describe('App', () => {
         expect(Math.abs(oneWeekEndGap - firstOneWeekMarkerDistance)).toBeLessThan(0.01);
         expect(analyzeOverview.findAll('.analyze-sparkline-grid-line--vertical')).toHaveLength(0);
 
-        const allCard = analyzeOverview.findAll('.analyze-holding-card')
-            .find((button) => button.text().includes('ALL'));
-        await allCard.trigger('click');
-        await flushPromises();
-
-        expect(window.location.search).toBe('?stock=all');
-        expect(analyzeOverview.text()).not.toContain('6 months');
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/holdings/historical-prices/ensure')).toBe(false);
     });
 
@@ -1603,13 +1743,11 @@ describe('App', () => {
         const analyzeOverview = wrapper.find('[aria-label="Analyze overview"]');
         const appleCard = analyzeOverview.findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Apple'));
-        const allCard = analyzeOverview.findAll('.analyze-holding-card')
-            .find((button) => button.text().includes('ALL'));
 
         expect(window.location.pathname).toBe('/admin/menu/analyze/overview');
         expect(window.location.search).toBe('?stock=1');
         expect(appleCard.attributes('aria-pressed')).toBe('true');
-        expect(allCard.attributes('aria-pressed')).toBe('false');
+        expect(analyzeOverview.find('.analyze-holding-card--all').exists()).toBe(false);
         expect(analyzeOverview.text()).toContain('1 year');
 
         const detailTab = wrapper.findAll('.v-tab')
@@ -1619,6 +1757,7 @@ describe('App', () => {
 
         expect(window.location.pathname).toBe('/admin/menu/analyze/detail');
         expect(window.location.search).toBe('?stock=1');
+        expect(wrapper.find('[aria-label="Analyze detail"] .analyze-detail-title').text()).toBe('Details');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Apple');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Intraday 05.06.2026 - 5m');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Intraday 04.06.2026 - 5m');
@@ -1666,9 +1805,13 @@ describe('App', () => {
 
         const detailStockMenu = wrapper.find('[aria-label="Analyze detail stocks"]');
         expect(detailStockMenu.exists()).toBe(true);
+        expect(detailStockMenu.find('.analyze-holding-card--all').exists()).toBe(false);
         expect(detailStockMenu.text()).toContain('Apple');
+        expect(detailStockMenu.text()).toContain('306.32 EUR');
         expect(detailStockMenu.text()).toContain('Microsoft');
         expect(detailStockMenu.text()).toContain('Nvidia');
+        expect(detailStockMenu.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Apple')).attributes('aria-pressed')).toBe('true');
 
         const nvidiaButton = detailStockMenu.findAll('button')
             .find((button) => button.text().includes('Nvidia'));
@@ -1678,6 +1821,7 @@ describe('App', () => {
         expect(window.location.pathname).toBe('/admin/menu/analyze/detail');
         expect(window.location.search).toBe('?stock=3');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Nvidia');
+        expect(nvidiaButton.attributes('aria-pressed')).toBe('true');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).not.toContain('924.15000000');
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/3/intraday-candles', expect.anything());
     });
@@ -1970,6 +2114,7 @@ describe('App', () => {
         expect(areaPath).toBe('');
         expect(wrapper.find('.analyze-sparkline-trend-line').exists()).toBe(false);
         expect(wrapper.findAll('.analyze-sparkline-dot')).toHaveLength(1);
+        expect(wrapper.find('.analyze-sparkline-meta').text()).toContain('05.06.26, 12:30');
         expect(wrapper.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Start 307.25');
         expect(wrapper.find('.analyze-sparkline-endpoint-label--latest').text()).toBe('End 307.25 0.00%');
         expect(wrapper.text()).not.toContain('No EODHD intraday prices available for this session.');
@@ -2904,9 +3049,9 @@ describe('App', () => {
         const intradayTable = wrapper.find('.holding-intraday-table');
         expect(wrapper.find('.holding-intraday-detail-header').text()).toContain('Intraday 05.06.2026 - 5m');
         expect(wrapper.find('.holding-intraday-detail-header').text()).toContain('3 rows');
-        expect(intradayTable.text()).toContain('2026-06-05 07:00:00');
-        expect(intradayTable.text()).toContain('2026-06-05 07:05:00');
-        expect(intradayTable.text()).toContain('2026-06-05 15:30:00');
+        expect(intradayTable.text()).toContain('05.06.2026, 09:00');
+        expect(intradayTable.text()).toContain('05.06.2026, 09:05');
+        expect(intradayTable.text()).toContain('05.06.2026, 17:30');
         expect(intradayTable.text()).toContain('306.32001000');
         expect(wrapper.find('.recent-price-strip').exists()).toBe(false);
 
