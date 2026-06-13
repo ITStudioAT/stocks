@@ -1091,6 +1091,55 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.intraday_prices.0.as_of', '2026-06-12T09:05:00+02:00');
     }
 
+    public function test_admin_listing_uses_stored_intraday_price_rows_when_candles_are_sparse(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-12 18:10:00', 'Europe/Berlin'));
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'country' => 'Germany',
+            'currency' => 'EUR',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+
+        StockHoldingIntradayCandle::query()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-12',
+            'interval' => '5m',
+            'as_of' => Carbon::parse('2026-06-12 07:10:00', 'UTC'),
+            'close' => '477.75000000',
+            'currency' => 'EUR',
+            'source_name' => 'EODHD intraday',
+        ]);
+
+        foreach ([
+            ['as_of' => '2026-06-12 07:05:00', 'price' => '477.75000000'],
+            ['as_of' => '2026-06-12 07:10:00', 'price' => '481.50000000'],
+        ] as $index => $priceRow) {
+            StockHoldingIntradayPrice::query()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-06-12',
+                'sample_index' => $index,
+                'price' => $priceRow['price'],
+                'currency' => 'EUR',
+                'as_of' => Carbon::parse($priceRow['as_of'], 'UTC'),
+                'source_name' => 'EODHD intraday',
+                'price_type' => 'intraday',
+            ]);
+        }
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonCount(2, 'holdings.0.intraday_prices')
+            ->assertJsonPath('holdings.0.intraday_prices.0.price', '477.75000000')
+            ->assertJsonPath('holdings.0.intraday_prices.0.as_of', '2026-06-12T09:05:00+02:00')
+            ->assertJsonPath('holdings.0.intraday_prices.1.price', '481.50000000')
+            ->assertJsonPath('holdings.0.intraday_prices.1.as_of', '2026-06-12T09:10:00+02:00');
+    }
+
     public function test_admin_can_fetch_and_store_last_trading_day_five_minute_intraday_candles(): void
     {
         config(['services.eodhd.key' => 'test-token']);

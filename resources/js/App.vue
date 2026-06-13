@@ -26,6 +26,7 @@ const {
     holdings,
     indexWatchItems,
     depotHoldings,
+    depotValuations,
     transactions,
     exchangeTradingTimes,
     appVersion,
@@ -351,11 +352,13 @@ const selectedAnalyzeScopeLabel = computed(() => {
         || selectedAnalyzeHolding.value?.symbol
         || `Stock ${selectedAnalyzeHoldingId.value}`;
 });
-const selectedAnalyzeHistoryWindow = computed(() => analyzeChartWindow(
-    selectedAnalyzeHolding.value?.intraday_candles ?? [],
+const selectedAnalyzeChartSource = computed(() => analyzeOverviewChartSource(
+    selectedAnalyzeHolding.value,
     selectedAnalyzeHistoryRange.value,
     selectedAnalyzeHistoryWindowOffset.value,
 ));
+const selectedAnalyzeChartSourcePrices = computed(() => selectedAnalyzeChartSource.value.prices);
+const selectedAnalyzeHistoryWindow = computed(() => selectedAnalyzeChartSource.value.window);
 const selectedAnalyzeIntradayCandlePrices = computed(() => selectedAnalyzeHistoryWindow.value.prices);
 const canMoveAnalyzeChartBackward = computed(() => selectedAnalyzeHistoryWindow.value.canMoveBackward);
 const canMoveAnalyzeChartForward = computed(() => selectedAnalyzeHistoryWindow.value.canMoveForward);
@@ -369,7 +372,7 @@ const selectedAnalyzeChartPrices = computed(() => normalizeAnalyzeChartPrices(
     selectedAnalyzeHistoryRange.value,
 ));
 const selectedAnalyzePreviousTradingClose = computed(() => previousAnalyzeTradingClose(
-    selectedAnalyzeHolding.value?.intraday_candles ?? [],
+    selectedAnalyzeChartSourcePrices.value,
     selectedAnalyzeChartPrices.value,
     selectedAnalyzeHistoryRange.value,
 ));
@@ -471,6 +474,36 @@ function isRealtimePriceRow(priceRow) {
     const sourceName = typeof priceRow.source_name === 'string' ? priceRow.source_name.toLowerCase() : '';
 
     return sourceName.includes('real-time') || sourceName.includes('realtime');
+}
+
+function analyzeOverviewChartSource(holding, rangeKey, windowOffset) {
+    const intradayCandles = Array.isArray(holding?.intraday_candles) ? holding.intraday_candles : [];
+    const intradayPrices = Array.isArray(holding?.intraday_prices) ? holding.intraday_prices : [];
+    const recentPrices = Array.isArray(holding?.recent_prices) ? holding.recent_prices.filter(isRealtimePriceRow) : [];
+    const chartSources = [
+        { key: 'intraday_candles', prices: intradayCandles },
+        { key: 'intraday_prices', prices: intradayPrices },
+        { key: 'realtime_prices', prices: recentPrices },
+    ];
+    const chartSourceWindows = chartSources.map((source) => ({
+        ...source,
+        window: analyzeChartWindow(source.prices, rangeKey, windowOffset),
+    }));
+    const sufficientChartSource = chartSourceWindows.find((source) => isSufficientAnalyzeChartWindow(source.window));
+
+    if (sufficientChartSource) {
+        return sufficientChartSource;
+    }
+
+    return chartSourceWindows.find((source) => hasAnalyzeChartPrices(source.prices)) ?? chartSourceWindows[0];
+}
+
+function isSufficientAnalyzeChartWindow(chartWindow) {
+    return chartWindow.prices.length >= 2;
+}
+
+function hasAnalyzeChartPrices(prices) {
+    return prices.some((price) => price?.as_of && !Number.isNaN(analyzeDailyPriceValue(price)));
 }
 
 function sortPriceRowsByTime(priceRows) {
@@ -2195,15 +2228,66 @@ async function deleteHolding() {
 }
 
 function formatTransactionDate(isoString) {
-    if (!isoString) return '–';
+    const inputValue = transactionDateInputValue(isoString);
 
-    return new Intl.DateTimeFormat('en-GB', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-    }).format(new Date(isoString));
+    if (!inputValue) return '–';
+
+    const [year, month, day] = inputValue.split('-');
+
+    return `${day}.${month}.${year}`;
+}
+
+function transactionDateInputValue(isoString) {
+    if (!isoString) return '';
+
+    const isoDateMatch = String(isoString).match(/^(\d{4})-(\d{2})-(\d{2})/);
+
+    if (isoDateMatch) {
+        return `${isoDateMatch[1]}-${isoDateMatch[2]}-${isoDateMatch[3]}`;
+    }
+
+    const date = new Date(isoString);
+
+    if (Number.isNaN(date.getTime())) {
+        return '';
+    }
+
+    return localDateInputValue(date);
+}
+
+function transactionDateInputId(transactionId, scope) {
+    return `transaction-date-${scope}-${transactionId}`;
+}
+
+function openTransactionDatePicker(transactionId, scope) {
+    const dateInput = document.getElementById(transactionDateInputId(transactionId, scope));
+
+    if (!dateInput) {
+        return;
+    }
+
+    if (typeof dateInput.showPicker === 'function') {
+        dateInput.showPicker();
+
+        return;
+    }
+
+    dateInput.focus();
+    dateInput.click();
+}
+
+async function updateTransactionDate(transaction, bookedAt) {
+    if (!bookedAt || bookedAt === transactionDateInputValue(transaction.booked_at)) {
+        return;
+    }
+
+    transactionsError.value = '';
+
+    try {
+        await depotsStore.updateTransactionDate(transaction.id, bookedAt);
+    } catch (error) {
+        transactionsError.value = error.message;
+    }
 }
 
 function transactionTypeColor(type) {
@@ -2386,10 +2470,6 @@ function formatEodhdUsageReset(value) {
     return formatScheduleDateTime(value);
 }
 
-function formatDepotCashBalance() {
-    return `${formatAccountBalance(activeDepot.value?.account_balance)} EUR`;
-}
-
 function isDepotPriceSource(source) {
     return depotPriceSource.value === source;
 }
@@ -2424,86 +2504,50 @@ function selectedDepotHoldingPrice(holding) {
         : holding.latest_price;
 }
 
-function depotStockBalance() {
-    return depotHoldings.value.reduce((sum, holding) => {
-        const selectedPrice = Number(selectedDepotHoldingPrice(holding));
-        const pieces = Number(holding.position_pieces ?? 0);
-
-        if (Number.isNaN(selectedPrice) || Number.isNaN(pieces)) {
-            return sum;
-        }
-
-        return sum + (selectedPrice * pieces);
-    }, 0);
+function selectedDepotValuation() {
+    return depotValuations.value?.[depotPriceSource.value] ?? null;
 }
 
-function depotYearStartStockBalance() {
-    return depotHoldings.value.reduce((sum, holding) => {
-        const yearStartPrice = Number(holding.year_start_price);
-        const pieces = Number(holding.position_pieces ?? 0);
-
-        if (Number.isNaN(yearStartPrice) || Number.isNaN(pieces)) {
-            return sum;
-        }
-
-        return sum + (yearStartPrice * pieces);
-    }, 0);
+function depotValuationNumber(key) {
+    return Number(selectedDepotValuation()?.[key] ?? 0);
 }
 
 function formatDepotStockBalance() {
-    return `${formatAccountBalance(depotStockBalance())} EUR`;
+    return `${formatAccountBalance(depotValuationNumber('stock_balance'))} EUR`;
 }
 
-function depotCashBalance() {
-    return Number(activeDepot.value?.account_balance ?? 0);
+function formatDepotCashBalance() {
+    return `${formatAccountBalance(depotValuationNumber('cash_balance'))} EUR`;
 }
 
 function formatDepotAccountBalance() {
-    return `${formatAccountBalance(depotCashBalance() + depotStockBalance())} EUR`;
-}
-
-function depotYearStartBalance() {
-    return depotCashBalance() + depotYearStartStockBalance();
-}
-
-function depotCurrentBalance() {
-    return depotCashBalance() + depotStockBalance();
+    return `${formatAccountBalance(depotValuationNumber('account_balance'))} EUR`;
 }
 
 function formatDepotYearStartBalance() {
-    return `${formatAccountBalance(depotYearStartBalance())} EUR`;
+    return `${formatAccountBalance(depotValuationNumber('year_start_balance'))} EUR`;
 }
 
 function formatDepotCurrentBalance() {
-    return `${formatAccountBalance(depotCurrentBalance())} EUR`;
-}
-
-function depotBalanceChangeAmount() {
-    return depotCurrentBalance() - depotYearStartBalance();
+    return `${formatAccountBalance(depotValuationNumber('current_balance'))} EUR`;
 }
 
 function formatDepotBalanceChangeAmount() {
-    const amount = depotBalanceChangeAmount();
+    const amount = depotValuationNumber('balance_change_amount');
     const sign = amount > 0 ? '+' : '';
 
     return `${sign}${formatAccountBalance(amount)} EUR`;
 }
 
 function formatDepotBalanceChangePercent() {
-    const yearStartBalance = depotYearStartBalance();
-
-    if (yearStartBalance === 0) {
-        return '-';
-    }
-
-    const amount = (depotBalanceChangeAmount() / yearStartBalance) * 100;
+    const amount = depotValuationNumber('balance_change_percent');
     const sign = amount > 0 ? '+' : '';
 
     return `${sign}${amount.toFixed(2)}%`;
 }
 
 function depotBalanceChangeClass() {
-    const amount = depotBalanceChangeAmount();
+    const amount = depotValuationNumber('balance_change_amount');
 
     return {
         'text-success': amount > 0,
@@ -2598,6 +2642,36 @@ function formatLatestPrice(holding) {
     }
 
     return formatPriceValue(holding.latest_price, holding.currency);
+}
+
+function formatPreviousDayPrice(holding) {
+    if (holding.previous_day_price === null || holding.previous_day_price === undefined || holding.previous_day_price === '') {
+        return '-';
+    }
+
+    return formatPriceValue(holding.previous_day_price, holding.currency);
+}
+
+function previousDayChangePercent(holding) {
+    if (
+        holding.previous_day_change_percent === null
+        || holding.previous_day_change_percent === undefined
+        || holding.previous_day_change_percent === ''
+    ) {
+        return null;
+    }
+
+    const changePercent = Number(holding.previous_day_change_percent);
+
+    return Number.isNaN(changePercent) ? null : changePercent;
+}
+
+function formatPreviousDayChangePercent(holding) {
+    return formatPriceChangePercent(previousDayChangePercent(holding));
+}
+
+function previousDayChangePercentClass(holding) {
+    return priceChangePercentClass(previousDayChangePercent(holding));
 }
 
 function formatHoldingCardPrice(holding) {
@@ -3267,8 +3341,14 @@ function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.va
         bottom: height - 72,
     };
     const chartPrices = prices.filter((price) => !Number.isNaN(price.chart_price));
+    const previousTradingClosePoint = rangeKey === 'today-1'
+        ? chartPrices.find((price) => price.is_previous_trading_close) ?? null
+        : null;
+    const plottedChartPrices = previousTradingClosePoint
+        ? chartPrices.filter((price) => !price.is_previous_trading_close)
+        : chartPrices;
 
-    if (chartPrices.length === 0) {
+    if (plottedChartPrices.length === 0) {
         return {
             width,
             height,
@@ -3276,6 +3356,7 @@ function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.va
             points: [],
             linePath: '',
             areaPath: '',
+            previousCloseLine: null,
             horizontalGridLines: [],
             verticalGridLines: [],
             monthStartMarkers: [],
@@ -3294,7 +3375,10 @@ function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.va
         };
     }
 
-    const chartPriceValues = chartPrices.map((price) => price.chart_price);
+    const chartPriceValues = [
+        ...plottedChartPrices,
+        ...(previousTradingClosePoint ? [previousTradingClosePoint] : []),
+    ].map((price) => price.chart_price);
     const min = Math.min(...chartPriceValues);
     const max = Math.max(...chartPriceValues);
     const scaleMin = min;
@@ -3306,16 +3390,16 @@ function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.va
     const chartRange = chartMax - chartMin;
     const plotWidth = plot.right - plot.left;
     const plotHeight = plot.bottom - plot.top;
-    const firstChartTime = isAnalyzeTodayRange(rangeKey) ? analyzeSparklinePointTime(chartPrices[0]) : null;
-    const latestChartTime = isAnalyzeTodayRange(rangeKey) ? analyzeSparklinePointTime(chartPrices[chartPrices.length - 1]) : null;
+    const firstChartTime = isAnalyzeTodayRange(rangeKey) ? analyzeSparklinePointTime(plottedChartPrices[0]) : null;
+    const latestChartTime = isAnalyzeTodayRange(rangeKey) ? analyzeSparklinePointTime(plottedChartPrices[plottedChartPrices.length - 1]) : null;
     const useTimeScale = firstChartTime !== null && latestChartTime !== null && firstChartTime < latestChartTime;
-    const points = chartPrices.map((price, index) => {
+    const points = plottedChartPrices.map((price, index) => {
         const priceTime = useTimeScale ? analyzeSparklinePointTime(price) : null;
-        const x = chartPrices.length === 1
+        const x = plottedChartPrices.length === 1
             ? plot.left + plotWidth / 2
             : (useTimeScale && priceTime !== null
                 ? plot.left + ((priceTime - firstChartTime) / (latestChartTime - firstChartTime)) * plotWidth
-                : plot.left + (index / (chartPrices.length - 1)) * plotWidth);
+                : plot.left + (index / (plottedChartPrices.length - 1)) * plotWidth);
         const normalized = (price.chart_price - chartMin) / chartRange;
         const y = plot.bottom - normalized * plotHeight;
 
@@ -3327,9 +3411,20 @@ function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.va
     });
     const highPoint = points.find((point) => point.chart_price === max);
     const lowPoint = points.find((point) => point.chart_price === min);
-    const todayStartPoint = rangeKey === 'today-1'
-        ? points.find((point) => !point.is_previous_trading_close)
+    const previousTradingCloseLine = previousTradingClosePoint
+        ? {
+            y: chartValueToY(previousTradingClosePoint.chart_price, chartMin, chartRange, plot),
+            value: previousTradingClosePoint.chart_price,
+        }
         : null;
+    const firstLabelPoint = previousTradingClosePoint
+        ? {
+            ...previousTradingClosePoint,
+            x: points[0].x,
+            y: previousTradingCloseLine.y,
+        }
+        : points[0];
+    const latestReferencePoint = previousTradingClosePoint ?? points[0];
 
     return {
         width,
@@ -3338,6 +3433,7 @@ function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.va
         points,
         linePath: analyzeSparklinePath(points),
         areaPath: analyzeSparklineAreaPath(points, plot),
+        previousCloseLine: previousTradingCloseLine,
         horizontalGridLines: analyzeSparklineHorizontalGridLines(chartMin, chartMax, plot),
         verticalGridLines: shouldUseAnalyzeDateMarkers(rangeKey) ? [] : analyzeSparklineTickPoints(points).map((point) => ({
             x: point.x,
@@ -3351,11 +3447,11 @@ function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.va
             : [],
         first: points[0],
         latest: points[points.length - 1],
-        firstLabel: chartEndpointLabel(points[0], plot, 'start'),
-        latestLabel: chartEndpointLabel(points[points.length - 1], plot, 'end', points[0]),
-        todayStartLabel: chartEndpointLabel(todayStartPoint, plot, 'start', null, {
-            changeClass: chartValueDirectionClass(todayStartPoint, points[0]),
-            changePercent: formatChartEndpointChangePercent(todayStartPoint, points[0]),
+        firstLabel: chartEndpointLabel(firstLabelPoint, plot, 'start'),
+        latestLabel: chartEndpointLabel(points[points.length - 1], plot, 'end', latestReferencePoint),
+        todayStartLabel: chartEndpointLabel(previousTradingClosePoint ? points[0] : null, plot, 'start', null, {
+            changeClass: chartValueDirectionClass(points[0], previousTradingClosePoint),
+            changePercent: formatChartEndpointChangePercent(points[0], previousTradingClosePoint),
             labelPrefix: 'Start',
             labelX: points[0].x,
             labelY: plot.bottom + 38,
@@ -3365,9 +3461,9 @@ function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.va
         lowMarker: analyzeSparklineExtremumMarker(lowPoint, 'low', plot),
         min,
         max,
-        trend: points[points.length - 1].chart_price > points[0].chart_price
+        trend: points[points.length - 1].chart_price > latestReferencePoint.chart_price
             ? 'up'
-            : (points[points.length - 1].chart_price < points[0].chart_price ? 'down' : 'flat'),
+            : (points[points.length - 1].chart_price < latestReferencePoint.chart_price ? 'down' : 'flat'),
     };
 }
 
@@ -8208,12 +8304,19 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     class="mobile-depot-stock-card"
                                 >
                                     <div class="mobile-depot-stock-name">
-                                        {{ holding.name || '-' }}
+                                        <div>{{ holding.name || '-' }}</div>
+                                        <div class="mobile-depot-stock-isin">{{ holding.isin || '-' }}</div>
                                     </div>
                                     <div class="mobile-depot-stock-row mobile-depot-stock-row--prices">
                                         <span>{{ formatPositionPieces(holding) }}</span>
                                         <span>{{ formatLatestPrice(holding) }}</span>
                                         <span>{{ formatStockHoldingValue(holding) }}</span>
+                                    </div>
+                                    <div class="mobile-depot-stock-row text-caption">
+                                        <span>Prev Day {{ formatPreviousDayPrice(holding) }}</span>
+                                        <span :class="previousDayChangePercentClass(holding)">
+                                            {{ formatPreviousDayChangePercent(holding) }}
+                                        </span>
                                     </div>
                                     <div class="mobile-depot-stock-row font-weight-medium" :class="yearStartChangeClass(holding)">
                                         <span>
@@ -8264,6 +8367,8 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 Latest price
                                             </button>
                                         </th>
+                                        <th class="text-right">Prev Day</th>
+                                        <th class="text-right">+/- %</th>
                                         <th class="text-right">
                                             <button
                                                 type="button"
@@ -8275,7 +8380,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 Flatex price
                                             </button>
                                         </th>
-                                        <th v-if="!isCompactDepotStocksTable" class="text-right">1.1.</th>
+                                        <th v-if="!isCompactDepotStocksTable" class="text-right">1.1/Buy</th>
                                         <th class="text-right">Change</th>
                                         <th class="text-right">+/- EUR</th>
                                         <th class="text-right">Actions</th>
@@ -8284,10 +8389,19 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 <tbody>
                                     <tr v-for="holding in depotHoldings" :key="holding.id" :class="depotHoldingRowClass(holding)">
                                         <td v-if="!isCompactDepotStocksTable">{{ holding.symbol || '-' }}</td>
-                                        <td>{{ holding.name || '-' }}</td>
+                                        <td>
+                                            <div>{{ holding.name || '-' }}</div>
+                                            <div class="depot-stock-isin">{{ holding.isin || '-' }}</div>
+                                        </td>
                                         <td class="text-right">{{ formatPositionPieces(holding) }}</td>
                                         <td class="text-right">{{ formatStockHoldingValue(holding) }}</td>
                                         <td class="text-right">{{ formatLatestPrice(holding) }}</td>
+                                        <td class="text-right">{{ formatPreviousDayPrice(holding) }}</td>
+                                        <td class="text-right">
+                                            <span class="font-weight-medium" :class="previousDayChangePercentClass(holding)">
+                                                {{ formatPreviousDayChangePercent(holding) }}
+                                            </span>
+                                        </td>
                                         <td class="text-right">
                                             <input
                                                 v-if="isEditingFlatexPrice(holding)"
@@ -8348,7 +8462,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 </tbody>
                                 <tfoot>
                                     <tr>
-                                        <td :colspan="isCompactDepotStocksTable ? 6 : 8" class="text-right font-weight-bold">Sum</td>
+                                        <td :colspan="isCompactDepotStocksTable ? 8 : 10" class="text-right font-weight-bold">Sum</td>
                                         <td class="text-right">
                                             <span class="font-weight-bold" :class="depotHoldingsChangeAmountTotalClass()">
                                                 {{ formatDepotHoldingsChangeAmountTotal() }}
@@ -8361,7 +8475,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             <p v-else-if="!transactionsLoading" class="text-medium-emphasis text-body-2 mt-2">No stocks in this depot.</p>
                         </div>
 
-                        <div v-if="activeDepot" class="mt-6">
+                        <div v-if="activeDepot" class="cash-ledger-section mt-6">
                             <div class="d-flex align-center justify-space-between flex-wrap ga-3 mb-2">
                                 <p class="text-overline text-medium-emphasis mb-0">Cash ledger</p>
                                 <div class="d-flex align-center ga-2">
@@ -8399,10 +8513,32 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 {{ transactionTypeLabel(tx.type) }}
                                             </v-chip>
                                         </span>
-                                        <span>{{ formatTransactionDate(tx.booked_at) }}</span>
+                                        <span class="cash-ledger-date-control">
+                                            <button
+                                                type="button"
+                                                class="cash-ledger-date-button"
+                                                :disabled="transactionsLoading"
+                                                :aria-label="`Edit transaction date ${formatTransactionDate(tx.booked_at)}`"
+                                                @click="openTransactionDatePicker(tx.id, 'mobile')"
+                                            >
+                                                <span>{{ formatTransactionDate(tx.booked_at) }}</span>
+                                                <v-icon icon="mdi-calendar-edit" size="x-small" />
+                                            </button>
+                                            <input
+                                                :id="transactionDateInputId(tx.id, 'mobile')"
+                                                class="cash-ledger-date-picker"
+                                                type="date"
+                                                :value="transactionDateInputValue(tx.booked_at)"
+                                                :disabled="transactionsLoading"
+                                                tabindex="-1"
+                                                aria-label="Transaction date"
+                                                @change="updateTransactionDate(tx, $event.target.value)"
+                                            >
+                                        </span>
                                     </div>
                                     <div v-if="tx.stock_label" class="mobile-cash-ledger-stock">
-                                        {{ tx.stock_label }}
+                                        <div>{{ tx.stock_label }}</div>
+                                        <div v-if="tx.stock_isin" class="cash-ledger-stock-isin">{{ tx.stock_isin }}</div>
                                     </div>
                                     <div class="mobile-cash-ledger-row">
                                         <span :class="Number(tx.cash_delta) >= 0 ? 'text-success' : 'text-error'">
@@ -8419,22 +8555,46 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         <th>Type</th>
                                         <th>Stock</th>
                                         <th class="text-right">Pieces</th>
-                                        <th v-if="!isCompactCashLedgerTable" class="text-right">Amount</th>
                                         <th class="text-right">Cash effect</th>
                                         <th class="text-right">Balance</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr v-for="tx in transactions" :key="tx.id">
-                                        <td class="text-caption text-medium-emphasis">{{ formatTransactionDate(tx.booked_at) }}</td>
+                                        <td class="text-caption text-medium-emphasis">
+                                            <span class="cash-ledger-date-control">
+                                                <button
+                                                    type="button"
+                                                    class="cash-ledger-date-button"
+                                                    :disabled="transactionsLoading"
+                                                    :aria-label="`Edit transaction date ${formatTransactionDate(tx.booked_at)}`"
+                                                    @click="openTransactionDatePicker(tx.id, 'desktop')"
+                                                >
+                                                    <span>{{ formatTransactionDate(tx.booked_at) }}</span>
+                                                    <v-icon icon="mdi-calendar-edit" size="x-small" />
+                                                </button>
+                                                <input
+                                                    :id="transactionDateInputId(tx.id, 'desktop')"
+                                                    class="cash-ledger-date-picker"
+                                                    type="date"
+                                                    :value="transactionDateInputValue(tx.booked_at)"
+                                                    :disabled="transactionsLoading"
+                                                    tabindex="-1"
+                                                    aria-label="Transaction date"
+                                                    @change="updateTransactionDate(tx, $event.target.value)"
+                                                >
+                                            </span>
+                                        </td>
                                         <td>
                                             <v-chip :color="transactionTypeColor(tx.type)" density="comfortable" size="x-small" variant="tonal">
                                                 {{ transactionTypeLabel(tx.type) }}
                                             </v-chip>
                                         </td>
-                                        <td>{{ tx.stock_label ?? '–' }}</td>
+                                        <td>
+                                            <div>{{ tx.stock_label ?? '–' }}</div>
+                                            <div v-if="tx.stock_isin" class="cash-ledger-stock-isin">{{ tx.stock_isin }}</div>
+                                        </td>
                                         <td class="text-right">{{ tx.pieces != null ? Math.trunc(Number(tx.pieces)) : '–' }}</td>
-                                        <td v-if="!isCompactCashLedgerTable" class="text-right">{{ formatAccountBalance(tx.total_amount) }}</td>
                                         <td class="text-right" :class="Number(tx.cash_delta) >= 0 ? 'text-success' : 'text-error'">
                                             {{ formatCashDelta(tx.cash_delta) }}
                                         </td>
@@ -8954,6 +9114,56 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 .mobile-depot-stocks,
 .mobile-watch-list {
     display: none;
+}
+
+.cash-ledger-date-control {
+    align-items: center;
+    display: inline-flex;
+    gap: 4px;
+    position: relative;
+}
+
+.cash-ledger-date-button {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    display: inline-flex;
+    font: inherit;
+    gap: 4px;
+    padding: 0;
+    text-decoration: underline;
+    text-decoration-style: dotted;
+    text-underline-offset: 3px;
+}
+
+.cash-ledger-date-button:disabled {
+    cursor: default;
+    opacity: 0.62;
+}
+
+.cash-ledger-date-picker {
+    height: 1px;
+    opacity: 0;
+    position: absolute;
+    right: 0;
+    top: 100%;
+    width: 1px;
+}
+
+.cash-ledger-section {
+    max-width: 920px;
+}
+
+.cash-ledger-stock-isin,
+.depot-stock-isin,
+.mobile-depot-stock-isin {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    font-size: 0.78rem;
+    font-weight: 400;
+    line-height: 1.2;
+    margin-top: 2px;
 }
 
 @media (max-width: 600px) {

@@ -667,15 +667,26 @@ class AdminDepotHoldingController extends Controller
         $sessionDate = $this->eodhdMarketData->intradaySessionDate($holding);
 
         if ($sessionDate !== null) {
-            if ($this->storedIntradayPriceCount($holding, $sessionDate) === 0) {
+            $storedCandleCount = $this->storedIntradayPriceCount($holding, $sessionDate);
+
+            if ($storedCandleCount === 0) {
                 $this->eodhdMarketData->ensureIntradaySamples($holding);
+                $storedCandleCount = $this->storedIntradayPriceCount($holding, $sessionDate);
             }
 
-            if ($this->storedIntradayPriceCount($holding, $sessionDate) === 0) {
-                return $this->storedSameDayIntradayFallbackPayload($holding, $sessionDate);
+            if ($storedCandleCount >= 2) {
+                return $this->storedEodhdIntradayPayload($holding, $sessionDate);
             }
 
-            return $this->storedEodhdIntradayPayload($holding, $sessionDate);
+            $storedIntradayPrices = $this->storedSameDayIntradayFallbackPayload($holding, $sessionDate);
+
+            if (count($storedIntradayPrices) >= 2) {
+                return $storedIntradayPrices;
+            }
+
+            return $storedCandleCount > 0
+                ? $this->storedEodhdIntradayPayload($holding, $sessionDate)
+                : $storedIntradayPrices;
         }
 
         $latestStoredDate = $this->latestStoredIntradayDate($holding);
@@ -735,7 +746,7 @@ class AdminDepotHoldingController extends Controller
         return StockHoldingIntradayPrice::query()
             ->where('stock_holding_id', $holding->id)
             ->whereDate('trading_date', $date)
-            ->where('source_name', '!=', 'EODHD intraday')
+            ->where('source_name', 'EODHD intraday')
             ->orderBy('sample_index')
             ->orderBy('as_of')
             ->orderBy('id')
@@ -819,13 +830,15 @@ class AdminDepotHoldingController extends Controller
 
     private function storedIntradayPriceTimestamp(StockHoldingIntradayPrice $intradayPrice): ?string
     {
-        $value = $intradayPrice->as_of;
+        $value = $intradayPrice->getRawOriginal('as_of');
 
         if ($value === null) {
             return null;
         }
 
-        return Carbon::parse($value)->toIso8601String();
+        return Carbon::parse($value, 'UTC')
+            ->setTimezone(config('app.timezone'))
+            ->toIso8601String();
     }
 
     /**

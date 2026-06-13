@@ -1304,22 +1304,20 @@ describe('App', () => {
 
         expect(todayMinusOneRangeButton.attributes('aria-pressed')).toBe('true');
         expect(analyzeOverview.text()).toContain('with previous close');
-        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(121);
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(120);
         expect(analyzeOverview.find('.analyze-sparkline-previous-close-line').exists()).toBe(false);
         expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Prev 298.58 · Start 298.60 +0.01%');
         expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--today-start').exists()).toBe(false);
         expect(analyzeOverview.find('.analyze-sparkline-endpoint-label-change--up').text()).toBe('Start 298.60 +0.01%');
-        expect(analyzeOverview.findAll('.analyze-sparkline-date-range-label').map((label) => label.text())).toEqual(['11:55']);
+        expect(analyzeOverview.findAll('.analyze-sparkline-date-range-label').map((label) => label.text())).toEqual(['02:00', '11:55']);
 
         const highMarkerLine = analyzeOverview.find('.analyze-sparkline-extremum--high .analyze-sparkline-extremum-line');
         const lowMarkerLine = analyzeOverview.find('.analyze-sparkline-extremum--low .analyze-sparkline-extremum-line');
         const highMarkerLabel = analyzeOverview.find('.analyze-sparkline-extremum--high .analyze-sparkline-extremum-label');
-        const lowMarkerLabel = analyzeOverview.find('.analyze-sparkline-extremum--low .analyze-sparkline-extremum-label');
 
         expect(highMarkerLine.attributes('y1')).not.toBe(highMarkerLine.attributes('y2'));
-        expect(lowMarkerLine.attributes('y1')).not.toBe(lowMarkerLine.attributes('y2'));
+        expect(lowMarkerLine.exists()).toBe(false);
         expect(['start', 'end']).toContain(highMarkerLabel.attributes('text-anchor'));
-        expect(['start', 'end']).toContain(lowMarkerLabel.attributes('text-anchor'));
 
         await oneYearRangeButton.trigger('click');
         await flushPromises();
@@ -2118,6 +2116,262 @@ describe('App', () => {
         expect(wrapper.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Start 307.25');
         expect(wrapper.find('.analyze-sparkline-endpoint-label--latest').text()).toBe('End 307.25 0.00%');
         expect(wrapper.text()).not.toContain('No EODHD intraday prices available for this session.');
+    });
+
+    it('uses real-time rows when intraday chart data is insufficient', async () => {
+        window.history.pushState({}, '', '/admin/menu/analyze/overview?stock=1');
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [
+                        {
+                            id: 1,
+                            symbol: 'DAY',
+                            name: 'Live Fallback Fund',
+                            currency: 'EUR',
+                            latest_price: '2.668000',
+                            daily_prices: [],
+                            intraday_prices: [],
+                            recent_prices: [
+                                {
+                                    id: 1,
+                                    price: '2.66300000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-12T07:05:00+00:00',
+                                    source_name: 'EODHD real-time',
+                                    price_type: 'last',
+                                },
+                                {
+                                    id: 2,
+                                    price: '99.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-12T07:07:00+00:00',
+                                    source_name: 'Manual',
+                                    price_type: 'last',
+                                },
+                                {
+                                    id: 3,
+                                    price: '2.66800000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-12T07:10:00+00:00',
+                                    source_name: 'EODHD Real-Time',
+                                    price_type: 'last',
+                                },
+                            ],
+                            intraday_candles: [
+                                {
+                                    id: 1,
+                                    trading_date: '2026-06-12',
+                                    price: '2.65000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-12T07:00:00+00:00',
+                                },
+                            ],
+                        },
+                    ],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Historical stock prices are available.',
+                    coverage: null,
+                    refresh: null,
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+
+            return Promise.resolve(jsonResponse({}));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const analyzeOverview = wrapper.find('[aria-label="Analyze overview"]');
+        const todayRangeButton = analyzeOverview.findAll('.analyze-range-button')
+            .find((button) => button.text() === 'today');
+        const oneWeekRangeButton = analyzeOverview.findAll('.analyze-range-button')
+            .find((button) => button.text() === '1 week');
+
+        expect(analyzeOverview.find('.analyze-sparkline').exists()).toBe(true);
+        expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Start 2.6630');
+        expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--latest').text()).toBe('End 2.6680 +0.19%');
+
+        await todayRangeButton.trigger('click');
+        await flushPromises();
+
+        expect(analyzeOverview.find('.analyze-sparkline').exists()).toBe(true);
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(2);
+        expect(analyzeOverview.find('.analyze-sparkline-meta').text()).toContain('12.06.26, 09:05');
+        expect(analyzeOverview.find('.analyze-sparkline-meta').text()).toContain('12.06.26, 09:10');
+        expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Start 2.6630');
+        expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--latest').text()).toBe('End 2.6680 +0.19%');
+        expect(analyzeOverview.text()).not.toContain('99.0000');
+
+        await oneWeekRangeButton.trigger('click');
+        await flushPromises();
+
+        expect(analyzeOverview.find('.analyze-sparkline').exists()).toBe(true);
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(0);
+        expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Start 2.6630');
+        expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--latest').text()).toBe('End 2.6680 +0.19%');
+    });
+
+    it('prefers stored intraday price rows over real-time rows when candle data is insufficient', async () => {
+        window.history.pushState({}, '', '/admin/menu/analyze/overview?stock=1');
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [
+                        {
+                            id: 1,
+                            symbol: 'DAY',
+                            name: 'Stored Intraday Fund',
+                            currency: 'EUR',
+                            latest_price: '3.100000',
+                            daily_prices: [],
+                            intraday_prices: [
+                                {
+                                    id: 11,
+                                    price: '3.00000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-12T07:05:00+00:00',
+                                    source_name: 'EODHD intraday',
+                                    price_type: 'intraday',
+                                },
+                                {
+                                    id: 12,
+                                    price: '3.10000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-12T07:10:00+00:00',
+                                    source_name: 'EODHD intraday',
+                                    price_type: 'intraday',
+                                },
+                            ],
+                            recent_prices: [
+                                {
+                                    id: 1,
+                                    price: '2.66300000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-12T07:05:00+00:00',
+                                    source_name: 'EODHD real-time',
+                                    price_type: 'last',
+                                },
+                                {
+                                    id: 2,
+                                    price: '2.66800000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-12T07:10:00+00:00',
+                                    source_name: 'EODHD Real-Time',
+                                    price_type: 'last',
+                                },
+                            ],
+                            intraday_candles: [
+                                {
+                                    id: 1,
+                                    trading_date: '2026-06-12',
+                                    price: '2.65000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-12T07:00:00+00:00',
+                                },
+                            ],
+                        },
+                    ],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Historical stock prices are available.',
+                    coverage: null,
+                    refresh: null,
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+
+            return Promise.resolve(jsonResponse({}));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const todayRangeButton = wrapper.find('[aria-label="Analyze overview"]').findAll('.analyze-range-button')
+            .find((button) => button.text() === 'today');
+        await todayRangeButton.trigger('click');
+        await flushPromises();
+
+        expect(wrapper.findAll('.analyze-sparkline-dot')).toHaveLength(2);
+        expect(wrapper.find('.analyze-sparkline-meta').text()).toContain('12.06.26, 09:05');
+        expect(wrapper.find('.analyze-sparkline-meta').text()).toContain('12.06.26, 09:10');
+        expect(wrapper.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Start 3.0000');
+        expect(wrapper.find('.analyze-sparkline-endpoint-label--latest').text()).toBe('End 3.1000 +3.33%');
+        expect(wrapper.text()).not.toContain('2.6680');
     });
 
     it('does not fetch historical stock prices on the Analyze overview', async () => {
@@ -4410,6 +4664,7 @@ describe('App', () => {
                 type: 'buy',
                 stock_holding_id: 1,
                 stock_label: 'Apple Inc.',
+                stock_isin: 'US0378331005',
                 pieces: '2.00000000',
                 total_amount: '350.00',
                 unit_price: '175.00000000',
@@ -4423,6 +4678,7 @@ describe('App', () => {
                 type: 'deposit',
                 stock_holding_id: null,
                 stock_label: null,
+                stock_isin: null,
                 pieces: null,
                 total_amount: '1000.00',
                 unit_price: null,
@@ -4437,8 +4693,12 @@ describe('App', () => {
                 id: 1,
                 symbol: 'AAPL',
                 name: 'Apple Inc.',
+                isin: 'US0378331005',
                 currency: 'USD',
                 latest_price: '191.500000',
+                previous_day_price: '189.00000000',
+                previous_day_price_date: '2026-06-03',
+                previous_day_change_percent: '1.32',
                 flatex_price: '180.000000',
                 year_start_price: '175.00000000',
                 latest_price_fetched_at: '2026-06-04T10:00:00+00:00',
@@ -4446,6 +4706,28 @@ describe('App', () => {
                 position_pieces: '2.00000000',
             },
         ];
+        const depotValuations = {
+            latest: {
+                stock_balance: '383.00',
+                cash_balance: '650.00',
+                account_balance: '1033.00',
+                year_start_balance: '1000.00',
+                current_balance: '1033.00',
+                balance_change_amount: '33.00',
+                balance_change_percent: '3.30',
+            },
+            flatex: {
+                stock_balance: '360.00',
+                cash_balance: '650.00',
+                account_balance: '1010.00',
+                year_start_balance: '1000.00',
+                current_balance: '1010.00',
+                balance_change_amount: '10.00',
+                balance_change_percent: '1.00',
+            },
+        };
+        let currentDepotHoldings = depotHoldings;
+        let currentDepotValuations = depotValuations;
         const fetchMock = vi.fn((path, options = {}) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -4466,7 +4748,26 @@ describe('App', () => {
             }
 
             if (path === '/admin/depot-transactions') {
-                return Promise.resolve(jsonResponse({ depot_holdings: depotHoldings, transactions }));
+                return Promise.resolve(jsonResponse({
+                    depot_holdings: currentDepotHoldings,
+                    depot_valuations: currentDepotValuations,
+                    transactions,
+                }));
+            }
+
+            if (path === '/admin/depot-transactions/2/date' && options.method === 'PATCH') {
+                const updatedTransaction = {
+                    ...transactions[0],
+                    booked_at: '2026-06-03T00:00:00+00:00',
+                };
+
+                return Promise.resolve(jsonResponse({
+                    message: 'Transaction date updated.',
+                    depot_holdings: depotHoldings,
+                    depot_valuations: depotValuations,
+                    transaction: updatedTransaction,
+                    transactions: [updatedTransaction, transactions[1]],
+                }));
             }
 
             if (path === '/admin/ui-preferences' && options.method === 'PATCH') {
@@ -4477,6 +4778,25 @@ describe('App', () => {
             }
 
             if (path === '/admin/watchlist/holdings/1/flatex-price' && options.method === 'PATCH') {
+                currentDepotHoldings = [
+                    {
+                        ...depotHoldings[0],
+                        flatex_price: '180.250000',
+                    },
+                ];
+                currentDepotValuations = {
+                    ...depotValuations,
+                    flatex: {
+                        stock_balance: '360.50',
+                        cash_balance: '650.00',
+                        account_balance: '1010.50',
+                        year_start_balance: '1000.00',
+                        current_balance: '1010.50',
+                        balance_change_amount: '10.50',
+                        balance_change_percent: '1.05',
+                    },
+                };
+
                 return Promise.resolve(jsonResponse({
                     message: 'Flatex price updated.',
                     holding: {
@@ -4541,18 +4861,23 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Amount');
         expect(wrapper.text()).toContain('Value');
         expect(wrapper.text()).toContain('Latest price');
+        expect(wrapper.text()).toContain('Prev Day');
+        expect(wrapper.text()).toContain('+/- %');
         expect(wrapper.text()).toContain('Flatex price');
-        expect(wrapper.text()).toContain('1.1.');
+        expect(wrapper.text()).toContain('1.1/Buy');
         expect(wrapper.text()).toContain('Change');
         expect(wrapper.text()).toContain('+/- EUR');
         expect(wrapper.text()).toContain('Actions');
+        expect(wrapper.text()).toContain('US0378331005');
         const rightAlignedDepotHeaders = wrapper
             .findAll('th.text-right')
             .map((header) => header.text());
         expect(rightAlignedDepotHeaders).toContain('Latest price');
+        expect(rightAlignedDepotHeaders).toContain('Prev Day');
+        expect(rightAlignedDepotHeaders).toContain('+/- %');
         expect(rightAlignedDepotHeaders).toContain('Value');
         expect(rightAlignedDepotHeaders).toContain('Flatex price');
-        expect(rightAlignedDepotHeaders).toContain('1.1.');
+        expect(rightAlignedDepotHeaders).toContain('1.1/Buy');
         expect(rightAlignedDepotHeaders).toContain('Change');
         expect(rightAlignedDepotHeaders).toContain('+/- EUR');
         const latestPriceHeaderButton = wrapper.findAll('button').find((button) => button.text() === 'Latest price');
@@ -4565,6 +4890,8 @@ describe('App', () => {
         expect(wrapper.text()).toContain('2');
         expect(wrapper.text()).toContain('383.00 USD');
         expect(wrapper.text()).toContain('191.50 USD');
+        expect(wrapper.text()).toContain('189.00 USD');
+        expect(wrapper.text()).toContain('+1.32%');
         expect(wrapper.text()).toContain('180.00 USD');
         expect(wrapper.text()).toContain('175.00 USD');
         expect(wrapper.text()).toContain('↑');
@@ -4572,15 +4899,18 @@ describe('App', () => {
         expect(wrapper.text()).toContain('+33.00');
         const mobileDepotStockCards = wrapper.findAll('.mobile-depot-stock-card');
         expect(mobileDepotStockCards).toHaveLength(1);
-        expect(mobileDepotStockCards[0].find('.mobile-depot-stock-name').text()).toBe('Apple Inc.');
+        expect(mobileDepotStockCards[0].find('.mobile-depot-stock-name').text()).toContain('Apple Inc.');
+        expect(mobileDepotStockCards[0].find('.mobile-depot-stock-isin').text()).toBe('US0378331005');
         expect(mobileDepotStockCards[0].text()).toContain('2');
         expect(mobileDepotStockCards[0].text()).toContain('191.50 USD');
+        expect(mobileDepotStockCards[0].text()).toContain('Prev Day 189.00 USD');
+        expect(mobileDepotStockCards[0].text()).toContain('+1.32%');
         expect(mobileDepotStockCards[0].text()).toContain('383.00 USD');
         expect(mobileDepotStockCards[0].text()).toContain('↑ +9.43%');
         expect(mobileDepotStockCards[0].text()).toContain('+33.00');
         expect(mobileDepotStockCards[0].text()).not.toContain('AAPL');
         expect(mobileDepotStockCards[0].find('.mobile-depot-stock-row--prices').text()).toContain('191.50 USD');
-        expect(mobileDepotStockCards[0].findAll('.mobile-depot-stock-row')).toHaveLength(2);
+        expect(mobileDepotStockCards[0].findAll('.mobile-depot-stock-row')).toHaveLength(3);
         expect(mobileDepotStockCards[0].findAll('.mobile-depot-stock-actions .v-btn')).toHaveLength(2);
         setViewportSize(844, 390);
         await flushPromises();
@@ -4590,11 +4920,13 @@ describe('App', () => {
             .findAll('th')
             .map((header) => header.text());
         expect(compactDepotHeaders).not.toContain('Symbol');
-        expect(compactDepotHeaders).not.toContain('1.1.');
+        expect(compactDepotHeaders).not.toContain('1.1/Buy');
         expect(compactDepotHeaders).toContain('Name');
         expect(compactDepotHeaders).toContain('Amount');
         expect(compactDepotHeaders).toContain('Value');
         expect(compactDepotHeaders).toContain('Latest price');
+        expect(compactDepotHeaders).toContain('Prev Day');
+        expect(compactDepotHeaders).toContain('+/- %');
         expect(compactDepotHeaders).toContain('Flatex price');
         expect(compactDepotHeaders).toContain('Change');
         expect(compactDepotHeaders).toContain('+/- EUR');
@@ -4617,19 +4949,45 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Add cash');
         expect(wrapper.text()).toContain('+1,000.00');
         expect(wrapper.text()).toContain('-350.00');
+        expect(wrapper.find('.cash-ledger-section').exists()).toBe(true);
+        const cashLedgerHeaders = wrapper
+            .find('.desktop-cash-ledger-table')
+            .findAll('th')
+            .map((header) => header.text());
+        expect(cashLedgerHeaders).toContain('Date');
+        expect(cashLedgerHeaders).toContain('Type');
+        expect(cashLedgerHeaders).toContain('Stock');
+        expect(cashLedgerHeaders).toContain('Pieces');
+        expect(cashLedgerHeaders).not.toContain('Amount');
+        expect(cashLedgerHeaders).toContain('Cash effect');
+        expect(cashLedgerHeaders).toContain('Balance');
+        expect(wrapper.find('.desktop-cash-ledger-table tbody tr').text()).toContain('US0378331005');
         const mobileCashLedgerCards = wrapper.findAll('.mobile-cash-ledger-card');
         expect(mobileCashLedgerCards).toHaveLength(2);
         expect(mobileCashLedgerCards[0].text()).toContain('Buy');
-        expect(mobileCashLedgerCards[0].find('.mobile-cash-ledger-row').text()).toContain('04/06/2026, 12:00');
+        expect(mobileCashLedgerCards[0].find('.mobile-cash-ledger-row').text()).toContain('04.06.2026');
+        expect(mobileCashLedgerCards[0].find('.mobile-cash-ledger-row').text()).not.toContain('12:00');
         expect(mobileCashLedgerCards[0].find('.mobile-cash-ledger-row').text()).not.toContain('350.00');
-        expect(mobileCashLedgerCards[0].find('.mobile-cash-ledger-stock').text()).toBe('Apple Inc.');
+        expect(mobileCashLedgerCards[0].find('.mobile-cash-ledger-stock').text()).toContain('Apple Inc.');
+        expect(mobileCashLedgerCards[0].find('.cash-ledger-stock-isin').text()).toBe('US0378331005');
         expect(mobileCashLedgerCards[0].text()).toContain('-350.00');
         expect(mobileCashLedgerCards[0].text()).toContain('650.00');
         expect(mobileCashLedgerCards[1].text()).toContain('Add cash');
-        expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-row').text()).toContain('04/06/2026, 11:00');
+        expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-row').text()).toContain('04.06.2026');
+        expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-row').text()).not.toContain('11:00');
         expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-row').text()).not.toContain('1,000.00');
         expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-stock').exists()).toBe(false);
         expect(mobileCashLedgerCards[1].text()).toContain('+1,000.00');
+        const desktopDateInput = wrapper.find('#transaction-date-desktop-2');
+        desktopDateInput.element.value = '2026-06-03';
+        await desktopDateInput.trigger('change');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/depot-transactions/2/date', expect.objectContaining({
+            method: 'PATCH',
+            body: JSON.stringify({ booked_at: '2026-06-03' }),
+        }));
+        expect(wrapper.find('.mobile-cash-ledger-card').text()).toContain('03.06.2026');
 
         await flatexPriceHeaderButton.trigger('click');
         await flushPromises();

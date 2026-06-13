@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\Depot;
 use App\Models\DepotTransaction;
 use App\Models\StockHolding;
+use App\Models\StockHoldingDailyPrice;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -173,11 +174,26 @@ class DepotTransactionTest extends TestCase
             'account_balance' => '0.00',
             'is_active' => true,
         ]);
+        $holding = StockHolding::factory()->create([
+            'name' => 'Apple Inc.',
+            'isin' => 'US0378331005',
+        ]);
 
         $this->actingAs($admin)
             ->postJson('/admin/depot-transactions/cash', [
                 'type' => 'deposit',
                 'total_amount' => '500.00',
+                'booked_at' => '2026-06-01',
+            ])
+            ->assertCreated();
+
+        $this->actingAs($admin)
+            ->postJson('/admin/depot-transactions/stocks', [
+                'type' => 'buy',
+                'stock_holding_id' => $holding->id,
+                'pieces' => '1',
+                'total_amount' => '125.00',
+                'booked_at' => '2026-06-02',
             ])
             ->assertCreated();
 
@@ -185,78 +201,186 @@ class DepotTransactionTest extends TestCase
             ->postJson('/admin/depot-transactions/cash', [
                 'type' => 'withdrawal',
                 'total_amount' => '100.00',
+                'booked_at' => '2026-06-03',
             ])
             ->assertCreated();
 
         $this->actingAs($admin)
             ->getJson('/admin/depot-transactions')
             ->assertOk()
-            ->assertJsonCount(2, 'transactions')
+            ->assertJsonCount(3, 'transactions')
             ->assertJsonPath('transactions.0.type', 'withdrawal')
             ->assertJsonPath('transactions.0.cash_delta', '-100.00')
-            ->assertJsonPath('transactions.0.balance_after', '400.00')
-            ->assertJsonPath('transactions.1.type', 'deposit')
-            ->assertJsonPath('transactions.1.cash_delta', '500.00')
-            ->assertJsonPath('transactions.1.balance_after', '500.00');
+            ->assertJsonPath('transactions.0.balance_after', '275.00')
+            ->assertJsonPath('transactions.1.type', 'buy')
+            ->assertJsonPath('transactions.1.stock_label', 'Apple Inc.')
+            ->assertJsonPath('transactions.1.stock_isin', 'US0378331005')
+            ->assertJsonPath('transactions.1.cash_delta', '-125.00')
+            ->assertJsonPath('transactions.1.balance_after', '375.00')
+            ->assertJsonPath('transactions.2.type', 'deposit')
+            ->assertJsonPath('transactions.2.cash_delta', '500.00')
+            ->assertJsonPath('transactions.2.balance_after', '500.00');
     }
 
-    public function test_admin_can_list_opening_cash_deposit_transaction(): void
+    public function test_admin_can_update_a_depot_transaction_date(): void
     {
         $admin = $this->adminUser();
         $depot = Depot::factory()->create([
-            'account_balance' => '56956.56',
+            'account_balance' => '100.00',
             'is_active' => true,
-            'created_at' => '2026-06-03 14:26:50',
         ]);
-        $holding = StockHolding::factory()->create();
-
-        $deposit = DepotTransaction::factory()->create([
+        $transaction = DepotTransaction::factory()->create([
             'depot_id' => $depot->id,
             'stock_holding_id' => null,
             'type' => 'deposit',
             'pieces' => null,
-            'total_amount' => '83236.56',
+            'total_amount' => '100.00',
             'unit_price' => null,
-            'cash_delta' => '83236.56',
-            'balance_after' => '83236.56',
-            'booked_at' => '2026-06-03 14:26:50',
-            'note' => 'Opening cash balance',
-        ]);
-
-        DepotTransaction::factory()->create([
-            'depot_id' => $depot->id,
-            'stock_holding_id' => $holding->id,
-            'type' => 'buy',
-            'pieces' => '1.00000000',
-            'total_amount' => '13260.00',
-            'unit_price' => '13260.00000000',
-            'cash_delta' => '-13260.00',
-            'balance_after' => '56956.56',
-            'booked_at' => '2026-06-04 18:08:17',
-        ]);
-
-        DepotTransaction::factory()->create([
-            'depot_id' => $depot->id,
-            'stock_holding_id' => $holding->id,
-            'type' => 'buy',
-            'pieces' => '1.00000000',
-            'total_amount' => '13020.00',
-            'unit_price' => '13020.00000000',
-            'cash_delta' => '-13020.00',
-            'balance_after' => '70216.56',
-            'booked_at' => '2026-06-04 18:07:41',
+            'cash_delta' => '100.00',
+            'balance_after' => '100.00',
+            'booked_at' => '2026-06-04 09:00:00',
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/depot-transactions')
+            ->patchJson("/admin/depot-transactions/{$transaction->id}/date", [
+                'booked_at' => '2026-06-03',
+            ])
             ->assertOk()
-            ->assertJsonCount(3, 'transactions')
-            ->assertJsonPath('transactions.2.id', $deposit->id)
-            ->assertJsonPath('transactions.2.type', 'deposit')
-            ->assertJsonPath('transactions.2.total_amount', '83236.56')
-            ->assertJsonPath('transactions.2.cash_delta', '83236.56')
-            ->assertJsonPath('transactions.2.balance_after', '83236.56')
-            ->assertJsonPath('transactions.2.note', 'Opening cash balance');
+            ->assertJsonPath('message', 'Transaction date updated.')
+            ->assertJsonPath('transaction.id', $transaction->id);
+
+        $this->assertSame('2026-06-03 00:00:00', $transaction->refresh()->booked_at->format('Y-m-d H:i:s'));
+    }
+
+    public function test_admin_cannot_update_a_transaction_date_for_another_depot(): void
+    {
+        $admin = $this->adminUser();
+        Depot::factory()->create([
+            'account_balance' => '100.00',
+            'is_active' => true,
+        ]);
+        $otherDepot = Depot::factory()->create([
+            'account_balance' => '100.00',
+            'is_active' => false,
+        ]);
+        $transaction = DepotTransaction::factory()->create([
+            'depot_id' => $otherDepot->id,
+            'stock_holding_id' => null,
+            'type' => 'deposit',
+            'pieces' => null,
+            'total_amount' => '100.00',
+            'unit_price' => null,
+            'cash_delta' => '100.00',
+            'balance_after' => '100.00',
+            'booked_at' => '2026-06-04 09:00:00',
+        ]);
+
+        $this->actingAs($admin)
+            ->patchJson("/admin/depot-transactions/{$transaction->id}/date", [
+                'booked_at' => '2026-06-03',
+            ])
+            ->assertNotFound();
+
+        $this->assertSame('2026-06-04 09:00:00', $transaction->refresh()->booked_at->format('Y-m-d H:i:s'));
+    }
+
+    public function test_admin_must_provide_a_valid_transaction_date_when_updating(): void
+    {
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create([
+            'account_balance' => '100.00',
+            'is_active' => true,
+        ]);
+        $transaction = DepotTransaction::factory()->create([
+            'depot_id' => $depot->id,
+            'stock_holding_id' => null,
+            'type' => 'deposit',
+            'pieces' => null,
+            'total_amount' => '100.00',
+            'unit_price' => null,
+            'cash_delta' => '100.00',
+            'balance_after' => '100.00',
+            'booked_at' => '2026-06-04 09:00:00',
+        ]);
+
+        $this->actingAs($admin)
+            ->patchJson("/admin/depot-transactions/{$transaction->id}/date", [
+                'booked_at' => '03.06.2026',
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('booked_at');
+    }
+
+    public function test_admin_can_list_opening_cash_deposit_transaction(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-13 12:00:00', 'UTC'));
+
+        try {
+            $admin = $this->adminUser();
+            $depot = Depot::factory()->create([
+                'account_balance' => '56956.56',
+                'is_active' => true,
+                'created_at' => '2026-06-03 14:26:50',
+            ]);
+            $holding = StockHolding::factory()->create([
+                'latest_price' => '150.000000',
+                'flatex_price' => '150.000000',
+            ]);
+
+            $deposit = DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => null,
+                'type' => 'deposit',
+                'pieces' => null,
+                'total_amount' => '83236.56',
+                'unit_price' => null,
+                'cash_delta' => '83236.56',
+                'balance_after' => '83236.56',
+                'booked_at' => '2026-01-01 00:00:00',
+                'note' => 'Opening cash balance',
+            ]);
+
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $holding->id,
+                'type' => 'buy',
+                'pieces' => '1.00000000',
+                'total_amount' => '13260.00',
+                'unit_price' => '13260.00000000',
+                'cash_delta' => '-13260.00',
+                'balance_after' => '70216.56',
+                'booked_at' => '2026-06-04 18:07:41',
+            ]);
+
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $holding->id,
+                'type' => 'buy',
+                'pieces' => '1.00000000',
+                'total_amount' => '13020.00',
+                'unit_price' => '13020.00000000',
+                'cash_delta' => '-13020.00',
+                'balance_after' => '56956.56',
+                'booked_at' => '2026-06-04 18:08:17',
+            ]);
+
+            $this->actingAs($admin)
+                ->getJson('/admin/depot-transactions')
+                ->assertOk()
+                ->assertJsonCount(3, 'transactions')
+                ->assertJsonPath('transactions.2.id', $deposit->id)
+                ->assertJsonPath('transactions.2.type', 'deposit')
+                ->assertJsonPath('transactions.2.total_amount', '83236.56')
+                ->assertJsonPath('transactions.2.cash_delta', '83236.56')
+                ->assertJsonPath('transactions.2.balance_after', '83236.56')
+                ->assertJsonPath('transactions.2.note', 'Opening cash balance')
+                ->assertJsonPath('depot_valuations.latest.year_start_balance', '83236.56')
+                ->assertJsonPath('depot_valuations.latest.current_balance', '57256.56')
+                ->assertJsonPath('depot_valuations.latest.balance_change_amount', '-25980.00')
+                ->assertJsonPath('depot_valuations.latest.balance_change_percent', '-31.21');
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     public function test_admin_can_list_current_stock_positions_for_the_active_depot(): void
@@ -266,15 +390,41 @@ class DepotTransactionTest extends TestCase
             'account_balance' => '1000.00',
             'is_active' => true,
         ]);
+        DepotTransaction::factory()->create([
+            'depot_id' => $depot->id,
+            'stock_holding_id' => null,
+            'type' => 'deposit',
+            'pieces' => null,
+            'total_amount' => '1000.00',
+            'unit_price' => null,
+            'cash_delta' => '1000.00',
+            'balance_after' => '1000.00',
+            'booked_at' => '2026-01-01 00:00:00',
+        ]);
         $otherDepot = Depot::factory()->create([
             'is_active' => false,
         ]);
         $ownedHolding = StockHolding::factory()->create([
             'symbol' => 'AAPL',
             'name' => 'Apple Inc.',
+            'isin' => 'US0378331005',
             'currency' => 'USD',
             'latest_price' => '191.500000',
             'flatex_price' => '191.500000',
+        ]);
+        StockHoldingDailyPrice::factory()->create([
+            'stock_holding_id' => $ownedHolding->id,
+            'trading_date' => '2026-06-11',
+            'close' => '185.00000000',
+            'adjusted_close' => '185.00000000',
+            'currency' => 'USD',
+        ]);
+        StockHoldingDailyPrice::factory()->create([
+            'stock_holding_id' => $ownedHolding->id,
+            'trading_date' => '2026-06-12',
+            'close' => '188.00000000',
+            'adjusted_close' => '188.00000000',
+            'currency' => 'USD',
         ]);
         $soldHolding = StockHolding::factory()->create([
             'symbol' => 'MSFT',
@@ -325,11 +475,22 @@ class DepotTransactionTest extends TestCase
             ->assertJsonCount(1, 'depot_holdings')
             ->assertJsonPath('depot_holdings.0.symbol', 'AAPL')
             ->assertJsonPath('depot_holdings.0.name', 'Apple Inc.')
+            ->assertJsonPath('depot_holdings.0.isin', 'US0378331005')
             ->assertJsonPath('depot_holdings.0.latest_price', '191.500000')
+            ->assertJsonPath('depot_holdings.0.previous_day_price', '188.00000000')
+            ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-06-12')
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '1.86')
             ->assertJsonPath('depot_holdings.0.flatex_price', '191.500000')
             ->assertJsonPath('depot_holdings.0.year_start_price', '120.00000000')
             ->assertJsonPath('depot_holdings.0.currency', 'USD')
-            ->assertJsonPath('depot_holdings.0.position_pieces', '2.50000000');
+            ->assertJsonPath('depot_holdings.0.position_pieces', '2.50000000')
+            ->assertJsonPath('depot_valuations.latest.stock_balance', '478.75')
+            ->assertJsonPath('depot_valuations.latest.cash_balance', '710.00')
+            ->assertJsonPath('depot_valuations.latest.account_balance', '1188.75')
+            ->assertJsonPath('depot_valuations.latest.year_start_balance', '1000.00')
+            ->assertJsonPath('depot_valuations.latest.current_balance', '1188.75')
+            ->assertJsonPath('depot_valuations.latest.balance_change_amount', '188.75')
+            ->assertJsonPath('depot_valuations.latest.balance_change_percent', '18.88');
 
         $this->assertSame(['AAPL'], collect($response->json('depot_holdings'))->pluck('symbol')->all());
         $this->assertSame('710.00', $depot->refresh()->account_balance);

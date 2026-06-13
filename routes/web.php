@@ -151,6 +151,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::patch('/admin/depots/{depot}', [AdminDepotController::class, 'update'])->name('admin.depots.update');
     Route::patch('/admin/depots/{depot}/activate', [AdminDepotController::class, 'activate'])->name('admin.depots.activate');
     Route::get('/admin/depot-transactions', [AdminDepotTransactionController::class, 'index'])->name('admin.depot-transactions.index');
+    Route::patch('/admin/depot-transactions/{depotTransaction}/date', [AdminDepotTransactionController::class, 'updateDate'])->name('admin.depot-transactions.date.update');
     Route::post('/admin/depot-transactions/cash', [AdminDepotTransactionController::class, 'storeCash'])->name('admin.depot-transactions.cash.store');
     Route::post('/admin/depot-transactions/stocks', [AdminDepotTransactionController::class, 'storeStock'])->name('admin.depot-transactions.stocks.store');
     Route::get('/admin/watchlist/holdings', [AdminDepotHoldingController::class, 'index'])->name('admin.watchlist.holdings.index');

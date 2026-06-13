@@ -8,6 +8,7 @@ export const useDepotStore = defineStore('depots', {
         holdings: [],
         indexWatchItems: [],
         depotHoldings: [],
+        depotValuations: {},
         transactions: [],
         exchangeTradingTimes: [],
         appVersion: null,
@@ -518,6 +519,7 @@ export const useDepotStore = defineStore('depots', {
                         flatex_price: flatexPriceByHoldingId.get(holding.id),
                     };
                 });
+                await this.loadTransactions();
 
                 return data;
             } catch (error) {
@@ -784,6 +786,7 @@ export const useDepotStore = defineStore('depots', {
             try {
                 const data = await request('/admin/depot-transactions');
                 this.depotHoldings = data.depot_holdings ?? [];
+                this.depotValuations = data.depot_valuations ?? {};
                 this.transactions = data.transactions;
                 this.uiPreferences = data.ui_preferences ?? this.uiPreferences;
             } catch (error) {
@@ -804,6 +807,7 @@ export const useDepotStore = defineStore('depots', {
                 });
                 this.activeDepot = data.depot;
                 this.depotHoldings = data.depot_holdings ?? this.depotHoldings;
+                this.depotValuations = data.depot_valuations ?? this.depotValuations;
                 this.transactions = [data.transaction, ...this.transactions];
 
                 return data;
@@ -812,6 +816,29 @@ export const useDepotStore = defineStore('depots', {
                 throw error;
             } finally {
                 this.holdingsLoading = false;
+            }
+        },
+        async updateTransactionDate(id, bookedAt) {
+            this.transactionsLoading = true;
+            this.transactionsError = '';
+
+            try {
+                const data = await request(`/admin/depot-transactions/${id}/date`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({ booked_at: bookedAt }),
+                });
+                this.depotHoldings = data.depot_holdings ?? this.depotHoldings;
+                this.depotValuations = data.depot_valuations ?? this.depotValuations;
+                this.transactions = data.transactions ?? this.transactions.map((transaction) => {
+                    return transaction.id === id ? data.transaction : transaction;
+                });
+
+                return data;
+            } catch (error) {
+                this.transactionsError = error.message;
+                throw error;
+            } finally {
+                this.transactionsLoading = false;
             }
         },
         async updateUiPreferences(payload) {
@@ -840,6 +867,8 @@ export const useDepotStore = defineStore('depots', {
                     body: JSON.stringify(payload),
                 });
                 this.activeDepot = data.depot;
+                this.depotHoldings = data.depot_holdings ?? this.depotHoldings;
+                this.depotValuations = data.depot_valuations ?? this.depotValuations;
                 this.transactions = [data.transaction, ...this.transactions];
 
                 return data;
