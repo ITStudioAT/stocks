@@ -53,6 +53,8 @@ class CloudwaysDatabaseSync
                 foreach ($syncTables as $table) {
                     $syncedTables[] = $this->syncTable($sourceConnectionName, $targetConnectionName, $table);
                 }
+
+                $this->repairLatestRealtimePriceLinks($targetConnectionName);
             });
         } finally {
             Schema::connection($targetConnectionName)->enableForeignKeyConstraints();
@@ -186,5 +188,40 @@ class CloudwaysDatabaseSync
             'rows' => $rows,
             'columns' => count($columns),
         ];
+    }
+
+    private function repairLatestRealtimePriceLinks(string $targetConnectionName): void
+    {
+        if (! Schema::connection($targetConnectionName)->hasTable('stock_holdings')) {
+            return;
+        }
+
+        if (! Schema::connection($targetConnectionName)->hasTable('stock_realtime_prices')) {
+            return;
+        }
+
+        if (! Schema::connection($targetConnectionName)->hasColumn('stock_holdings', 'latest_realtime_price_id')) {
+            return;
+        }
+
+        DB::connection($targetConnectionName)
+            ->table('stock_holdings')
+            ->orderBy('id')
+            ->chunkById(500, function (Collection $holdings) use ($targetConnectionName): void {
+                foreach ($holdings as $holding) {
+                    $latestRealtimePriceId = DB::connection($targetConnectionName)
+                        ->table('stock_realtime_prices')
+                        ->where('stock_holding_id', $holding->id)
+                        ->whereNotNull('price')
+                        ->orderByDesc('as_of')
+                        ->orderByDesc('id')
+                        ->value('id');
+
+                    DB::connection($targetConnectionName)
+                        ->table('stock_holdings')
+                        ->where('id', $holding->id)
+                        ->update(['latest_realtime_price_id' => $latestRealtimePriceId]);
+                }
+            });
     }
 }

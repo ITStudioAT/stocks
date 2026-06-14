@@ -84,6 +84,51 @@ class AdminCloudwaysSyncTest extends TestCase
         ]);
     }
 
+    public function test_cloudways_sync_repairs_latest_realtime_price_links(): void
+    {
+        $this->configureCloudwaysTestingConnection();
+        $this->createCloudStockTables('cloudways_testing');
+
+        $now = '2026-06-14 10:00:00';
+
+        DB::connection('cloudways_testing')->table('stock_holdings')->insert([
+            'id' => 123,
+            'symbol' => 'ARGT',
+            'latest_realtime_price_id' => null,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::connection('cloudways_testing')->table('stock_realtime_prices')->insert([
+            $this->cloudRealtimePriceAttributes(
+                id: 990,
+                stockHoldingId: 123,
+                quoteHash: str_repeat('a', 64),
+                price: '96.12000000',
+                asOf: '2026-06-13 20:00:00',
+                now: $now,
+            ),
+            $this->cloudRealtimePriceAttributes(
+                id: 991,
+                stockHoldingId: 123,
+                quoteHash: str_repeat('b', 64),
+                price: '97.92000000',
+                asOf: '2026-06-14 20:00:00',
+                now: $now,
+            ),
+        ]);
+
+        $this->actingAs($this->superAdminUser())
+            ->postJson('/admin/cloudways/sync')
+            ->assertOk()
+            ->assertJsonPath('sync.synced_tables', 2);
+
+        $this->assertDatabaseHas('stock_holdings', [
+            'id' => 123,
+            'symbol' => 'ARGT',
+            'latest_realtime_price_id' => 991,
+        ]);
+    }
+
     public function test_regular_admin_cannot_sync_cloudways_tables(): void
     {
         $this->actingAs($this->adminUser())
@@ -127,6 +172,69 @@ class AdminCloudwaysSyncTest extends TestCase
         }
 
         Schema::connection($connection)->create('cloud_items', $createTable);
+    }
+
+    private function createCloudStockTables(string $connection): void
+    {
+        Schema::connection($connection)->create('stock_holdings', function (Blueprint $table): void {
+            $table->id();
+            $table->string('symbol')->nullable();
+            $table->unsignedBigInteger('latest_realtime_price_id')->nullable();
+            $table->timestamps();
+        });
+
+        Schema::connection($connection)->create('stock_realtime_prices', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('stock_holding_id')->nullable();
+            $table->string('instrument_key');
+            $table->string('quote_hash', 64);
+            $table->string('source_key');
+            $table->string('source_name');
+            $table->text('source_url');
+            $table->string('source_quality');
+            $table->string('symbol')->nullable();
+            $table->char('currency', 3)->nullable();
+            $table->decimal('price', 20, 8)->nullable();
+            $table->string('price_type');
+            $table->timestamp('as_of')->nullable();
+            $table->timestamp('fetched_at');
+            $table->string('freshness_status');
+            $table->string('validation_status');
+            $table->timestamps();
+        });
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function cloudRealtimePriceAttributes(
+        int $id,
+        int $stockHoldingId,
+        string $quoteHash,
+        string $price,
+        string $asOf,
+        string $now,
+    ): array {
+        return [
+            'id' => $id,
+            'stock_holding_id' => $stockHoldingId,
+            'instrument_key' => 'isin:US37950E2596',
+            'quote_hash' => $quoteHash,
+            'source_key' => 'eodhd_realtime',
+            'source_name' => 'EODHD real-time',
+            'source_url' => 'https://eodhd.com/api/real-time/ARGT.US?fmt=json',
+            'source_quality' => 'market_data_vendor',
+            'symbol' => 'ARGT',
+            'currency' => 'USD',
+            'price' => $price,
+            'price_type' => 'last',
+            'as_of' => $asOf,
+            'fetched_at' => $now,
+            'freshness_status' => 'closed_market',
+            'validation_status' => 'valid',
+            'created_at' => $now,
+            'updated_at' => $now,
+        ];
     }
 
     private function adminUser(): User
