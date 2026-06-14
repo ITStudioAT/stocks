@@ -25,7 +25,7 @@ class UpdateApplicationCommandTest extends TestCase
     public function test_update_command_can_be_previewed(): void
     {
         $this->artisan('app:update --dry-run')
-            ->expectsOutputToContain('Would run: composer install --no-interaction --prefer-dist')
+            ->expectsOutputToContain('Would run: composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader')
             ->expectsOutputToContain('Would run: php artisan optimize:clear')
             ->expectsOutputToContain('Would run: php artisan migrate --force --no-interaction')
             ->expectsOutputToContain('Would run: node scripts/dev-stop-stale-vite.mjs --strict')
@@ -59,20 +59,15 @@ class UpdateApplicationCommandTest extends TestCase
             ->assertSuccessful();
     }
 
-    public function test_update_command_uses_production_composer_mode_when_app_environment_is_production(): void
+    public function test_update_command_uses_production_composer_mode_by_default(): void
     {
-        config()->set('app.env', 'production');
-
         $this->artisan('app:update --dry-run')
             ->expectsOutputToContain('Would run: composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader')
-            ->doesntExpectOutputToContain('Would run: composer install --no-interaction --prefer-dist')
             ->assertSuccessful();
     }
 
-    public function test_update_command_can_force_dev_composer_packages_in_production(): void
+    public function test_update_command_can_force_dev_composer_packages(): void
     {
-        config()->set('app.env', 'production');
-
         $this->artisan('app:update --dry-run --dev')
             ->expectsOutputToContain('Would run: composer install --no-interaction --prefer-dist')
             ->doesntExpectOutputToContain('Would run: composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader')
@@ -95,7 +90,7 @@ class UpdateApplicationCommandTest extends TestCase
         try {
             $this->artisan('app:update --dry-run')
                 ->expectsOutputToContain('Would run: composer require symfony/http-client:^7.4 symfony/postmark-mailer:^7.4 --no-interaction --no-scripts --no-progress')
-                ->expectsOutputToContain('Would run: composer install --no-interaction --prefer-dist')
+                ->expectsOutputToContain('Would run: composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader')
                 ->assertSuccessful();
         } finally {
             file_put_contents($composerJsonPath, $originalComposerJson);
@@ -107,7 +102,7 @@ class UpdateApplicationCommandTest extends TestCase
         Process::preventStrayProcesses();
 
         Process::fake([
-            'composer install --no-interaction --prefer-dist' => Process::result(),
+            'composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader' => Process::result(),
             'php artisan optimize:clear' => Process::result(errorOutput: 'Database connection failed', exitCode: 1),
         ]);
 
@@ -115,7 +110,7 @@ class UpdateApplicationCommandTest extends TestCase
             ->doesntExpectOutputToContain('Application update complete.')
             ->assertFailed();
 
-        Process::assertRan('composer install --no-interaction --prefer-dist');
+        Process::assertRan('composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader');
         Process::assertRan('php artisan optimize:clear');
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
         Process::assertDidntRun('node scripts/dev-stop-stale-vite.mjs --strict');
@@ -257,7 +252,7 @@ return new class extends Migration
 PHP);
 
         Process::fake([
-            'composer install --no-interaction --prefer-dist' => Process::result(),
+            'composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader' => Process::result(),
             'php artisan optimize:clear' => Process::result(),
         ]);
 
@@ -272,7 +267,7 @@ PHP);
             unlink($duplicateMigration);
         }
 
-        Process::assertDidntRun('composer install --no-interaction --prefer-dist');
+        Process::assertDidntRun('composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader');
         Process::assertDidntRun('php artisan optimize:clear');
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
     }
@@ -314,7 +309,7 @@ PHP);
         $this->createProtectedAdminTables();
 
         Process::fake([
-            'composer install --no-interaction --prefer-dist' => Process::result(),
+            'composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader' => Process::result(),
             'php artisan optimize:clear' => Process::result(),
             'php artisan migrate --force --no-interaction' => Process::result(),
             'php artisan optimize' => Process::result(),
@@ -338,7 +333,7 @@ PHP);
             }
         }
 
-        Process::assertRan('composer install --no-interaction --prefer-dist');
+        Process::assertRan('composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader');
         Process::assertRan('php artisan optimize:clear');
         Process::assertRan('php artisan migrate --force --no-interaction');
         Process::assertRan('php artisan optimize');
@@ -371,7 +366,7 @@ PHP);
         });
 
         Process::fake([
-            'composer install --no-interaction --prefer-dist' => Process::result(),
+            'composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader' => Process::result(),
             'php artisan optimize:clear' => Process::result(),
             'php artisan migrate --force --no-interaction' => Process::result(),
             'php artisan optimize' => Process::result(),
@@ -400,7 +395,7 @@ PHP);
             }
         }
 
-        Process::assertRan('composer install --no-interaction --prefer-dist');
+        Process::assertRan('composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader');
         Process::assertRan('php artisan optimize:clear');
         Process::assertRan('php artisan migrate --force --no-interaction');
         Process::assertRan('php artisan optimize');
@@ -417,7 +412,7 @@ PHP);
         });
 
         Process::fake([
-            'composer install --no-interaction --prefer-dist' => Process::result(),
+            'composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader' => Process::result(),
             'php artisan optimize:clear' => Process::result(),
         ]);
 
@@ -432,7 +427,7 @@ PHP);
             Schema::dropIfExists('users');
         }
 
-        Process::assertDidntRun('composer install --no-interaction --prefer-dist');
+        Process::assertDidntRun('composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader');
         Process::assertDidntRun('php artisan optimize:clear');
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
     }
@@ -467,7 +462,7 @@ PHP);
         $this->createProtectedAdminTables();
 
         Process::fake([
-            'composer install --no-interaction --prefer-dist' => Process::result(),
+            'composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader' => Process::result(),
             'php artisan optimize:clear' => Process::result(),
             'php artisan migrate --force --no-interaction' => Process::result(),
             'php artisan optimize' => Process::result(),
@@ -486,7 +481,7 @@ PHP);
             }
         }
 
-        Process::assertRan('composer install --no-interaction --prefer-dist');
+        Process::assertRan('composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader');
         Process::assertRan('php artisan optimize:clear');
         Process::assertRan('php artisan migrate --force --no-interaction');
         Process::assertRan('php artisan optimize');
@@ -499,7 +494,7 @@ PHP);
         Process::preventStrayProcesses();
 
         Process::fake([
-            'composer install --no-interaction --prefer-dist' => Process::result(),
+            'composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader' => Process::result(),
             'php artisan optimize:clear' => Process::result(),
             'php artisan migrate --force --no-interaction' => Process::result(),
             'php artisan optimize' => Process::result(),
