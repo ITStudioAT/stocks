@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useDisplay } from 'vuetify';
 import { storeToRefs } from 'pinia';
-import { useAuthStore } from './stores/auth';
+import { request, useAuthStore } from './stores/auth';
 import { useDepotStore } from './stores/depots';
 import { useRoleStore } from './stores/roles';
 import { useUserStore } from './stores/users';
@@ -189,6 +189,10 @@ const editingFlatexHoldingId = ref(null);
 const flatexPriceEditValue = ref('');
 const flatexPriceEditInput = ref(null);
 const depotPriceSource = ref('latest');
+const cloudwaysSyncLoading = ref(false);
+const cloudwaysSyncMessage = ref('');
+const cloudwaysSyncError = ref('');
+const cloudwaysSyncResult = ref(null);
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
@@ -804,6 +808,13 @@ const menuItems = computed(() => [
                     label: 'Updates',
                     icon: 'mdi-update',
                 },
+                ...(canManageUsers.value ? [
+                    {
+                        key: 'cloudways',
+                        label: 'Cloudways',
+                        icon: 'mdi-cloud-outline',
+                    },
+                ] : []),
             ],
         },
     ] : []),
@@ -1055,6 +1066,28 @@ function navigateSection(section) {
 
     if (section === 'updates') {
         loadPriceRefreshSettings();
+    }
+}
+
+async function syncCloudwaysDatabase() {
+    if (cloudwaysSyncLoading.value) {
+        return;
+    }
+
+    cloudwaysSyncLoading.value = true;
+    cloudwaysSyncMessage.value = '';
+    cloudwaysSyncError.value = '';
+
+    try {
+        const data = await request('/admin/cloudways/sync', {
+            method: 'POST',
+        });
+        cloudwaysSyncMessage.value = data.message;
+        cloudwaysSyncResult.value = data.sync;
+    } catch (error) {
+        cloudwaysSyncError.value = error.message;
+    } finally {
+        cloudwaysSyncLoading.value = false;
     }
 }
 
@@ -2532,6 +2565,10 @@ function formatDepotCurrentBalance() {
     return `${formatAccountBalance(depotValuationNumber('current_balance'))} EUR`;
 }
 
+function formatDepotOneWeekStartBalance() {
+    return `${formatAccountBalance(depotValuationNumber('one_week_start_balance'))} EUR`;
+}
+
 function formatDepotBalanceChangeAmount() {
     const amount = depotValuationNumber('balance_change_amount');
     const sign = amount > 0 ? '+' : '';
@@ -2539,8 +2576,22 @@ function formatDepotBalanceChangeAmount() {
     return `${sign}${formatAccountBalance(amount)} EUR`;
 }
 
+function formatDepotOneWeekChangeAmount() {
+    const amount = depotValuationNumber('one_week_change_amount');
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${formatAccountBalance(amount)} EUR`;
+}
+
 function formatDepotBalanceChangePercent() {
     const amount = depotValuationNumber('balance_change_percent');
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${amount.toFixed(2)}%`;
+}
+
+function formatDepotOneWeekChangePercent() {
+    const amount = depotValuationNumber('one_week_change_percent');
     const sign = amount > 0 ? '+' : '';
 
     return `${sign}${amount.toFixed(2)}%`;
@@ -2556,12 +2607,33 @@ function depotBalanceChangeClass() {
     };
 }
 
+function depotOneWeekChangeClass() {
+    const amount = depotValuationNumber('one_week_change_amount');
+
+    return {
+        'text-success': amount > 0,
+        'text-error': amount < 0,
+        'text-medium-emphasis': amount === 0,
+    };
+}
+
 function formatCurrentDayMonth() {
+    return formatDayMonthDaysAgo(0);
+}
+
+function formatOneWeekAgoDayMonth() {
+    return formatDayMonthDaysAgo(7);
+}
+
+function formatDayMonthDaysAgo(daysAgo) {
+    const date = new Date();
+    date.setDate(date.getDate() - daysAgo);
+
     return new Intl.DateTimeFormat('de-AT', {
         timeZone: displayTimeZone,
         day: '2-digit',
         month: '2-digit',
-    }).format(new Date());
+    }).format(date);
 }
 
 function formatPositionPieces(holding) {
@@ -3344,9 +3416,7 @@ function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.va
     const previousTradingClosePoint = rangeKey === 'today-1'
         ? chartPrices.find((price) => price.is_previous_trading_close) ?? null
         : null;
-    const plottedChartPrices = previousTradingClosePoint
-        ? chartPrices.filter((price) => !price.is_previous_trading_close)
-        : chartPrices;
+    const plottedChartPrices = chartPrices;
 
     if (plottedChartPrices.length === 0) {
         return {
@@ -3375,10 +3445,7 @@ function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.va
         };
     }
 
-    const chartPriceValues = [
-        ...plottedChartPrices,
-        ...(previousTradingClosePoint ? [previousTradingClosePoint] : []),
-    ].map((price) => price.chart_price);
+    const chartPriceValues = plottedChartPrices.map((price) => price.chart_price);
     const min = Math.min(...chartPriceValues);
     const max = Math.max(...chartPriceValues);
     const scaleMin = min;
@@ -3411,20 +3478,10 @@ function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.va
     });
     const highPoint = points.find((point) => point.chart_price === max);
     const lowPoint = points.find((point) => point.chart_price === min);
-    const previousTradingCloseLine = previousTradingClosePoint
-        ? {
-            y: chartValueToY(previousTradingClosePoint.chart_price, chartMin, chartRange, plot),
-            value: previousTradingClosePoint.chart_price,
-        }
-        : null;
-    const firstLabelPoint = previousTradingClosePoint
-        ? {
-            ...previousTradingClosePoint,
-            x: points[0].x,
-            y: previousTradingCloseLine.y,
-        }
-        : points[0];
     const latestReferencePoint = previousTradingClosePoint ?? points[0];
+    const todayStartPoint = previousTradingClosePoint
+        ? points.find((point) => !point.is_previous_trading_close) ?? null
+        : null;
 
     return {
         width,
@@ -3433,7 +3490,7 @@ function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.va
         points,
         linePath: analyzeSparklinePath(points),
         areaPath: analyzeSparklineAreaPath(points, plot),
-        previousCloseLine: previousTradingCloseLine,
+        previousCloseLine: null,
         horizontalGridLines: analyzeSparklineHorizontalGridLines(chartMin, chartMax, plot),
         verticalGridLines: shouldUseAnalyzeDateMarkers(rangeKey) ? [] : analyzeSparklineTickPoints(points).map((point) => ({
             x: point.x,
@@ -3447,13 +3504,13 @@ function buildAnalyzeSparkline(prices, rangeKey = selectedAnalyzeHistoryRange.va
             : [],
         first: points[0],
         latest: points[points.length - 1],
-        firstLabel: chartEndpointLabel(firstLabelPoint, plot, 'start'),
+        firstLabel: chartEndpointLabel(points[0], plot, 'start'),
         latestLabel: chartEndpointLabel(points[points.length - 1], plot, 'end', latestReferencePoint),
-        todayStartLabel: chartEndpointLabel(previousTradingClosePoint ? points[0] : null, plot, 'start', null, {
-            changeClass: chartValueDirectionClass(points[0], previousTradingClosePoint),
-            changePercent: formatChartEndpointChangePercent(points[0], previousTradingClosePoint),
+        todayStartLabel: chartEndpointLabel(todayStartPoint, plot, 'start', null, {
+            changeClass: chartValueDirectionClass(todayStartPoint, previousTradingClosePoint),
+            changePercent: formatChartEndpointChangePercent(todayStartPoint, previousTradingClosePoint),
             labelPrefix: 'Start',
-            labelX: points[0].x,
+            labelX: todayStartPoint?.x,
             labelY: plot.bottom + 38,
         }),
         trendLine: chartRegressionLine(points, chartMin, chartRange, plot),
@@ -3492,7 +3549,7 @@ function analyzeMarkerIntervalDaysForRange(rangeKey) {
 }
 
 function analyzeSparklineDateRangeLabels(points, rangeKey) {
-    const first = points[0];
+    const first = points.find((point) => !point.is_previous_trading_close) ?? points[0];
     const latest = points[points.length - 1];
 
     if (!first || !latest) {
@@ -7516,7 +7573,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                     </v-dialog>
 
                     <v-tabs
-                        v-if="(activeSection === 'depots' || activeSection === 'users' || activeSection === 'roles' || activeSection === 'updates') && canManageDashboardAdmin"
+                        v-if="(activeSection === 'depots' || activeSection === 'users' || activeSection === 'roles' || activeSection === 'updates' || activeSection === 'cloudways') && canManageDashboardAdmin"
                         :model-value="activeSection"
                         color="primary"
                         class="mb-6"
@@ -7526,6 +7583,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                         <v-tab v-if="canManageUsers" value="users" prepend-icon="mdi-account-group-outline">Users</v-tab>
                         <v-tab v-if="canManageUsers" value="roles" prepend-icon="mdi-shield-account-outline">Roles</v-tab>
                         <v-tab value="updates" prepend-icon="mdi-update">Updates</v-tab>
+                        <v-tab v-if="canManageUsers" value="cloudways" prepend-icon="mdi-cloud-outline">Cloudways</v-tab>
                     </v-tabs>
 
                     <section v-if="activeSection === 'data' && canManageDashboardAdmin">
@@ -8269,6 +8327,29 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </tbody>
                                 </v-table>
                             </v-card>
+
+                            <v-card class="depot-balance-card" variant="outlined" width="100%" max-width="480">
+                                <v-table density="compact">
+                                    <tbody>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">Balance {{ formatOneWeekAgoDayMonth() }}</td>
+                                            <td class="text-right">{{ formatDepotOneWeekStartBalance() }}</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">Balance {{ formatCurrentDayMonth() }}</td>
+                                            <td class="text-right">{{ formatDepotCurrentBalance() }}</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">1 week</td>
+                                            <td class="text-right">
+                                                <span :class="depotOneWeekChangeClass()">
+                                                    {{ formatDepotOneWeekChangePercent() }} · {{ formatDepotOneWeekChangeAmount() }}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </v-table>
+                            </v-card>
                         </div>
 
                         <div v-if="activeDepot" class="mt-6">
@@ -8706,6 +8787,73 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 </v-card-actions>
                             </v-card>
                         </v-dialog>
+                    </section>
+
+                    <section v-if="activeSection === 'cloudways' && canManageUsers">
+                        <div class="d-flex align-center justify-space-between mb-6">
+                            <div>
+                                <p class="text-overline text-primary mb-1">Admin</p>
+                                <h1 class="text-h4">Cloudways</h1>
+                            </div>
+                            <v-btn
+                                color="primary"
+                                prepend-icon="mdi-sync"
+                                variant="flat"
+                                :loading="cloudwaysSyncLoading"
+                                :disabled="cloudwaysSyncLoading"
+                                @click="syncCloudwaysDatabase"
+                            >
+                                Sync
+                            </v-btn>
+                        </div>
+
+                        <v-alert v-if="cloudwaysSyncMessage" type="success" variant="tonal" density="compact" class="mb-4">
+                            {{ cloudwaysSyncMessage }}
+                        </v-alert>
+                        <v-alert v-if="cloudwaysSyncError" type="error" variant="tonal" density="compact" class="mb-4">
+                            {{ cloudwaysSyncError }}
+                        </v-alert>
+
+                        <v-sheet border rounded class="pa-4">
+                            <div class="text-body-2 text-medium-emphasis">
+                                Replace local table rows with matching Cloudways table rows.
+                            </div>
+
+                            <div v-if="cloudwaysSyncResult" class="mt-4">
+                                <div class="d-flex flex-wrap ga-3 mb-4">
+                                    <v-chip color="primary" variant="tonal">
+                                        {{ cloudwaysSyncResult.synced_tables }} table(s)
+                                    </v-chip>
+                                    <v-chip color="primary" variant="tonal">
+                                        {{ cloudwaysSyncResult.rows }} row(s)
+                                    </v-chip>
+                                    <v-chip v-if="cloudwaysSyncResult.skipped_tables.length > 0" color="warning" variant="tonal">
+                                        {{ cloudwaysSyncResult.skipped_tables.length }} skipped
+                                    </v-chip>
+                                </div>
+
+                                <v-table v-if="cloudwaysSyncResult.tables.length > 0" density="compact">
+                                    <thead>
+                                        <tr>
+                                            <th>Table</th>
+                                            <th class="text-right">Rows</th>
+                                            <th class="text-right">Columns</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="table in cloudwaysSyncResult.tables" :key="table.name">
+                                            <td>{{ table.name }}</td>
+                                            <td class="text-right">{{ table.rows }}</td>
+                                            <td class="text-right">{{ table.columns }}</td>
+                                        </tr>
+                                    </tbody>
+                                </v-table>
+
+                                <div v-if="cloudwaysSyncResult.skipped_tables.length > 0" class="text-caption text-medium-emphasis mt-3">
+                                    Skipped: {{ cloudwaysSyncResult.skipped_tables.join(', ') }}
+                                </div>
+                            </div>
+                        </v-sheet>
                     </section>
 
                     <section v-if="activeSection === 'users' && canManageUsers">

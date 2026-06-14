@@ -211,6 +211,21 @@ class AdminDepotTest extends TestCase
             ->assertSee('<title>GKStocks</title>', false);
     }
 
+    public function test_only_super_admin_can_open_cloudways_menu_page(): void
+    {
+        $admin = $this->adminUser();
+        $superAdmin = $this->superAdminUser();
+
+        $this->actingAs($admin)
+            ->get('/admin/menu/cloudways')
+            ->assertForbidden();
+
+        $this->actingAs($superAdmin)
+            ->get('/admin/menu/cloudways')
+            ->assertOk()
+            ->assertSee('<title>GKStocks</title>', false);
+    }
+
     public function test_admin_can_open_data_menu_page(): void
     {
         $admin = $this->adminUser();
@@ -253,6 +268,16 @@ class AdminDepotTest extends TestCase
 
         $user = User::factory()->create();
         $user->assignRole('admin');
+
+        return $user;
+    }
+
+    private function superAdminUser(): User
+    {
+        Role::findOrCreate('super_admin');
+
+        $user = User::factory()->create();
+        $user->assignRole('super_admin');
 
         return $user;
     }

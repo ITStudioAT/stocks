@@ -431,7 +431,7 @@ class AdminDepotTransactionController extends Controller
 
     /**
      * @param  array<int, array{id: int, symbol: ?string, name: ?string, isin: ?string, currency: ?string, latest_price: ?string, previous_day_price: ?string, previous_day_price_date: ?string, previous_day_change_percent: ?string, flatex_price: ?string, year_start_price: ?string, latest_price_fetched_at: ?string, latest_price_status: string, position_pieces: string}>  $depotHoldings
-     * @return array{stock_balance: string, cash_balance: string, account_balance: string, year_start_balance: string, current_balance: string, balance_change_amount: string, balance_change_percent: string}
+     * @return array{stock_balance: string, cash_balance: string, account_balance: string, year_start_balance: string, current_balance: string, balance_change_amount: string, balance_change_percent: string, one_week_start_balance: string, one_week_change_amount: string, one_week_change_percent: string}
      */
     private function depotValuationPayload(Depot $depot, array $depotHoldings, string $source): array
     {
@@ -452,10 +452,17 @@ class AdminDepotTransactionController extends Controller
         $yearStartBalance = $this->cashBalanceAt($depot, $yearStartCutoff)
             + $this->stockBalanceAt($depot, $yearStartCutoff);
         $currentBalance = $cashBalance + $stockBalance;
+        $oneWeekStartCutoff = now()->subWeek()->endOfDay();
+        $oneWeekStartBalance = $this->cashBalanceAt($depot, $oneWeekStartCutoff)
+            + $this->stockMarketBalanceAt($depot, $oneWeekStartCutoff);
         $balanceChangeAmount = $currentBalance - $yearStartBalance;
         $balanceChangePercent = $yearStartBalance === 0.0
             ? 0.0
             : ($balanceChangeAmount / $yearStartBalance) * 100;
+        $oneWeekChangeAmount = $currentBalance - $oneWeekStartBalance;
+        $oneWeekChangePercent = $oneWeekStartBalance === 0.0
+            ? 0.0
+            : ($oneWeekChangeAmount / $oneWeekStartBalance) * 100;
 
         return [
             'stock_balance' => $this->decimal($stockBalance, 2),
@@ -465,6 +472,9 @@ class AdminDepotTransactionController extends Controller
             'current_balance' => $this->decimal($currentBalance, 2),
             'balance_change_amount' => $this->decimal($balanceChangeAmount, 2),
             'balance_change_percent' => $this->decimal($balanceChangePercent, 2),
+            'one_week_start_balance' => $this->decimal($oneWeekStartBalance, 2),
+            'one_week_change_amount' => $this->decimal($oneWeekChangeAmount, 2),
+            'one_week_change_percent' => $this->decimal($oneWeekChangePercent, 2),
         ];
     }
 
@@ -493,6 +503,47 @@ class AdminDepotTransactionController extends Controller
         return $transactionsByHoldingId->sum(function (Collection $transactions): float {
             return collect($this->openBuyLots($transactions))
                 ->sum(fn (array $lot): float => $lot['total_amount']);
+        });
+    }
+
+    private function stockMarketBalanceAt(Depot $depot, Carbon $cutoff): float
+    {
+        $openPiecesByHoldingId = DepotTransaction::query()
+            ->where('depot_id', $depot->id)
+            ->whereNotNull('stock_holding_id')
+            ->whereIn('type', ['buy', 'sell'])
+            ->where('booked_at', '<=', $cutoff)
+            ->orderBy('booked_at')
+            ->orderBy('id')
+            ->get(['stock_holding_id', 'type', 'pieces', 'total_amount', 'booked_at'])
+            ->groupBy('stock_holding_id')
+            ->map(fn (Collection $transactions): float => collect($this->openBuyLots($transactions))
+                ->sum(fn (array $lot): float => $lot['pieces']))
+            ->filter(fn (float $pieces): bool => $pieces > 0);
+
+        if ($openPiecesByHoldingId->isEmpty()) {
+            return 0.0;
+        }
+
+        $dailyPriceByHoldingId = StockHoldingDailyPrice::query()
+            ->whereIn('stock_holding_id', $openPiecesByHoldingId->keys()->all())
+            ->where('trading_date', '<=', $cutoff->toDateString())
+            ->where(function ($query): void {
+                $query
+                    ->whereNotNull('adjusted_close')
+                    ->orWhereNotNull('close');
+            })
+            ->orderByDesc('trading_date')
+            ->orderByDesc('id')
+            ->get(['stock_holding_id', 'adjusted_close', 'close'])
+            ->groupBy('stock_holding_id')
+            ->map(fn (Collection $dailyPrices): ?StockHoldingDailyPrice => $dailyPrices->first());
+
+        return $openPiecesByHoldingId->sum(function (float $pieces, int $holdingId) use ($dailyPriceByHoldingId): float {
+            $dailyPrice = $dailyPriceByHoldingId->get($holdingId);
+            $price = $dailyPrice?->adjusted_close ?? $dailyPrice?->close;
+
+            return is_numeric($price) ? $pieces * (float) $price : 0.0;
         });
     }
 

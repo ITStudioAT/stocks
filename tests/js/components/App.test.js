@@ -748,6 +748,7 @@ describe('App', () => {
         await flushPromises();
 
         expect(wrapper.text()).toContain('Depots');
+        expect(wrapper.text()).not.toContain('Cloudways');
         expect(wrapper.text()).toContain('New depot');
         expect(wrapper.text()).toContain('Long term depot');
         expect(wrapper.text()).toContain('82,830.36 EUR');
@@ -1304,8 +1305,9 @@ describe('App', () => {
 
         expect(todayMinusOneRangeButton.attributes('aria-pressed')).toBe('true');
         expect(analyzeOverview.text()).toContain('with previous close');
-        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(120);
+        expect(analyzeOverview.findAll('.analyze-sparkline-dot')).toHaveLength(121);
         expect(analyzeOverview.find('.analyze-sparkline-previous-close-line').exists()).toBe(false);
+        expect(analyzeOverview.find('.analyze-sparkline-previous-close-label').exists()).toBe(false);
         expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--start').text()).toBe('Prev 298.58 · Start 298.60 +0.01%');
         expect(analyzeOverview.find('.analyze-sparkline-endpoint-label--today-start').exists()).toBe(false);
         expect(analyzeOverview.find('.analyze-sparkline-endpoint-label-change--up').text()).toBe('Start 298.60 +0.01%');
@@ -1314,9 +1316,11 @@ describe('App', () => {
         const highMarkerLine = analyzeOverview.find('.analyze-sparkline-extremum--high .analyze-sparkline-extremum-line');
         const lowMarkerLine = analyzeOverview.find('.analyze-sparkline-extremum--low .analyze-sparkline-extremum-line');
         const highMarkerLabel = analyzeOverview.find('.analyze-sparkline-extremum--high .analyze-sparkline-extremum-label');
+        const lowMarkerLabel = analyzeOverview.find('.analyze-sparkline-extremum--low .analyze-sparkline-extremum-label');
 
         expect(highMarkerLine.attributes('y1')).not.toBe(highMarkerLine.attributes('y2'));
-        expect(lowMarkerLine.exists()).toBe(false);
+        expect(lowMarkerLine.exists()).toBe(true);
+        expect(lowMarkerLabel.text()).toBe('298.58');
         expect(['start', 'end']).toContain(highMarkerLabel.attributes('text-anchor'));
 
         await oneYearRangeButton.trigger('click');
@@ -4082,10 +4086,10 @@ describe('App', () => {
         expect(wrapper.vm.priceRefreshScheduleForm.closed_refresh_enabled).toBe(false);
     });
 
-    it('shows Data as a main dashboard item and Admin group with Users, Roles, and Updates submenu chips for super_admin', async () => {
+    it('shows Data as a main dashboard item and Admin group with Users, Roles, Updates, and Cloudways submenu chips for super_admin', async () => {
         window.history.pushState({}, '', '/admin/menu/users');
         localStorage.removeItem('data_intraday_refresh_info_dismissed');
-        const fetchMock = vi.fn((path) => {
+        const fetchMock = vi.fn((path, options = {}) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
                     user: {
@@ -4230,6 +4234,31 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/cloudways/sync' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Synced 2 table(s) and 15 row(s) from Cloudways.',
+                    sync: {
+                        synced_tables: 2,
+                        total_tables: 3,
+                        rows: 15,
+                        synced_at: '2026-06-13T12:00:00+00:00',
+                        skipped_tables: ['remote_only_items'],
+                        tables: [
+                            {
+                                name: 'users',
+                                rows: 1,
+                                columns: 9,
+                            },
+                            {
+                                name: 'depots',
+                                rows: 14,
+                                columns: 6,
+                            },
+                        ],
+                    },
+                }));
+            }
+
             return Promise.reject(new Error(`Unexpected request: ${path}`));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -4242,6 +4271,7 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Roles');
         expect(wrapper.text()).toContain('Data');
         expect(wrapper.text()).toContain('Updates');
+        expect(wrapper.text()).toContain('Cloudways');
         expect(wrapper.find('.dashboard-navigation-drawer').text()).toContain('Data');
 
         const tabs = wrapper.findAll('.v-tab');
@@ -4250,6 +4280,7 @@ describe('App', () => {
         expect(tabLabels.some((l) => l.includes('Roles'))).toBe(true);
         expect(tabLabels.some((l) => l.includes('Data'))).toBe(false);
         expect(tabLabels.some((l) => l.includes('Updates'))).toBe(true);
+        expect(tabLabels.some((l) => l.includes('Cloudways'))).toBe(true);
 
         const rolesTab = wrapper.findAll('.v-tab').find((t) => t.text().includes('Roles'));
         await rolesTab.trigger('click');
@@ -4257,6 +4288,27 @@ describe('App', () => {
 
         expect(window.location.pathname).toBe('/admin/menu/roles');
         expect(wrapper.text()).toContain('admin');
+
+        const cloudwaysTab = wrapper.findAll('.v-tab').find((t) => t.text().includes('Cloudways'));
+        await cloudwaysTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/cloudways');
+        expect(wrapper.text()).toContain('Replace local table rows with matching Cloudways table rows.');
+
+        const syncButton = wrapper.findAll('button').find((button) => button.text().includes('Sync'));
+        await syncButton.trigger('click');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/cloudways/sync', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(wrapper.text()).toContain('Synced 2 table(s) and 15 row(s) from Cloudways.');
+        expect(wrapper.text()).toContain('2 table(s)');
+        expect(wrapper.text()).toContain('15 row(s)');
+        expect(wrapper.text()).toContain('users');
+        expect(wrapper.text()).toContain('depots');
+        expect(wrapper.text()).toContain('Skipped: remote_only_items');
 
         const dataMenuItem = wrapper.find('.dashboard-navigation-drawer')
             .findAll('.v-list-item')
@@ -4715,6 +4767,9 @@ describe('App', () => {
                 current_balance: '1033.00',
                 balance_change_amount: '33.00',
                 balance_change_percent: '3.30',
+                one_week_start_balance: '990.00',
+                one_week_change_amount: '43.00',
+                one_week_change_percent: '4.34',
             },
             flatex: {
                 stock_balance: '360.00',
@@ -4724,6 +4779,9 @@ describe('App', () => {
                 current_balance: '1010.00',
                 balance_change_amount: '10.00',
                 balance_change_percent: '1.00',
+                one_week_start_balance: '995.00',
+                one_week_change_amount: '15.00',
+                one_week_change_percent: '1.51',
             },
         };
         let currentDepotHoldings = depotHoldings;
@@ -4794,6 +4852,9 @@ describe('App', () => {
                         current_balance: '1010.50',
                         balance_change_amount: '10.50',
                         balance_change_percent: '1.05',
+                        one_week_start_balance: '995.00',
+                        one_week_change_amount: '15.50',
+                        one_week_change_percent: '1.56',
                     },
                 };
 
@@ -4854,7 +4915,11 @@ describe('App', () => {
         expect(wrapper.text()).toContain('1,000.00 EUR');
         expect(wrapper.text()).toContain(`Balance ${sessionHeaderDate(0).slice(0, 6)}`);
         expect(wrapper.text()).toContain('+3.30% · +33.00 EUR');
-        expect(wrapper.findAll('.depot-balance-card')).toHaveLength(2);
+        expect(wrapper.text()).toContain(`Balance ${sessionHeaderDate(7).slice(0, 6)}`);
+        expect(wrapper.text()).toContain('990.00 EUR');
+        expect(wrapper.text()).toContain('1 week');
+        expect(wrapper.text()).toContain('+4.34% · +43.00 EUR');
+        expect(wrapper.findAll('.depot-balance-card')).toHaveLength(3);
         expect(wrapper.find('.depot-balance-card tbody td:nth-child(2)').classes()).toContain('text-right');
         expect(wrapper.text()).toContain('Symbol');
         expect(wrapper.text()).toContain('Name');

@@ -22,6 +22,15 @@ return [
         'password' => env('SA_PW'),
     ],
 
+    'cloudways' => [
+        'connection' => env('CLOUDWAYS_CONNECTION'),
+        'host' => env('CLOUDWAYS_HOST'),
+        'port' => env('CLOUDWAYS_PORT', 3306),
+        'database' => env('CLOUDWAYS_DATABASE'),
+        'username' => env('CLOUDWAYS_USERNAME'),
+        'password' => env('CLOUDWAYS_PASSWORD'),
+    ],
+
     'resend' => [
         'key' => env('RESEND_API_KEY'),
     ],

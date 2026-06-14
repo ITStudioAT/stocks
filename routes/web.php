@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\AdminAuthController;
+use App\Http\Controllers\AdminCloudwaysController;
 use App\Http\Controllers\AdminDataController;
 use App\Http\Controllers\AdminDepotController;
 use App\Http\Controllers\AdminDepotHoldingController;
@@ -129,6 +130,9 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::view('/admin/menu/roles', 'app')
         ->middleware('role:super_admin')
         ->name('admin.menu.roles');
+    Route::view('/admin/menu/cloudways', 'app')
+        ->middleware('role:super_admin')
+        ->name('admin.menu.cloudways');
     Route::view('/admin/menu/depots', 'app')->name('admin.menu.depots');
     Route::view('/admin/menu/{adminSection}/{adminSubSection?}', 'app')
         ->where([
@@ -193,6 +197,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::match(['GET', 'POST'], '/admin/logout', [AdminAuthController::class, 'logout'])->name('admin.logout');
 
     Route::middleware('role:super_admin')->group(function (): void {
+        Route::post('/admin/cloudways/sync', [AdminCloudwaysController::class, 'sync'])->name('admin.cloudways.sync');
         Route::get('/admin/users', [AdminUserController::class, 'index'])->name('admin.users.index');
         Route::post('/admin/users', [AdminUserController::class, 'store'])->name('admin.users.store');
         Route::patch('/admin/users/{user}', [AdminUserController::class, 'update'])->name('admin.users.update');

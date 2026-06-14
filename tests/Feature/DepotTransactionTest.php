@@ -326,6 +326,12 @@ class DepotTransactionTest extends TestCase
                 'latest_price' => '150.000000',
                 'flatex_price' => '150.000000',
             ]);
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-06-05',
+                'close' => '140.00000000',
+                'adjusted_close' => '140.00000000',
+            ]);
 
             $deposit = DepotTransaction::factory()->create([
                 'depot_id' => $depot->id,
@@ -377,7 +383,10 @@ class DepotTransactionTest extends TestCase
                 ->assertJsonPath('depot_valuations.latest.year_start_balance', '83236.56')
                 ->assertJsonPath('depot_valuations.latest.current_balance', '57256.56')
                 ->assertJsonPath('depot_valuations.latest.balance_change_amount', '-25980.00')
-                ->assertJsonPath('depot_valuations.latest.balance_change_percent', '-31.21');
+                ->assertJsonPath('depot_valuations.latest.balance_change_percent', '-31.21')
+                ->assertJsonPath('depot_valuations.latest.one_week_start_balance', '57236.56')
+                ->assertJsonPath('depot_valuations.latest.one_week_change_amount', '20.00')
+                ->assertJsonPath('depot_valuations.latest.one_week_change_percent', '0.03');
         } finally {
             Carbon::setTestNow();
         }
@@ -490,7 +499,10 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('depot_valuations.latest.year_start_balance', '1000.00')
             ->assertJsonPath('depot_valuations.latest.current_balance', '1188.75')
             ->assertJsonPath('depot_valuations.latest.balance_change_amount', '188.75')
-            ->assertJsonPath('depot_valuations.latest.balance_change_percent', '18.88');
+            ->assertJsonPath('depot_valuations.latest.balance_change_percent', '18.88')
+            ->assertJsonPath('depot_valuations.latest.one_week_start_balance', '1000.00')
+            ->assertJsonPath('depot_valuations.latest.one_week_change_amount', '188.75')
+            ->assertJsonPath('depot_valuations.latest.one_week_change_percent', '18.88');
 
         $this->assertSame(['AAPL'], collect($response->json('depot_holdings'))->pluck('symbol')->all());
         $this->assertSame('710.00', $depot->refresh()->account_balance);
