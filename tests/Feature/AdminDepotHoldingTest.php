@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Jobs\FetchHistoricalSessionPrices;
 use App\Jobs\RefreshDepotHoldingPrices;
+use App\Models\EodhdExchange;
 use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
 use App\Models\StockHoldingDailyPrice;
@@ -19,7 +20,6 @@ use App\Services\IndexWatchItemPriceRefresher;
 use App\Services\StockPriceCatalog;
 use App\Services\WebMarketData\DTO\QuoteSelectionResult;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\Client\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -182,7 +182,7 @@ class AdminDepotHoldingTest extends TestCase
         }
     }
 
-    public function test_admin_can_list_exchange_trading_times_from_eodhd(): void
+    public function test_admin_exchange_trading_times_omit_exchanges_without_stored_details(): void
     {
         Cache::flush();
         config([
@@ -191,25 +191,7 @@ class AdminDepotHoldingTest extends TestCase
             'services.eodhd.calls_per_day' => 100000,
             'services.eodhd.calls_used_today' => 0,
         ]);
-
-        Http::fake([
-            'eodhd.com/api/exchange-details/XETRA*' => Http::response([
-                'Name' => 'XETRA Stock Exchange',
-                'Code' => 'XETRA',
-                'OperatingMIC' => 'XETR',
-                'Country' => 'Germany',
-                'Currency' => 'EUR',
-                'Timezone' => 'Europe/Berlin',
-                'isOpen' => false,
-                'TradingHours' => [
-                    'Open' => '09:00:00',
-                    'Close' => '17:30:00',
-                    'OpenUTC' => '07:00:00',
-                    'CloseUTC' => '15:30:00',
-                    'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
-                ],
-            ]),
-        ]);
+        Http::preventStrayRequests();
 
         $admin = $this->adminUser();
         StockHolding::factory()->create([
@@ -228,6 +210,53 @@ class AdminDepotHoldingTest extends TestCase
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/exchange-trading-times')
             ->assertOk()
+            ->assertJsonCount(0, 'exchange_trading_times')
+            ->assertJsonPath('eodhd_api_usage.hour.used', 0)
+            ->assertJsonPath('eodhd_api_usage.day.used', 0);
+
+        Http::assertSentCount(0);
+    }
+
+    public function test_admin_can_list_exchange_trading_times_from_stored_eodhd_exchange_details(): void
+    {
+        Cache::flush();
+        config([
+            'services.eodhd.key' => 'test-token',
+            'services.eodhd.calls_per_hour' => 1000,
+            'services.eodhd.calls_per_day' => 100000,
+            'services.eodhd.calls_used_today' => 0,
+        ]);
+        Http::preventStrayRequests();
+
+        EodhdExchange::query()->create([
+            'code' => 'XETRA',
+            'detail_code' => 'XETRA',
+            'name' => 'XETRA Stock Exchange',
+            'country' => 'Germany',
+            'currency' => 'EUR',
+            'timezone' => 'Europe/Berlin',
+            'operating_mic' => 'XETR',
+            'trading_hours' => [
+                'Open' => '09:00:00',
+                'Close' => '17:30:00',
+                'OpenUTC' => '07:00:00',
+                'CloseUTC' => '15:30:00',
+                'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
+            ],
+            'holidays' => [],
+        ]);
+
+        $admin = $this->adminUser();
+        StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'exchange' => 'Xetra',
+            'mic_code' => 'XETR',
+            'country' => 'Germany',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/exchange-trading-times')
+            ->assertOk()
             ->assertJsonCount(1, 'exchange_trading_times')
             ->assertJsonPath('exchange_trading_times.0.code', 'XETRA')
             ->assertJsonPath('exchange_trading_times.0.name', 'XETRA Stock Exchange')
@@ -238,17 +267,14 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('exchange_trading_times.0.open_utc', '07:00:00')
             ->assertJsonPath('exchange_trading_times.0.close_utc', '15:30:00')
             ->assertJsonPath('exchange_trading_times.0.working_days', 'Mon,Tue,Wed,Thu,Fri')
-            ->assertJsonPath('exchange_trading_times.0.is_open', false)
             ->assertJsonPath('exchange_trading_times.0.error', null)
-            ->assertJsonPath('eodhd_api_usage.hour.used', 1)
-            ->assertJsonPath('eodhd_api_usage.hour.remaining', 999)
-            ->assertJsonPath('eodhd_api_usage.day.used', 1)
-            ->assertJsonPath('eodhd_api_usage.day.remaining', 99999);
+            ->assertJsonPath('eodhd_api_usage.hour.used', 0)
+            ->assertJsonPath('eodhd_api_usage.day.used', 0);
 
-        Http::assertSentCount(1);
+        Http::assertSentCount(0);
     }
 
-    public function test_admin_exchange_trading_times_include_saved_austrian_index_exchange(): void
+    public function test_admin_exchange_trading_times_include_generic_index_exchange_for_loaded_index_data(): void
     {
         Cache::flush();
         config([
@@ -257,25 +283,7 @@ class AdminDepotHoldingTest extends TestCase
             'services.eodhd.calls_per_day' => 100000,
             'services.eodhd.calls_used_today' => 0,
         ]);
-
-        Http::fake([
-            'eodhd.com/api/exchange-details/VI*' => Http::response([
-                'Name' => 'Vienna Exchange',
-                'Code' => 'VI',
-                'OperatingMIC' => 'XWBO',
-                'Country' => 'Austria',
-                'Currency' => 'EUR',
-                'Timezone' => 'Europe/Vienna',
-                'isOpen' => false,
-                'TradingHours' => [
-                    'Open' => '08:55:00',
-                    'Close' => '17:35:00',
-                    'OpenUTC' => '06:55:00',
-                    'CloseUTC' => '15:35:00',
-                    'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
-                ],
-            ]),
-        ]);
+        Http::preventStrayRequests();
 
         $admin = $this->adminUser();
         IndexWatchItem::factory()->create([
@@ -287,26 +295,35 @@ class AdminDepotHoldingTest extends TestCase
             'country' => 'Austria',
             'currency' => 'EUR',
         ]);
+        IndexWatchItem::factory()->create([
+            'symbol' => 'BBVAI',
+            'name' => 'Accion IBEX 35 Cotizado Armonizado FI',
+            'exchange' => 'MC',
+            'mic_code' => 'XMAD',
+            'instrument_type' => 'INDEX',
+            'country' => 'Spain',
+            'currency' => 'EUR',
+        ]);
 
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/exchange-trading-times')
             ->assertOk()
             ->assertJsonCount(1, 'exchange_trading_times')
-            ->assertJsonPath('exchange_trading_times.0.code', 'VI')
-            ->assertJsonPath('exchange_trading_times.0.name', 'Vienna Exchange')
-            ->assertJsonPath('exchange_trading_times.0.operating_mic', 'XWBO')
-            ->assertJsonPath('exchange_trading_times.0.timezone', 'Europe/Vienna')
-            ->assertJsonPath('exchange_trading_times.0.open', '08:55:00')
-            ->assertJsonPath('exchange_trading_times.0.close', '17:35:00')
-            ->assertJsonPath('exchange_trading_times.0.open_utc', '06:55:00')
-            ->assertJsonPath('exchange_trading_times.0.close_utc', '15:35:00')
+            ->assertJsonPath('exchange_trading_times.0.code', 'INDX')
+            ->assertJsonPath('exchange_trading_times.0.name', 'Index Data')
+            ->assertJsonPath('exchange_trading_times.0.operating_mic', null)
+            ->assertJsonPath('exchange_trading_times.0.timezone', 'UTC')
+            ->assertJsonPath('exchange_trading_times.0.open', '00:00:00')
+            ->assertJsonPath('exchange_trading_times.0.close', '23:59:00')
+            ->assertJsonPath('exchange_trading_times.0.open_utc', '00:00:00')
+            ->assertJsonPath('exchange_trading_times.0.close_utc', '23:59:00')
             ->assertJsonPath('exchange_trading_times.0.working_days', 'Mon,Tue,Wed,Thu,Fri')
-            ->assertJsonPath('eodhd_api_usage.hour.used', 1);
+            ->assertJsonPath('eodhd_api_usage.hour.used', 0);
 
-        Http::assertSentCount(1);
+        Http::assertSentCount(0);
     }
 
-    public function test_admin_exchange_trading_times_include_lunch_break_sessions_from_eodhd(): void
+    public function test_admin_exchange_trading_times_include_lunch_break_sessions_from_stored_exchange_details(): void
     {
         Cache::flush();
         config([
@@ -315,33 +332,32 @@ class AdminDepotHoldingTest extends TestCase
             'services.eodhd.calls_per_day' => 100000,
             'services.eodhd.calls_used_today' => 0,
         ]);
+        Http::preventStrayRequests();
 
-        Http::fake([
-            'eodhd.com/api/exchange-details/SHG*' => Http::response([
-                'Name' => 'Shanghai Stock Exchange',
-                'Code' => 'SHG',
-                'OperatingMIC' => 'XSHG',
-                'Country' => 'China',
-                'Currency' => 'CNY',
-                'Timezone' => 'Asia/Shanghai',
-                'ExchangeHolidays' => [
-                    [
-                        'Holiday' => 'Dragon Boat Festival',
-                        'Date' => '2026-06-19',
-                        'Type' => 'official',
-                    ],
+        EodhdExchange::query()->create([
+            'code' => 'SHG',
+            'detail_code' => 'XSHG',
+            'name' => 'Shanghai Stock Exchange',
+            'country' => 'China',
+            'currency' => 'CNY',
+            'timezone' => 'Asia/Shanghai',
+            'operating_mic' => 'XSHG',
+            'trading_hours' => [
+                'Open' => '09:30:00',
+                'Close' => '15:00:00',
+                'LunchBegin' => '11:30:00',
+                'LunchEnd' => '13:00:00',
+                'OpenUTC' => '01:30:00',
+                'CloseUTC' => '07:00:00',
+                'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
+            ],
+            'holidays' => [
+                [
+                    'Holiday' => 'Dragon Boat Festival',
+                    'Date' => '2026-06-19',
+                    'Type' => 'official',
                 ],
-                'isOpen' => false,
-                'TradingHours' => [
-                    'Open' => '09:30:00',
-                    'Close' => '15:00:00',
-                    'LunchBegin' => '11:30:00',
-                    'LunchEnd' => '13:00:00',
-                    'OpenUTC' => '01:30:00',
-                    'CloseUTC' => '07:00:00',
-                    'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
-                ],
-            ]),
+            ],
         ]);
 
         $admin = $this->adminUser();
@@ -370,11 +386,7 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('exchange_trading_times.0.sessions.1.close', '15:00:00')
             ->assertJsonPath('exchange_trading_times.0.holidays.0', '2026-06-19');
 
-        Http::assertSent(fn (Request $request): bool => str_starts_with(
-            $request->url(),
-            'https://eodhd.com/api/exchange-details/SHG?',
-        ));
-        Http::assertSentCount(1);
+        Http::assertSentCount(0);
     }
 
     public function test_admin_listing_hides_stale_holding_prices(): void

@@ -11,6 +11,7 @@ import { formatAdaptiveNumber, formatPriceValue } from './utils/numberFormatters
 const indexRecentPriceLimit = 30;
 const logoMarkUrl = '/images/gkstocks-logo-mark.png';
 const displayTimeZone = 'Europe/Vienna';
+const kestTaxRate = 0.275;
 
 const { lgAndDown, mdAndDown, smAndDown } = useDisplay();
 
@@ -2571,8 +2572,33 @@ function formatDepotOneWeekStartBalance() {
     return `${formatAccountBalance(depotValuationNumber('one_week_start_balance'))} EUR`;
 }
 
+function depotBalanceChangeTaxAmount() {
+    const amount = depotValuationNumber('balance_change_amount');
+
+    return amount > 0 ? roundCurrencyAmount(amount * kestTaxRate) : 0;
+}
+
+function depotAfterTaxBalanceChangeAmount() {
+    return depotValuationNumber('balance_change_amount') - depotBalanceChangeTaxAmount();
+}
+
+function roundCurrencyAmount(value) {
+    return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
 function formatDepotBalanceChangeAmount() {
     const amount = depotValuationNumber('balance_change_amount');
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${formatAccountBalance(amount)} EUR`;
+}
+
+function formatDepotCorrectedBalance() {
+    return `${formatAccountBalance(depotValuationNumber('current_balance') - depotBalanceChangeTaxAmount())} EUR`;
+}
+
+function formatDepotCorrectedBalanceChangeAmount() {
+    const amount = depotAfterTaxBalanceChangeAmount();
     const sign = amount > 0 ? '+' : '';
 
     return `${sign}${formatAccountBalance(amount)} EUR`;
@@ -2587,6 +2613,16 @@ function formatDepotOneWeekChangeAmount() {
 
 function formatDepotBalanceChangePercent() {
     const amount = depotValuationNumber('balance_change_percent');
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${amount.toFixed(2)}%`;
+}
+
+function formatDepotCorrectedBalanceChangePercent() {
+    const yearStartBalance = depotValuationNumber('year_start_balance');
+    const amount = yearStartBalance === 0
+        ? 0
+        : (depotAfterTaxBalanceChangeAmount() / yearStartBalance) * 100;
     const sign = amount > 0 ? '+' : '';
 
     return `${sign}${amount.toFixed(2)}%`;
@@ -2664,6 +2700,16 @@ function formatDepotPerformanceChangePercent() {
 
 function depotBalanceChangeClass() {
     const amount = depotValuationNumber('balance_change_amount');
+
+    return {
+        'text-success': amount > 0,
+        'text-error': amount < 0,
+        'text-medium-emphasis': amount === 0,
+    };
+}
+
+function depotCorrectedBalanceChangeClass() {
+    const amount = depotAfterTaxBalanceChangeAmount();
 
     return {
         'text-success': amount > 0,
@@ -5479,8 +5525,21 @@ function formatExchangeNextTradingText(exchange) {
     return nextTradingDateTime === '-' ? '-' : `Next trading: ${nextTradingDateTime}`;
 }
 
-function formatExchangeStatusText(exchange) {
-    return exchangeTradingState(exchange).isOpen ? 'Open' : 'Closed';
+function formatExchangeNextHolidays(exchange) {
+    const exchangeToday = exchangeLocalDateParts(exchange.timezone);
+    const todayKey = exchangeToday ? exchangeDateKey(exchangeToday) : new Date().toISOString().slice(0, 10);
+    const nextHolidays = exchangeHolidayDates(exchange)
+        .filter((holiday) => holiday >= todayKey)
+        .sort()
+        .slice(0, 3);
+
+    if (!nextHolidays.length) {
+        return '-';
+    }
+
+    return nextHolidays
+        .map((holiday) => formatExchangeHolidayDate(holiday))
+        .join(', ');
 }
 
 function exchangeTradingState(exchange) {
@@ -5626,6 +5685,20 @@ function exchangeDateKey(exchangeDate) {
         String(exchangeDate.month).padStart(2, '0'),
         String(exchangeDate.day).padStart(2, '0'),
     ].join('-');
+}
+
+function formatExchangeHolidayDate(holiday) {
+    const matches = String(holiday).match(/^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})$/);
+
+    if (!matches?.groups) {
+        return String(holiday);
+    }
+
+    return formatExchangeDate({
+        year: Number(matches.groups.year),
+        month: Number(matches.groups.month),
+        day: Number(matches.groups.day),
+    });
 }
 
 function formatExchangeDate(exchangeDate) {
@@ -6529,11 +6602,10 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 <thead>
                                     <tr>
                                         <th>Exchange</th>
-                                        <th>MIC</th>
                                         <th>Local time</th>
                                         <th>Next trading</th>
+                                        <th>Next holidays</th>
                                         <th>Days</th>
-                                        <th>Status</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -6544,23 +6616,10 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 {{ exchange.name || '-' }}
                                             </div>
                                         </td>
-                                        <td>
-                                            <div>{{ exchange.operating_mic || '-' }}</div>
-                                            <div class="text-caption text-medium-emphasis">
-                                                {{ exchange.timezone || '-' }}
-                                            </div>
-                                        </td>
                                         <td>{{ formatExchangeTradingTime(exchange) }}</td>
                                         <td>{{ formatExchangeNextTradingText(exchange) }}</td>
+                                        <td>{{ formatExchangeNextHolidays(exchange) }}</td>
                                         <td>{{ exchange.working_days || '-' }}</td>
-                                        <td>
-                                            <span v-if="exchange.error" class="text-warning">
-                                                Unavailable
-                                            </span>
-                                            <span v-else>
-                                                {{ formatExchangeStatusText(exchange) }}
-                                            </span>
-                                        </td>
                                     </tr>
                                 </tbody>
                             </v-table>
@@ -8554,6 +8613,19 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             <td class="text-right">
                                                 <span :class="depotBalanceChangeClass()">
                                                     {{ formatDepotBalanceChangePercent() }} · {{ formatDepotBalanceChangeAmount() }}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">Corrected balance (-27,5%)</td>
+                                            <td class="text-right">{{ formatDepotCorrectedBalance() }}</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">Corrected +/-</td>
+                                            <td class="text-right">
+                                                <span :class="depotCorrectedBalanceChangeClass()">
+                                                    {{ formatDepotCorrectedBalanceChangePercent() }} ·
+                                                    {{ formatDepotCorrectedBalanceChangeAmount() }}
                                                 </span>
                                             </td>
                                         </tr>

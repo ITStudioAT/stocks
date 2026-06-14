@@ -73,50 +73,130 @@ return new class extends Migration
 
         $now = now();
 
+        $this->clearMismatchedLegacyRealtimePriceLinks();
+
         DB::table('stock_prices')
             ->where('source_key', 'eodhd_realtime')
             ->orderBy('id')
             ->chunkById(500, function ($stockPrices) use ($now): void {
                 foreach ($stockPrices as $stockPrice) {
-                    DB::table('stock_realtime_prices')->updateOrInsert([
-                        'legacy_stock_price_id' => $stockPrice->id,
-                    ], [
-                        'stock_holding_id' => null,
-                        'instrument_key' => $stockPrice->instrument_key,
-                        'quote_hash' => $stockPrice->quote_hash,
-                        'source_key' => $stockPrice->source_key,
-                        'source_name' => $stockPrice->source_name,
-                        'source_url' => $stockPrice->source_url,
-                        'source_quality' => $stockPrice->source_quality,
-                        'venue' => $stockPrice->venue,
-                        'mic' => $stockPrice->mic,
-                        'isin' => $stockPrice->isin,
-                        'wkn' => $stockPrice->wkn,
-                        'symbol' => $stockPrice->symbol,
-                        'currency' => $stockPrice->currency,
-                        'bid' => $stockPrice->bid,
-                        'ask' => $stockPrice->ask,
-                        'last' => $stockPrice->last,
-                        'close' => $stockPrice->close,
-                        'nav' => $stockPrice->nav,
-                        'price' => $stockPrice->price,
-                        'price_type' => $stockPrice->price_type,
-                        'spread_abs' => $stockPrice->spread_abs,
-                        'spread_pct' => $stockPrice->spread_pct,
-                        'as_of' => $stockPrice->as_of,
-                        'fetched_at' => $stockPrice->fetched_at,
-                        'freshness_status' => $stockPrice->freshness_status,
-                        'validation_status' => $stockPrice->validation_status,
-                        'validation_errors' => $stockPrice->validation_errors,
-                        'raw_text_hash' => $stockPrice->raw_text_hash,
-                        'raw_payload' => $stockPrice->raw_payload,
-                        'trading_times' => $stockPrice->trading_times,
-                        'created_at' => $stockPrice->created_at ?? $now,
-                        'updated_at' => $stockPrice->updated_at ?? $now,
-                    ]);
+                    $this->copyRealtimePrice($stockPrice, $now);
                 }
             });
 
+        $this->assignLatestRealtimePrices();
+    }
+
+    /**
+     * Reverse the migrations.
+     */
+    public function down(): void
+    {
+        Schema::table('stock_holdings', function (Blueprint $table) {
+            $table->dropForeign(['latest_realtime_price_id']);
+            $table->dropColumn('latest_realtime_price_id');
+        });
+
+        Schema::dropIfExists('stock_realtime_prices');
+    }
+
+    private function clearMismatchedLegacyRealtimePriceLinks(): void
+    {
+        DB::table('stock_realtime_prices')
+            ->whereNotNull('legacy_stock_price_id')
+            ->orderBy('id')
+            ->chunkById(500, function ($realtimePrices): void {
+                foreach ($realtimePrices as $realtimePrice) {
+                    $stockPrice = DB::table('stock_prices')
+                        ->select(['id', 'quote_hash', 'source_key'])
+                        ->where('id', $realtimePrice->legacy_stock_price_id)
+                        ->first();
+
+                    if (
+                        $stockPrice !== null
+                        && $stockPrice->source_key === 'eodhd_realtime'
+                        && $stockPrice->quote_hash === $realtimePrice->quote_hash
+                    ) {
+                        continue;
+                    }
+
+                    DB::table('stock_realtime_prices')
+                        ->where('id', $realtimePrice->id)
+                        ->update(['legacy_stock_price_id' => null]);
+                }
+            });
+    }
+
+    private function copyRealtimePrice(object $stockPrice, mixed $now): void
+    {
+        $realtimePriceAttributes = $this->realtimePriceAttributes($stockPrice, $now);
+        $realtimePriceId = DB::table('stock_realtime_prices')
+            ->where('quote_hash', $stockPrice->quote_hash)
+            ->value('id');
+
+        DB::table('stock_realtime_prices')
+            ->where('legacy_stock_price_id', $stockPrice->id)
+            ->when($realtimePriceId !== null, fn ($query) => $query->where('id', '<>', $realtimePriceId))
+            ->update(['legacy_stock_price_id' => null]);
+
+        if ($realtimePriceId === null) {
+            DB::table('stock_realtime_prices')->insert([
+                'legacy_stock_price_id' => $stockPrice->id,
+            ] + $realtimePriceAttributes);
+
+            return;
+        }
+
+        DB::table('stock_realtime_prices')
+            ->where('id', $realtimePriceId)
+            ->update([
+                'legacy_stock_price_id' => $stockPrice->id,
+            ] + $realtimePriceAttributes);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function realtimePriceAttributes(object $stockPrice, mixed $now): array
+    {
+        return [
+            'stock_holding_id' => null,
+            'instrument_key' => $stockPrice->instrument_key,
+            'quote_hash' => $stockPrice->quote_hash,
+            'source_key' => $stockPrice->source_key,
+            'source_name' => $stockPrice->source_name,
+            'source_url' => $stockPrice->source_url,
+            'source_quality' => $stockPrice->source_quality,
+            'venue' => $stockPrice->venue,
+            'mic' => $stockPrice->mic,
+            'isin' => $stockPrice->isin,
+            'wkn' => $stockPrice->wkn,
+            'symbol' => $stockPrice->symbol,
+            'currency' => $stockPrice->currency,
+            'bid' => $stockPrice->bid,
+            'ask' => $stockPrice->ask,
+            'last' => $stockPrice->last,
+            'close' => $stockPrice->close,
+            'nav' => $stockPrice->nav,
+            'price' => $stockPrice->price,
+            'price_type' => $stockPrice->price_type,
+            'spread_abs' => $stockPrice->spread_abs,
+            'spread_pct' => $stockPrice->spread_pct,
+            'as_of' => $stockPrice->as_of,
+            'fetched_at' => $stockPrice->fetched_at,
+            'freshness_status' => $stockPrice->freshness_status,
+            'validation_status' => $stockPrice->validation_status,
+            'validation_errors' => $stockPrice->validation_errors,
+            'raw_text_hash' => $stockPrice->raw_text_hash,
+            'raw_payload' => $stockPrice->raw_payload,
+            'trading_times' => $stockPrice->trading_times,
+            'created_at' => $stockPrice->created_at ?? $now,
+            'updated_at' => $stockPrice->updated_at ?? $now,
+        ];
+    }
+
+    private function assignLatestRealtimePrices(): void
+    {
         DB::table('stock_holdings')
             ->whereNotNull('latest_stock_price_id')
             ->orderBy('id')
@@ -139,18 +219,5 @@ return new class extends Migration
                         ->update(['latest_realtime_price_id' => $realtimePriceId]);
                 }
             });
-    }
-
-    /**
-     * Reverse the migrations.
-     */
-    public function down(): void
-    {
-        Schema::table('stock_holdings', function (Blueprint $table) {
-            $table->dropForeign(['latest_realtime_price_id']);
-            $table->dropColumn('latest_realtime_price_id');
-        });
-
-        Schema::dropIfExists('stock_realtime_prices');
     }
 };

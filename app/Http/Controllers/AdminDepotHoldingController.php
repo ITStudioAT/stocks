@@ -127,15 +127,12 @@ class AdminDepotHoldingController extends Controller
         $holdingExchangeCodes = $holdings
             ->map(fn (StockHolding $holding): string => $this->eodhdMarketData->exchangeCodeForHolding($holding))
             ->toBase();
-        $indexExchangeCodes = IndexWatchItem::query()
-            ->orderBy('exchange')
-            ->orderBy('symbol')
-            ->get(['id', 'symbol', 'exchange', 'country'])
-            ->map(fn (IndexWatchItem $item): string => $this->eodhdMarketData->exchangeCodeForIndexWatchItem($item))
-            ->toBase();
+        $indexExchangeCodes = IndexWatchItem::query()->exists()
+            ? collect(['INDX'])
+            : collect();
 
         return response()->json([
-            'exchange_trading_times' => $this->eodhdMarketData->exchangeTradingTimesForCodes(
+            'exchange_trading_times' => $this->eodhdMarketData->storedExchangeTradingTimesForCodes(
                 $holdingExchangeCodes->merge($indexExchangeCodes),
             ),
             'eodhd_api_usage' => $this->eodhdApiUsage->payload(),

@@ -414,6 +414,63 @@ PHP);
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
     }
 
+    public function test_update_command_allows_guarded_pending_migrations_that_reference_existing_tables(): void
+    {
+        Process::preventStrayProcesses();
+
+        $guardedMigration = database_path('migrations/2014_10_12_000000_create_users_table.php');
+
+        file_put_contents($guardedMigration, <<<'PHP'
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        if (! Schema::hasTable('users')) {
+            Schema::create('users', function (Blueprint $table): void {
+                $table->id();
+            });
+        }
+    }
+};
+PHP);
+
+        $this->markCurrentMigrationsAsRanExcept([$guardedMigration]);
+        $this->createProtectedAdminTables();
+
+        Process::fake([
+            'composer install --no-interaction --prefer-dist' => Process::result(),
+            'php artisan optimize:clear' => Process::result(),
+            'php artisan migrate --force --no-interaction' => Process::result(),
+            'php artisan optimize' => Process::result(),
+            'php artisan queue:restart' => Process::result(),
+            'php artisan historical-session-prices:dispatch-due' => Process::result(),
+        ]);
+
+        try {
+            $this->artisan('app:update --skip-npm --skip-build')
+                ->doesntExpectOutputToContain('Migration preflight failed')
+                ->expectsOutputToContain('Application update complete.')
+                ->assertSuccessful();
+        } finally {
+            if (file_exists($guardedMigration)) {
+                unlink($guardedMigration);
+            }
+        }
+
+        Process::assertRan('composer install --no-interaction --prefer-dist');
+        Process::assertRan('php artisan optimize:clear');
+        Process::assertRan('php artisan migrate --force --no-interaction');
+        Process::assertRan('php artisan optimize');
+        Process::assertRan('php artisan queue:restart');
+        Process::assertRan('php artisan historical-session-prices:dispatch-due');
+    }
+
     private function fakeSuccessfulUpdateProcess(): void
     {
         Process::preventStrayProcesses();

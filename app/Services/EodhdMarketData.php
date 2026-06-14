@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\EodhdExchange;
 use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
 use App\Models\StockHoldingIntradayCandle;
@@ -448,6 +449,23 @@ class EodhdMarketData
             ->sort()
             ->values()
             ->map(fn (string $exchangeCode): array => $this->exchangeDetails($exchangeCode))
+            ->all();
+    }
+
+    /**
+     * @param  iterable<int, string>  $exchangeCodes
+     * @return array<int, array{code: string, name: ?string, operating_mic: ?string, country: ?string, currency: ?string, timezone: ?string, is_open: bool, open: ?string, close: ?string, open_utc: ?string, close_utc: ?string, working_days: ?string, error: ?string}>
+     */
+    public function storedExchangeTradingTimesForCodes(iterable $exchangeCodes): array
+    {
+        return collect($exchangeCodes)
+            ->filter(fn (string $exchangeCode): bool => trim($exchangeCode) !== '')
+            ->unique()
+            ->sort()
+            ->values()
+            ->map(fn (string $exchangeCode): ?array => $this->storedOrGenericExchangeDetails($exchangeCode))
+            ->filter()
+            ->values()
             ->all();
     }
 
@@ -1180,6 +1198,14 @@ class EodhdMarketData
      */
     private function exchangeDetails(string $exchangeCode): array
     {
+        $exchangeCode = Str::upper(trim($exchangeCode));
+
+        $storedDetails = $this->storedOrGenericExchangeDetails($exchangeCode);
+
+        if ($storedDetails !== null) {
+            return $storedDetails;
+        }
+
         $cacheKey = "eodhd.exchange-details.{$exchangeCode}";
         $cachedDetails = Cache::get($cacheKey);
 
@@ -1194,6 +1220,91 @@ class EodhdMarketData
         }
 
         return $details;
+    }
+
+    /**
+     * @return array{code: string, name: ?string, operating_mic: ?string, country: ?string, currency: ?string, timezone: ?string, is_open: bool, open: ?string, close: ?string, lunch_begin: ?string, lunch_end: ?string, open_utc: ?string, close_utc: ?string, working_days: ?string, sessions: array<int, array{open: string, close: string}>, holidays: array<int, string>, error: ?string}|null
+     */
+    private function storedOrGenericExchangeDetails(string $exchangeCode): ?array
+    {
+        $exchangeCode = Str::upper(trim($exchangeCode));
+
+        if ($exchangeCode === 'INDX') {
+            return $this->genericIndexExchangeDetails();
+        }
+
+        return $this->storedExchangeDetails($exchangeCode);
+    }
+
+    /**
+     * @return array{code: string, name: ?string, operating_mic: ?string, country: ?string, currency: ?string, timezone: ?string, is_open: bool, open: ?string, close: ?string, lunch_begin: ?string, lunch_end: ?string, open_utc: ?string, close_utc: ?string, working_days: ?string, sessions: array<int, array{open: string, close: string}>, holidays: array<int, string>, error: ?string}|null
+     */
+    private function storedExchangeDetails(string $exchangeCode): ?array
+    {
+        $exchange = EodhdExchange::query()
+            ->where('code', $exchangeCode)
+            ->orWhere('detail_code', $exchangeCode)
+            ->first();
+
+        if ($exchange === null) {
+            return null;
+        }
+
+        $tradingHours = is_array($exchange->trading_hours) ? $exchange->trading_hours : [];
+
+        return [
+            'code' => $exchange->code,
+            'name' => $exchange->name,
+            'operating_mic' => $exchange->operating_mic,
+            'country' => $exchange->country,
+            'currency' => $exchange->currency,
+            'timezone' => $exchange->timezone,
+            'is_open' => false,
+            'open' => $this->stringOrNull(Arr::get($tradingHours, 'Open')),
+            'close' => $this->stringOrNull(Arr::get($tradingHours, 'Close')),
+            'lunch_begin' => $this->stringOrNull(Arr::get($tradingHours, 'LunchBegin')),
+            'lunch_end' => $this->stringOrNull(Arr::get($tradingHours, 'LunchEnd')),
+            'open_utc' => $this->stringOrNull(Arr::get($tradingHours, 'OpenUTC')),
+            'close_utc' => $this->stringOrNull(Arr::get($tradingHours, 'CloseUTC')),
+            'working_days' => $this->stringOrNull(Arr::get($tradingHours, 'WorkingDays')),
+            'sessions' => $this->exchangeSessions($tradingHours),
+            'holidays' => $this->exchangeHolidays(['ExchangeHolidays' => $exchange->holidays ?? []]),
+            'error' => null,
+        ];
+    }
+
+    /**
+     * @return array{code: string, name: ?string, operating_mic: ?string, country: ?string, currency: ?string, timezone: ?string, is_open: bool, open: ?string, close: ?string, lunch_begin: ?string, lunch_end: ?string, open_utc: ?string, close_utc: ?string, working_days: ?string, sessions: array<int, array{open: string, close: string}>, holidays: array<int, string>, error: ?string}
+     */
+    private function genericIndexExchangeDetails(): array
+    {
+        $tradingHours = [
+            'Open' => '00:00:00',
+            'Close' => '23:59:00',
+            'OpenUTC' => '00:00:00',
+            'CloseUTC' => '23:59:00',
+            'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
+        ];
+
+        return [
+            'code' => 'INDX',
+            'name' => 'Index Data',
+            'operating_mic' => null,
+            'country' => null,
+            'currency' => null,
+            'timezone' => 'UTC',
+            'is_open' => false,
+            'open' => $tradingHours['Open'],
+            'close' => $tradingHours['Close'],
+            'lunch_begin' => null,
+            'lunch_end' => null,
+            'open_utc' => $tradingHours['OpenUTC'],
+            'close_utc' => $tradingHours['CloseUTC'],
+            'working_days' => $tradingHours['WorkingDays'],
+            'sessions' => $this->exchangeSessions($tradingHours),
+            'holidays' => [],
+            'error' => null,
+        ];
     }
 
     /**

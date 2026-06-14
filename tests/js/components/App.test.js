@@ -168,6 +168,17 @@ function localDateKey(timeZone) {
     return [dateParts.year, dateParts.month, dateParts.day].join('-');
 }
 
+function displayDateFromKey(dateKey) {
+    const [year, month, day] = dateKey.split('-').map((part) => Number(part));
+
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: 'UTC',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
 function indexMonthPrices() {
     const baseDate = new Date(Date.UTC(2026, 5, 7));
 
@@ -2528,6 +2539,7 @@ describe('App', () => {
             next_refresh_at: '2026-06-02T13:30:00+00:00',
         });
         const currentBerlinDate = localDateKey('Europe/Berlin');
+        const nextHolidayDate = '2099-12-25';
         const fetchMock = vi.fn((path, options) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -2887,7 +2899,7 @@ describe('App', () => {
                             sessions: [
                                 { open: '09:00:00', close: '17:30:00' },
                             ],
-                            holidays: [currentBerlinDate],
+                            holidays: [currentBerlinDate, nextHolidayDate],
                             error: null,
                         },
                     ],
@@ -3335,16 +3347,24 @@ describe('App', () => {
         expect(wrapper.text()).toContain('XETRA Stock Exchange');
         expect(wrapper.text()).toContain('09:00-17:30');
         const exchangeDetailsTable = wrapper.findAll('table')[1];
-        expect(exchangeDetailsTable.findAll('thead th').map((header) => header.text())).toContain('Next trading');
+        expect(exchangeDetailsTable.findAll('thead th').map((header) => header.text())).toEqual([
+            'Exchange',
+            'Local time',
+            'Next trading',
+            'Next holidays',
+            'Days',
+        ]);
         const exchangeDetailsCells = exchangeDetailsTable.find('tbody tr').findAll('td');
+        expect(exchangeDetailsCells).toHaveLength(5);
         expect(exchangeDetailsCells[0].text()).toContain('XETRA');
         expect(exchangeDetailsCells[0].text()).toContain('XETRA Stock Exchange');
         expect(exchangeDetailsCells[0].text()).not.toContain('Europe/Berlin');
-        expect(exchangeDetailsCells[1].text()).toContain('XETR');
-        expect(exchangeDetailsCells[1].text()).toContain('Europe/Berlin');
+        expect(exchangeDetailsTable.find('tbody tr').text()).not.toContain('Europe/Berlin');
         expect(wrapper.text()).toContain('Next trading:');
+        expect(exchangeDetailsCells[3].text()).toContain(displayDateFromKey(currentBerlinDate));
+        expect(exchangeDetailsCells[3].text()).toContain(displayDateFromKey(nextHolidayDate));
         expect(wrapper.text()).toContain('Mon,Tue,Wed,Thu,Fri');
-        expect(wrapper.text()).toContain('Closed');
+        expect(exchangeDetailsTable.find('tbody tr').text()).not.toContain('Closed');
         expect(wrapper.text()).not.toContain('07:00-15:30 UTC');
         expect(wrapper.text()).toContain('Tradegate Exchange');
         expect(wrapper.text()).toContain('EXXX');
@@ -3739,7 +3759,7 @@ describe('App', () => {
             expect(exchangeRow.text()).toContain('Shanghai Stock Exchange');
             expect(exchangeRow.text()).toContain('09:30-11:30, 13:00-15:00');
             expect(exchangeRow.text()).toContain('Next trading: 05.06.2026, 13:00');
-            expect(exchangeRow.text()).toContain('Closed');
+            expect(exchangeRow.text()).not.toContain('Closed');
         } finally {
             vi.useRealTimers();
         }
@@ -4937,6 +4957,11 @@ describe('App', () => {
         expect(wrapper.text()).toContain('1,000.00 EUR');
         expect(wrapper.text()).toContain(`Balance ${sessionHeaderDate(0).slice(0, 6)}`);
         expect(wrapper.text()).toContain('+3.30% · +33.00 EUR');
+        expect(wrapper.text()).not.toContain('Kest - 27,5%');
+        expect(wrapper.text()).toContain('Corrected balance (-27,5%)');
+        expect(wrapper.text()).toContain('1,023.92 EUR');
+        expect(wrapper.text()).toContain('Corrected +/-');
+        expect(wrapper.text()).toContain('+2.39% · +23.92 EUR');
         expect(wrapper.text()).toContain(`Balance ${sessionHeaderDate(7).slice(0, 6)}`);
         expect(wrapper.text()).toContain('990.00 EUR');
         expect(wrapper.text()).toContain('1 week');
@@ -5108,6 +5133,8 @@ describe('App', () => {
         expect(wrapper.text()).toContain('360.00 USD');
         expect(wrapper.text()).toContain('1,010.00 EUR');
         expect(wrapper.text()).toContain('+1.00% · +10.00 EUR');
+        expect(wrapper.text()).toContain('1,007.25 EUR');
+        expect(wrapper.text()).toContain('+0.73% · +7.25 EUR');
         expect(wrapper.text()).toContain('+2.86%');
         expect(wrapper.text()).toContain('+10.00');
 
@@ -5132,6 +5159,8 @@ describe('App', () => {
         expect(wrapper.text()).toContain('360.50 USD');
         expect(wrapper.text()).toContain('1,010.50 EUR');
         expect(wrapper.text()).toContain('+1.05% · +10.50 EUR');
+        expect(wrapper.text()).toContain('1,007.61 EUR');
+        expect(wrapper.text()).toContain('+0.76% · +7.61 EUR');
         expect(wrapper.text()).toContain('+3.00%');
 
         const updatedFlatexPriceButton = wrapper.findAll('button').find((button) => button.text() === '180.25 USD');

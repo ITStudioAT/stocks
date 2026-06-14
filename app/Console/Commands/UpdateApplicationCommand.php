@@ -407,7 +407,13 @@ PHP;
         $tables = [];
 
         foreach ($this->pendingMigrationFiles() as $migrationFile) {
+            $migrationContents = File::get($migrationFile);
+
             foreach ($this->createdTablesInMigration($migrationFile) as $table) {
+                if ($this->createTableIsGuarded($migrationContents, $table)) {
+                    continue;
+                }
+
                 $tables[$table][] = basename($migrationFile);
             }
         }
@@ -461,6 +467,17 @@ PHP;
         );
 
         return array_values(array_unique($matches[1] ?? []));
+    }
+
+    private function createTableIsGuarded(string $migrationContents, string $table): bool
+    {
+        $tablePattern = preg_quote($table, '/');
+        $separator = '(?:(?:\s+)|(?:/\*.*?\*/)|(?://[^\r\n]*(?:\r?\n|$)))*';
+
+        return preg_match(
+            "~if\s*\(\s*!\s*Schema::hasTable\s*\(\s*['\"]{$tablePattern}['\"]\s*\)\s*\)\s*\{{$separator}Schema::create\s*\(\s*['\"]{$tablePattern}['\"]~s",
+            $migrationContents,
+        ) === 1;
     }
 
     /**
