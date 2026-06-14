@@ -27,6 +27,7 @@ const {
     indexWatchItems,
     depotHoldings,
     depotValuations,
+    depotPerformanceSeries,
     transactions,
     exchangeTradingTimes,
     appVersion,
@@ -346,6 +347,7 @@ const sessionHeaderDates = computed(() => {
 });
 const selectedIndexRecentPrices = computed(() => selectedIndexWatchItem.value?.recent_prices ?? []);
 const selectedIndexChart = computed(() => buildIndexPriceChart(selectedIndexRecentPrices.value));
+const depotPerformanceChart = computed(() => buildDepotPerformanceChart(depotPerformanceSeries?.value ?? []));
 const selectedAnalyzeHolding = computed(() => holdings.value.find((holding) => holding.id === selectedAnalyzeHoldingId.value) ?? null);
 const selectedAnalyzeScopeLabel = computed(() => {
     if (selectedAnalyzeHoldingId.value === null) {
@@ -2597,6 +2599,69 @@ function formatDepotOneWeekChangePercent() {
     return `${sign}${amount.toFixed(2)}%`;
 }
 
+function formatDepotPerformanceBalance(value) {
+    return `${formatAccountBalance(value)} EUR`;
+}
+
+function formatDepotPerformanceDate(value) {
+    return formatIndexHistoryDate(value);
+}
+
+function formatDepotPerformanceEndpoint(point) {
+    if (!point || Number.isNaN(point.chart_price)) {
+        return '-';
+    }
+
+    return formatDepotPerformanceBalance(point.chart_price);
+}
+
+function depotPerformanceChangeClass() {
+    const first = depotPerformanceChart.value.first;
+    const latest = depotPerformanceChart.value.latest;
+
+    if (!first || !latest) {
+        return 'text-medium-emphasis';
+    }
+
+    if (latest.chart_price > first.chart_price) {
+        return 'text-success';
+    }
+
+    if (latest.chart_price < first.chart_price) {
+        return 'text-error';
+    }
+
+    return 'text-medium-emphasis';
+}
+
+function formatDepotPerformanceChangeAmount() {
+    const first = depotPerformanceChart.value.first;
+    const latest = depotPerformanceChart.value.latest;
+
+    if (!first || !latest) {
+        return '0.00 EUR';
+    }
+
+    const amount = latest.chart_price - first.chart_price;
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${formatAccountBalance(amount)} EUR`;
+}
+
+function formatDepotPerformanceChangePercent() {
+    const first = depotPerformanceChart.value.first;
+    const latest = depotPerformanceChart.value.latest;
+
+    if (!first || !latest || first.chart_price === 0) {
+        return '0.00%';
+    }
+
+    const percent = ((latest.chart_price - first.chart_price) / Math.abs(first.chart_price)) * 100;
+    const sign = percent > 0 ? '+' : '';
+
+    return `${sign}${percent.toFixed(2)}%`;
+}
+
 function depotBalanceChangeClass() {
     const amount = depotValuationNumber('balance_change_amount');
 
@@ -3042,6 +3107,174 @@ function buildIndexPriceChart(prices) {
         firstLabel: chartEndpointLabel(points[0], plot, 'start'),
         latestLabel: chartEndpointLabel(points[points.length - 1], plot, 'end', points[0]),
         trendLine: chartRegressionLine(points, chartMin, chartRange, plot),
+    };
+}
+
+function buildDepotPerformanceChart(series) {
+    const chartWidth = 1800;
+    const chartHeight = 520;
+    const chartPadding = {
+        top: 40,
+        right: 92,
+        bottom: 58,
+        left: 88,
+    };
+    const plot = {
+        left: chartPadding.left,
+        top: chartPadding.top,
+        right: chartWidth - chartPadding.right,
+        bottom: chartHeight - chartPadding.bottom,
+    };
+    const plotWidth = plot.right - plot.left;
+    const plotHeight = plot.bottom - plot.top;
+    const chartPrices = [...series]
+        .map((point) => ({
+            ...point,
+            chart_price: Number(point.account_balance),
+        }))
+        .filter((point) => point.date && !Number.isNaN(point.chart_price))
+        .sort((first, second) => first.date.localeCompare(second.date));
+
+    if (chartPrices.length === 0) {
+        return {
+            width: chartWidth,
+            height: chartHeight,
+            plot,
+            points: [],
+            linePoints: '',
+            horizontalGridLines: [],
+            verticalGridLines: [],
+            first: null,
+            latest: null,
+            firstLabel: null,
+            latestLabel: null,
+            highMarker: null,
+            lowMarker: null,
+            trendLine: null,
+        };
+    }
+
+    const domainStartDate = new Date(`${chartPrices[0].date.slice(0, 4)}-01-01T00:00:00Z`);
+    const domainYear = domainStartDate.getUTCFullYear();
+    const values = chartPrices.map((point) => point.chart_price);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const range = max - min;
+    const rangePadding = range === 0 ? Math.max(Math.abs(max) * 0.05, 1) : range * 0.05;
+    const chartMin = min - rangePadding;
+    const chartMax = max + rangePadding;
+    const chartRange = chartMax - chartMin;
+    const horizontalGridLines = Array.from({ length: 5 }, (_, index) => {
+        const ratio = index / 4;
+        const value = chartMax - chartRange * ratio;
+        const y = plot.top + plotHeight * ratio;
+
+        return {
+            value,
+            y,
+            label: formatAdaptiveNumber(value),
+        };
+    });
+    const points = chartPrices.map((point) => {
+        const x = plot.left + depotPerformanceYearRatio(point.date) * plotWidth;
+        const normalized = (point.chart_price - chartMin) / chartRange;
+        const y = plot.bottom - normalized * plotHeight;
+
+        return {
+            ...point,
+            x,
+            y,
+            label: formatDepotPerformanceDate(point.date),
+        };
+    });
+    const highPoint = points.find((point) => point.chart_price === max);
+    const lowPoint = points.find((point) => point.chart_price === min);
+
+    return {
+        width: chartWidth,
+        height: chartHeight,
+        plot,
+        points,
+        linePoints: points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' '),
+        horizontalGridLines,
+        verticalGridLines: depotPerformanceMonthMarkers(domainYear, plot),
+        first: points[0],
+        latest: points[points.length - 1],
+        firstLabel: chartEndpointLabel(points[0], plot, 'start', null, {
+            labelPrefix: '01.01',
+        }),
+        latestLabel: chartEndpointLabel(points[points.length - 1], plot, 'end', points[0], {
+            labelPrefix: 'Now',
+        }),
+        highMarker: depotPerformanceExtremumMarker(highPoint, 'high', plot),
+        lowMarker: depotPerformanceExtremumMarker(lowPoint, 'low', plot),
+        trendLine: chartRegressionLine(points, chartMin, chartRange, plot),
+    };
+}
+
+function depotPerformanceYearRatio(dateString) {
+    const date = new Date(`${dateString}T00:00:00Z`);
+
+    if (Number.isNaN(date.getTime())) {
+        return 0;
+    }
+
+    const monthIndex = date.getUTCMonth();
+    const dayOfMonth = date.getUTCDate();
+    const daysInMonth = new Date(Date.UTC(date.getUTCFullYear(), monthIndex + 1, 0)).getUTCDate();
+    const monthProgress = daysInMonth <= 1
+        ? 0
+        : (dayOfMonth - 1) / (daysInMonth - 1);
+
+    return (monthIndex + monthProgress) / 12;
+}
+
+function depotPerformanceMonthMarkers(year, plot) {
+    const plotWidth = plot.right - plot.left;
+
+    const monthMarkers = Array.from({ length: 12 }, (_, monthIndex) => ({
+        x: plot.left + (monthIndex / 12) * plotWidth,
+        label: `1.${monthIndex + 1}.${year}`,
+        labelAnchor: monthIndex === 0 ? 'start' : 'middle',
+    }));
+
+    return [
+        ...monthMarkers,
+        {
+            x: plot.right,
+            label: `31.12.${year}`,
+            labelAnchor: 'end',
+        },
+    ];
+}
+
+function depotPerformanceExtremumMarker(point, direction, plot) {
+    if (!point) {
+        return null;
+    }
+
+    const markerDistance = 24;
+    const markerPadding = 18;
+    const preferredMarkerY = direction === 'high'
+        ? point.y - markerDistance
+        : point.y + markerDistance;
+    const fallbackMarkerY = direction === 'high'
+        ? point.y + markerDistance
+        : point.y - markerDistance;
+    const markerY = preferredMarkerY >= plot.top + markerPadding && preferredMarkerY <= plot.bottom - markerPadding
+        ? preferredMarkerY
+        : fallbackMarkerY;
+    const shouldPlaceLabelLeft = point.x > (plot.left + plot.right) / 2;
+
+    return {
+        ...point,
+        direction,
+        markerX: point.x,
+        markerY,
+        labelX: shouldPlaceLabelLeft ? point.x - 12 : point.x + 12,
+        labelY: markerY,
+        labelAnchor: shouldPlaceLabelLeft ? 'end' : 'start',
+        labelPrefix: direction === 'high' ? 'High' : 'Low',
     };
 }
 
@@ -8686,6 +8919,183 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             <p v-else-if="!transactionsLoading" class="text-medium-emphasis text-body-2 mt-2">No transactions yet.</p>
                         </div>
 
+                        <v-card v-if="activeDepot" class="depot-performance-card mt-6" variant="outlined">
+                            <v-card-text>
+                                <div class="d-flex align-center justify-space-between flex-wrap ga-3 mb-3">
+                                    <div>
+                                        <p class="text-overline text-medium-emphasis mb-1">Depot performance</p>
+                                        <h2 class="text-h6">01.01 to now</h2>
+                                    </div>
+                                    <div class="text-right">
+                                        <div class="text-caption text-medium-emphasis">
+                                            {{ formatDepotPerformanceDate(depotPerformanceChart.first?.date) }}
+                                            {{ formatDepotPerformanceEndpoint(depotPerformanceChart.first) }}
+                                            -
+                                            {{ formatDepotPerformanceDate(depotPerformanceChart.latest?.date) }}
+                                            {{ formatDepotPerformanceEndpoint(depotPerformanceChart.latest) }}
+                                        </div>
+                                        <div class="font-weight-bold" :class="depotPerformanceChangeClass()">
+                                            {{ formatDepotPerformanceChangePercent() }} · {{ formatDepotPerformanceChangeAmount() }}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <svg
+                                    v-if="depotPerformanceChart.points.length"
+                                    class="depot-performance-chart"
+                                    :viewBox="`0 0 ${depotPerformanceChart.width} ${depotPerformanceChart.height}`"
+                                    role="img"
+                                    aria-label="Depot performance chart from January 1 to now"
+                                >
+                                    <line
+                                        v-for="(gridLine, index) in depotPerformanceChart.horizontalGridLines"
+                                        :key="`depot-performance-grid-${index}`"
+                                        class="index-price-chart-grid-line"
+                                        :x1="depotPerformanceChart.plot.left"
+                                        :y1="gridLine.y"
+                                        :x2="depotPerformanceChart.plot.right"
+                                        :y2="gridLine.y"
+                                    />
+                                    <line
+                                        v-for="(marker, index) in depotPerformanceChart.verticalGridLines"
+                                        :key="`depot-performance-marker-${index}`"
+                                        class="index-price-chart-grid-line"
+                                        :x1="marker.x"
+                                        :y1="depotPerformanceChart.plot.top"
+                                        :x2="marker.x"
+                                        :y2="depotPerformanceChart.plot.bottom"
+                                    />
+                                    <line
+                                        class="index-price-chart-axis"
+                                        :x1="depotPerformanceChart.plot.left"
+                                        :y1="depotPerformanceChart.plot.bottom"
+                                        :x2="depotPerformanceChart.plot.right"
+                                        :y2="depotPerformanceChart.plot.bottom"
+                                    />
+                                    <line
+                                        class="index-price-chart-axis"
+                                        :x1="depotPerformanceChart.plot.left"
+                                        :y1="depotPerformanceChart.plot.top"
+                                        :x2="depotPerformanceChart.plot.left"
+                                        :y2="depotPerformanceChart.plot.bottom"
+                                    />
+                                    <text
+                                        v-for="(gridLine, index) in depotPerformanceChart.horizontalGridLines"
+                                        :key="`depot-performance-y-label-${index}`"
+                                        class="index-price-chart-y-label"
+                                        :x="depotPerformanceChart.plot.left - 8"
+                                        :y="gridLine.y"
+                                        text-anchor="end"
+                                    >
+                                        {{ gridLine.label }}
+                                    </text>
+                                    <text
+                                        v-for="(marker, index) in depotPerformanceChart.verticalGridLines"
+                                        :key="`depot-performance-x-label-${index}`"
+                                        class="index-price-chart-x-label"
+                                        :x="marker.x"
+                                        :y="depotPerformanceChart.height - 18"
+                                        :text-anchor="marker.labelAnchor ?? 'middle'"
+                                    >
+                                        {{ marker.label }}
+                                    </text>
+                                    <line
+                                        v-if="depotPerformanceChart.trendLine"
+                                        class="index-price-chart-trend-line"
+                                        :x1="depotPerformanceChart.trendLine.x1"
+                                        :y1="depotPerformanceChart.trendLine.y1"
+                                        :x2="depotPerformanceChart.trendLine.x2"
+                                        :y2="depotPerformanceChart.trendLine.y2"
+                                    />
+                                    <polyline
+                                        class="depot-performance-chart-line"
+                                        :points="depotPerformanceChart.linePoints"
+                                    />
+                                    <circle
+                                        v-if="depotPerformanceChart.first"
+                                        class="index-price-chart-point"
+                                        :cx="depotPerformanceChart.first.x"
+                                        :cy="depotPerformanceChart.first.y"
+                                        r="4"
+                                    />
+                                    <circle
+                                        v-if="depotPerformanceChart.latest"
+                                        class="index-price-chart-point"
+                                        :cx="depotPerformanceChart.latest.x"
+                                        :cy="depotPerformanceChart.latest.y"
+                                        r="4"
+                                    />
+                                    <template v-if="depotPerformanceChart.highMarker">
+                                        <line
+                                            class="depot-performance-chart-extremum-line depot-performance-chart-extremum-line--high"
+                                            :x1="depotPerformanceChart.highMarker.x"
+                                            :y1="depotPerformanceChart.highMarker.y"
+                                            :x2="depotPerformanceChart.highMarker.markerX"
+                                            :y2="depotPerformanceChart.highMarker.markerY"
+                                        />
+                                        <circle
+                                            class="depot-performance-chart-extremum-point depot-performance-chart-extremum-point--high"
+                                            :cx="depotPerformanceChart.highMarker.x"
+                                            :cy="depotPerformanceChart.highMarker.y"
+                                            r="5"
+                                        />
+                                        <text
+                                            class="depot-performance-chart-extremum-label depot-performance-chart-extremum-label--high"
+                                            :x="depotPerformanceChart.highMarker.labelX"
+                                            :y="depotPerformanceChart.highMarker.labelY"
+                                            :text-anchor="depotPerformanceChart.highMarker.labelAnchor"
+                                        >
+                                            High {{ formatDepotPerformanceEndpoint(depotPerformanceChart.highMarker) }}
+                                        </text>
+                                    </template>
+                                    <template v-if="depotPerformanceChart.lowMarker">
+                                        <line
+                                            class="depot-performance-chart-extremum-line depot-performance-chart-extremum-line--low"
+                                            :x1="depotPerformanceChart.lowMarker.x"
+                                            :y1="depotPerformanceChart.lowMarker.y"
+                                            :x2="depotPerformanceChart.lowMarker.markerX"
+                                            :y2="depotPerformanceChart.lowMarker.markerY"
+                                        />
+                                        <circle
+                                            class="depot-performance-chart-extremum-point depot-performance-chart-extremum-point--low"
+                                            :cx="depotPerformanceChart.lowMarker.x"
+                                            :cy="depotPerformanceChart.lowMarker.y"
+                                            r="5"
+                                        />
+                                        <text
+                                            class="depot-performance-chart-extremum-label depot-performance-chart-extremum-label--low"
+                                            :x="depotPerformanceChart.lowMarker.labelX"
+                                            :y="depotPerformanceChart.lowMarker.labelY"
+                                            :text-anchor="depotPerformanceChart.lowMarker.labelAnchor"
+                                        >
+                                            Low {{ formatDepotPerformanceEndpoint(depotPerformanceChart.lowMarker) }}
+                                        </text>
+                                    </template>
+                                    <text
+                                        v-if="depotPerformanceChart.firstLabel"
+                                        class="index-price-chart-endpoint-label"
+                                        :x="depotPerformanceChart.firstLabel.labelX"
+                                        :y="depotPerformanceChart.firstLabel.labelY"
+                                        :text-anchor="depotPerformanceChart.firstLabel.labelAnchor"
+                                    >
+                                        {{ formatDepotPerformanceEndpoint(depotPerformanceChart.firstLabel) }}
+                                    </text>
+                                    <text
+                                        v-if="depotPerformanceChart.latestLabel"
+                                        class="index-price-chart-endpoint-label index-price-chart-endpoint-label--latest"
+                                        :x="depotPerformanceChart.latestLabel.labelX"
+                                        :y="depotPerformanceChart.latestLabel.labelY"
+                                        :text-anchor="depotPerformanceChart.latestLabel.labelAnchor"
+                                    >
+                                        {{ formatDepotPerformanceEndpoint(depotPerformanceChart.latestLabel) }}
+                                    </text>
+                                </svg>
+                                <p v-else class="text-medium-emphasis text-body-2 mb-0">
+                                    No chart data available.
+                                </p>
+                            </v-card-text>
+                        </v-card>
+
                         <v-alert v-else type="info" variant="tonal" density="compact" class="mt-4">
                             No active depot found.
                         </v-alert>
@@ -10616,6 +11026,71 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
     border-radius: 4px;
     padding: 12px;
+}
+
+.depot-performance-card {
+    max-width: 100%;
+}
+
+.depot-performance-chart {
+    display: block;
+    height: 560px;
+    width: 100%;
+}
+
+.depot-performance-chart-line {
+    fill: none;
+    stroke: rgb(var(--v-theme-success));
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 3;
+    vector-effect: non-scaling-stroke;
+}
+
+.depot-performance-chart-extremum-line {
+    stroke-dasharray: 3 5;
+    stroke-width: 1.4;
+    vector-effect: non-scaling-stroke;
+}
+
+.depot-performance-chart-extremum-line--high {
+    stroke: rgb(var(--v-theme-success));
+}
+
+.depot-performance-chart-extremum-line--low {
+    stroke: rgb(var(--v-theme-error));
+}
+
+.depot-performance-chart-extremum-point {
+    stroke: rgb(var(--v-theme-surface));
+    stroke-width: 2;
+    vector-effect: non-scaling-stroke;
+}
+
+.depot-performance-chart-extremum-point--high {
+    fill: rgb(var(--v-theme-success));
+}
+
+.depot-performance-chart-extremum-point--low {
+    fill: rgb(var(--v-theme-error));
+}
+
+.depot-performance-chart-extremum-label {
+    dominant-baseline: middle;
+    font-size: 11px;
+    font-weight: 800;
+    paint-order: stroke;
+    stroke: rgb(var(--v-theme-surface));
+    stroke-linejoin: round;
+    stroke-width: 4;
+}
+
+.depot-performance-chart-extremum-label--high {
+    fill: rgb(var(--v-theme-success));
+}
+
+.depot-performance-chart-extremum-label--low {
+    fill: rgb(var(--v-theme-error));
 }
 
 .index-price-chart {

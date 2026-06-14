@@ -9,6 +9,7 @@ export const useDepotStore = defineStore('depots', {
         indexWatchItems: [],
         depotHoldings: [],
         depotValuations: {},
+        depotPerformanceSeries: [],
         transactions: [],
         exchangeTradingTimes: [],
         appVersion: null,
@@ -787,6 +788,7 @@ export const useDepotStore = defineStore('depots', {
                 const data = await request('/admin/depot-transactions');
                 this.depotHoldings = data.depot_holdings ?? [];
                 this.depotValuations = data.depot_valuations ?? {};
+                this.depotPerformanceSeries = data.depot_performance_series ?? [];
                 this.transactions = data.transactions;
                 this.uiPreferences = data.ui_preferences ?? this.uiPreferences;
             } catch (error) {
@@ -808,6 +810,7 @@ export const useDepotStore = defineStore('depots', {
                 this.activeDepot = data.depot;
                 this.depotHoldings = data.depot_holdings ?? this.depotHoldings;
                 this.depotValuations = data.depot_valuations ?? this.depotValuations;
+                this.depotPerformanceSeries = data.depot_performance_series ?? this.depotPerformanceSeries;
                 this.transactions = [data.transaction, ...this.transactions];
 
                 return data;
@@ -829,6 +832,7 @@ export const useDepotStore = defineStore('depots', {
                 });
                 this.depotHoldings = data.depot_holdings ?? this.depotHoldings;
                 this.depotValuations = data.depot_valuations ?? this.depotValuations;
+                this.depotPerformanceSeries = data.depot_performance_series ?? this.depotPerformanceSeries;
                 this.transactions = data.transactions ?? this.transactions.map((transaction) => {
                     return transaction.id === id ? data.transaction : transaction;
                 });
@@ -869,6 +873,7 @@ export const useDepotStore = defineStore('depots', {
                 this.activeDepot = data.depot;
                 this.depotHoldings = data.depot_holdings ?? this.depotHoldings;
                 this.depotValuations = data.depot_valuations ?? this.depotValuations;
+                this.depotPerformanceSeries = data.depot_performance_series ?? this.depotPerformanceSeries;
                 this.transactions = [data.transaction, ...this.transactions];
 
                 return data;

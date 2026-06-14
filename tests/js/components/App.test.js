@@ -4784,6 +4784,26 @@ describe('App', () => {
                 one_week_change_percent: '1.51',
             },
         };
+        const depotPerformanceSeries = [
+            {
+                date: '2026-01-01',
+                stock_balance: '0.00',
+                cash_balance: '1000.00',
+                account_balance: '1000.00',
+            },
+            {
+                date: '2026-06-04',
+                stock_balance: '350.00',
+                cash_balance: '650.00',
+                account_balance: '1000.00',
+            },
+            {
+                date: '2026-06-14',
+                stock_balance: '383.00',
+                cash_balance: '650.00',
+                account_balance: '1033.00',
+            },
+        ];
         let currentDepotHoldings = depotHoldings;
         let currentDepotValuations = depotValuations;
         const fetchMock = vi.fn((path, options = {}) => {
@@ -4809,6 +4829,7 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({
                     depot_holdings: currentDepotHoldings,
                     depot_valuations: currentDepotValuations,
+                    depot_performance_series: depotPerformanceSeries,
                     transactions,
                 }));
             }
@@ -4823,6 +4844,7 @@ describe('App', () => {
                     message: 'Transaction date updated.',
                     depot_holdings: depotHoldings,
                     depot_valuations: depotValuations,
+                    depot_performance_series: depotPerformanceSeries,
                     transaction: updatedTransaction,
                     transactions: [updatedTransaction, transactions[1]],
                 }));
@@ -4921,6 +4943,26 @@ describe('App', () => {
         expect(wrapper.text()).toContain('+4.34% · +43.00 EUR');
         expect(wrapper.findAll('.depot-balance-card')).toHaveLength(3);
         expect(wrapper.find('.depot-balance-card tbody td:nth-child(2)').classes()).toContain('text-right');
+        expect(wrapper.text()).toContain('Depot performance');
+        expect(wrapper.text()).toContain('01.01 to now');
+        expect(wrapper.text()).toContain('01.01.2026 1,000.00 EUR');
+        expect(wrapper.text()).toContain('14.06.2026 1,033.00 EUR');
+        expect(wrapper.text()).toContain('+3.30% · +33.00 EUR');
+        expect(wrapper.text()).toContain('1.1.2026');
+        expect(wrapper.text()).toContain('1.2.2026');
+        expect(wrapper.text()).toContain('1.3.2026');
+        expect(wrapper.text()).toContain('1.12.2026');
+        expect(wrapper.text()).toContain('31.12.2026');
+        expect(wrapper.text()).toContain('High 1,033.00 EUR');
+        expect(wrapper.text()).toContain('Low 1,000.00 EUR');
+        expect(wrapper.find('.depot-performance-card').exists()).toBe(true);
+        expect(wrapper.find('.depot-performance-chart').exists()).toBe(true);
+        expect(wrapper.find('.depot-performance-chart').attributes('viewBox')).toBe('0 0 1800 520');
+        expect(wrapper.find('.depot-performance-chart-line').attributes('points')).toContain(',');
+        expect(wrapper.find('.depot-performance-chart-extremum-point--high').exists()).toBe(true);
+        expect(wrapper.find('.depot-performance-chart-extremum-point--low').exists()).toBe(true);
+        expect(wrapper.findAll('.depot-performance-card .index-price-chart-y-label')).toHaveLength(5);
+        expect(wrapper.findAll('.depot-performance-card .index-price-chart-x-label')).toHaveLength(13);
         expect(wrapper.text()).toContain('Symbol');
         expect(wrapper.text()).toContain('Name');
         expect(wrapper.text()).toContain('Amount');

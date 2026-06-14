@@ -392,6 +392,71 @@ class DepotTransactionTest extends TestCase
         }
     }
 
+    public function test_admin_can_list_depot_performance_series_from_year_start_to_now(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-13 12:00:00', 'UTC'));
+
+        try {
+            $admin = $this->adminUser();
+            $depot = Depot::factory()->create([
+                'account_balance' => '800.00',
+                'is_active' => true,
+            ]);
+            $holding = StockHolding::factory()->create([
+                'latest_price' => '150.000000',
+                'flatex_price' => '150.000000',
+            ]);
+
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => null,
+                'type' => 'deposit',
+                'pieces' => null,
+                'total_amount' => '1000.00',
+                'unit_price' => null,
+                'cash_delta' => '1000.00',
+                'balance_after' => '1000.00',
+                'booked_at' => '2026-01-01 00:00:00',
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $holding->id,
+                'type' => 'buy',
+                'pieces' => '2.00000000',
+                'total_amount' => '200.00',
+                'unit_price' => '100.00000000',
+                'cash_delta' => '-200.00',
+                'balance_after' => '800.00',
+                'booked_at' => '2026-02-01 00:00:00',
+            ]);
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-02-01',
+                'close' => '120.00000000',
+                'adjusted_close' => '120.00000000',
+            ]);
+
+            $response = $this->actingAs($admin)
+                ->getJson('/admin/depot-transactions')
+                ->assertOk()
+                ->assertJsonPath('depot_performance_series.0.date', '2026-01-01')
+                ->assertJsonPath('depot_performance_series.0.account_balance', '1000.00');
+
+            $series = collect($response->json('depot_performance_series'));
+            $februaryFirstPoint = $series->firstWhere('date', '2026-02-01');
+            $latestPoint = $series->last();
+
+            $this->assertSame('240.00', $februaryFirstPoint['stock_balance']);
+            $this->assertSame('800.00', $februaryFirstPoint['cash_balance']);
+            $this->assertSame('1040.00', $februaryFirstPoint['account_balance']);
+            $this->assertSame('2026-06-13', $latestPoint['date']);
+            $this->assertSame('300.00', $latestPoint['stock_balance']);
+            $this->assertSame('1100.00', $latestPoint['account_balance']);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
     public function test_admin_can_list_current_stock_positions_for_the_active_depot(): void
     {
         $admin = $this->adminUser();
