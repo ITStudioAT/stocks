@@ -1910,6 +1910,89 @@ describe('App', () => {
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/3/intraday-candles', expect.anything());
     });
 
+    it('selects the first stock when Analyze intraday opens with stock all', async () => {
+        window.history.pushState({}, '', '/admin/menu/analyze/intraday?stock=all');
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [
+                        {
+                            id: 1,
+                            symbol: 'AMES',
+                            name: 'Amundi IBEX 35',
+                            currency: 'EUR',
+                            latest_price: '481.500000',
+                            recent_prices: [
+                                {
+                                    id: 10,
+                                    price: '481.50000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-12T15:36:00+00:00',
+                                    source_name: 'EODHD real-time',
+                                    price_type: 'last',
+                                },
+                            ],
+                            intraday_candles: [],
+                        },
+                        {
+                            id: 2,
+                            symbol: 'LEER',
+                            name: 'Amundi Eastern Europe',
+                            currency: 'EUR',
+                            latest_price: '44.215000',
+                            recent_prices: [],
+                            intraday_candles: [],
+                        },
+                    ],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            return Promise.resolve(jsonResponse({}));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const analyzeIntraday = wrapper.find('[aria-label="Analyze intraday"]');
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/intraday');
+        expect(window.location.search).toBe('?stock=1');
+        expect(analyzeIntraday.text()).not.toContain('No stock selected.');
+        expect(analyzeIntraday.text()).toContain('Amundi IBEX 35');
+        expect(analyzeIntraday.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Amundi IBEX 35')).attributes('aria-pressed')).toBe('true');
+    });
+
     it('renders the Tests menu page with unpaginated index and stock selects', async () => {
         window.history.pushState({}, '', '/admin/menu/analyze/tests?stock=all');
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };

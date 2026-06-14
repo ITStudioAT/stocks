@@ -932,6 +932,10 @@ watch(
 watch(
     holdings,
     (currentHoldings) => {
+        if (ensureAnalyzeHoldingSelection(currentHoldings)) {
+            return;
+        }
+
         if (selectedAnalyzeHoldingId.value === null) {
             return;
         }
@@ -958,6 +962,8 @@ watch(
 watch(
     [activeSection, activeAnalyzeSubsection, activeDataSubsection],
     ([section, subsection, dataSubsection]) => {
+        ensureAnalyzeHoldingSelection();
+
         if (section === 'analyze' && subsection === 'tests') {
             depotsStore.loadTestOptions();
         }
@@ -1264,6 +1270,31 @@ function updateUrlPath(options = {}) {
 
 function isAnalyzeSubsection(subsection) {
     return analyzeSubmenuItems.some((item) => item.key === subsection);
+}
+
+function analyzeSubsectionRequiresHolding(subsection) {
+    return ['detail', 'intraday'].includes(subsection);
+}
+
+function ensureAnalyzeHoldingSelection(currentHoldings = holdings.value) {
+    if (activeSection.value !== 'analyze' || !analyzeSubsectionRequiresHolding(activeAnalyzeSubsection.value)) {
+        return false;
+    }
+
+    if (selectedAnalyzeHoldingId.value !== null) {
+        return false;
+    }
+
+    const firstHoldingId = currentHoldings[0]?.id ?? null;
+
+    if (firstHoldingId === null) {
+        return false;
+    }
+
+    selectedAnalyzeHoldingId.value = firstHoldingId;
+    updateUrlPath({ replace: true });
+
+    return true;
 }
 
 function isDataSubsection(subsection) {

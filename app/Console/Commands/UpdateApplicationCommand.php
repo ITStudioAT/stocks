@@ -18,6 +18,7 @@ use Throwable;
 #[Signature('app:update
     {--dry-run : Show the commands without running them}
     {--production : Install Composer dependencies without dev packages}
+    {--dev : Install Composer dev packages even when APP_ENV is production}
     {--skip-composer : Do not run composer install}
     {--skip-npm : Do not run npm ci}
     {--skip-build : Do not run npm run build}
@@ -122,7 +123,7 @@ class UpdateApplicationCommand extends Command
                     .' --no-interaction --no-scripts --no-progress';
             }
 
-            $commands['Installing Composer packages'] = $this->option('production')
+            $commands['Installing Composer packages'] = $this->usesProductionComposerInstall()
                 ? 'composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader'
                 : 'composer install --no-interaction --prefer-dist';
         }
@@ -147,6 +148,15 @@ class UpdateApplicationCommand extends Command
         $commands['Dispatching due historical session prices'] = 'php artisan historical-session-prices:dispatch-due';
 
         return $commands;
+    }
+
+    private function usesProductionComposerInstall(): bool
+    {
+        if ($this->option('dev')) {
+            return false;
+        }
+
+        return $this->option('production') || config('app.env') === 'production';
     }
 
     /**

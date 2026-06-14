@@ -59,6 +59,26 @@ class UpdateApplicationCommandTest extends TestCase
             ->assertSuccessful();
     }
 
+    public function test_update_command_uses_production_composer_mode_when_app_environment_is_production(): void
+    {
+        config()->set('app.env', 'production');
+
+        $this->artisan('app:update --dry-run')
+            ->expectsOutputToContain('Would run: composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader')
+            ->doesntExpectOutputToContain('Would run: composer install --no-interaction --prefer-dist')
+            ->assertSuccessful();
+    }
+
+    public function test_update_command_can_force_dev_composer_packages_in_production(): void
+    {
+        config()->set('app.env', 'production');
+
+        $this->artisan('app:update --dry-run --dev')
+            ->expectsOutputToContain('Would run: composer install --no-interaction --prefer-dist')
+            ->doesntExpectOutputToContain('Would run: composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader')
+            ->assertSuccessful();
+    }
+
     public function test_update_command_installs_missing_required_composer_packages(): void
     {
         $composerJsonPath = base_path('composer.json');
