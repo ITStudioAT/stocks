@@ -28,6 +28,7 @@ class UpdateApplicationCommandTest extends TestCase
             ->expectsOutputToContain('Would run: composer install --no-interaction --prefer-dist')
             ->expectsOutputToContain('Would run: php artisan optimize:clear')
             ->expectsOutputToContain('Would run: php artisan migrate --force --no-interaction')
+            ->expectsOutputToContain('Would run: node scripts/dev-stop-stale-vite.mjs --strict')
             ->expectsOutputToContain('Would run: npm ci --ignore-scripts --no-audit --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm')
             ->expectsOutputToContain('Would run: npm run build')
             ->expectsOutputToContain('Would run: php artisan optimize')
@@ -41,6 +42,7 @@ class UpdateApplicationCommandTest extends TestCase
         $this->artisan('app:update --dry-run --skip-composer --skip-npm --skip-build --skip-migrate')
             ->doesntExpectOutputToContain('composer install')
             ->doesntExpectOutputToContain('php artisan migrate')
+            ->doesntExpectOutputToContain('node scripts/dev-stop-stale-vite.mjs')
             ->doesntExpectOutputToContain('npm ci')
             ->doesntExpectOutputToContain('npm run build')
             ->expectsOutputToContain('Would run: php artisan optimize:clear')
@@ -96,6 +98,7 @@ class UpdateApplicationCommandTest extends TestCase
         Process::assertRan('composer install --no-interaction --prefer-dist');
         Process::assertRan('php artisan optimize:clear');
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
+        Process::assertDidntRun('node scripts/dev-stop-stale-vite.mjs --strict');
         Process::assertDidntRun('npm ci --ignore-scripts --no-audit --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm');
         Process::assertDidntRun('npm run build');
         Process::assertDidntRun('php artisan optimize');

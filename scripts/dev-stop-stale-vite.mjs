@@ -1,5 +1,7 @@
 import { execFileSync } from 'node:child_process';
 
+const isStrict = process.argv.includes('--strict');
+
 if (process.platform !== 'win32') {
     process.exit(0);
 }
@@ -71,4 +73,8 @@ try {
     });
 } catch (error) {
     console.warn('Could not check for stale Vite processes before starting dev server.');
+
+    if (isStrict) {
+        process.exit(1);
+    }
 }

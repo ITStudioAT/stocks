@@ -134,6 +134,7 @@ class UpdateApplicationCommand extends Command
         }
 
         if (! $this->option('skip-npm')) {
+            $commands['Stopping frontend dev server'] = 'node scripts/dev-stop-stale-vite.mjs --strict';
             $commands['Installing npm packages'] = 'npm ci --ignore-scripts --no-audit --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm';
         }
 
