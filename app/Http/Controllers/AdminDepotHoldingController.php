@@ -97,7 +97,7 @@ class AdminDepotHoldingController extends Controller
 
     public function intradayCandles(StockHolding $holding): JsonResponse
     {
-        $intradayDays = $this->eodhdMarketData->ensureLastThreeTradingDayFiveMinuteCandles($holding);
+        $intradayDays = $this->eodhdMarketData->ensureLastSevenTradingDayFiveMinuteCandles($holding);
 
         return response()->json([
             'holding' => [

@@ -999,6 +999,16 @@ describe('App', () => {
                                     volume: 13345,
                                 },
                                 {
+                                    timestamp: 1780643400,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-05 07:10:00',
+                                    open: '469.25000000',
+                                    high: '469.50000000',
+                                    low: '469.00000000',
+                                    close: '469.25000000',
+                                    volume: 1000,
+                                },
+                                {
                                     timestamp: 1780653900,
                                     gmtoffset: 0,
                                     datetime: '2026-06-05 10:05:00',
@@ -1555,6 +1565,7 @@ describe('App', () => {
                             currency: 'EUR',
                             latest_price: '306.320010',
                             daily_prices: [
+                                { trading_date: '2026-06-02', price: '465.150000', currency: 'EUR' },
                                 { trading_date: '2026-06-04', price: '306.320010', currency: 'EUR' },
                             ],
                         },
@@ -1635,6 +1646,16 @@ describe('App', () => {
                                     low: '469.00000000',
                                     close: '469.25000000',
                                     volume: 13345,
+                                },
+                                {
+                                    timestamp: 1780643400,
+                                    gmtoffset: 0,
+                                    datetime: '2026-06-05 07:10:00',
+                                    open: '469.25000000',
+                                    high: '469.50000000',
+                                    low: '469.00000000',
+                                    close: '469.25000000',
+                                    volume: 1000,
                                 },
                                 {
                                     timestamp: 1780653900,
@@ -1772,41 +1793,91 @@ describe('App', () => {
         expect(window.location.search).toBe('?stock=1');
         expect(wrapper.find('[aria-label="Analyze detail"] .analyze-detail-title').text()).toBe('Details');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Apple');
-        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Intraday 05.06.2026 - 5m');
-        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Intraday 04.06.2026 - 5m');
-        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Intraday 03.06.2026 - 5m');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Intraday 05.06.2026');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Intraday 04.06.2026');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Intraday 03.06.2026');
+        expect(wrapper.find('[aria-label="Analyze detail"]').text()).not.toContain('- 5m');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).not.toContain('470.15000000');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).not.toContain('472.75000000');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).not.toContain('469.15000000');
 
         const firstIntradayDaySummary = wrapper.find('.analyze-detail-day-summary');
-        expect(firstIntradayDaySummary.text()).toContain('First');
-        expect(firstIntradayDaySummary.text()).toContain('Lowest');
-        expect(firstIntradayDaySummary.text()).toContain('Highest');
-        expect(firstIntradayDaySummary.text()).toContain('Ups');
-        expect(firstIntradayDaySummary.text()).toContain('Downs');
-        expect(firstIntradayDaySummary.text()).toContain('First -> 12:00+');
-        expect(firstIntradayDaySummary.text()).toContain('12:00+ -> End');
-        expect(firstIntradayDaySummary.text()).toContain('Last');
+        expect(firstIntradayDaySummary.text()).toContain('Last day -> Latest');
+        expect(firstIntradayDaySummary.text()).toContain('Last day -> First');
+        expect(firstIntradayDaySummary.text()).toContain('Start -> 12:00');
+        expect(firstIntradayDaySummary.text()).toContain('12:00 -> End');
+        expect(firstIntradayDaySummary.text().indexOf('Last day -> First')).toBeLessThan(
+            firstIntradayDaySummary.text().indexOf('Last day -> Latest'),
+        );
+        expect(firstIntradayDaySummary.text().indexOf('Last day -> Latest')).toBeLessThan(
+            firstIntradayDaySummary.text().indexOf('Start -> 12:00'),
+        );
+        expect(firstIntradayDaySummary.text().indexOf('Start -> 12:00')).toBeLessThan(
+            firstIntradayDaySummary.text().indexOf('12:00 -> End'),
+        );
         expect(firstIntradayDaySummary.text()).toContain('470.15');
-        expect(firstIntradayDaySummary.text()).toContain('469.25');
+        expect(firstIntradayDaySummary.text()).toContain('469.15');
         expect(firstIntradayDaySummary.text()).toContain('472.75');
-        expect(firstIntradayDaySummary.text()).toContain('Ups1');
-        expect(firstIntradayDaySummary.text()).toContain('Downs2');
+        expect(firstIntradayDaySummary.text()).toContain('471.75');
+        expect(firstIntradayDaySummary.text()).toContain('+2.6000');
+        expect(firstIntradayDaySummary.text()).toContain('+1.0000');
+        expect(firstIntradayDaySummary.text()).toContain('-1.0000');
         expect(firstIntradayDaySummary.text()).toContain('+0.21%');
         expect(firstIntradayDaySummary.text()).toContain('+0.55%');
         expect(firstIntradayDaySummary.text()).toContain('-0.21%');
         expect(firstIntradayDaySummary.text()).not.toContain('3d start');
-        expect(firstIntradayDaySummary.findAll('.analyze-detail-day-summary-item.is-compact')).toHaveLength(2);
-        expect(firstIntradayDaySummary.findAll('.analyze-detail-day-summary-change.is-up')).toHaveLength(2);
+        expect(firstIntradayDaySummary.text()).not.toContain('Lowest');
+        expect(firstIntradayDaySummary.text()).not.toContain('Highest');
+        expect(firstIntradayDaySummary.text()).not.toContain('Ups');
+        expect(firstIntradayDaySummary.text()).not.toContain('Downs');
+        expect(firstIntradayDaySummary.text()).not.toContain('12:00+');
+        expect(firstIntradayDaySummary.findAll('.analyze-detail-day-summary-item.is-compact')).toHaveLength(0);
+        expect(firstIntradayDaySummary.findAll('.analyze-detail-day-summary-item.is-comparison')).toHaveLength(4);
+        expect(firstIntradayDaySummary.findAll('.analyze-detail-day-summary-change.is-up')).toHaveLength(6);
+        expect(firstIntradayDaySummary.findAll('.analyze-detail-day-summary-change.is-down')).toHaveLength(2);
         expect(firstIntradayDaySummary.text()).not.toContain('460.00');
         expect(firstIntradayDaySummary.text()).not.toContain('480.00');
         expect(firstIntradayDaySummary.text()).not.toContain('473.25');
 
+        const firstIntradaySummaryCards = firstIntradayDaySummary.findAll('.analyze-detail-day-summary-item.is-comparison');
+        expect(firstIntradaySummaryCards[0].find('.analyze-detail-day-summary-move-ratio').exists()).toBe(false);
+        expect(firstIntradaySummaryCards[1].find('.analyze-detail-day-summary-move-ratio').text()).toContain('Up 33%');
+        expect(firstIntradaySummaryCards[1].find('.analyze-detail-day-summary-move-ratio').text()).toContain('Down 67%');
+        expect(firstIntradaySummaryCards[2].find('.analyze-detail-day-summary-move-ratio').text()).toContain('Up 50%');
+        expect(firstIntradaySummaryCards[2].find('.analyze-detail-day-summary-move-ratio').text()).toContain('Down 50%');
+        expect(firstIntradaySummaryCards[3].find('.analyze-detail-day-summary-move-ratio').text()).toContain('Up 0%');
+        expect(firstIntradaySummaryCards[3].find('.analyze-detail-day-summary-move-ratio').text()).toContain('Down 100%');
+
+        const firstHourlySummary = wrapper.find('.analyze-detail-hourly-summary');
+        expect(firstHourlySummary.text()).toContain('Hourly');
+        expect(firstHourlySummary.text()).toContain('Europe/Vienna');
+        expect(firstHourlySummary.findAll('.analyze-detail-hourly-summary-card')).toHaveLength(3);
+        expect(firstHourlySummary.find('.analyze-detail-hourly-summary-meta').text()).toContain('09:00');
+        expect(firstHourlySummary.find('.analyze-detail-hourly-summary-meta').text()).toContain('Vol 26,690');
+        expect(firstHourlySummary.text()).toContain('09:00');
+        expect(firstHourlySummary.text()).toContain('469.55');
+        expect(firstHourlySummary.text()).toContain('Vol 26,690');
+        expect(firstHourlySummary.text()).toContain('12:00');
+        expect(firstHourlySummary.text()).toContain('472.75');
+        expect(firstHourlySummary.text()).toContain('Vol 14,345');
+        expect(firstHourlySummary.text()).toContain('15:00');
+        expect(firstHourlySummary.text()).toContain('471.75');
+        expect(firstHourlySummary.text()).toContain('Vol 15,345');
+        expect(firstHourlySummary.findAll('.analyze-detail-hourly-summary-arrow.is-up')).toHaveLength(2);
+        expect(firstHourlySummary.findAll('.analyze-detail-hourly-summary-arrow.is-down')).toHaveLength(1);
+
         const thirdIntradayDaySummary = wrapper.findAll('.analyze-detail-day-summary')[2];
-        expect(thirdIntradayDaySummary.text()).toContain('Last');
+        expect(wrapper.find('[aria-label="Analyze detail"]').findAll('.analyze-detail-day-summary-item.is-comparison')).toHaveLength(8);
+        expect(wrapper.findAll('.analyze-detail-day-summary')[1].text()).toContain('Last day -> Latest');
+        expect(wrapper.findAll('.analyze-detail-day-summary')[1].text()).toContain('Last day -> First');
+        expect(wrapper.findAll('.analyze-detail-day-summary')[1].text()).toContain('+3.0000');
+        expect(thirdIntradayDaySummary.text()).toContain('Last day -> Latest');
+        expect(thirdIntradayDaySummary.text()).toContain('Last day -> First');
+        expect(thirdIntradayDaySummary.text()).toContain('+1.0000');
         expect(thirdIntradayDaySummary.text()).toContain('466.15');
-        expect(thirdIntradayDaySummary.text()).toContain('-0.21%');
+        expect(thirdIntradayDaySummary.text()).toContain('+0.21%');
+        expect(thirdIntradayDaySummary.text()).not.toContain('Lowest');
+        expect(thirdIntradayDaySummary.text()).not.toContain('Highest');
 
         const firstIntradayDayHeader = wrapper.find('.data-intraday-day-header');
         expect(firstIntradayDayHeader.attributes('aria-expanded')).toBe('false');
@@ -1998,7 +2069,7 @@ describe('App', () => {
         expect(stockChips[11].attributes('aria-pressed')).toBe('true');
 
         const testTabs = wrapper.findAll('.v-tab').filter((tab) => ['Tickers', 'Exchanges'].includes(tab.text()));
-        expect(testTabs).toHaveLength(2);
+        expect(testTabs).toHaveLength(1);
         expect(wrapper.vm.selectedTestTab).toBe('tickers');
         expect(testsPage.text()).toContain('Exchange: XETRA');
         expect(testsPage.find('[aria-label="Ticker result"]').classes()).toContain('tests-ticker-panel');
@@ -2012,27 +2083,6 @@ describe('App', () => {
         expect(testsPage.text()).toContain('AMES');
         expect(testsPage.text()).toContain('Amundi IBEX 35 UCITS ETF Acc');
         expect(testsPage.text()).toContain('LU1681043599');
-
-        await testTabs[1].trigger('click');
-        await flushPromises();
-
-        expect(wrapper.vm.selectedTestTab).toBe('exchanges');
-        expect(wrapper.find('[aria-label="Exchange result"]').classes()).toContain('tests-ticker-panel');
-
-        const exchangeLoadButton = wrapper.find('[aria-label="Exchange result"]')
-            .findAll('button')
-            .find((button) => button.text().includes('Load'));
-        await exchangeLoadButton.trigger('click');
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/exchanges', expect.any(Object));
-        expect(wrapper.vm.testExchanges).toHaveLength(2);
-        expect(wrapper.vm.testExchangeDetails.XNAS.Name).toBe('NASDAQ details');
-        expect(wrapper.find('[aria-label="Exchange result"]').text()).toContain('XETRA');
-        expect(wrapper.find('[aria-label="Exchange result"]').text()).toContain('Germany');
-        expect(wrapper.find('[aria-label="Exchange result"]').text()).toContain('Europe/Berlin');
-        expect(wrapper.find('[aria-label="Exchange result"]').text()).toContain('NASDAQ details');
-        expect(wrapper.find('[aria-label="Exchange result"]').text()).toContain('09:30-16:00');
     });
 
     it('renders a Today chart with stored EODHD intraday candle rows', async () => {
@@ -3214,7 +3264,7 @@ describe('App', () => {
         expect(dashboardStatusText).not.toContain('Hour 988 / 1,000 Used 12');
         expect(dashboardStatusText).not.toContain('Day 98,805 / 100,000 Used 1,195');
         expect(dashboardStatusText).toContain('fetching historical data');
-        expect(dashboardStatusText.match(/waiting/g)).toHaveLength(1);
+        expect(dashboardStatusText.match(/waiting/g)).toHaveLength(2);
         expect(wrapper.find('[aria-label="Minify dashboard menu"]').exists()).toBe(true);
         expect(wrapper.text()).toContain('Watch-list');
         expect(wrapper.text()).not.toContain('Free calls remaining');
@@ -3317,7 +3367,8 @@ describe('App', () => {
         expect(wrapper.text()).toContain('305.55');
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/1/intraday-candles', expect.anything());
         const intradayTable = wrapper.find('.holding-intraday-table');
-        expect(wrapper.find('.holding-intraday-detail-header').text()).toContain('Intraday 05.06.2026 - 5m');
+        expect(wrapper.find('.holding-intraday-detail-header').text()).toContain('Intraday 05.06.2026');
+        expect(wrapper.find('.holding-intraday-detail-header').text()).not.toContain('- 5m');
         expect(wrapper.find('.holding-intraday-detail-header').text()).toContain('3 rows');
         expect(intradayTable.text()).toContain('05.06.2026, 09:00');
         expect(intradayTable.text()).toContain('05.06.2026, 09:05');
@@ -3593,7 +3644,7 @@ describe('App', () => {
         expect(document.body.querySelector('.index-price-chart-endpoint-label--start').textContent.trim()).toMatch(/^Start /);
         expect(document.body.querySelector('.index-price-chart-endpoint-label--latest').textContent.trim()).toMatch(/^End /);
         expect(Number(document.body.querySelector('.index-price-chart-endpoint-label--start').getAttribute('y'))).toBeGreaterThan(220);
-        expect(Number(document.body.querySelector('.index-price-chart-endpoint-label--latest').getAttribute('y'))).toBeLessThan(10);
+        expect(Number(document.body.querySelector('.index-price-chart-endpoint-label--latest').getAttribute('y'))).toBeLessThan(70);
         expect(document.body.textContent).toContain('6,116.53');
         expect(document.body.textContent).toContain('09.05');
 
@@ -4359,7 +4410,8 @@ describe('App', () => {
         expect(window.location.pathname).toBe('/admin/menu/data/intraday');
         expect(wrapper.find('[aria-label="Data intraday"]').exists()).toBe(true);
         expect(wrapper.text()).toContain('Amundi IBEX 35 UCITS ETF');
-        expect(wrapper.text()).toContain('Intraday 05.06.2026 - 5m');
+        expect(wrapper.text()).toContain('Intraday 05.06.2026');
+        expect(wrapper.text()).not.toContain('- 5m');
         expect(wrapper.text()).not.toContain('10.15000000');
         expect(wrapper.text()).toContain('1 intraday candles loaded/updated.');
         expect(fetchMock).toHaveBeenCalledWith('/admin/data/intraday', expect.any(Object));
@@ -5291,7 +5343,7 @@ describe('App', () => {
             await flushPromises();
 
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1')).toHaveLength(2);
-            expect(wrapper.get('.dashboard-status-card').text().match(/waiting/g)).toHaveLength(2);
+            expect(wrapper.get('.dashboard-status-card').text().match(/waiting/g)).toHaveLength(4);
             expect(wrapper.text()).not.toContain('fetching historical data');
 
             wrapper.unmount();

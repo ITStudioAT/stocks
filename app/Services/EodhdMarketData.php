@@ -25,6 +25,8 @@ use Throwable;
 
 class EodhdMarketData
 {
+    private const IntradayDetailTradingDayCount = 7;
+
     /**
      * @var array<int, string>
      */
@@ -286,16 +288,16 @@ class EodhdMarketData
     /**
      * @return array<int, array{title: string, trading_date: string, interval: string, rows: array<int, array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}>}>
      */
-    public function ensureLastThreeTradingDayFiveMinuteCandles(StockHolding $holding): array
+    public function ensureLastSevenTradingDayFiveMinuteCandles(StockHolding $holding): array
     {
         $currentSession = $this->currentTradingSessionWithStoredFiveMinuteCandles($holding);
-        $sessions = collect($this->lastCompletedTradingSessions($holding, 3));
+        $sessions = collect($this->lastCompletedTradingSessions($holding, self::IntradayDetailTradingDayCount));
 
         if ($currentSession !== null) {
             $sessions = collect([$currentSession])
                 ->merge($sessions)
                 ->unique(fn (array $session): string => $session['date']->toDateString())
-                ->take(3);
+                ->take(self::IntradayDetailTradingDayCount);
         }
 
         return $sessions
@@ -344,7 +346,7 @@ class EodhdMarketData
         }
 
         return [
-            'title' => 'Intraday '.$session['date']->format('d.m.Y').' - 5m',
+            'title' => 'Intraday '.$session['date']->format('d.m.Y'),
             'trading_date' => $session['date']->toDateString(),
             'interval' => '5m',
             'rows' => $this->storedIntradayCandlePayload($holding, $session['date'], '5m'),
