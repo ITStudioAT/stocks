@@ -7832,6 +7832,9 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     <span class="index-watch-card-price analyze-holding-card-price">
                                         {{ formatHoldingCardPrice(holding) }}
                                     </span>
+                                    <span class="analyze-holding-card-pieces">
+                                        Pieces: {{ formatPositionPieces(holding) }}
+                                    </span>
                                 </button>
                             </div>
                             <div
@@ -8164,6 +8167,9 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     <span class="index-watch-card-price analyze-holding-card-price">
                                         {{ formatHoldingCardPrice(holding) }}
                                     </span>
+                                    <span class="analyze-holding-card-pieces">
+                                        Pieces: {{ formatPositionPieces(holding) }}
+                                    </span>
                                 </button>
                             </div>
 
@@ -8293,6 +8299,9 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </span>
                                     <span class="index-watch-card-price analyze-holding-card-price">
                                         {{ formatHoldingCardPrice(holding) }}
+                                    </span>
+                                    <span class="analyze-holding-card-pieces">
+                                        Pieces: {{ formatPositionPieces(holding) }}
                                     </span>
                                 </button>
                             </div>
@@ -11704,8 +11713,8 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 }
 
 .analyze-holding-card {
-    justify-content: center;
-    gap: 10px;
+    gap: 6px;
+    justify-content: flex-start;
 }
 
 .analyze-holding-card--all {
@@ -11726,6 +11735,14 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 .analyze-holding-card-price {
     color: rgb(var(--v-theme-primary));
     font-size: 0.7rem;
+}
+
+.analyze-holding-card-pieces {
+    color: rgba(var(--v-theme-on-surface), 0.7);
+    font-size: 0.66rem;
+    font-weight: 700;
+    line-height: 1;
+    margin-top: auto;
 }
 
 .analyze-range-selector {

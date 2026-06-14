@@ -836,6 +836,7 @@ describe('App', () => {
                             name: 'Apple',
                             currency: 'EUR',
                             latest_price: '306.320010',
+                            position_pieces: '2.00000000',
                             daily_prices: [
                                 { trading_date: '2026-05-10', price: '290.000000', currency: 'EUR' },
                                 { trading_date: '2026-05-20', price: '301.500000', currency: 'EUR' },
@@ -863,6 +864,7 @@ describe('App', () => {
                             name: 'Microsoft',
                             currency: 'USD',
                             latest_price: null,
+                            position_pieces: '0.00000000',
                             end_price: '429.950000',
                             daily_prices: [],
                         },
@@ -1214,8 +1216,10 @@ describe('App', () => {
         expect(analyzeOverview.find('.analyze-holding-card--all').exists()).toBe(false);
         expect(analyzeOverview.text()).toContain('Apple');
         expect(analyzeOverview.text()).toContain('306.32 EUR');
+        expect(analyzeOverview.text()).toContain('Pieces: 2');
         expect(analyzeOverview.text()).toContain('Microsoft');
         expect(analyzeOverview.text()).toContain('429.95 USD');
+        expect(analyzeOverview.text()).toContain('Pieces: 0');
         expect(analyzeOverview.text()).toContain('Small Price Fund');
         expect(analyzeOverview.text()).toContain('44.220 EUR');
         expect(analyzeOverview.text()).toContain('Tiny Price Fund');
