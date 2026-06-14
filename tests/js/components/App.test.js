@@ -82,6 +82,29 @@ function weekdayIntradayCandles(startDate, endDate) {
     return candles;
 }
 
+function trendSignalDailyPrices() {
+    const prices = [];
+    const currentDate = new Date('2026-04-01T00:00:00Z');
+    let price = 100;
+
+    Array.from({ length: 46 }).forEach((_, index) => {
+        const isPullback = index > 0 && index % 8 === 0;
+        const change = isPullback ? -0.65 : 1.15;
+        price += index === 0 ? 0 : change;
+
+        prices.push({
+            trading_date: currentDate.toISOString().slice(0, 10),
+            price: price.toFixed(6),
+            currency: 'EUR',
+            volume: index === 44 ? 5400 : 2200 + index * 20,
+        });
+
+        currentDate.setUTCDate(currentDate.getUTCDate() + 1);
+    });
+
+    return prices;
+}
+
 function priceRefreshSettings(overrides = {}) {
     return {
         trading_interval_minutes: 20,
@@ -943,6 +966,14 @@ describe('App', () => {
                                 })),
                             ],
                         },
+                        {
+                            id: 7,
+                            symbol: 'TREND',
+                            name: 'Trend Signal Fund',
+                            currency: 'EUR',
+                            latest_price: '146.000000',
+                            daily_prices: trendSignalDailyPrices(),
+                        },
                     ],
                     meta: pagination,
                     price_refresh_settings: priceRefreshSettings(),
@@ -1125,10 +1156,91 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Charts');
         expect(wrapper.text()).toContain('Intraday');
         expect(wrapper.text()).toContain('Detail');
+        expect(wrapper.text()).toContain('Trend');
         expect(wrapper.text()).toContain('Tests');
         const analyzeTabsText = wrapper.findAll('.v-tab').map((tab) => tab.text()).join(' ');
         expect(analyzeTabsText.indexOf('Charts')).toBeLessThan(analyzeTabsText.indexOf('Intraday'));
         expect(analyzeTabsText.indexOf('Intraday')).toBeLessThan(analyzeTabsText.indexOf('Detail'));
+        expect(analyzeTabsText.indexOf('Detail')).toBeLessThan(analyzeTabsText.indexOf('Trend'));
+        expect(analyzeTabsText.indexOf('Trend')).toBeLessThan(analyzeTabsText.indexOf('Tests'));
+
+        const trendTab = wrapper.findAll('.v-tab')
+            .find((tab) => tab.text().includes('Trend'));
+        await trendTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
+        expect(window.location.search).toBe('?stock=1');
+        const analyzeTrend = wrapper.find('[aria-label="Analyze trend"]');
+        const trendStockMenu = wrapper.find('[aria-label="Analyze trend stocks"]');
+        expect(analyzeTrend.exists()).toBe(true);
+        expect(analyzeTrend.find('.analyze-detail-title').text()).toBe('Trend');
+        expect(trendStockMenu.find('.analyze-holding-card--all').exists()).toBe(false);
+        expect(trendStockMenu.text()).toContain('Apple');
+        expect(trendStockMenu.text()).toContain('306.32 EUR');
+        expect(trendStockMenu.text()).toContain('Pieces: 2');
+        expect(trendStockMenu.text()).toContain('Microsoft');
+        expect(trendStockMenu.text()).toContain('429.95 USD');
+        expect(trendStockMenu.text()).toContain('Pieces: 0');
+        expect(trendStockMenu.text()).toContain('Trend Signal Fund');
+        expect(analyzeTrend.text()).toContain('Rows');
+        expect(analyzeTrend.text()).toContain('2');
+        expect(analyzeTrend.text()).toContain('Right');
+        expect(analyzeTrend.text()).toContain('Accuracy');
+        expect(analyzeTrend.text()).toContain('Latest signal');
+        expect(analyzeTrend.text()).toContain('Date');
+        expect(analyzeTrend.text()).toContain('Day +/-');
+        expect(analyzeTrend.text()).toContain('Day %');
+        expect(analyzeTrend.text()).toContain('Trend line');
+        expect(analyzeTrend.text()).toContain('Up/Down');
+        expect(analyzeTrend.text()).toContain('Volume');
+        expect(analyzeTrend.text()).toContain('Recommendation');
+        expect(analyzeTrend.text()).toContain('Reason');
+        expect(analyzeTrend.text()).toContain('Next %');
+        expect(analyzeTrend.text()).toContain('Right?');
+        expect(analyzeTrend.text()).toContain('04.06.2026');
+        expect(analyzeTrend.text()).toContain('+4.8200');
+        expect(analyzeTrend.text()).toContain('+1.60%');
+        expect(analyzeTrend.text()).not.toContain('Sell');
+        expect(analyzeTrend.text()).not.toContain('0/0');
+        expect(analyzeTrend.text()).not.toContain('No clear pattern');
+        expect(analyzeTrend.text()).not.toContain('See');
+        expect(analyzeTrend.text()).not.toContain('Wrong');
+
+        const trendSignalCard = trendStockMenu.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Trend Signal Fund'));
+        await trendSignalCard.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
+        expect(window.location.search).toBe('?stock=7');
+        expect(trendSignalCard.attributes('aria-pressed')).toBe('true');
+        expect(analyzeTrend.text()).toContain('Above rising line');
+        expect(analyzeTrend.text()).toMatch(/5d \d+\/\d+; 20d \d+\/\d+/);
+        expect(analyzeTrend.text()).toContain('avg, confirms up');
+        expect(analyzeTrend.text()).toMatch(/\d+\/\d+ \(\d+\.\d%\)/);
+        expect(analyzeTrend.text()).toContain('Buy');
+        expect(analyzeTrend.text()).not.toContain('Sell');
+
+        const microsoftTrendCard = trendStockMenu.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Microsoft'));
+        await microsoftTrendCard.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
+        expect(window.location.search).toBe('?stock=2');
+        expect(microsoftTrendCard.attributes('aria-pressed')).toBe('true');
+        expect(analyzeTrend.text()).toContain('No daily prices stored for this stock.');
+
+        const appleTrendCard = trendStockMenu.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Apple'));
+        await appleTrendCard.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
+        expect(window.location.search).toBe('?stock=1');
+        expect(appleTrendCard.attributes('aria-pressed')).toBe('true');
+        expect(analyzeTrend.text()).toContain('04.06.2026');
 
         const intradayTab = wrapper.findAll('.v-tab')
             .find((tab) => tab.text().includes('Intraday'));

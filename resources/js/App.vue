@@ -403,6 +403,8 @@ const selectedAnalyzeSparkline = computed(() => buildAnalyzeSparkline(
 const selectedAnalyzeRangeCaptureLabel = computed(() => (
     analyzeHistoryRangeItems.find((item) => item.key === selectedAnalyzeHistoryRange.value)?.captureLabel ?? ''
 ));
+const selectedAnalyzeTrendRows = computed(() => buildAnalyzeTrendRows(selectedAnalyzeHolding.value));
+const selectedAnalyzeTrendSummary = computed(() => buildAnalyzeTrendSummary(selectedAnalyzeTrendRows.value));
 const showAnalyzeSparklineDots = computed(() => isAnalyzeTodayRange(selectedAnalyzeHistoryRange.value));
 const analyzeIntradayDetail = computed(() => analyzeIntradayCandles.value?.intraday ?? null);
 const analyzeIntradayDetailDays = computed(() => {
@@ -483,6 +485,729 @@ function priceChangePercent(price, referencePrice) {
     }
 
     return ((price - referencePrice) / referencePrice) * 100;
+}
+
+function buildAnalyzeTrendRows(holding) {
+    const prices = analyzeTrendDailyPrices(holding);
+    const patternStats = {};
+    const rows = [];
+
+    prices.forEach((price, priceIndex) => {
+        if (priceIndex === 0) {
+            return;
+        }
+
+        const previousPrice = prices[priceIndex - 1];
+        const nextPrice = prices[priceIndex + 1] ?? null;
+        const dayChange = price.price - previousPrice.price;
+        const dayChangePercent = priceChangePercent(price.price, previousPrice.price);
+        const indicators = analyzeTrendIndicators(prices, priceIndex, dayChangePercent);
+        const nextDayChangePercent = nextPrice ? priceChangePercent(nextPrice.price, price.price) : null;
+        const recommendation = analyzeTrendRecommendation(prices, priceIndex, patternStats, indicators);
+        const result = analyzeTrendRecommendationResult(recommendation.key, nextDayChangePercent);
+
+        rows.push({
+            date: price.trading_date,
+            price: price.price,
+            volume: price.volume,
+            dayChange,
+            dayChangePercent,
+            recommendation,
+            result,
+            nextDayChangePercent,
+            trendLine: indicators.trendLine,
+            upDownCounts: indicators.upDownCounts,
+            volumeSignal: indicators.volumeSignal,
+        });
+
+        addAnalyzeTrendPatternStats(patternStats, prices, priceIndex, indicators);
+    });
+
+    return rows
+        .slice(-200)
+        .reverse();
+}
+
+function analyzeTrendDailyPrices(holding) {
+    if (!Array.isArray(holding?.daily_prices)) {
+        return [];
+    }
+
+    return holding.daily_prices
+        .map((price) => ({
+            trading_date: price.trading_date,
+            price: Number(price.price),
+            volume: Number.isFinite(Number(price.volume)) ? Number(price.volume) : null,
+        }))
+        .filter((price) => price.trading_date && Number.isFinite(price.price))
+        .sort((firstPrice, secondPrice) => firstPrice.trading_date.localeCompare(secondPrice.trading_date));
+}
+
+function addAnalyzeTrendPatternStats(patternStats, prices, priceIndex, indicators) {
+    const nextPrice = prices[priceIndex + 1] ?? null;
+
+    if (!nextPrice) {
+        return;
+    }
+
+    const nextDayChangePercent = priceChangePercent(nextPrice.price, prices[priceIndex].price);
+
+    if (nextDayChangePercent === null || nextDayChangePercent === 0) {
+        return;
+    }
+
+    analyzeTrendPatternLabels(prices, priceIndex, indicators).forEach((label) => {
+        if (!patternStats[label]) {
+            patternStats[label] = {
+                label,
+                n: 0,
+                up: 0,
+                down: 0,
+            };
+        }
+
+        patternStats[label].n += 1;
+
+        if (nextDayChangePercent > 0) {
+            patternStats[label].up += 1;
+        } else {
+            patternStats[label].down += 1;
+        }
+    });
+}
+
+function analyzeTrendRecommendation(prices, priceIndex, patternStats, indicators) {
+    const bestPattern = analyzeTrendBestPattern(prices, priceIndex, patternStats, indicators);
+    const scoreParts = analyzeTrendScoreParts(indicators, bestPattern);
+    const score = analyzeTrendRecommendationScore(scoreParts, indicators, prices, priceIndex);
+    const key = score >= 0.35 ? 'buy' : 'none';
+
+    return {
+        key,
+        label: key === 'buy' ? 'Buy' : '',
+        reason: analyzeTrendRecommendationReason(score, scoreParts, bestPattern),
+        confidence: analyzeTrendScoreConfidence(score),
+        score,
+        pattern: bestPattern,
+    };
+}
+
+function analyzeTrendBestPattern(prices, priceIndex, patternStats, indicators) {
+    const minimumPatternCount = 25;
+    const minimumWilsonEdge = 0.04;
+
+    return analyzeTrendPatternLabels(prices, priceIndex, indicators)
+        .map((label) => {
+            const pattern = patternStats[label] ?? null;
+
+            if (!pattern) {
+                return null;
+            }
+
+            const rate = pattern.n === 0 ? 0.5 : pattern.up / pattern.n;
+            const wilson = wilsonScoreInterval(pattern.up, pattern.n);
+            const buyEdge = wilson.lower - 0.5;
+            const sellEdge = 0.5 - wilson.upper;
+            const direction = buyEdge >= sellEdge ? 'buy' : 'sell';
+            const meaningfulEdge = Math.max(buyEdge, sellEdge);
+
+            return {
+                ...pattern,
+                rate,
+                wilson,
+                direction,
+                edge: meaningfulEdge,
+                strength: 1.6 + meaningfulEdge * 7,
+            };
+        })
+        .filter((pattern) => pattern
+            && pattern.n >= minimumPatternCount
+            && pattern.edge >= minimumWilsonEdge)
+        .sort((firstPattern, secondPattern) => (
+            secondPattern.edge - firstPattern.edge
+                || secondPattern.n - firstPattern.n
+        ))[0] ?? null;
+}
+
+function analyzeTrendPatternLabels(prices, priceIndex, indicators = null) {
+    const price = prices[priceIndex];
+    const previousPrice = prices[priceIndex - 1] ?? null;
+
+    if (!previousPrice) {
+        return [];
+    }
+
+    const dayChangePercent = priceChangePercent(price.price, previousPrice.price);
+
+    if (dayChangePercent === null) {
+        return [];
+    }
+
+    const labels = [
+        dayChangePercent > 0 ? 'day up' : (dayChangePercent < 0 ? 'day down' : 'day flat'),
+        `weekday ${analyzeTrendWeekday(price.trading_date)}`,
+        analyzeTrendDayChangeBucket(dayChangePercent),
+    ];
+    const twoDayChangePercent = analyzeTrendLookbackChangePercent(prices, priceIndex, 2);
+    const threeDayChangePercent = analyzeTrendLookbackChangePercent(prices, priceIndex, 3);
+    const fiveDayChangePercent = analyzeTrendLookbackChangePercent(prices, priceIndex, 5);
+    const tenDayChangePercent = analyzeTrendLookbackChangePercent(prices, priceIndex, 10);
+    const upStreak = analyzeTrendDirectionalStreak(prices, priceIndex, 'up');
+    const downStreak = analyzeTrendDirectionalStreak(prices, priceIndex, 'down');
+    const trendIndicators = indicators ?? analyzeTrendIndicators(prices, priceIndex, dayChangePercent);
+
+    if (twoDayChangePercent !== null) {
+        labels.push(twoDayChangePercent >= 0 ? '2d positive' : '2d negative');
+
+        if (twoDayChangePercent >= 1.5) {
+            labels.push('2d gain >=1.5');
+        }
+
+        if (twoDayChangePercent <= -1.5) {
+            labels.push('2d loss <=-1.5');
+        }
+    }
+
+    if (threeDayChangePercent !== null) {
+        labels.push(threeDayChangePercent >= 0 ? '3d positive' : '3d negative');
+
+        if (threeDayChangePercent >= 2) {
+            labels.push('3d gain >=2');
+        }
+
+        if (threeDayChangePercent <= -2) {
+            labels.push('3d loss <=-2');
+        }
+    }
+
+    if (fiveDayChangePercent !== null) {
+        labels.push(fiveDayChangePercent >= 0 ? '5d positive' : '5d negative');
+
+        if (fiveDayChangePercent >= 3) {
+            labels.push('5d gain >=3');
+        }
+
+        if (fiveDayChangePercent <= -3) {
+            labels.push('5d loss <=-3');
+        }
+    }
+
+    if (tenDayChangePercent !== null) {
+        labels.push(tenDayChangePercent >= 0 ? '10d positive' : '10d negative');
+
+        if (tenDayChangePercent >= 5) {
+            labels.push('10d gain >=5');
+        }
+
+        if (tenDayChangePercent <= -5) {
+            labels.push('10d loss <=-5');
+        }
+    }
+
+    if (upStreak >= 2) {
+        labels.push('up streak >=2');
+    }
+
+    if (upStreak >= 3) {
+        labels.push('up streak >=3');
+    }
+
+    if (downStreak >= 2) {
+        labels.push('down streak >=2');
+    }
+
+    if (downStreak >= 3) {
+        labels.push('down streak >=3');
+    }
+
+    if (trendIndicators.trendLine.meaningful) {
+        labels.push(`trendline ${trendIndicators.trendLine.position}`);
+        labels.push(`trendline ${trendIndicators.trendLine.slopeDirection}`);
+
+        if (trendIndicators.trendLine.cross) {
+            labels.push(`trendline ${trendIndicators.trendLine.cross}`);
+        }
+    }
+
+    if (trendIndicators.upDownCounts.long.total >= 10) {
+        if (trendIndicators.upDownCounts.long.up > trendIndicators.upDownCounts.long.down) {
+            labels.push('20d more up days');
+        }
+
+        if (trendIndicators.upDownCounts.long.down > trendIndicators.upDownCounts.long.up) {
+            labels.push('20d more down days');
+        }
+    }
+
+    if (trendIndicators.volumeSignal.meaningful) {
+        labels.push(`volume ${trendIndicators.volumeSignal.key}`);
+    }
+
+    return labels;
+}
+
+function analyzeTrendIndicators(prices, priceIndex, dayChangePercent) {
+    return {
+        trendLine: analyzeTrendLine(prices, priceIndex),
+        upDownCounts: analyzeTrendUpDownCounts(prices, priceIndex),
+        volumeSignal: analyzeTrendVolumeSignal(prices, priceIndex, dayChangePercent),
+    };
+}
+
+function analyzeTrendScoreParts(indicators, bestPattern) {
+    const scoreParts = [];
+
+    if (bestPattern) {
+        scoreParts.push({
+            key: 'pattern',
+            label: 'pattern',
+            score: bestPattern.direction === 'buy' ? bestPattern.strength : -bestPattern.strength,
+        });
+    }
+
+    if (indicators.trendLine.meaningful && indicators.trendLine.score !== 0) {
+        scoreParts.push({
+            key: 'trendline',
+            label: 'trend line',
+            score: indicators.trendLine.score,
+        });
+    }
+
+    if (indicators.upDownCounts.meaningful && indicators.upDownCounts.score !== 0) {
+        scoreParts.push({
+            key: 'updown',
+            label: 'up/down',
+            score: indicators.upDownCounts.score,
+        });
+    }
+
+    if (indicators.volumeSignal.meaningful && indicators.volumeSignal.score !== 0) {
+        scoreParts.push({
+            key: 'volume',
+            label: 'volume',
+            score: indicators.volumeSignal.score,
+        });
+    }
+
+    return scoreParts;
+}
+
+function analyzeTrendRecommendationScore(scoreParts, indicators, prices, priceIndex) {
+    const score = scoreParts.reduce((total, scorePart) => total + scorePart.score, 0);
+
+    if (score !== 0) {
+        return score;
+    }
+
+    if (indicators.trendLine.meaningful && indicators.trendLine.fallbackScore !== 0) {
+        return indicators.trendLine.fallbackScore;
+    }
+
+    const dayChangePercent = priceChangePercent(prices[priceIndex].price, prices[priceIndex - 1]?.price ?? null);
+
+    if (dayChangePercent !== null && dayChangePercent !== 0) {
+        return dayChangePercent > 0 ? 0.2 : -0.2;
+    }
+
+    return 0.1;
+}
+
+function analyzeTrendRecommendationReason(score, scoreParts, bestPattern) {
+    const direction = score >= 0 ? '+' : '';
+    const scoreLabel = `${direction}${score.toFixed(1)}`;
+
+    if (score < 0.35) {
+        if (bestPattern) {
+            return `${scoreLabel}: no buy signal (${analyzeTrendPatternReason(bestPattern)})`;
+        }
+
+        return `${scoreLabel}: no buy signal`;
+    }
+
+    if (bestPattern?.direction === 'buy') {
+        return `${scoreLabel}: ${analyzeTrendPatternReason(bestPattern)}`;
+    }
+
+    if (scoreParts.length === 0) {
+        return `${scoreLabel}: trend fallback`;
+    }
+
+    const positiveScoreParts = scoreParts.filter((scorePart) => scorePart.score > 0);
+    const reasonScoreParts = positiveScoreParts.length > 0 ? positiveScoreParts : scoreParts;
+
+    return `${scoreLabel}: ${reasonScoreParts.map((scorePart) => scorePart.label).join(', ')}`;
+}
+
+function analyzeTrendScoreConfidence(score) {
+    return Math.min(95, 50 + Math.abs(score) * 10);
+}
+
+function analyzeTrendLine(prices, priceIndex) {
+    const lookbackPrices = prices.slice(Math.max(0, priceIndex - 29), priceIndex + 1);
+
+    if (lookbackPrices.length < 3) {
+        return {
+            meaningful: false,
+            summary: 'Short history',
+            score: 0,
+            fallbackScore: 0,
+            position: 'near',
+            slopeDirection: 'flat',
+            cross: null,
+        };
+    }
+
+    const regression = linearRegression(lookbackPrices.map((price, index) => ({
+        x: index,
+        y: price.price,
+    })));
+    const currentLine = regression.intercept + regression.slope * (lookbackPrices.length - 1);
+    const previousLine = regression.intercept + regression.slope * (lookbackPrices.length - 2);
+    const currentPrice = lookbackPrices[lookbackPrices.length - 1];
+    const previousPrice = lookbackPrices[lookbackPrices.length - 2];
+    const distancePercent = priceChangePercent(currentPrice.price, currentLine);
+    const previousDistancePercent = priceChangePercent(previousPrice.price, previousLine);
+    const slopePercentPerDay = currentLine === 0 ? 0 : (regression.slope / currentLine) * 100;
+    const slopeDirection = slopePercentPerDay > 0.05
+        ? 'rising'
+        : (slopePercentPerDay < -0.05 ? 'falling' : 'flat');
+    const position = distancePercent > 0.2
+        ? 'above'
+        : (distancePercent < -0.2 ? 'below' : 'near');
+    const cross = analyzeTrendLineCross(distancePercent, previousDistancePercent);
+    const slopeScore = clamp(slopePercentPerDay / 0.4, -1.1, 1.1);
+    const distanceScore = clamp((distancePercent ?? 0) / 1.2, -0.9, 0.9);
+    const crossScore = cross === 'crossed up'
+        ? 0.9
+        : (cross === 'crossed down' ? -0.9 : 0);
+    const score = slopeScore + distanceScore + crossScore;
+
+    return {
+        meaningful: true,
+        summary: analyzeTrendLineSummary(position, slopeDirection, slopePercentPerDay, cross),
+        score,
+        fallbackScore: score === 0 ? (slopePercentPerDay >= 0 ? 0.1 : -0.1) : score,
+        position,
+        slopeDirection,
+        cross,
+        distancePercent,
+        slopePercentPerDay,
+    };
+}
+
+function analyzeTrendLineCross(distancePercent, previousDistancePercent) {
+    if (distancePercent === null || previousDistancePercent === null) {
+        return null;
+    }
+
+    if (previousDistancePercent <= 0 && distancePercent > 0.2) {
+        return 'crossed up';
+    }
+
+    if (previousDistancePercent >= 0 && distancePercent < -0.2) {
+        return 'crossed down';
+    }
+
+    return null;
+}
+
+function analyzeTrendLineSummary(position, slopeDirection, slopePercentPerDay, cross) {
+    const slope = `${slopePercentPerDay > 0 ? '+' : ''}${slopePercentPerDay.toFixed(2)}%/d`;
+    const crossSummary = cross ? `, ${cross}` : '';
+
+    return `${capitalizeFirst(position)} ${slopeDirection} line (${slope})${crossSummary}`;
+}
+
+function analyzeTrendUpDownCounts(prices, priceIndex) {
+    const short = analyzeTrendDirectionCounts(prices, priceIndex, 5);
+    const long = analyzeTrendDirectionCounts(prices, priceIndex, 20);
+    const shortScore = analyzeTrendDirectionCountScore(short, 1.1);
+    const longScore = analyzeTrendDirectionCountScore(long, 0.8);
+
+    return {
+        meaningful: short.total >= 3 || long.total >= 10,
+        short,
+        long,
+        score: shortScore + longScore,
+        summary: `5d ${short.up}/${short.down}; 20d ${long.up}/${long.down}`,
+    };
+}
+
+function analyzeTrendDirectionCounts(prices, priceIndex, days) {
+    const startIndex = Math.max(1, priceIndex - days + 1);
+    const counts = {
+        up: 0,
+        down: 0,
+        flat: 0,
+        total: 0,
+    };
+
+    for (let index = startIndex; index <= priceIndex; index += 1) {
+        const changePercent = priceChangePercent(prices[index].price, prices[index - 1].price);
+
+        if (changePercent === null) {
+            continue;
+        }
+
+        if (changePercent > 0) {
+            counts.up += 1;
+        } else if (changePercent < 0) {
+            counts.down += 1;
+        } else {
+            counts.flat += 1;
+        }
+
+        counts.total += 1;
+    }
+
+    return counts;
+}
+
+function analyzeTrendDirectionCountScore(counts, weight) {
+    if (counts.total === 0) {
+        return 0;
+    }
+
+    return ((counts.up - counts.down) / counts.total) * weight;
+}
+
+function analyzeTrendVolumeSignal(prices, priceIndex, dayChangePercent) {
+    const currentVolume = prices[priceIndex].volume;
+
+    if (currentVolume === null || currentVolume <= 0) {
+        return analyzeTrendEmptyVolumeSignal();
+    }
+
+    const previousVolumes = prices
+        .slice(Math.max(0, priceIndex - 20), priceIndex)
+        .map((price) => price.volume)
+        .filter((volume) => volume !== null && volume > 0);
+
+    if (previousVolumes.length < 8) {
+        return analyzeTrendEmptyVolumeSignal();
+    }
+
+    const averageVolume = previousVolumes.reduce((total, volume) => total + volume, 0) / previousVolumes.length;
+    const ratio = averageVolume === 0 ? null : currentVolume / averageVolume;
+
+    if (ratio === null) {
+        return analyzeTrendEmptyVolumeSignal();
+    }
+
+    const direction = dayChangePercent > 0 ? 'up' : (dayChangePercent < 0 ? 'down' : 'flat');
+    const directionScore = direction === 'up' ? 1 : (direction === 'down' ? -1 : 0);
+
+    if (ratio >= 1.25 && Math.abs(dayChangePercent ?? 0) >= 0.15) {
+        return {
+            meaningful: true,
+            key: `confirms ${direction}`,
+            summary: `${ratio.toFixed(1)}x avg, confirms ${direction}`,
+            score: directionScore * clamp((ratio - 1) * 0.9, 0.35, 1.4),
+            ratio,
+        };
+    }
+
+    if (ratio <= 0.7 && Math.abs(dayChangePercent ?? 0) >= 0.15) {
+        return {
+            meaningful: true,
+            key: `weak ${direction}`,
+            summary: `${ratio.toFixed(1)}x avg, weak ${direction}`,
+            score: directionScore * -0.35,
+            ratio,
+        };
+    }
+
+    return {
+        meaningful: false,
+        key: 'normal',
+        summary: '-',
+        score: 0,
+        ratio,
+    };
+}
+
+function analyzeTrendEmptyVolumeSignal() {
+    return {
+        meaningful: false,
+        key: 'missing',
+        summary: '-',
+        score: 0,
+        ratio: null,
+    };
+}
+
+function linearRegression(points) {
+    const count = points.length;
+    const sumX = points.reduce((total, point) => total + point.x, 0);
+    const sumY = points.reduce((total, point) => total + point.y, 0);
+    const sumXY = points.reduce((total, point) => total + point.x * point.y, 0);
+    const sumXX = points.reduce((total, point) => total + point.x * point.x, 0);
+    const denominator = count * sumXX - sumX * sumX;
+
+    if (denominator === 0) {
+        return {
+            slope: 0,
+            intercept: points[0]?.y ?? 0,
+        };
+    }
+
+    const slope = (count * sumXY - sumX * sumY) / denominator;
+
+    return {
+        slope,
+        intercept: (sumY - slope * sumX) / count,
+    };
+}
+
+function wilsonScoreInterval(successes, total) {
+    if (total <= 0) {
+        return {
+            lower: 0,
+            upper: 1,
+        };
+    }
+
+    const z = 1.64;
+    const probability = successes / total;
+    const zSquared = z * z;
+    const denominator = 1 + zSquared / total;
+    const centre = probability + zSquared / (2 * total);
+    const margin = z * Math.sqrt((probability * (1 - probability) + zSquared / (4 * total)) / total);
+
+    return {
+        lower: (centre - margin) / denominator,
+        upper: (centre + margin) / denominator,
+    };
+}
+
+function clamp(value, minimum, maximum) {
+    return Math.min(maximum, Math.max(minimum, value));
+}
+
+function capitalizeFirst(value) {
+    if (!value) {
+        return '';
+    }
+
+    return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
+function analyzeTrendDayChangeBucket(dayChangePercent) {
+    if (dayChangePercent <= -1) {
+        return 'loss <= -1';
+    }
+
+    if (dayChangePercent <= -0.3) {
+        return 'loss -1..-.3';
+    }
+
+    if (dayChangePercent < 0) {
+        return 'loss -.3..0';
+    }
+
+    if (dayChangePercent < 0.3) {
+        return 'gain 0...3';
+    }
+
+    if (dayChangePercent < 1) {
+        return 'gain .3..1';
+    }
+
+    return 'gain >=1';
+}
+
+function analyzeTrendLookbackChangePercent(prices, priceIndex, days) {
+    const previousPrice = prices[priceIndex - days] ?? null;
+
+    if (!previousPrice) {
+        return null;
+    }
+
+    return priceChangePercent(prices[priceIndex].price, previousPrice.price);
+}
+
+function analyzeTrendDirectionalStreak(prices, priceIndex, direction) {
+    let streak = 0;
+
+    for (let index = priceIndex; index > 0; index -= 1) {
+        const changePercent = priceChangePercent(prices[index].price, prices[index - 1].price);
+
+        if (changePercent === null) {
+            break;
+        }
+
+        if (direction === 'up' && changePercent <= 0) {
+            break;
+        }
+
+        if (direction === 'down' && changePercent >= 0) {
+            break;
+        }
+
+        streak += 1;
+    }
+
+    return streak;
+}
+
+function analyzeTrendWeekday(dateString) {
+    const date = new Date(`${dateString}T00:00:00.000Z`);
+
+    if (Number.isNaN(date.getTime())) {
+        return '-';
+    }
+
+    return new Intl.DateTimeFormat('en-US', {
+        timeZone: 'UTC',
+        weekday: 'short',
+    }).format(date);
+}
+
+function analyzeTrendPatternReason(pattern) {
+    const percent = `${(pattern.rate * 100).toFixed(0)}% up`;
+    const interval = `${(pattern.wilson.lower * 100).toFixed(0)}-${(pattern.wilson.upper * 100).toFixed(0)}%`;
+
+    return `${pattern.label}: ${pattern.up}/${pattern.down} up/down (${percent}, ${pattern.n}x, ${interval})`;
+}
+
+function analyzeTrendRecommendationResult(recommendationKey, nextDayChangePercent) {
+    if (nextDayChangePercent === null) {
+        return {
+            key: 'pending',
+            label: '-',
+        };
+    }
+
+    if (recommendationKey === 'buy') {
+        return nextDayChangePercent > 0
+            ? { key: 'right', label: 'Right' }
+            : { key: 'wrong', label: 'Wrong' };
+    }
+
+    if (recommendationKey === 'sell') {
+        return nextDayChangePercent < 0
+            ? { key: 'right', label: 'Right' }
+            : { key: 'wrong', label: 'Wrong' };
+    }
+
+    return {
+        key: 'pending',
+        label: '',
+    };
+}
+
+function buildAnalyzeTrendSummary(rows) {
+    const completedRows = rows.filter((row) => row.result.key !== 'pending');
+    const rightRows = completedRows.filter((row) => row.result.key === 'right');
+    const latestRecommendation = rows.find((row) => row.recommendation.key === 'buy')?.recommendation ?? null;
+
+    return {
+        rows: rows.length,
+        completed: completedRows.length,
+        right: rightRows.length,
+        accuracy: completedRows.length === 0 ? null : (rightRows.length / completedRows.length) * 100,
+        latestRecommendation,
+    };
 }
 
 function isRealtimePriceRow(priceRow) {
@@ -753,6 +1478,11 @@ const analyzeSubmenuItems = [
         key: 'detail',
         label: 'Detail',
         icon: 'mdi-chart-box-outline',
+    },
+    {
+        key: 'trend',
+        label: 'Trend',
+        icon: 'mdi-trending-up',
     },
     {
         key: 'tests',
@@ -1319,7 +2049,7 @@ function isAnalyzeSubsection(subsection) {
 }
 
 function analyzeSubsectionRequiresHolding(subsection) {
-    return ['detail', 'intraday'].includes(subsection);
+    return ['detail', 'intraday', 'trend'].includes(subsection);
 }
 
 function ensureAnalyzeHoldingSelection(currentHoldings = holdings.value) {
@@ -5811,11 +6541,76 @@ function formatPriceChangePercent(changePercent) {
     return `${sign}${changePercent.toFixed(2)}%`;
 }
 
+function formatAnalyzeTrendDate(dateString) {
+    if (!dateString) {
+        return '-';
+    }
+
+    const date = new Date(`${dateString}T00:00:00.000Z`);
+
+    if (Number.isNaN(date.getTime())) {
+        return dateString;
+    }
+
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: 'UTC',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    }).format(date);
+}
+
+function formatAnalyzeTrendPrice(value, holding) {
+    return formatPriceValue(value, holding?.currency);
+}
+
+function formatAnalyzeTrendChangeValue(row, holding) {
+    if (row.dayChange === null || row.dayChange === undefined || Number.isNaN(row.dayChange)) {
+        return '-';
+    }
+
+    const sign = row.dayChange > 0 ? '+' : '';
+
+    return `${sign}${formatPriceValue(row.dayChange, holding?.currency)}`;
+}
+
+function formatAnalyzeTrendAccuracy(value) {
+    if (value === null) {
+        return '-';
+    }
+
+    return `${value.toFixed(1)}%`;
+}
+
+function formatAnalyzeTrendRightSummary(summary) {
+    if (summary.completed === 0) {
+        return '-';
+    }
+
+    return `${summary.right}/${summary.completed} (${formatAnalyzeTrendAccuracy(summary.accuracy)})`;
+}
+
 function priceChangePercentClass(changePercent) {
     return {
         'text-success': changePercent !== null && changePercent > 0,
         'text-error': changePercent !== null && changePercent < 0,
         'text-medium-emphasis': changePercent === null || changePercent === 0,
+    };
+}
+
+function analyzeTrendRecommendationClass(recommendation) {
+    return {
+        'analyze-trend-badge--buy': recommendation.key === 'buy',
+        'analyze-trend-badge--sell': recommendation.key === 'sell',
+        'analyze-trend-badge--empty': recommendation.key === 'none',
+    };
+}
+
+function analyzeTrendResultClass(result) {
+    return {
+        'analyze-trend-result--right': result.key === 'right',
+        'analyze-trend-result--wrong': result.key === 'wrong',
+        'analyze-trend-result--pending': result.key === 'pending',
     };
 }
 
@@ -8465,6 +9260,139 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         </div>
                                     </div>
                                 </section>
+                            </div>
+                        </section>
+                        <section
+                            v-if="activeAnalyzeSubsection === 'trend'"
+                            class="analyze-detail-page"
+                            aria-label="Analyze trend"
+                        >
+                            <div class="analyze-detail-header">
+                                <div>
+                                    <h2 class="analyze-detail-title">Trend</h2>
+                                    <div class="analyze-detail-scope">
+                                        {{ selectedAnalyzeScopeLabel }}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="index-watch-strip analyze-detail-stock-menu" aria-label="Analyze trend stocks">
+                                <button
+                                    v-for="holding in holdings"
+                                    :key="holding.id"
+                                    type="button"
+                                    class="index-watch-card analyze-holding-card"
+                                    :class="{ 'analyze-holding-card--active': selectedAnalyzeHoldingId === holding.id }"
+                                    :aria-pressed="selectedAnalyzeHoldingId === holding.id"
+                                    @click="selectAnalyzeHolding(holding.id)"
+                                >
+                                    <span class="index-watch-card-label analyze-holding-card-name">
+                                        {{ holding.name || holding.symbol || '-' }}
+                                    </span>
+                                    <span class="index-watch-card-price analyze-holding-card-price">
+                                        {{ formatHoldingCardPrice(holding) }}
+                                    </span>
+                                    <span class="analyze-holding-card-pieces">
+                                        Pieces: {{ formatPositionPieces(holding) }}
+                                    </span>
+                                </button>
+                            </div>
+
+                            <v-alert
+                                v-if="selectedAnalyzeHoldingId === null"
+                                class="mb-4"
+                                type="info"
+                                variant="tonal"
+                            >
+                                No stock selected.
+                            </v-alert>
+                            <div
+                                v-else-if="selectedAnalyzeTrendRows.length === 0"
+                                class="analyze-detail-empty"
+                            >
+                                No daily prices stored for this stock.
+                            </div>
+                            <div v-else class="analyze-trend-panel">
+                                <div class="analyze-trend-summary" aria-label="Trend analysis summary">
+                                    <div class="analyze-trend-summary-item">
+                                        <span class="analyze-trend-summary-label">Rows</span>
+                                        <strong>{{ selectedAnalyzeTrendSummary.rows }}</strong>
+                                    </div>
+                                    <div class="analyze-trend-summary-item">
+                                        <span class="analyze-trend-summary-label">Right</span>
+                                        <strong>
+                                            {{ formatAnalyzeTrendRightSummary(selectedAnalyzeTrendSummary) }}
+                                        </strong>
+                                    </div>
+                                    <div class="analyze-trend-summary-item">
+                                        <span class="analyze-trend-summary-label">Accuracy</span>
+                                        <strong>{{ formatAnalyzeTrendAccuracy(selectedAnalyzeTrendSummary.accuracy) }}</strong>
+                                    </div>
+                                    <div class="analyze-trend-summary-item">
+                                        <span class="analyze-trend-summary-label">Latest signal</span>
+                                        <strong>{{ selectedAnalyzeTrendSummary.latestRecommendation?.label ?? '-' }}</strong>
+                                    </div>
+                                </div>
+
+                                <div class="analyze-detail-table-wrap">
+                                    <v-table class="analyze-detail-table analyze-trend-table" density="compact">
+                                        <thead>
+                                            <tr>
+                                                <th>Date</th>
+                                                <th class="text-right">Price</th>
+                                                <th class="text-right">Day +/-</th>
+                                                <th class="text-right">Day %</th>
+                                                <th>Trend line</th>
+                                                <th>Up/Down</th>
+                                                <th>Volume</th>
+                                                <th>Recommendation</th>
+                                                <th>Reason</th>
+                                                <th class="text-right">Next %</th>
+                                                <th>Right?</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr
+                                                v-for="trendRow in selectedAnalyzeTrendRows"
+                                                :key="trendRow.date"
+                                            >
+                                                <td>{{ formatAnalyzeTrendDate(trendRow.date) }}</td>
+                                                <td class="text-right">{{ formatAnalyzeTrendPrice(trendRow.price, selectedAnalyzeHolding) }}</td>
+                                                <td class="text-right" :class="priceChangePercentClass(trendRow.dayChangePercent)">
+                                                    {{ formatAnalyzeTrendChangeValue(trendRow, selectedAnalyzeHolding) }}
+                                                </td>
+                                                <td class="text-right" :class="priceChangePercentClass(trendRow.dayChangePercent)">
+                                                    {{ formatPriceChangePercent(trendRow.dayChangePercent) }}
+                                                </td>
+                                                <td>{{ trendRow.trendLine.summary }}</td>
+                                                <td>{{ trendRow.upDownCounts.summary }}</td>
+                                                <td>{{ trendRow.volumeSignal.summary }}</td>
+                                                <td>
+                                                    <span
+                                                        v-if="trendRow.recommendation.label"
+                                                        class="analyze-trend-badge"
+                                                        :class="analyzeTrendRecommendationClass(trendRow.recommendation)"
+                                                    >
+                                                        {{ trendRow.recommendation.label }}
+                                                    </span>
+                                                </td>
+                                                <td>{{ trendRow.recommendation.reason }}</td>
+                                                <td class="text-right" :class="priceChangePercentClass(trendRow.nextDayChangePercent)">
+                                                    {{ formatPriceChangePercent(trendRow.nextDayChangePercent) }}
+                                                </td>
+                                                <td>
+                                                    <span
+                                                        v-if="trendRow.result.label"
+                                                        class="analyze-trend-result"
+                                                        :class="analyzeTrendResultClass(trendRow.result)"
+                                                    >
+                                                        {{ trendRow.result.label }}
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </v-table>
+                                </div>
                             </div>
                         </section>
                         <section
@@ -11159,6 +12087,65 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 
 .analyze-detail-table {
     min-width: 820px;
+}
+
+.analyze-trend-panel {
+    display: grid;
+    gap: 14px;
+}
+
+.analyze-trend-summary {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+
+.analyze-trend-summary-item {
+    border: 1px solid rgba(20, 91, 75, 0.16);
+    border-radius: 6px;
+    padding: 10px 12px;
+}
+
+.analyze-trend-summary-label {
+    color: #667480;
+    display: block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    line-height: 1.2;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+}
+
+.analyze-trend-table {
+    min-width: 1260px;
+}
+
+.analyze-trend-badge,
+.analyze-trend-result {
+    border-radius: 999px;
+    display: inline-flex;
+    font-size: 0.72rem;
+    font-weight: 800;
+    line-height: 1;
+    padding: 5px 8px;
+}
+
+.analyze-trend-badge--buy,
+.analyze-trend-result--right {
+    background: rgba(var(--v-theme-success), 0.12);
+    color: rgb(var(--v-theme-success));
+}
+
+.analyze-trend-badge--sell,
+.analyze-trend-result--wrong {
+    background: rgba(var(--v-theme-error), 0.12);
+    color: rgb(var(--v-theme-error));
+}
+
+.analyze-trend-badge--empty,
+.analyze-trend-result--pending {
+    background: rgba(var(--v-theme-on-surface), 0.08);
+    color: rgba(var(--v-theme-on-surface), 0.68);
 }
 
 .analyze-intraday-card-grid {

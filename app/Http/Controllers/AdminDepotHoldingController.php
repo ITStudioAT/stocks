@@ -74,7 +74,7 @@ class AdminDepotHoldingController extends Controller
                     ->whereDate('trading_date', '>=', $historyRange['from']->toDateString())
                     ->whereDate('trading_date', '<=', $historyRange['to']->toDateString())
                     ->orderBy('trading_date')
-                    ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'adjusted_close', 'currency']),
+                    ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'adjusted_close', 'volume', 'currency']),
             ];
 
             if ($includeIntradayCharts) {
@@ -821,7 +821,7 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array<int, array{trading_date: string, price: string, currency: ?string}>
+     * @return array<int, array{trading_date: string, price: string, volume: ?int, currency: ?string}>
      */
     private function dailyPricePayload(StockHolding $holding): array
     {
@@ -833,19 +833,39 @@ class AdminDepotHoldingController extends Controller
             ->map(fn (StockHoldingDailyPrice $price): array => [
                 'trading_date' => $price->trading_date->toDateString(),
                 'price' => (string) ($price->adjusted_close ?? $price->close),
+                'volume' => $price->volume,
                 'currency' => $price->currency,
             ])
             ->filter(fn (array $price): bool => $price['price'] !== '')
             ->values()
             ->all();
 
-        return $dailyPrices !== []
-            ? $dailyPrices
-            : $this->dailyPricePayloadFromIntradayCandles($holding);
+        if ($dailyPrices === []) {
+            return $this->dailyPricePayloadFromIntradayCandles($holding);
+        }
+
+        $latestDailyDate = collect($dailyPrices)
+            ->pluck('trading_date')
+            ->filter()
+            ->max();
+
+        if ($latestDailyDate === null) {
+            return $dailyPrices;
+        }
+
+        $newerIntradayPrices = collect($this->dailyPricePayloadFromIntradayCandles($holding))
+            ->filter(fn (array $price): bool => $price['trading_date'] > $latestDailyDate)
+            ->values()
+            ->all();
+
+        return [
+            ...$dailyPrices,
+            ...$newerIntradayPrices,
+        ];
     }
 
     /**
-     * @return array<int, array{trading_date: string, price: string, currency: ?string}>
+     * @return array<int, array{trading_date: string, price: string, volume: ?int, currency: ?string}>
      */
     private function dailyPricePayloadFromIntradayCandles(StockHolding $holding): array
     {
@@ -857,6 +877,13 @@ class AdminDepotHoldingController extends Controller
             ->whereNotNull('close')
             ->select('trading_date', DB::raw('MAX(as_of) as latest_as_of'))
             ->groupBy('trading_date');
+        $volumePerDay = StockHoldingIntradayCandle::query()
+            ->where('stock_holding_id', $holding->id)
+            ->whereDate('trading_date', '>=', now()->subYear()->toDateString())
+            ->where('interval', '5m')
+            ->where('source_key', 'eodhd_intraday')
+            ->select('trading_date', DB::raw('SUM(volume) as daily_volume'))
+            ->groupBy('trading_date');
 
         return StockHoldingIntradayCandle::query()
             ->joinSub($latestCandlePerDay, 'latest_candle_per_day', function ($join): void {
@@ -864,16 +891,21 @@ class AdminDepotHoldingController extends Controller
                     ->on('stock_holding_intraday_candles.trading_date', '=', 'latest_candle_per_day.trading_date')
                     ->on('stock_holding_intraday_candles.as_of', '=', 'latest_candle_per_day.latest_as_of');
             })
-            ->where('stock_holding_id', $holding->id)
+            ->leftJoinSub($volumePerDay, 'volume_per_day', function ($join): void {
+                $join->on('stock_holding_intraday_candles.trading_date', '=', 'volume_per_day.trading_date');
+            })
+            ->where('stock_holding_intraday_candles.stock_holding_id', $holding->id)
             ->orderBy('stock_holding_intraday_candles.trading_date')
             ->get([
                 'stock_holding_intraday_candles.trading_date',
                 'stock_holding_intraday_candles.close',
                 'stock_holding_intraday_candles.currency',
+                DB::raw('volume_per_day.daily_volume as volume'),
             ])
             ->map(fn (StockHoldingIntradayCandle $price): array => [
                 'trading_date' => $price->trading_date->toDateString(),
                 'price' => (string) $price->close,
+                'volume' => $price->volume === null ? null : (int) $price->volume,
                 'currency' => $price->currency,
             ])
             ->all();
