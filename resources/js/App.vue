@@ -1035,6 +1035,7 @@ onMounted(async () => {
 
     await auth.loadUser();
     applyRouteFromPath();
+    const queueStatusRequest = loadDashboardQueueStatus();
 
     await depotsStore.loadActiveDepot();
 
@@ -1043,14 +1044,12 @@ onMounted(async () => {
     }
 
     await Promise.all([
-        depotsStore.loadWatchlistHoldings(),
-        depotsStore.loadIndexWatchItems(),
-        depotsStore.loadWatchlistExchangeTradingTimes(),
+        loadWatchlistHoldingsForActiveSection().catch(() => {}),
+        depotsStore.loadIndexWatchItems().catch(() => {}),
+        depotsStore.loadWatchlistExchangeTradingTimes().catch(() => {}),
     ]);
 
-    if (activeSection.value === 'dashboard') {
-        depotsStore.loadQueueStatus();
-    }
+    await queueStatusRequest;
 
     ensureAnalyzeDetailIntradayCandles();
     startPriceRefreshSettingsPolling();
@@ -1116,12 +1115,31 @@ function navigateSection(section) {
     }
 
     if (section === 'dashboard') {
-        depotsStore.loadQueueStatus();
+        loadDashboardQueueStatus();
+    }
+
+    if (section === 'analyze') {
+        loadWatchlistHoldingsForActiveSection();
     }
 
     if (section === 'updates') {
         loadPriceRefreshSettings();
     }
+}
+
+function loadDashboardQueueStatus() {
+    if (activeSection.value !== 'dashboard') {
+        return Promise.resolve();
+    }
+
+    return depotsStore.loadQueueStatus().catch(() => {});
+}
+
+function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.current_page, options = {}) {
+    return depotsStore.loadWatchlistHoldings(page, {
+        ...options,
+        includeCharts: activeSection.value === 'analyze',
+    });
 }
 
 async function syncCloudwaysDatabase() {
@@ -1590,7 +1608,7 @@ async function activateDepot(depot) {
         const data = await depotsStore.activateDepot(depot.id);
         depotMessage.value = data.message;
         await depotsStore.loadActiveDepot();
-        await depotsStore.loadWatchlistHoldings();
+        await loadWatchlistHoldingsForActiveSection();
         await depotsStore.loadDepots(depotPagination.value.current_page);
     } catch (err) {
         depotError.value = err.message;
@@ -1732,7 +1750,7 @@ async function saveHolding(result) {
         isHoldingDialogOpen.value = false;
         stopHoldingDialogKeyboardShortcuts();
         await Promise.all([
-            depotsStore.loadWatchlistHoldings(holdingsPagination.value.current_page),
+            loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page),
             depotsStore.loadWatchlistExchangeTradingTimes(),
         ]);
     } catch (err) {
@@ -1765,7 +1783,7 @@ async function refreshHoldingPrices() {
         await depotsStore.loadQueueStatus();
 
         if (!data.refresh) {
-            await depotsStore.loadWatchlistHoldings();
+            await loadWatchlistHoldingsForActiveSection();
             await loadPriceRefreshSettings();
             holdingMessage.value = '';
 
@@ -1874,7 +1892,7 @@ async function bookStockTransaction() {
 
         holdingMessage.value = data.message;
         abortStockTransactionDialog();
-        await depotsStore.loadWatchlistHoldings(holdingsPagination.value.current_page);
+        await loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page);
     } catch (err) {
         holdingError.value = err.message;
     }
@@ -2130,7 +2148,7 @@ async function pollHistoricalPriceFetches() {
     isHistoricalPriceFetchPolling.value = true;
 
     try {
-        await depotsStore.loadWatchlistHoldings(holdingsPagination.value.current_page, { silent: true });
+        await loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page, { silent: true });
     } catch {
     } finally {
         isHistoricalPriceFetchPolling.value = false;
@@ -2289,7 +2307,7 @@ async function finishPriceRefresh(refresh) {
     stopPriceRefreshPolling();
     depotsStore.clearPriceRefresh();
     await Promise.all([
-        depotsStore.loadWatchlistHoldings(holdingsPagination.value.current_page),
+        loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page),
         depotsStore.loadQueueStatus(),
     ]);
 
@@ -2332,7 +2350,7 @@ async function deleteHolding() {
         holdingMessage.value = data.message;
         abortDeleteHoldingDialog();
         await Promise.all([
-            depotsStore.loadWatchlistHoldings(holdingsPagination.value.current_page),
+            loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page),
             depotsStore.loadWatchlistExchangeTradingTimes(),
         ]);
     } catch (err) {
@@ -7348,7 +7366,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             v-model="holdingsPagination.current_page"
                             class="mt-6"
                             :length="holdingsPagination.last_page"
-                            @update:model-value="depotsStore.loadWatchlistHoldings"
+                            @update:model-value="loadWatchlistHoldingsForActiveSection"
                         />
 
                         <v-dialog v-model="isHoldingDialogOpen" persistent max-width="900">

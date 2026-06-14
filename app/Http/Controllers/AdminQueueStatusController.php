@@ -52,10 +52,14 @@ class AdminQueueStatusController extends Controller
         $queueSizes = $this->queueSizes($connection, $queue);
         $failedJobs = $this->failedJobsCount();
         $staleRunningRuns = $this->staleRunningRuns($maxJobTimeout);
+        $queueSizeUnavailable = in_array(null, $queueSizes, true);
         $pendingJobs = (int) ($queueSizes['pending'] ?? 0);
         $reservedJobs = (int) ($queueSizes['reserved'] ?? 0);
 
         $issues = collect([
+            $queueSizeUnavailable
+                ? "Queue size could not be checked for {$connection}:{$queue}"
+                : null,
             $retryAfter <= $maxJobTimeout
                 ? "retry_after ({$retryAfter}s) must be greater than max job timeout ({$maxJobTimeout}s)"
                 : null,

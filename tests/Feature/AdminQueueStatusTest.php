@@ -47,6 +47,23 @@ class AdminQueueStatusTest extends TestCase
             ->assertJsonPath('queue.issues.0', 'retry_after (60s) must be greater than max job timeout (1800s)');
     }
 
+    public function test_queue_status_warns_when_queue_size_cannot_be_checked(): void
+    {
+        Config::set('queue.default', 'missing');
+        Config::set('queue.connections.missing.queue', 'default');
+        Config::set('queue.connections.missing.retry_after', 2100);
+
+        $this->actingAs($this->adminUser())
+            ->getJson('/admin/queue/status')
+            ->assertOk()
+            ->assertJsonPath('queue.status', 'check')
+            ->assertJsonPath('queue.connection', 'missing')
+            ->assertJsonPath('queue.pending', null)
+            ->assertJsonPath('queue.delayed', null)
+            ->assertJsonPath('queue.reserved', null)
+            ->assertJsonPath('queue.issues.0', 'Queue size could not be checked for missing:default');
+    }
+
     public function test_queue_status_shows_waiting_when_jobs_are_pending_without_a_reserved_worker(): void
     {
         Config::set('queue.default', 'database');

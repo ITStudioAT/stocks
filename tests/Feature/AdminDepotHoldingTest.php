@@ -94,6 +94,35 @@ class AdminDepotHoldingTest extends TestCase
             ]);
     }
 
+    public function test_admin_listing_omits_chart_history_by_default(): void
+    {
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create();
+
+        StockHoldingDailyPrice::factory()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-04',
+            'close' => '123.45000000',
+            'currency' => 'USD',
+        ]);
+        StockHoldingIntradayCandle::query()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-04',
+            'interval' => '5m',
+            'as_of' => Carbon::parse('2026-06-04 09:00:00', 'UTC'),
+            'close' => '124.56000000',
+            'currency' => 'USD',
+            'source_key' => 'eodhd_intraday',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonCount(0, 'holdings.0.daily_prices')
+            ->assertJsonCount(0, 'holdings.0.intraday_prices')
+            ->assertJsonCount(0, 'holdings.0.intraday_candles');
+    }
+
     public function test_admin_listing_includes_one_year_daily_stock_prices(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-05 12:00:00', 'UTC'));
@@ -121,7 +150,7 @@ class AdminDepotHoldingTest extends TestCase
             ]);
 
             $this->actingAs($admin)
-                ->getJson('/admin/watchlist/holdings')
+                ->getJson('/admin/watchlist/holdings?include_charts=1')
                 ->assertOk()
                 ->assertJsonCount(1, 'holdings.0.daily_prices')
                 ->assertJsonPath('holdings.0.daily_prices.0.trading_date', '2026-06-04')
@@ -170,7 +199,7 @@ class AdminDepotHoldingTest extends TestCase
             ]);
 
             $this->actingAs($admin)
-                ->getJson('/admin/watchlist/holdings')
+                ->getJson('/admin/watchlist/holdings?include_charts=1')
                 ->assertOk()
                 ->assertJsonCount(2, 'holdings.0.intraday_candles')
                 ->assertJsonPath('holdings.0.intraday_candles.0.trading_date', '2026-05-01')
@@ -402,7 +431,7 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonPath('holdings.0.symbol', 'LEER')
             ->assertJsonPath('holdings.0.latest_price', null)
@@ -427,7 +456,7 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonPath('holdings.0.symbol', 'EXXX')
             ->assertJsonPath('holdings.0.latest_price', null)
@@ -480,7 +509,7 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonPath('holdings.0.symbol', 'AMES')
             ->assertJsonPath('holdings.0.latest_price', null)
@@ -503,7 +532,7 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonPath('holdings.0.symbol', 'LYMH')
             ->assertJsonPath('holdings.0.latest_price', null)
@@ -541,7 +570,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->createMedianQuote($holding, '2026-06-04 08:15:00', '191.50');
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonPath('holdings.0.symbol', 'LYXIB')
             ->assertJsonPath('holdings.0.start_price', '191.000000')
@@ -582,7 +611,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->createMedianQuote($holding, '2026-06-04 07:10:00', '191.00', 'historical_session_start');
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonPath('holdings.0.symbol', 'LYXIB')
             ->assertJsonPath('holdings.0.start_price', '191.000000')
@@ -839,7 +868,7 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-03T15:35:00+02:00');
     }
@@ -891,7 +920,7 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonPath('holdings.0.latest_price_tick_trend', 'up')
             ->assertJsonPath('holdings.1.latest_price_tick_trend', 'down')
@@ -1057,7 +1086,7 @@ class AdminDepotHoldingTest extends TestCase
         }
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonCount(20, 'holdings.0.intraday_prices')
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '100.00000000')
@@ -1098,7 +1127,7 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '2.66300000')
             ->assertJsonPath('holdings.0.intraday_prices.0.as_of', '2026-06-12T09:05:00+02:00');
@@ -1144,7 +1173,7 @@ class AdminDepotHoldingTest extends TestCase
         }
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonCount(2, 'holdings.0.intraday_prices')
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '477.75000000')
@@ -1401,7 +1430,7 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonCount(301, 'holdings.0.intraday_prices')
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '470.15000000')
@@ -1444,7 +1473,7 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonCount(103, 'holdings.0.intraday_prices')
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '42.60000000')
@@ -1484,7 +1513,7 @@ class AdminDepotHoldingTest extends TestCase
         }
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonCount(4, 'holdings.0.intraday_prices')
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '460.00000000')
@@ -1511,12 +1540,12 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonCount(0, 'holdings.0.intraday_prices');
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonCount(0, 'holdings.0.intraday_prices');
 
@@ -1548,7 +1577,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->createRealtimeQuote($holding, '2026-06-05 15:30:00', '17.87');
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonCount(0, 'holdings.0.intraday_prices');
 
@@ -1584,7 +1613,7 @@ class AdminDepotHoldingTest extends TestCase
         }
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings')
+            ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
             ->assertJsonCount(20, 'holdings.0.intraday_prices');
 

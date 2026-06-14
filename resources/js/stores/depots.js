@@ -129,6 +129,13 @@ export const useDepotStore = defineStore('depots', {
         },
         async loadWatchlistHoldings(page = 1, options = {}) {
             const isSilent = options.silent === true;
+            const query = new URLSearchParams({
+                page: String(page),
+            });
+
+            if (options.includeCharts === true) {
+                query.set('include_charts', '1');
+            }
 
             if (!isSilent) {
                 this.holdingsLoading = true;
@@ -137,7 +144,7 @@ export const useDepotStore = defineStore('depots', {
             this.holdingsError = '';
 
             try {
-                const data = await request(`/admin/watchlist/holdings?page=${page}`);
+                const data = await request(`/admin/watchlist/holdings?${query.toString()}`);
                 this.activeDepot = data.depot ?? this.activeDepot;
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
@@ -145,8 +152,8 @@ export const useDepotStore = defineStore('depots', {
                 this.intradayBackfillRefresh = data.intraday_backfill_refresh ?? this.intradayBackfillRefresh;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
                 this.uiPreferences = data.ui_preferences ?? this.uiPreferences;
-                this.holdings = data.holdings;
-                this.holdingsPagination = data.meta;
+                this.holdings = data.holdings ?? [];
+                this.holdingsPagination = data.meta ?? this.holdingsPagination;
             } catch (error) {
                 this.holdingsError = error.message;
                 throw error;

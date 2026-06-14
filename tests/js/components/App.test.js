@@ -51,6 +51,13 @@ function jsonResponse(data) {
     };
 }
 
+function failedJsonResponse(data = {}) {
+    return {
+        ok: false,
+        json: () => Promise.resolve(data),
+    };
+}
+
 function weekdayIntradayCandles(startDate, endDate) {
     const candles = [];
     const currentDate = new Date(`${startDate}T09:00:00Z`);
@@ -243,7 +250,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [
@@ -395,7 +402,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [
@@ -551,7 +558,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot: {
                         id: 1,
@@ -819,7 +826,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -1111,7 +1118,7 @@ describe('App', () => {
         expect(drawerText.indexOf('Analyze')).toBeLessThan(drawerText.indexOf('Depot'));
         expect(wrapper.find('[aria-label="Analyze detail"]').exists()).toBe(true);
         expect(window.location.pathname).toBe('/admin/menu/analyze/detail');
-        expect(window.location.search).toBe('?stock=all');
+        expect(window.location.search).toBe('?stock=1');
         expect(wrapper.find('[aria-label="Analyze detail stocks"]').find('.analyze-holding-card--all').exists()).toBe(false);
         expect(wrapper.text()).toContain('Charts');
         expect(wrapper.text()).toContain('Intraday');
@@ -1127,10 +1134,10 @@ describe('App', () => {
         await flushPromises();
 
         expect(window.location.pathname).toBe('/admin/menu/analyze/intraday');
-        expect(window.location.search).toBe('?stock=all');
+        expect(window.location.search).toBe('?stock=1');
         expect(wrapper.find('[aria-label="Analyze intraday stocks"]').find('.analyze-holding-card--all').exists()).toBe(false);
-        expect(wrapper.find('[aria-label="Analyze intraday"]').text()).toContain('ALL');
-        expect(wrapper.find('[aria-label="Analyze intraday"]').text()).toContain('No stock selected.');
+        expect(wrapper.find('[aria-label="Analyze intraday"]').text()).toContain('Apple');
+        expect(wrapper.find('[aria-label="Analyze intraday"]').text()).not.toContain('No stock selected.');
 
         const intradayFilterCard = wrapper.find('[aria-label="Analyze intraday stocks"]').findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Intraday Filter Fund'));
@@ -1186,7 +1193,7 @@ describe('App', () => {
             '+4.77%',
             '+4.77%',
         ]);
-        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/holdings/1/intraday-candles')).toBe(false);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/holdings/1/intraday-candles')).toBe(true);
 
         const intradayAppleCard = wrapper.find('[aria-label="Analyze intraday stocks"]').findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Apple'));
@@ -1554,7 +1561,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -1934,7 +1941,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -2026,7 +2033,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -2192,7 +2199,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -2290,7 +2297,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -2422,7 +2429,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -2541,7 +2548,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -2611,7 +2618,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -2726,7 +2733,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot: {
                         id: 1,
@@ -3794,7 +3801,7 @@ describe('App', () => {
             if (path === '/admin/depots/active') {
                 return Promise.resolve(jsonResponse({ depot, price_refresh_settings: priceRefreshSettings() }));
             }
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot, holdings: [holdingWithPieces, holdingWithoutPieces],
                     meta: pagination, price_refresh_settings: priceRefreshSettings(),
@@ -3839,7 +3846,7 @@ describe('App', () => {
                         index_price_refresh_settings: indexPriceRefreshSettings(),
                     }));
                 }
-                if (path === '/admin/watchlist/holdings?page=1') {
+                if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                     return Promise.resolve(jsonResponse({
                         depot,
                         holdings: [],
@@ -3914,7 +3921,7 @@ describe('App', () => {
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -4022,7 +4029,7 @@ describe('App', () => {
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -4132,7 +4139,7 @@ describe('App', () => {
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -4190,7 +4197,7 @@ describe('App', () => {
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -4263,7 +4270,7 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ depot: null }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
@@ -4556,7 +4563,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [
@@ -4638,7 +4645,7 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ transactions: [] }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -4779,7 +4786,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [holding],
@@ -5050,7 +5057,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -5371,7 +5378,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 holdingsLoaded += 1;
 
                 return Promise.resolve(jsonResponse({
@@ -5478,7 +5485,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
@@ -5549,6 +5556,74 @@ describe('App', () => {
         }
     });
 
+    it('loads the queue status even when the watch-list request fails', async () => {
+        window.history.pushState({}, '', '/admin/dashboard');
+
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/queue/status') {
+                return Promise.resolve(jsonResponse(queueStatusResponse()));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1') {
+                return Promise.resolve(failedJsonResponse({
+                    message: 'The request failed.',
+                }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [],
+                    meta: {
+                        current_page: 1,
+                        last_page: 1,
+                        per_page: 10,
+                        total: 0,
+                        from: null,
+                        to: null,
+                    },
+                }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/queue/status', expect.any(Object));
+        expect(wrapper.get('.dashboard-status-card').text()).toContain('Queue OK');
+        expect(wrapper.get('.dashboard-status-card').text()).not.toContain('Unknown');
+        expect(wrapper.text()).toContain('The request failed.');
+    });
+
     it('clears the queue from the dashboard action button', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
 
@@ -5580,7 +5655,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
@@ -5686,7 +5761,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
