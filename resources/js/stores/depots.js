@@ -137,6 +137,14 @@ export const useDepotStore = defineStore('depots', {
                 query.set('include_charts', '1');
             }
 
+            if (Number.isInteger(options.chartStockId) && options.chartStockId > 0) {
+                query.set('chart_stock_id', String(options.chartStockId));
+            }
+
+            if (typeof options.chartRange === 'string' && options.chartRange !== '') {
+                query.set('chart_range', options.chartRange);
+            }
+
             if (!isSilent) {
                 this.holdingsLoading = true;
             }

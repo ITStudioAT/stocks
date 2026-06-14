@@ -29,6 +29,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Symfony\Component\HttpFoundation\Response;
@@ -55,6 +56,11 @@ class AdminDepotHoldingController extends Controller
     {
         $activeDepot = $this->activeDepot();
         $includeCharts = $request->boolean('include_charts');
+        $chartStockId = $includeCharts ? $request->integer('chart_stock_id') : 0;
+        $chartRange = $includeCharts && $request->filled('chart_range')
+            ? $request->string('chart_range')->toString()
+            : null;
+        $includeIntradayCharts = $includeCharts && $this->shouldIncludeIntradayCharts($chartRange);
         $relations = [
             'latestRealtimePrice',
             'latestStockPrice',
@@ -64,19 +70,22 @@ class AdminDepotHoldingController extends Controller
             $historyRange = $this->stockHistoricalPriceService->range();
             $relations = [
                 ...$relations,
-                'dailyPrices' => fn ($query) => $query
+                'dailyPrices' => fn ($query) => $this->selectedChartRelation($query, $chartStockId)
                     ->whereDate('trading_date', '>=', $historyRange['from']->toDateString())
                     ->whereDate('trading_date', '<=', $historyRange['to']->toDateString())
                     ->orderBy('trading_date')
                     ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'adjusted_close', 'currency']),
-                'intradayCandles' => fn ($query) => $query
+            ];
+
+            if ($includeIntradayCharts) {
+                $relations['intradayCandles'] = fn ($query) => $this->selectedChartRelation($query, $chartStockId)
                     ->whereDate('trading_date', '>=', now()->subYear()->toDateString())
                     ->where('interval', '5m')
                     ->where('source_key', 'eodhd_intraday')
                     ->whereNotNull('close')
                     ->orderBy('as_of')
-                    ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'currency', 'as_of', 'timestamp', 'source_key']),
-            ];
+                    ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'currency', 'as_of', 'timestamp', 'source_key']);
+            }
         }
 
         $holdings = StockHolding::query()
@@ -84,7 +93,12 @@ class AdminDepotHoldingController extends Controller
             ->orderBy('name')
             ->orderBy('isin')
             ->paginate(10)
-            ->through(fn (StockHolding $holding): array => $this->holdingPayload($holding, $activeDepot, $includeCharts));
+            ->through(fn (StockHolding $holding): array => $this->holdingPayload(
+                $holding,
+                $activeDepot,
+                $includeCharts && ($chartStockId <= 0 || $holding->id === $chartStockId),
+                $includeIntradayCharts,
+            ));
 
         return response()->json([
             'depot' => $activeDepot ? $this->depotPayload($activeDepot) : null,
@@ -323,8 +337,12 @@ class AdminDepotHoldingController extends Controller
     /**
      * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, end_price_24: ?string, end_price_48: ?string, start_price_date: ?string, end_price_date: ?string, end_price_24_date: ?string, end_price_48_date: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, recent_prices_are_fallback: bool, intraday_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, intraday_candles: array<int, array{id: int, trading_date: string, price: string, currency: ?string, as_of: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, currency: ?string}>, validation_errors: array<int, string>, created_at: ?string}
      */
-    private function holdingPayload(StockHolding $holding, ?Depot $activeDepot, bool $includeCharts = false): array
-    {
+    private function holdingPayload(
+        StockHolding $holding,
+        ?Depot $activeDepot,
+        bool $includeCharts = false,
+        bool $includeIntradayCharts = true,
+    ): array {
         $latestStockPrice = $holding->latestStockPrice;
         $latestStoredPrice = $holding->latestRealtimePrice ?? $latestStockPrice;
         $latestPriceStatus = $this->latestPriceStatus($holding);
@@ -381,8 +399,8 @@ class AdminDepotHoldingController extends Controller
             'price_spread_pct' => $hasCurrentPrice ? ($latestStoredPrice?->spread_pct ?? $holding->price_spread_pct) : null,
             'recent_prices' => $recentStoredPricePayload['prices'],
             'recent_prices_are_fallback' => $recentStoredPricePayload['are_fallback'],
-            'intraday_prices' => $includeCharts ? $this->intradayPricePayload($holding) : [],
-            'intraday_candles' => $includeCharts ? $this->intradayCandlePayload($holding) : [],
+            'intraday_prices' => $includeCharts && $includeIntradayCharts ? $this->intradayPricePayload($holding) : [],
+            'intraday_candles' => $includeCharts && $includeIntradayCharts ? $this->intradayCandlePayload($holding) : [],
             'daily_prices' => $includeCharts ? $this->dailyPricePayload($holding) : [],
             'validation_errors' => $hasCurrentPrice ? ($latestStoredPrice?->validation_errors ?? []) : [],
             'created_at' => $holding->created_at?->toIso8601String(),
@@ -440,6 +458,18 @@ class AdminDepotHoldingController extends Controller
         }
 
         return number_format((float) $price, 6, '.', '');
+    }
+
+    private function selectedChartRelation(mixed $query, int $chartStockId): mixed
+    {
+        return $chartStockId > 0
+            ? $query->where('stock_holding_id', $chartStockId)
+            : $query;
+    }
+
+    private function shouldIncludeIntradayCharts(?string $chartRange): bool
+    {
+        return $chartRange === null || in_array($chartRange, ['today', 'today-1'], true);
     }
 
     /**
@@ -799,7 +829,7 @@ class AdminDepotHoldingController extends Controller
             return [];
         }
 
-        return $holding->dailyPrices
+        $dailyPrices = $holding->dailyPrices
             ->map(fn (StockHoldingDailyPrice $price): array => [
                 'trading_date' => $price->trading_date->toDateString(),
                 'price' => (string) ($price->adjusted_close ?? $price->close),
@@ -807,6 +837,45 @@ class AdminDepotHoldingController extends Controller
             ])
             ->filter(fn (array $price): bool => $price['price'] !== '')
             ->values()
+            ->all();
+
+        return $dailyPrices !== []
+            ? $dailyPrices
+            : $this->dailyPricePayloadFromIntradayCandles($holding);
+    }
+
+    /**
+     * @return array<int, array{trading_date: string, price: string, currency: ?string}>
+     */
+    private function dailyPricePayloadFromIntradayCandles(StockHolding $holding): array
+    {
+        $latestCandlePerDay = StockHoldingIntradayCandle::query()
+            ->where('stock_holding_id', $holding->id)
+            ->whereDate('trading_date', '>=', now()->subYear()->toDateString())
+            ->where('interval', '5m')
+            ->where('source_key', 'eodhd_intraday')
+            ->whereNotNull('close')
+            ->select('trading_date', DB::raw('MAX(as_of) as latest_as_of'))
+            ->groupBy('trading_date');
+
+        return StockHoldingIntradayCandle::query()
+            ->joinSub($latestCandlePerDay, 'latest_candle_per_day', function ($join): void {
+                $join
+                    ->on('stock_holding_intraday_candles.trading_date', '=', 'latest_candle_per_day.trading_date')
+                    ->on('stock_holding_intraday_candles.as_of', '=', 'latest_candle_per_day.latest_as_of');
+            })
+            ->where('stock_holding_id', $holding->id)
+            ->orderBy('stock_holding_intraday_candles.trading_date')
+            ->get([
+                'stock_holding_intraday_candles.trading_date',
+                'stock_holding_intraday_candles.close',
+                'stock_holding_intraday_candles.currency',
+            ])
+            ->map(fn (StockHoldingIntradayCandle $price): array => [
+                'trading_date' => $price->trading_date->toDateString(),
+                'price' => (string) $price->close,
+                'currency' => $price->currency,
+            ])
             ->all();
     }
 

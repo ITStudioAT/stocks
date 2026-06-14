@@ -492,14 +492,28 @@ function isRealtimePriceRow(priceRow) {
 }
 
 function analyzeOverviewChartSource(holding, rangeKey, windowOffset) {
+    const dailyPrices = Array.isArray(holding?.daily_prices)
+        ? holding.daily_prices.map((price) => ({
+            ...price,
+            as_of: `${price.trading_date}T00:00:00.000Z`,
+        }))
+        : [];
     const intradayCandles = Array.isArray(holding?.intraday_candles) ? holding.intraday_candles : [];
     const intradayPrices = Array.isArray(holding?.intraday_prices) ? holding.intraday_prices : [];
     const recentPrices = Array.isArray(holding?.recent_prices) ? holding.recent_prices.filter(isRealtimePriceRow) : [];
-    const chartSources = [
-        { key: 'intraday_candles', prices: intradayCandles },
-        { key: 'intraday_prices', prices: intradayPrices },
-        { key: 'realtime_prices', prices: recentPrices },
-    ];
+    const chartSources = isAnalyzeTodayRange(rangeKey)
+        ? [
+            { key: 'intraday_candles', prices: intradayCandles },
+            { key: 'intraday_prices', prices: intradayPrices },
+            { key: 'realtime_prices', prices: recentPrices },
+            { key: 'daily_prices', prices: dailyPrices },
+        ]
+        : [
+            { key: 'daily_prices', prices: dailyPrices },
+            { key: 'intraday_candles', prices: intradayCandles },
+            { key: 'intraday_prices', prices: intradayPrices },
+            { key: 'realtime_prices', prices: recentPrices },
+        ];
     const chartSourceWindows = chartSources.map((source) => ({
         ...source,
         window: analyzeChartWindow(source.prices, rangeKey, windowOffset),
@@ -956,6 +970,7 @@ watch(
     [selectedAnalyzeHistoryRange, selectedAnalyzeHoldingId],
     () => {
         selectedAnalyzeHistoryWindowOffset.value = 0;
+        loadSelectedAnalyzeChartData();
     },
 );
 
@@ -995,6 +1010,7 @@ watch(
 watch(
     [activeSection, activeAnalyzeSubsection, selectedAnalyzeHoldingId],
     () => {
+        loadSelectedAnalyzeChartData();
         ensureAnalyzeDetailIntradayCandles();
     },
 );
@@ -1136,10 +1152,22 @@ function loadDashboardQueueStatus() {
 }
 
 function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.current_page, options = {}) {
+    const shouldIncludeCharts = activeSection.value === 'analyze' && selectedAnalyzeHoldingId.value !== null;
+
     return depotsStore.loadWatchlistHoldings(page, {
         ...options,
-        includeCharts: activeSection.value === 'analyze',
+        includeCharts: shouldIncludeCharts,
+        chartStockId: shouldIncludeCharts ? selectedAnalyzeHoldingId.value : null,
+        chartRange: shouldIncludeCharts ? selectedAnalyzeHistoryRange.value : null,
     });
+}
+
+function loadSelectedAnalyzeChartData() {
+    if (activeSection.value !== 'analyze' || selectedAnalyzeHoldingId.value === null) {
+        return;
+    }
+
+    loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page, { silent: true }).catch(() => {});
 }
 
 async function syncCloudwaysDatabase() {

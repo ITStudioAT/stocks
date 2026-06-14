@@ -250,7 +250,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [
@@ -402,7 +402,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [
@@ -558,7 +558,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot: {
                         id: 1,
@@ -826,7 +826,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -1561,7 +1561,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -1941,7 +1941,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -2033,7 +2033,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -2199,7 +2199,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -2297,7 +2297,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -2429,7 +2429,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -2548,7 +2548,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -2618,7 +2618,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -2733,7 +2733,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot: {
                         id: 1,
@@ -3801,7 +3801,7 @@ describe('App', () => {
             if (path === '/admin/depots/active') {
                 return Promise.resolve(jsonResponse({ depot, price_refresh_settings: priceRefreshSettings() }));
             }
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot, holdings: [holdingWithPieces, holdingWithoutPieces],
                     meta: pagination, price_refresh_settings: priceRefreshSettings(),
@@ -3846,7 +3846,7 @@ describe('App', () => {
                         index_price_refresh_settings: indexPriceRefreshSettings(),
                     }));
                 }
-                if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+                if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                     return Promise.resolve(jsonResponse({
                         depot,
                         holdings: [],
@@ -3921,7 +3921,7 @@ describe('App', () => {
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -4029,7 +4029,7 @@ describe('App', () => {
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -4139,7 +4139,7 @@ describe('App', () => {
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -4197,7 +4197,7 @@ describe('App', () => {
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -4270,7 +4270,7 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ depot: null }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
@@ -4563,7 +4563,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [
@@ -4645,7 +4645,7 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ transactions: [] }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -4786,7 +4786,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [holding],
@@ -5057,7 +5057,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -5378,7 +5378,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 holdingsLoaded += 1;
 
                 return Promise.resolve(jsonResponse({
@@ -5485,7 +5485,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
@@ -5655,7 +5655,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
@@ -5761,7 +5761,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1' || path === '/admin/watchlist/holdings?page=1&include_charts=1') {
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
