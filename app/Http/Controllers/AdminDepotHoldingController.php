@@ -56,11 +56,13 @@ class AdminDepotHoldingController extends Controller
     {
         $activeDepot = $this->activeDepot();
         $includeCharts = $request->boolean('include_charts');
+        $includeAllChartHoldings = $includeCharts && $request->boolean('all_chart_holdings');
         $chartStockId = $includeCharts ? $request->integer('chart_stock_id') : 0;
         $chartRange = $includeCharts && $request->filled('chart_range')
             ? $request->string('chart_range')->toString()
             : null;
-        $includeIntradayCharts = $includeCharts && $this->shouldIncludeIntradayCharts($chartRange);
+        $includeIntradayCharts = $includeCharts && ! $includeAllChartHoldings && $this->shouldIncludeIntradayCharts($chartRange);
+        $dailyChartStockId = $includeAllChartHoldings ? 0 : $chartStockId;
         $relations = [
             'latestRealtimePrice',
             'latestStockPrice',
@@ -70,7 +72,7 @@ class AdminDepotHoldingController extends Controller
             $historyRange = $this->stockHistoricalPriceService->range();
             $relations = [
                 ...$relations,
-                'dailyPrices' => fn ($query) => $this->selectedChartRelation($query, $chartStockId)
+                'dailyPrices' => fn ($query) => $this->selectedChartRelation($query, $dailyChartStockId)
                     ->whereDate('trading_date', '>=', $historyRange['from']->toDateString())
                     ->whereDate('trading_date', '<=', $historyRange['to']->toDateString())
                     ->orderBy('trading_date')
@@ -88,10 +90,40 @@ class AdminDepotHoldingController extends Controller
             }
         }
 
-        $holdings = StockHolding::query()
+        $holdingsQuery = StockHolding::query()
             ->with($relations)
             ->orderBy('name')
-            ->orderBy('isin')
+            ->orderBy('isin');
+
+        if ($includeAllChartHoldings) {
+            $holdings = $holdingsQuery
+                ->get()
+                ->map(fn (StockHolding $holding): array => $this->holdingPayload(
+                    $holding,
+                    $activeDepot,
+                    true,
+                    false,
+                ));
+
+            return response()->json([
+                'depot' => $activeDepot ? $this->depotPayload($activeDepot) : null,
+                'price_refresh_settings' => $this->priceRefreshScheduler->payload(),
+                'index_price_refresh_settings' => $this->indexPriceRefreshSettings->payload(),
+                'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
+                'ui_preferences' => $this->uiPreferences->payload(),
+                'holdings' => $holdings->all(),
+                'meta' => [
+                    'current_page' => 1,
+                    'last_page' => 1,
+                    'per_page' => $holdings->count(),
+                    'total' => $holdings->count(),
+                    'from' => $holdings->isEmpty() ? null : 1,
+                    'to' => $holdings->isEmpty() ? null : $holdings->count(),
+                ],
+            ]);
+        }
+
+        $holdings = $holdingsQuery
             ->paginate(10)
             ->through(fn (StockHolding $holding): array => $this->holdingPayload(
                 $holding,

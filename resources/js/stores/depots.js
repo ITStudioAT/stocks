@@ -137,6 +137,10 @@ export const useDepotStore = defineStore('depots', {
                 query.set('include_charts', '1');
             }
 
+            if (options.allChartHoldings === true) {
+                query.set('all_chart_holdings', '1');
+            }
+
             if (Number.isInteger(options.chartStockId) && options.chartStockId > 0) {
                 query.set('chart_stock_id', String(options.chartStockId));
             }

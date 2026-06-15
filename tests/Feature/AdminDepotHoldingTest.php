@@ -162,6 +162,52 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonCount(0, 'holdings.1.intraday_candles');
     }
 
+    public function test_admin_listing_can_include_chart_history_for_all_holdings_without_pagination(): void
+    {
+        Carbon::setTestNow('2026-06-15 12:00:00');
+        $admin = $this->adminUser();
+
+        $firstHolding = StockHolding::factory()->create([
+            'name' => 'Alpha ETF',
+        ]);
+        StockHolding::factory()->count(10)->create();
+        $lastHolding = StockHolding::factory()->create([
+            'name' => 'Zulu ETF',
+        ]);
+
+        foreach ([$firstHolding, $lastHolding] as $holding) {
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-06-01',
+                'close' => '123.45000000',
+                'currency' => 'EUR',
+            ]);
+            StockHoldingIntradayCandle::query()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-06-01',
+                'interval' => '5m',
+                'as_of' => Carbon::parse('2026-06-01 09:00:00', 'UTC'),
+                'close' => '124.56000000',
+                'currency' => 'EUR',
+                'source_key' => 'eodhd_intraday',
+            ]);
+        }
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings?include_charts=1&all_chart_holdings=1&chart_range=1y')
+            ->assertOk()
+            ->assertJsonCount(12, 'holdings')
+            ->assertJsonPath('meta.current_page', 1)
+            ->assertJsonPath('meta.last_page', 1)
+            ->assertJsonPath('meta.total', 12)
+            ->assertJsonPath('holdings.0.id', $firstHolding->id)
+            ->assertJsonCount(1, 'holdings.0.daily_prices')
+            ->assertJsonCount(0, 'holdings.0.intraday_candles')
+            ->assertJsonPath('holdings.11.id', $lastHolding->id)
+            ->assertJsonCount(1, 'holdings.11.daily_prices')
+            ->assertJsonCount(0, 'holdings.11.intraday_candles');
+    }
+
     public function test_admin_listing_derives_period_chart_history_from_intraday_candles_when_daily_prices_are_missing(): void
     {
         $admin = $this->adminUser();

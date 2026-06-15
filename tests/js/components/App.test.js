@@ -105,6 +105,74 @@ function trendSignalDailyPrices() {
     return prices;
 }
 
+function streakRecommendationDailyPrices() {
+    return [
+        { trading_date: '2026-06-01', price: '100.000000', currency: 'EUR' },
+        { trading_date: '2026-06-02', price: '99.000000', currency: 'EUR' },
+        { trading_date: '2026-06-03', price: '98.010000', currency: 'EUR' },
+        { trading_date: '2026-06-04', price: '97.029900', currency: 'EUR' },
+        { trading_date: '2026-06-05', price: '96.059601', currency: 'EUR' },
+        { trading_date: '2026-06-06', price: '95.099005', currency: 'EUR' },
+        { trading_date: '2026-06-07', price: '97.000985', currency: 'EUR' },
+        { trading_date: '2026-06-08', price: '100.008016', currency: 'EUR' },
+        { trading_date: '2026-06-09', price: '99.007936', currency: 'EUR' },
+        { trading_date: '2026-06-10', price: '98.017857', currency: 'EUR' },
+        { trading_date: '2026-06-11', price: '97.037678', currency: 'EUR' },
+        { trading_date: '2026-06-12', price: '96.067301', currency: 'EUR' },
+        { trading_date: '2026-06-13', price: '95.106628', currency: 'EUR' },
+        { trading_date: '2026-06-14', price: '97.008761', currency: 'EUR' },
+        { trading_date: '2026-06-15', price: '100.016033', currency: 'EUR' },
+    ];
+}
+
+function openStreakRecommendationDailyPrices() {
+    return [
+        { trading_date: '2026-05-27', price: '100.000000', currency: 'EUR' },
+        { trading_date: '2026-05-28', price: '99.000000', currency: 'EUR' },
+        { trading_date: '2026-05-29', price: '98.010000', currency: 'EUR' },
+        { trading_date: '2026-05-30', price: '97.029900', currency: 'EUR' },
+        { trading_date: '2026-06-01', price: '97.029900', currency: 'EUR' },
+        { trading_date: '2026-06-08', price: '97.029900', currency: 'EUR' },
+        { trading_date: '2026-06-15', price: '97.029900', currency: 'EUR' },
+    ];
+}
+
+function overlappingStreakRecommendationDailyPrices() {
+    return [
+        { trading_date: '2026-07-01', price: '100.000000', currency: 'EUR' },
+        { trading_date: '2026-07-02', price: '99.000000', currency: 'EUR' },
+        { trading_date: '2026-07-03', price: '98.010000', currency: 'EUR' },
+        { trading_date: '2026-07-04', price: '97.029900', currency: 'EUR' },
+        { trading_date: '2026-07-05', price: '98.000199', currency: 'EUR' },
+        { trading_date: '2026-07-06', price: '97.020197', currency: 'EUR' },
+        { trading_date: '2026-07-07', price: '96.049995', currency: 'EUR' },
+        { trading_date: '2026-07-08', price: '95.089495', currency: 'EUR' },
+        { trading_date: '2026-07-09', price: '99.843970', currency: 'EUR' },
+    ];
+}
+
+function hiddenPreAnalysisBuyDailyPrices() {
+    const prices = [];
+    const currentDate = new Date('2026-01-01T00:00:00Z');
+    let price = 100;
+
+    Array.from({ length: 205 }).forEach((_, index) => {
+        if (index > 0 && index <= 3) {
+            price *= 0.99;
+        }
+
+        prices.push({
+            trading_date: currentDate.toISOString().slice(0, 10),
+            price: price.toFixed(6),
+            currency: 'EUR',
+        });
+
+        currentDate.setUTCDate(currentDate.getUTCDate() + 1);
+    });
+
+    return prices;
+}
+
 function priceRefreshSettings(overrides = {}) {
     return {
         trading_interval_minutes: 20,
@@ -974,6 +1042,38 @@ describe('App', () => {
                             latest_price: '146.000000',
                             daily_prices: trendSignalDailyPrices(),
                         },
+                        {
+                            id: 8,
+                            symbol: 'BUY',
+                            name: 'Buy Streak Fund',
+                            currency: 'EUR',
+                            latest_price: '95.000000',
+                            daily_prices: streakRecommendationDailyPrices(),
+                        },
+                        {
+                            id: 11,
+                            symbol: 'OPEN',
+                            name: 'Open Streak Fund',
+                            currency: 'EUR',
+                            latest_price: '95.000000',
+                            daily_prices: openStreakRecommendationDailyPrices(),
+                        },
+                        {
+                            id: 9,
+                            symbol: 'OVER',
+                            name: 'Overlap Streak Fund',
+                            currency: 'EUR',
+                            latest_price: '99.843970',
+                            daily_prices: overlappingStreakRecommendationDailyPrices(),
+                        },
+                        {
+                            id: 10,
+                            symbol: 'HIDDEN',
+                            name: 'Hidden Pre Analysis Fund',
+                            currency: 'EUR',
+                            latest_price: '97.029900',
+                            daily_prices: hiddenPreAnalysisBuyDailyPrices(),
+                        },
                     ],
                     meta: pagination,
                     price_refresh_settings: priceRefreshSettings(),
@@ -1171,6 +1271,9 @@ describe('App', () => {
 
         expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
         expect(window.location.search).toBe('?stock=1');
+        expect(fetchMock.mock.calls.some(([path]) => (
+            path === '/admin/watchlist/holdings?page=1&include_charts=1&all_chart_holdings=1&chart_range=1y'
+        ))).toBe(true);
         const analyzeTrend = wrapper.find('[aria-label="Analyze trend"]');
         const trendStockMenu = wrapper.find('[aria-label="Analyze trend stocks"]');
         expect(analyzeTrend.exists()).toBe(true);
@@ -1188,18 +1291,34 @@ describe('App', () => {
         expect(analyzeTrend.text()).toContain('Right');
         expect(analyzeTrend.text()).toContain('Accuracy');
         expect(analyzeTrend.text()).toContain('Latest signal');
-        expect(analyzeTrend.text()).toContain('Date');
-        expect(analyzeTrend.text()).toContain('Day +/-');
-        expect(analyzeTrend.text()).toContain('Day %');
-        expect(analyzeTrend.text()).toContain('Trend line');
-        expect(analyzeTrend.text()).toContain('Up/Down');
-        expect(analyzeTrend.text()).toContain('Volume');
-        expect(analyzeTrend.text()).toContain('Recommendation');
-        expect(analyzeTrend.text()).toContain('Reason');
-        expect(analyzeTrend.text()).toContain('Next %');
-        expect(analyzeTrend.text()).toContain('Right?');
+        expect(analyzeTrend.find('.analyze-trend-table').findAll('th').map((heading) => heading.text())).toEqual([
+            'Date',
+            'Price',
+            'Day %',
+            '-Streak',
+            'Rec',
+            'Evoluation',
+            'Next %',
+            'Wins',
+            'CAP',
+            'Total',
+        ]);
+        expect(analyzeTrend.text()).not.toContain('Trend line');
+        expect(analyzeTrend.text()).not.toContain('Up/Down');
+        expect(analyzeTrend.text()).not.toContain('Volume');
+        expect(analyzeTrend.text()).not.toContain('Reason');
+        expect(analyzeTrend.text()).not.toContain('Day +/-');
+        expect(analyzeTrend.text()).not.toContain('Right?');
+        const firstTrendRowCells = analyzeTrend.find('.analyze-trend-table tbody tr').findAll('td');
+        expect(firstTrendRowCells).toHaveLength(10);
+        expect(firstTrendRowCells[3].text()).toBe('');
+        expect(firstTrendRowCells[4].text()).toBe('');
+        expect(firstTrendRowCells[5].text()).toBe('');
+        expect(firstTrendRowCells[7].text()).toBe('');
+        expect(firstTrendRowCells[8].text()).toBe('All: 20,000.00 EUR');
+        expect(firstTrendRowCells[8].find('.analyze-trend-cap-amount--portfolio').text()).toBe('All: 20,000.00 EUR');
+        expect(firstTrendRowCells[9].text()).toBe('');
         expect(analyzeTrend.text()).toContain('04.06.2026');
-        expect(analyzeTrend.text()).toContain('+4.8200');
         expect(analyzeTrend.text()).toContain('+1.60%');
         expect(analyzeTrend.text()).not.toContain('Sell');
         expect(analyzeTrend.text()).not.toContain('0/0');
@@ -1215,12 +1334,99 @@ describe('App', () => {
         expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
         expect(window.location.search).toBe('?stock=7');
         expect(trendSignalCard.attributes('aria-pressed')).toBe('true');
-        expect(analyzeTrend.text()).toContain('Above rising line');
-        expect(analyzeTrend.text()).toMatch(/5d \d+\/\d+; 20d \d+\/\d+/);
-        expect(analyzeTrend.text()).toContain('avg, confirms up');
         expect(analyzeTrend.text()).toMatch(/\d+\/\d+ \(\d+\.\d%\)/);
+        expect(analyzeTrend.text()).toMatch(/1 \(-0\.\d{2}%\)/);
         expect(analyzeTrend.text()).toContain('Buy');
         expect(analyzeTrend.text()).not.toContain('Sell');
+
+        const buyStreakCard = trendStockMenu.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Buy Streak Fund'));
+        await buyStreakCard.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
+        expect(window.location.search).toBe('?stock=8');
+        expect(buyStreakCard.attributes('aria-pressed')).toBe('true');
+        const buyStreakRows = analyzeTrend.findAll('.analyze-trend-table tbody tr');
+        expect(buyStreakRows).toHaveLength(14);
+        expect(buyStreakRows[0].findAll('td')[3].text()).toBe('');
+        expect(buyStreakRows[0].findAll('td')[4].text()).toBe('SELL 1');
+        expect(buyStreakRows[0].findAll('td')[5].text()).toBe('1: +3.10%');
+        expect(buyStreakRows[0].findAll('td')[7].text()).toBe('310.00 EUR');
+        expect(buyStreakRows[0].findAll('td')[8].text()).toBe('All: 10,000.00 EUR');
+        expect(buyStreakRows[0].findAll('td')[9].text()).toBe('620.00 EUR');
+        expect(buyStreakRows[1].findAll('td')[3].text()).toBe('');
+        expect(buyStreakRows[1].findAll('td')[4].text()).toBe('');
+        expect(buyStreakRows[1].findAll('td')[5].text()).toBe('1: 0.00%');
+        expect(buyStreakRows[1].findAll('td')[8].text()).toContain('0.00 EUR');
+        expect(buyStreakRows[1].findAll('td')[8].find('.analyze-trend-cap-amount').text()).toBe('10,000.00 EUR');
+        expect(buyStreakRows[1].findAll('td')[8].find('.analyze-trend-cap-amount--portfolio').text()).toBe('All: 20,000.00 EUR');
+        expect(buyStreakRows[2].findAll('td')[3].text()).toBe('5 (-5.00%)');
+        expect(buyStreakRows[2].findAll('td')[4].text()).toBe('');
+        expect(buyStreakRows[2].findAll('td')[5].text()).toBe('1: -2.00%');
+        expect(buyStreakRows[2].findAll('td')[8].text()).toContain('-200.00 EUR');
+        expect(buyStreakRows[2].findAll('td')[8].find('.analyze-trend-cap-amount').text()).toBe('10,000.00 EUR');
+        expect(buyStreakRows[2].findAll('td')[8].find('.analyze-trend-cap-amount--portfolio').text()).toBe('All: 20,000.00 EUR');
+        expect(buyStreakRows[3].findAll('td')[3].text()).toBe('4 (-4.00%)');
+        expect(buyStreakRows[3].findAll('td')[4].text()).toBe('');
+        expect(buyStreakRows[3].findAll('td')[5].text()).toBe('1: -1.00%');
+        expect(buyStreakRows[3].findAll('td')[8].text()).toContain('-100.00 EUR');
+        expect(buyStreakRows[3].findAll('td')[8].find('.analyze-trend-cap-amount').text()).toBe('10,000.00 EUR');
+        expect(buyStreakRows[4].findAll('td')[3].text()).toBe('3 (-3.00%)');
+        expect(buyStreakRows[4].findAll('td')[4].text()).toBe('BUY 1');
+        expect(buyStreakRows[4].findAll('td')[5].text()).toBe('');
+        expect(buyStreakRows[4].findAll('td')[8].text()).toContain('0.00 EUR');
+        expect(buyStreakRows[4].findAll('td')[8].find('.analyze-trend-cap-amount').text()).toBe('10,000.00 EUR');
+        expect(buyStreakRows[4].find('.analyze-trend-rec--buy').exists()).toBe(true);
+        expect(buyStreakRows[4].text()).not.toContain('BUY 2');
+        expect(buyStreakRows[5].findAll('td')[3].text()).toBe('2 (-2.00%)');
+        expect(buyStreakRows[5].findAll('td')[4].text()).toBe('');
+        expect(buyStreakRows[6].findAll('td')[3].text()).toBe('1 (-1.00%)');
+        expect(buyStreakRows[6].findAll('td')[4].text()).toBe('');
+        expect(buyStreakRows[7].findAll('td')[4].text()).toBe('SELL 1');
+        expect(buyStreakRows[7].findAll('td')[5].text()).toBe('1: +3.10%');
+        expect(buyStreakRows[7].findAll('td')[7].text()).toBe('310.00 EUR');
+        expect(buyStreakRows[7].findAll('td')[8].text()).toBe('All: 10,000.00 EUR');
+        expect(buyStreakRows[7].findAll('td')[9].text()).toBe('310.00 EUR');
+        expect(buyStreakRows[11].findAll('td')[3].text()).toBe('3 (-3.00%)');
+        expect(buyStreakRows[11].findAll('td')[4].text()).toBe('BUY 1');
+        expect(buyStreakRows[11].text()).not.toContain('BUY 2');
+
+        const overlapStreakCard = trendStockMenu.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Overlap Streak Fund'));
+        await overlapStreakCard.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
+        expect(window.location.search).toBe('?stock=9');
+        expect(overlapStreakCard.attributes('aria-pressed')).toBe('true');
+        const overlapRows = analyzeTrend.findAll('.analyze-trend-table tbody tr');
+        expect(overlapRows).toHaveLength(8);
+        expect(overlapRows[1].findAll('td')[4].text()).toBe('BUY 2');
+        expect(overlapRows[1].findAll('td')[5].text()).toBe('1: -2.00%');
+        expect(overlapRows[1].findAll('td')[8].text()).toContain('-200.00 EUR');
+        expect(overlapRows[1].findAll('td')[8].find('.analyze-trend-cap-amount').text()).toBe('15,000.00 EUR');
+        expect(overlapRows[1].findAll('td')[8].find('.analyze-trend-cap-amount--portfolio').text()).toBe('All: 25,000.00 EUR');
+        expect(overlapRows[0].findAll('td')[4].text()).toContain('SELL 1');
+        expect(overlapRows[0].findAll('td')[4].text()).toContain('SELL 2');
+        expect(overlapRows[0].findAll('td')[7].text()).toBe('550.00 EUR');
+        expect(overlapRows[0].findAll('td')[8].text()).toBe('All: 10,000.00 EUR');
+        expect(overlapRows[0].findAll('td')[9].text()).toBe('550.00 EUR');
+
+        const hiddenPreAnalysisCard = trendStockMenu.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Hidden Pre Analysis Fund'));
+        await hiddenPreAnalysisCard.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
+        expect(window.location.search).toBe('?stock=10');
+        expect(hiddenPreAnalysisCard.attributes('aria-pressed')).toBe('true');
+        const hiddenPreAnalysisRows = analyzeTrend.findAll('.analyze-trend-table tbody tr');
+        expect(hiddenPreAnalysisRows).toHaveLength(200);
+        const hiddenPreAnalysisFirstRowCells = hiddenPreAnalysisRows[199].findAll('td');
+        expect(hiddenPreAnalysisFirstRowCells[4].text()).toBe('');
+        expect(hiddenPreAnalysisFirstRowCells[5].text()).toBe('');
+        expect(hiddenPreAnalysisFirstRowCells[8].text()).toBe('');
 
         const microsoftTrendCard = trendStockMenu.findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Microsoft'));
