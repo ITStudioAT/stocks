@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useDisplay } from 'vuetify';
 import { storeToRefs } from 'pinia';
-import { request, useAuthStore } from './stores/auth';
+import { csrfToken, request, useAuthStore } from './stores/auth';
 import { useDepotStore } from './stores/depots';
 import { useRoleStore } from './stores/roles';
 import { useUserStore } from './stores/users';
@@ -194,6 +194,7 @@ const depotPriceSource = ref('latest');
 const cloudwaysSyncLoading = ref(false);
 const cloudwaysSyncMessage = ref('');
 const cloudwaysSyncError = ref('');
+const cloudwaysSyncProgressMessage = ref('');
 const cloudwaysSyncResult = ref(null);
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
@@ -1986,18 +1987,136 @@ async function syncCloudwaysDatabase() {
     cloudwaysSyncLoading.value = true;
     cloudwaysSyncMessage.value = '';
     cloudwaysSyncError.value = '';
+    cloudwaysSyncProgressMessage.value = 'Starting Cloudways sync...';
+    cloudwaysSyncResult.value = emptyCloudwaysSyncResult();
 
     try {
-        const data = await request('/admin/cloudways/sync', {
-            method: 'POST',
-        });
-        cloudwaysSyncMessage.value = data.message;
-        cloudwaysSyncResult.value = data.sync;
+        await streamCloudwaysDatabaseSync();
     } catch (error) {
         cloudwaysSyncError.value = error.message;
     } finally {
+        cloudwaysSyncProgressMessage.value = '';
         cloudwaysSyncLoading.value = false;
     }
+}
+
+function emptyCloudwaysSyncResult() {
+    return {
+        synced_tables: 0,
+        total_tables: 0,
+        rows: 0,
+        synced_at: null,
+        skipped_tables: [],
+        tables: [],
+    };
+}
+
+async function streamCloudwaysDatabaseSync() {
+    const response = await fetch('/admin/cloudways/sync', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+            Accept: 'application/x-ndjson',
+            'Content-Type': 'application/json',
+            'X-CSRF-TOKEN': csrfToken(),
+        },
+    });
+
+    if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        const message = data.message ?? Object.values(data.errors ?? {})?.[0]?.[0] ?? 'The request failed.';
+
+        throw new Error(message);
+    }
+
+    if (!response.body?.getReader) {
+        const data = await response.json();
+        cloudwaysSyncMessage.value = data.message;
+        cloudwaysSyncResult.value = data.sync;
+
+        return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+        const { value, done } = await reader.read();
+
+        if (done) {
+            break;
+        }
+
+        buffer += decoder.decode(value, { stream: true });
+        buffer = processCloudwaysSyncBuffer(buffer);
+    }
+
+    buffer += decoder.decode();
+
+    if (buffer.trim() !== '') {
+        handleCloudwaysSyncEvent(JSON.parse(buffer));
+    }
+}
+
+function processCloudwaysSyncBuffer(buffer) {
+    const lines = buffer.split('\n');
+    const remainingBuffer = lines.pop() ?? '';
+
+    lines
+        .map(line => line.trim())
+        .filter(line => line !== '')
+        .forEach(line => handleCloudwaysSyncEvent(JSON.parse(line)));
+
+    return remainingBuffer;
+}
+
+function handleCloudwaysSyncEvent(event) {
+    if (event.type === 'table') {
+        appendCloudwaysSyncedTable(event.table);
+        cloudwaysSyncProgressMessage.value = event.table?.message ?? `Imported ${event.table?.name ?? 'table'}.`;
+
+        return;
+    }
+
+    if (event.type === 'finished') {
+        cloudwaysSyncMessage.value = event.message;
+        cloudwaysSyncResult.value = event.sync;
+
+        return;
+    }
+
+    if (event.type === 'error') {
+        throw new Error(event.message ?? 'The Cloudways sync failed.');
+    }
+}
+
+function appendCloudwaysSyncedTable(table) {
+    if (!table) {
+        return;
+    }
+
+    const currentResult = cloudwaysSyncResult.value ?? emptyCloudwaysSyncResult();
+    const tables = [
+        ...currentResult.tables.filter(existingTable => existingTable.name !== table.name),
+        table,
+    ];
+
+    cloudwaysSyncResult.value = {
+        ...currentResult,
+        synced_tables: tables.length,
+        total_tables: Math.max(currentResult.total_tables ?? 0, tables.length),
+        rows: tables.reduce((sum, syncedTable) => sum + Number(syncedTable.rows ?? 0), 0),
+        tables,
+    };
+}
+
+function cloudwaysTableStatusColor(table) {
+    return table?.status === 'imported' ? 'success' : 'warning';
+}
+
+function cloudwaysTableStatusLabel(table) {
+    return table?.status === 'imported' ? 'Imported' : 'Skipped';
 }
 
 function navigateAnalyzeSubsection(subsection) {
@@ -11272,6 +11391,15 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                         <v-alert v-if="cloudwaysSyncError" type="error" variant="tonal" density="compact" class="mb-4">
                             {{ cloudwaysSyncError }}
                         </v-alert>
+                        <v-alert
+                            v-if="cloudwaysSyncProgressMessage"
+                            type="info"
+                            variant="tonal"
+                            density="compact"
+                            class="mb-4"
+                        >
+                            {{ cloudwaysSyncProgressMessage }}
+                        </v-alert>
 
                         <v-sheet border rounded class="pa-4">
                             <div class="text-body-2 text-medium-emphasis">
@@ -11295,15 +11423,27 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     <thead>
                                         <tr>
                                             <th>Table</th>
+                                            <th>Status</th>
                                             <th class="text-right">Rows</th>
                                             <th class="text-right">Columns</th>
+                                            <th>Response</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         <tr v-for="table in cloudwaysSyncResult.tables" :key="table.name">
                                             <td>{{ table.name }}</td>
+                                            <td>
+                                                <v-chip
+                                                    :color="cloudwaysTableStatusColor(table)"
+                                                    size="small"
+                                                    variant="tonal"
+                                                >
+                                                    {{ cloudwaysTableStatusLabel(table) }}
+                                                </v-chip>
+                                            </td>
                                             <td class="text-right">{{ table.rows }}</td>
                                             <td class="text-right">{{ table.columns }}</td>
+                                            <td>{{ table.message }}</td>
                                         </tr>
                                     </tbody>
                                 </v-table>

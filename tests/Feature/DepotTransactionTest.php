@@ -6,6 +6,8 @@ use App\Models\Depot;
 use App\Models\DepotTransaction;
 use App\Models\StockHolding;
 use App\Models\StockHoldingDailyPrice;
+use App\Models\StockPrice;
+use App\Models\StockRealtimePrice;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -571,6 +573,79 @@ class DepotTransactionTest extends TestCase
 
         $this->assertSame(['AAPL'], collect($response->json('depot_holdings'))->pluck('symbol')->all());
         $this->assertSame('710.00', $depot->refresh()->account_balance);
+    }
+
+    public function test_depot_holding_payload_uses_latest_realtime_price_when_available(): void
+    {
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create([
+            'account_balance' => '1000.00',
+            'is_active' => true,
+        ]);
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'AAPL',
+            'name' => 'Apple Inc.',
+            'isin' => 'US0378331005',
+            'currency' => 'USD',
+            'latest_price' => '100.000000',
+            'latest_price_fetched_at' => Carbon::parse('2026-06-12 16:00:00', 'UTC'),
+            'latest_price_as_of' => '2026-06-12T14:00:00+00:00',
+        ]);
+        $realtimePrice = StockRealtimePrice::factory()->create([
+            'stock_holding_id' => $holding->id,
+            'symbol' => 'AAPL',
+            'isin' => 'US0378331005',
+            'currency' => 'USD',
+            'price' => '121.25000000',
+            'as_of' => Carbon::parse('2026-06-12 17:30:00', 'UTC'),
+            'fetched_at' => Carbon::parse('2026-06-15 07:23:00', 'UTC'),
+            'freshness_status' => 'realtime',
+        ]);
+        $holding->update([
+            'latest_realtime_price_id' => $realtimePrice->id,
+        ]);
+        $previousStoredPrice = StockPrice::factory()->create([
+            'symbol' => 'AAPL',
+            'isin' => 'US0378331005',
+            'currency' => 'USD',
+            'price' => '120.00000000',
+            'as_of' => Carbon::parse('2026-06-12 17:30:00', 'UTC'),
+            'fetched_at' => Carbon::parse('2026-06-12 18:00:00', 'UTC'),
+            'freshness_status' => 'closed_market',
+        ]);
+        $holding->update([
+            'latest_stock_price_id' => $previousStoredPrice->id,
+        ]);
+        StockHoldingDailyPrice::factory()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-11',
+            'close' => '118.00000000',
+            'adjusted_close' => '118.00000000',
+            'currency' => 'USD',
+        ]);
+        DepotTransaction::factory()->create([
+            'depot_id' => $depot->id,
+            'stock_holding_id' => $holding->id,
+            'type' => 'buy',
+            'pieces' => '2.00000000',
+            'total_amount' => '200.00',
+            'unit_price' => '100.00000000',
+            'cash_delta' => '-200.00',
+            'balance_after' => '800.00',
+            'booked_at' => '2026-06-10 00:00:00',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/depot-transactions')
+            ->assertOk()
+            ->assertJsonPath('depot_holdings.0.latest_price', '121.25000000')
+            ->assertJsonPath('depot_holdings.0.latest_price_status', 'realtime')
+            ->assertJsonPath('depot_holdings.0.latest_price_fetched_at', '2026-06-15T07:23:00+02:00')
+            ->assertJsonPath('depot_holdings.0.previous_day_price', '120.00000000')
+            ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-06-12')
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '1.04')
+            ->assertJsonPath('depot_valuations.latest.stock_balance', '242.50')
+            ->assertJsonPath('depot_valuations.latest.current_balance', '1242.50');
     }
 
     public function test_depot_year_start_price_uses_only_current_open_lots_after_sells(): void

@@ -7,6 +7,7 @@ use App\Models\DepotTransaction;
 use App\Models\StockHolding;
 use App\Models\StockHoldingDailyPrice;
 use App\Models\StockPrice;
+use App\Models\StockRealtimePrice;
 use App\Services\DepotTransactionBooker;
 use App\Services\UiPreferences;
 use Illuminate\Http\JsonResponse;
@@ -207,7 +208,7 @@ class AdminDepotTransactionController extends Controller
         $yearStartPriceByHoldingId = $this->yearStartPriceByHoldingId($transactionsByHoldingId);
 
         $holdings = StockHolding::query()
-            ->with('latestStockPrice')
+            ->with(['latestRealtimePrice', 'latestStockPrice'])
             ->whereKey($positionPiecesByHoldingId->keys()->all())
             ->orderBy('name')
             ->get()
@@ -260,8 +261,11 @@ class AdminDepotTransactionController extends Controller
 
     private function latestPriceDate(StockHolding $holding): Carbon
     {
-        if ($holding->latestStockPrice?->as_of) {
-            return $holding->latestStockPrice->as_of->copy()->startOfDay();
+        $latestStoredPrice = $this->latestStoredPrice($holding);
+        $storedPriceDate = $this->storedPriceDate($latestStoredPrice);
+
+        if ($storedPriceDate !== null) {
+            return $storedPriceDate;
         }
 
         if (is_string($holding->latest_price_as_of) && trim($holding->latest_price_as_of) !== '') {
@@ -272,7 +276,27 @@ class AdminDepotTransactionController extends Controller
             }
         }
 
+        if ($holding->latest_price_fetched_at !== null) {
+            return $holding->latest_price_fetched_at->copy()->startOfDay();
+        }
+
         return now()->startOfDay();
+    }
+
+    private function storedPriceDate(StockPrice|StockRealtimePrice|null $stockPrice): ?Carbon
+    {
+        if ($stockPrice === null) {
+            return null;
+        }
+
+        $asOfDate = $stockPrice->as_of?->copy()->startOfDay();
+        $fetchedAtDate = $stockPrice->fetched_at?->copy()->startOfDay();
+
+        if ($stockPrice instanceof StockRealtimePrice && $fetchedAtDate !== null && ($asOfDate === null || $fetchedAtDate->gt($asOfDate))) {
+            return $fetchedAtDate;
+        }
+
+        return $asOfDate ?? $fetchedAtDate;
     }
 
     /**
@@ -357,26 +381,84 @@ class AdminDepotTransactionController extends Controller
         ?string $yearStartPrice,
         ?StockHoldingDailyPrice $previousDailyPrice,
     ): array {
-        $latestStockPrice = $holding->latestStockPrice;
-        $latestPrice = $latestStockPrice?->price ?? $holding->latest_price;
-        $previousDayPrice = $previousDailyPrice?->adjusted_close ?? $previousDailyPrice?->close;
+        $latestStoredPrice = $this->latestStoredPrice($holding);
+        $latestPrice = $latestStoredPrice?->price ?? $holding->latest_price;
+        $previousDayReference = $this->previousDayReference($holding, $latestStoredPrice, $previousDailyPrice);
 
         return [
             'id' => $holding->id,
             'symbol' => $holding->symbol,
             'name' => $holding->name,
             'isin' => $holding->isin,
-            'currency' => $latestStockPrice?->currency ?? $holding->currency,
+            'currency' => $latestStoredPrice?->currency ?? $holding->currency,
             'latest_price' => $latestPrice,
-            'previous_day_price' => $previousDayPrice,
-            'previous_day_price_date' => $previousDailyPrice?->trading_date?->toDateString(),
-            'previous_day_change_percent' => $this->priceChangePercent($latestPrice, $previousDayPrice),
+            'previous_day_price' => $previousDayReference['price'],
+            'previous_day_price_date' => $previousDayReference['date'],
+            'previous_day_change_percent' => $this->priceChangePercent($latestPrice, $previousDayReference['price']),
             'flatex_price' => $holding->flatex_price,
             'year_start_price' => $yearStartPrice,
-            'latest_price_fetched_at' => $latestStockPrice?->fetched_at?->toIso8601String() ?? $holding->latest_price_fetched_at?->toIso8601String(),
-            'latest_price_status' => $this->latestPriceStatus($holding, $latestPrice),
+            'latest_price_fetched_at' => $latestStoredPrice?->fetched_at?->toIso8601String() ?? $holding->latest_price_fetched_at?->toIso8601String(),
+            'latest_price_status' => $this->latestPriceStatus($holding, $latestStoredPrice, $latestPrice),
             'position_pieces' => $positionPieces,
         ];
+    }
+
+    /**
+     * @return array{price: ?string, date: ?string}
+     */
+    private function previousDayReference(
+        StockHolding $holding,
+        StockPrice|StockRealtimePrice|null $latestStoredPrice,
+        ?StockHoldingDailyPrice $previousDailyPrice,
+    ): array {
+        $dailyPrice = $previousDailyPrice?->adjusted_close ?? $previousDailyPrice?->close;
+        $dailyDate = $previousDailyPrice?->trading_date?->copy()->startOfDay();
+        $previousStoredPrice = $this->previousStoredPriceForLatestRealtime($holding, $latestStoredPrice);
+        $previousStoredPriceDate = $this->storedPriceDate($previousStoredPrice);
+
+        if ($previousStoredPrice?->price !== null && $previousStoredPriceDate !== null && ($dailyDate === null || $previousStoredPriceDate->gt($dailyDate))) {
+            return [
+                'price' => $previousStoredPrice->price,
+                'date' => $previousStoredPriceDate->toDateString(),
+            ];
+        }
+
+        return [
+            'price' => $dailyPrice,
+            'date' => $previousDailyPrice?->trading_date?->toDateString(),
+        ];
+    }
+
+    private function previousStoredPriceForLatestRealtime(StockHolding $holding, StockPrice|StockRealtimePrice|null $latestStoredPrice): ?StockPrice
+    {
+        if (! $latestStoredPrice instanceof StockRealtimePrice) {
+            return null;
+        }
+
+        $latestStoredPriceDate = $this->storedPriceDate($latestStoredPrice);
+        $previousStoredPrice = $holding->latestStockPrice;
+        $previousStoredPriceDate = $this->storedPriceDate($previousStoredPrice);
+
+        if ($previousStoredPrice?->price === null || $latestStoredPriceDate === null || $previousStoredPriceDate === null) {
+            return null;
+        }
+
+        return $previousStoredPriceDate->lt($latestStoredPriceDate)
+            ? $previousStoredPrice
+            : null;
+    }
+
+    private function latestStoredPrice(StockHolding $holding): StockPrice|StockRealtimePrice|null
+    {
+        if ($holding->latestRealtimePrice?->price !== null) {
+            return $holding->latestRealtimePrice;
+        }
+
+        if ($holding->latestStockPrice?->price !== null) {
+            return $holding->latestStockPrice;
+        }
+
+        return $holding->latestRealtimePrice ?? $holding->latestStockPrice;
     }
 
     private function priceChangePercent(?string $currentPrice, ?string $referencePrice): ?string
@@ -388,9 +470,9 @@ class AdminDepotTransactionController extends Controller
         return $this->decimal((((float) $currentPrice - (float) $referencePrice) / (float) $referencePrice) * 100, 2);
     }
 
-    private function latestPriceStatus(StockHolding $holding, ?string $latestPrice): string
+    private function latestPriceStatus(StockHolding $holding, StockPrice|StockRealtimePrice|null $latestStoredPrice, ?string $latestPrice): string
     {
-        $storedPriceStatus = $this->storedPriceStatus($holding->latestStockPrice);
+        $storedPriceStatus = $this->storedPriceStatus($latestStoredPrice);
 
         if ($storedPriceStatus !== null) {
             return $storedPriceStatus;
@@ -407,7 +489,7 @@ class AdminDepotTransactionController extends Controller
         return 'fresh';
     }
 
-    private function storedPriceStatus(?StockPrice $stockPrice): ?string
+    private function storedPriceStatus(StockPrice|StockRealtimePrice|null $stockPrice): ?string
     {
         if ($stockPrice?->price === null) {
             return null;

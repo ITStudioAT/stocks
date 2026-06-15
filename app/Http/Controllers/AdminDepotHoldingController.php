@@ -152,7 +152,10 @@ class AdminDepotHoldingController extends Controller
 
     public function intradayCandles(StockHolding $holding): JsonResponse
     {
-        $intradayDays = $this->eodhdMarketData->ensureLastSevenTradingDayFiveMinuteCandles($holding);
+        $intradayDays = $this->intradayDaysWithLatestRealtimePrices(
+            $holding,
+            $this->eodhdMarketData->ensureLastSevenTradingDayFiveMinuteCandles($holding),
+        );
 
         return response()->json([
             'holding' => [
@@ -367,7 +370,7 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, end_price_24: ?string, end_price_48: ?string, start_price_date: ?string, end_price_date: ?string, end_price_24_date: ?string, end_price_48_date: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, recent_prices_are_fallback: bool, intraday_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, intraday_candles: array<int, array{id: int, trading_date: string, price: string, currency: ?string, as_of: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, currency: ?string}>, validation_errors: array<int, string>, created_at: ?string}
+     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, end_price_24: ?string, end_price_48: ?string, start_price_date: ?string, end_price_date: ?string, end_price_24_date: ?string, end_price_48_date: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, recent_prices_are_fallback: bool, intraday_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, intraday_candles: array<int, array{id: int, trading_date: string, price: string, currency: ?string, as_of: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, volume: ?int, currency: ?string}>, validation_errors: array<int, string>, created_at: ?string}
      */
     private function holdingPayload(
         StockHolding $holding,
@@ -379,7 +382,7 @@ class AdminDepotHoldingController extends Controller
         $latestStoredPrice = $holding->latestRealtimePrice ?? $latestStockPrice;
         $latestPriceStatus = $this->latestPriceStatus($holding);
         $hasCurrentPrice = in_array($latestPriceStatus, ['realtime', 'fresh', 'delayed', 'suspicious', 'unavailable_now'], true);
-        $latestPrice = $hasCurrentPrice ? $this->pricePayload($holding->latest_price) : null;
+        $latestPrice = $hasCurrentPrice ? $this->pricePayload($latestStoredPrice?->price ?? $holding->latest_price) : null;
         $startPrice = $this->pricePayload($holding->start_price);
         $endPrice = $this->pricePayload($holding->end_price);
         $end24Price = $this->pricePayload($holding->end_price_24);
@@ -735,6 +738,7 @@ class AdminDepotHoldingController extends Controller
         $sessionDate = $this->eodhdMarketData->intradaySessionDate($holding);
 
         if ($sessionDate !== null) {
+            $realtimePrices = $this->realtimeIntradayPricePayload($holding, $sessionDate);
             $storedCandleCount = $this->storedIntradayPriceCount($holding, $sessionDate);
 
             if ($storedCandleCount === 0) {
@@ -743,27 +747,48 @@ class AdminDepotHoldingController extends Controller
             }
 
             if ($storedCandleCount >= 2) {
-                return $this->storedEodhdIntradayPayload($holding, $sessionDate);
+                return $this->intradayPricePayloadWithNewerRealtimePrices(
+                    $this->storedEodhdIntradayPayload($holding, $sessionDate),
+                    $holding,
+                    $sessionDate,
+                );
             }
 
             $storedIntradayPrices = $this->storedSameDayIntradayFallbackPayload($holding, $sessionDate);
 
             if (count($storedIntradayPrices) >= 2) {
-                return $storedIntradayPrices;
+                return $this->intradayPricePayloadWithNewerRealtimePrices(
+                    $storedIntradayPrices,
+                    $holding,
+                    $sessionDate,
+                );
             }
 
             return $storedCandleCount > 0
-                ? $this->storedEodhdIntradayPayload($holding, $sessionDate)
-                : $storedIntradayPrices;
+                ? $this->intradayPricePayloadWithNewerRealtimePrices(
+                    $this->storedEodhdIntradayPayload($holding, $sessionDate),
+                    $holding,
+                    $sessionDate,
+                )
+                : $realtimePrices;
         }
 
         $latestStoredDate = $this->latestStoredIntradayDate($holding);
+        $latestRealtimeDate = $this->latestRealtimeTradingDate($holding);
+
+        if ($latestRealtimeDate !== null && ($latestStoredDate === null || $latestRealtimeDate > Carbon::parse($latestStoredDate)->toDateString())) {
+            return $this->realtimeIntradayPricePayload($holding, $latestRealtimeDate);
+        }
 
         if ($latestStoredDate === null) {
             return [];
         }
 
-        return $this->storedEodhdIntradayPayload($holding, $latestStoredDate);
+        return $this->intradayPricePayloadWithNewerRealtimePrices(
+            $this->storedEodhdIntradayPayload($holding, $latestStoredDate),
+            $holding,
+            Carbon::parse($latestStoredDate)->toDateString(),
+        );
     }
 
     /**
@@ -853,6 +878,193 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
+     * @param  array<int, array{title: string, trading_date: string, interval: string, rows: array<int, array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}>}>  $intradayDays
+     * @return array<int, array{title: string, trading_date: string, interval: string, rows: array<int, array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}>}>
+     */
+    private function intradayDaysWithLatestRealtimePrices(StockHolding $holding, array $intradayDays): array
+    {
+        $latestRealtimeDate = $this->latestRealtimeTradingDate($holding);
+
+        if ($latestRealtimeDate === null) {
+            return $intradayDays;
+        }
+
+        $firstIntradayDate = $intradayDays[0]['trading_date'] ?? null;
+
+        $realtimeRows = $this->realtimeIntradayCandleRows($holding, $latestRealtimeDate);
+
+        if ($realtimeRows === []) {
+            return $intradayDays;
+        }
+
+        $matchingDayIndex = collect($intradayDays)->search(
+            fn (array $day): bool => $day['trading_date'] === $latestRealtimeDate,
+        );
+
+        if ($matchingDayIndex !== false) {
+            $intradayDays[$matchingDayIndex] = $this->intradayDayWithNewerRealtimeRows(
+                $intradayDays[$matchingDayIndex],
+                $realtimeRows,
+            );
+
+            return $intradayDays;
+        }
+
+        if ($firstIntradayDate !== null && $latestRealtimeDate < $firstIntradayDate) {
+            return $intradayDays;
+        }
+
+        return collect([
+            [
+                'title' => 'Intraday '.Carbon::parse($latestRealtimeDate)->format('d.m.Y'),
+                'trading_date' => $latestRealtimeDate,
+                'interval' => 'realtime',
+                'rows' => $realtimeRows,
+            ],
+            ...$intradayDays,
+        ])
+            ->unique(fn (array $day): string => $day['trading_date'])
+            ->take(7)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array{title: string, trading_date: string, interval: string, rows: array<int, array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}>}  $intradayDay
+     * @param  array<int, array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}>  $realtimeRows
+     * @return array{title: string, trading_date: string, interval: string, rows: array<int, array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}>}
+     */
+    private function intradayDayWithNewerRealtimeRows(array $intradayDay, array $realtimeRows): array
+    {
+        $latestStoredTimestamp = collect($intradayDay['rows'])
+            ->map(fn (array $row): ?int => $this->intradayRowTimestamp($row))
+            ->filter()
+            ->max();
+
+        $newerRealtimeRows = collect($realtimeRows)
+            ->filter(fn (array $row): bool => $latestStoredTimestamp === null || $this->intradayRowTimestamp($row) > $latestStoredTimestamp)
+            ->values()
+            ->all();
+
+        if ($newerRealtimeRows === []) {
+            return $intradayDay;
+        }
+
+        return [
+            ...$intradayDay,
+            'rows' => collect([
+                ...$intradayDay['rows'],
+                ...$newerRealtimeRows,
+            ])
+                ->sortBy(fn (array $row): int => $this->intradayRowTimestamp($row) ?? PHP_INT_MAX)
+                ->values()
+                ->all(),
+        ];
+    }
+
+    /**
+     * @return array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>
+     */
+    private function realtimeIntradayPricePayload(StockHolding $holding, string $tradingDate): array
+    {
+        $realtimePrices = $holding->realtimePrices()
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->whereDate('as_of', $tradingDate)
+            ->orderBy('as_of')
+            ->orderBy('id')
+            ->get(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type']);
+        $previousRealtimePrice = $this->previousTradingDayLastRealtimePrice($holding, $realtimePrices);
+
+        return $realtimePrices
+            ->when($previousRealtimePrice !== null, fn ($prices) => $prices->prepend($previousRealtimePrice))
+            ->map(fn (StockRealtimePrice $stockPrice): array => [
+                'id' => $stockPrice->id,
+                'price' => (string) $stockPrice->price,
+                'currency' => $stockPrice->currency,
+                'as_of' => $this->storedStockPriceTimestamp($stockPrice, 'as_of'),
+                'source_name' => $stockPrice->source_name,
+                'price_type' => $stockPrice->price_type,
+            ])
+            ->all();
+    }
+
+    /**
+     * @param  array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>  $intradayPrices
+     * @return array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>
+     */
+    private function intradayPricePayloadWithNewerRealtimePrices(
+        array $intradayPrices,
+        StockHolding $holding,
+        string $tradingDate,
+    ): array {
+        $latestIntradayTime = collect($intradayPrices)
+            ->pluck('as_of')
+            ->filter()
+            ->map(fn (string $asOf): int => Carbon::parse($asOf)->timestamp)
+            ->max();
+        $newerRealtimePrices = collect($this->realtimeIntradayPricePayload($holding, $tradingDate))
+            ->filter(fn (array $price): bool => $price['as_of'] !== null)
+            ->filter(fn (array $price): bool => $latestIntradayTime === null || Carbon::parse($price['as_of'])->timestamp > $latestIntradayTime)
+            ->values()
+            ->all();
+
+        if ($newerRealtimePrices === []) {
+            return $intradayPrices;
+        }
+
+        return [
+            ...$intradayPrices,
+            ...$newerRealtimePrices,
+        ];
+    }
+
+    /**
+     * @return array<int, array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}>
+     */
+    private function realtimeIntradayCandleRows(StockHolding $holding, string $tradingDate): array
+    {
+        return $holding->realtimePrices()
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->whereDate('as_of', $tradingDate)
+            ->orderBy('as_of')
+            ->orderBy('id')
+            ->get(['price', 'as_of'])
+            ->map(function (StockRealtimePrice $stockPrice): array {
+                $asOf = Carbon::parse($stockPrice->as_of)->utc();
+
+                return [
+                    'timestamp' => $asOf->timestamp,
+                    'gmtoffset' => 0,
+                    'datetime' => $asOf->toDateTimeString(),
+                    'open' => null,
+                    'high' => null,
+                    'low' => null,
+                    'close' => (string) $stockPrice->price,
+                    'volume' => null,
+                ];
+            })
+            ->all();
+    }
+
+    /**
+     * @param  array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}  $row
+     */
+    private function intradayRowTimestamp(array $row): ?int
+    {
+        if (($row['timestamp'] ?? null) !== null && (int) $row['timestamp'] > 0) {
+            return (int) $row['timestamp'];
+        }
+
+        if (! is_string($row['datetime'] ?? null) || trim($row['datetime']) === '') {
+            return null;
+        }
+
+        return Carbon::parse($row['datetime'], 'UTC')->timestamp;
+    }
+
+    /**
      * @return array<int, array{trading_date: string, price: string, volume: ?int, currency: ?string}>
      */
     private function dailyPricePayload(StockHolding $holding): array
@@ -873,7 +1085,10 @@ class AdminDepotHoldingController extends Controller
             ->all();
 
         if ($dailyPrices === []) {
-            return $this->dailyPricePayloadFromIntradayCandles($holding);
+            return $this->dailyPricePayloadWithLatestRealtimePrice(
+                $this->dailyPricePayloadFromIntradayCandles($holding),
+                $holding,
+            );
         }
 
         $latestDailyDate = collect($dailyPrices)
@@ -890,10 +1105,10 @@ class AdminDepotHoldingController extends Controller
             ->values()
             ->all();
 
-        return [
+        return $this->dailyPricePayloadWithLatestRealtimePrice([
             ...$dailyPrices,
             ...$newerIntradayPrices,
-        ];
+        ], $holding);
     }
 
     /**
@@ -941,6 +1156,77 @@ class AdminDepotHoldingController extends Controller
                 'currency' => $price->currency,
             ])
             ->all();
+    }
+
+    /**
+     * @param  array<int, array{trading_date: string, price: string, volume: ?int, currency: ?string}>  $dailyPrices
+     * @return array<int, array{trading_date: string, price: string, volume: ?int, currency: ?string}>
+     */
+    private function dailyPricePayloadWithLatestRealtimePrice(array $dailyPrices, StockHolding $holding): array
+    {
+        $latestRealtimePrice = $this->latestRealtimeDailyPricePayload($holding);
+
+        if ($latestRealtimePrice === null) {
+            return $dailyPrices;
+        }
+
+        $latestDailyDate = collect($dailyPrices)
+            ->pluck('trading_date')
+            ->filter()
+            ->max();
+
+        if ($latestDailyDate !== null && $latestRealtimePrice['trading_date'] <= $latestDailyDate) {
+            return $dailyPrices;
+        }
+
+        return [
+            ...$dailyPrices,
+            $latestRealtimePrice,
+        ];
+    }
+
+    /**
+     * @return array{trading_date: string, price: string, volume: ?int, currency: ?string}|null
+     */
+    private function latestRealtimeDailyPricePayload(StockHolding $holding): ?array
+    {
+        $latestTradingDate = $this->latestRealtimeTradingDate($holding);
+
+        if ($latestTradingDate === null) {
+            return null;
+        }
+
+        $latestRealtimePrice = $holding->realtimePrices()
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->whereDate('as_of', $latestTradingDate)
+            ->orderByDesc('as_of')
+            ->orderByDesc('id')
+            ->first(['price', 'currency', 'as_of']);
+
+        if ($latestRealtimePrice === null) {
+            return null;
+        }
+
+        return [
+            'trading_date' => $latestTradingDate,
+            'price' => (string) $latestRealtimePrice->price,
+            'volume' => null,
+            'currency' => $latestRealtimePrice->currency,
+        ];
+    }
+
+    private function latestRealtimeTradingDate(StockHolding $holding): ?string
+    {
+        $latestTradingDay = $holding->realtimePrices()
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->latest('as_of')
+            ->value('as_of');
+
+        return $latestTradingDay === null
+            ? null
+            : Carbon::parse($latestTradingDay)->toDateString();
     }
 
     private function sourceDateTimePayload(?string $asOf, bool $hasCurrentPrice): ?string

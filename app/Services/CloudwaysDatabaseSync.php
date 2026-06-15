@@ -18,7 +18,7 @@ class CloudwaysDatabaseSync
      * @return array{
      *     source_connection: string,
      *     target_connection: string,
-     *     tables: array<int, array{name: string, rows: int, columns: int}>,
+     *     tables: array<int, array{name: string, rows: int, columns: int, status: string, message: string}>,
      *     skipped_tables: array<int, string>,
      *     synced_tables: int,
      *     total_tables: int,
@@ -26,8 +26,11 @@ class CloudwaysDatabaseSync
      *     synced_at: string,
      * }
      */
-    public function syncAllTables(?string $sourceConnectionName = null, ?string $targetConnectionName = null): array
-    {
+    public function syncAllTables(
+        ?string $sourceConnectionName = null,
+        ?string $targetConnectionName = null,
+        ?callable $onTableSynced = null,
+    ): array {
         $sourceConnectionName ??= $this->sourceConnectionName();
         $targetConnectionName ??= (string) config('database.default');
 
@@ -44,6 +47,7 @@ class CloudwaysDatabaseSync
                 $sourceConnectionName,
                 $targetConnectionName,
                 $syncTables,
+                $onTableSynced,
                 &$syncedTables,
             ): void {
                 foreach ($syncTables as $table) {
@@ -51,7 +55,12 @@ class CloudwaysDatabaseSync
                 }
 
                 foreach ($syncTables as $table) {
-                    $syncedTables[] = $this->syncTable($sourceConnectionName, $targetConnectionName, $table);
+                    $syncedTable = $this->syncTable($sourceConnectionName, $targetConnectionName, $table);
+                    $syncedTables[] = $syncedTable;
+
+                    if ($onTableSynced !== null) {
+                        $onTableSynced($syncedTable);
+                    }
                 }
 
                 $this->repairLatestRealtimePriceLinks($targetConnectionName);
@@ -148,7 +157,7 @@ class CloudwaysDatabaseSync
     }
 
     /**
-     * @return array{name: string, rows: int, columns: int}
+     * @return array{name: string, rows: int, columns: int, status: string, message: string}
      */
     private function syncTable(string $sourceConnectionName, string $targetConnectionName, string $table): array
     {
@@ -163,6 +172,8 @@ class CloudwaysDatabaseSync
                 'name' => $table,
                 'rows' => 0,
                 'columns' => 0,
+                'status' => 'skipped',
+                'message' => "Skipped {$table}: no matching columns.",
             ];
         }
 
@@ -187,6 +198,8 @@ class CloudwaysDatabaseSync
             'name' => $table,
             'rows' => $rows,
             'columns' => count($columns),
+            'status' => 'imported',
+            'message' => "Imported {$table}: {$rows} row(s), ".count($columns).' column(s).',
         ];
     }
 

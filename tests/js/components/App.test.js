@@ -51,6 +51,21 @@ function jsonResponse(data) {
     };
 }
 
+function ndjsonResponse(events) {
+    const payload = `${events.map(event => JSON.stringify(event)).join('\n')}\n`;
+
+    return {
+        ok: true,
+        body: new ReadableStream({
+            start(controller) {
+                controller.enqueue(new TextEncoder().encode(payload));
+                controller.close();
+            },
+        }),
+        json: () => Promise.reject(new Error('Expected stream reader to be used.')),
+    };
+}
+
 function failedJsonResponse(data = {}) {
     return {
         ok: false,
@@ -4718,28 +4733,55 @@ describe('App', () => {
             }
 
             if (path === '/admin/cloudways/sync' && options?.method === 'POST') {
-                return Promise.resolve(jsonResponse({
-                    message: 'Synced 2 table(s) and 15 row(s) from Cloudways.',
-                    sync: {
-                        synced_tables: 2,
-                        total_tables: 3,
-                        rows: 15,
-                        synced_at: '2026-06-13T12:00:00+00:00',
-                        skipped_tables: ['remote_only_items'],
-                        tables: [
-                            {
-                                name: 'users',
-                                rows: 1,
-                                columns: 9,
-                            },
-                            {
-                                name: 'depots',
-                                rows: 14,
-                                columns: 6,
-                            },
-                        ],
+                return Promise.resolve(ndjsonResponse([
+                    {
+                        type: 'table',
+                        table: {
+                            name: 'users',
+                            rows: 1,
+                            columns: 9,
+                            status: 'imported',
+                            message: 'Imported users: 1 row(s), 9 column(s).',
+                        },
                     },
-                }));
+                    {
+                        type: 'table',
+                        table: {
+                            name: 'depots',
+                            rows: 14,
+                            columns: 6,
+                            status: 'imported',
+                            message: 'Imported depots: 14 row(s), 6 column(s).',
+                        },
+                    },
+                    {
+                        type: 'finished',
+                        message: 'Synced 2 table(s) and 15 row(s) from Cloudways.',
+                        sync: {
+                            synced_tables: 2,
+                            total_tables: 3,
+                            rows: 15,
+                            synced_at: '2026-06-13T12:00:00+00:00',
+                            skipped_tables: ['remote_only_items'],
+                            tables: [
+                                {
+                                    name: 'users',
+                                    rows: 1,
+                                    columns: 9,
+                                    status: 'imported',
+                                    message: 'Imported users: 1 row(s), 9 column(s).',
+                                },
+                                {
+                                    name: 'depots',
+                                    rows: 14,
+                                    columns: 6,
+                                    status: 'imported',
+                                    message: 'Imported depots: 14 row(s), 6 column(s).',
+                                },
+                            ],
+                        },
+                    },
+                ]));
             }
 
             return Promise.reject(new Error(`Unexpected request: ${path}`));
@@ -4785,12 +4827,17 @@ describe('App', () => {
 
         expect(fetchMock).toHaveBeenCalledWith('/admin/cloudways/sync', expect.objectContaining({
             method: 'POST',
+            headers: expect.objectContaining({
+                Accept: 'application/x-ndjson',
+            }),
         }));
         expect(wrapper.text()).toContain('Synced 2 table(s) and 15 row(s) from Cloudways.');
         expect(wrapper.text()).toContain('2 table(s)');
         expect(wrapper.text()).toContain('15 row(s)');
         expect(wrapper.text()).toContain('users');
         expect(wrapper.text()).toContain('depots');
+        expect(wrapper.text()).toContain('Imported users: 1 row(s), 9 column(s).');
+        expect(wrapper.text()).toContain('Imported depots: 14 row(s), 6 column(s).');
         expect(wrapper.text()).toContain('Skipped: remote_only_items');
 
         const dataMenuItem = wrapper.find('.dashboard-navigation-drawer')

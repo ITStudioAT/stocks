@@ -66,6 +66,8 @@ class AdminCloudwaysSyncTest extends TestCase
             ->assertJsonPath('sync.rows', 2)
             ->assertJsonPath('sync.tables.0.name', 'cloud_items')
             ->assertJsonPath('sync.tables.0.rows', 2)
+            ->assertJsonPath('sync.tables.0.status', 'imported')
+            ->assertJsonPath('sync.tables.0.message', 'Imported cloud_items: 2 row(s), 3 column(s).')
             ->assertJsonPath('sync.skipped_tables.0', 'remote_only_items');
 
         $this->assertDatabaseMissing('cloud_items', [
@@ -82,6 +84,36 @@ class AdminCloudwaysSyncTest extends TestCase
             'name' => 'Remote second item',
             'quantity' => 20,
         ]);
+    }
+
+    public function test_super_admin_can_stream_cloudways_table_sync_progress(): void
+    {
+        $this->configureCloudwaysTestingConnection();
+        $this->createCloudItemsTable();
+        $this->createCloudItemsTable('cloudways_testing');
+
+        DB::connection('cloudways_testing')->table('cloud_items')->insert([
+            'id' => 1,
+            'name' => 'Remote first item',
+            'quantity' => 10,
+        ]);
+
+        $response = $this->actingAs($this->superAdminUser())
+            ->post('/admin/cloudways/sync', [], [
+                'Accept' => 'application/x-ndjson',
+            ])
+            ->assertOk();
+
+        $this->assertStringContainsString('application/x-ndjson', (string) $response->headers->get('Content-Type'));
+
+        $events = collect(explode("\n", trim($response->streamedContent())))
+            ->map(fn (string $line): array => json_decode($line, true));
+
+        $this->assertSame('table', $events->first()['type']);
+        $this->assertSame('cloud_items', $events->first()['table']['name']);
+        $this->assertSame('Imported cloud_items: 1 row(s), 3 column(s).', $events->first()['table']['message']);
+        $this->assertSame('finished', $events->last()['type']);
+        $this->assertSame('Synced 1 table(s) and 1 row(s) from Cloudways.', $events->last()['message']);
     }
 
     public function test_cloudways_sync_repairs_latest_realtime_price_links(): void

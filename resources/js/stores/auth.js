@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 
-const csrfToken = () => document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
+export const csrfToken = () => document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
 
 export async function request(path, options = {}) {
     const response = await fetch(path, {
