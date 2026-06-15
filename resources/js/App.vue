@@ -12,6 +12,12 @@ const indexRecentPriceLimit = 30;
 const logoMarkUrl = '/images/gkstocks-logo-mark.png';
 const displayTimeZone = 'Europe/Vienna';
 const kestTaxRate = 0.275;
+const defaultAnalyzeTrendRowLimit = 200;
+const maxAnalyzeTrendRowLimit = 2000;
+const defaultAnalyzeTrendTradeAmounts = [7000, 5000, 3000];
+const maxAnalyzeTrendTradeAmount = 1000000;
+const defaultAnalyzeTrendMaxInvestAmount = 0;
+const maxAnalyzeTrendMaxInvestAmount = 1000000;
 
 const { lgAndDown, mdAndDown, smAndDown } = useDisplay();
 
@@ -111,6 +117,21 @@ const activeDataSubsection = ref('exchanges');
 const selectedAnalyzeHistoryRange = ref('1y');
 const selectedAnalyzeHistoryWindowOffset = ref(0);
 const selectedAnalyzeHoldingId = ref(null);
+const excludedAnalyzeTrendHoldingIds = ref([]);
+const analyzeTrendRowLimit = ref(defaultAnalyzeTrendRowLimit);
+const analyzeTrendRowLimitEditValue = ref(String(defaultAnalyzeTrendRowLimit));
+const isAnalyzeTrendRowLimitDialogOpen = ref(false);
+const isAnalyzeTrendRowLimitSaving = ref(false);
+const selectedAnalyzeCopiedIsin = ref(null);
+const analyzeIsinCopiedTimer = ref(null);
+const analyzeTrendTradeAmounts = ref([...defaultAnalyzeTrendTradeAmounts]);
+const analyzeTrendTradeAmountEditValues = ref(defaultAnalyzeTrendTradeAmounts.map((amount) => String(amount)));
+const analyzeTrendMaxInvestAmount = ref(defaultAnalyzeTrendMaxInvestAmount);
+const analyzeTrendMaxInvestAmountEditValue = ref(String(defaultAnalyzeTrendMaxInvestAmount));
+const isAnalyzeTrendTradeAmountDialogOpen = ref(false);
+const isAnalyzeTrendTradeAmountSaving = ref(false);
+const isAnalyzeTrendMaxInvestAmountDialogOpen = ref(false);
+const isAnalyzeTrendMaxInvestAmountSaving = ref(false);
 const selectedTestIndexId = ref(null);
 const selectedTestStockId = ref(null);
 const selectedTestTab = ref('tickers');
@@ -404,12 +425,38 @@ const selectedAnalyzeSparkline = computed(() => buildAnalyzeSparkline(
 const selectedAnalyzeRangeCaptureLabel = computed(() => (
     analyzeHistoryRangeItems.find((item) => item.key === selectedAnalyzeHistoryRange.value)?.captureLabel ?? ''
 ));
-const analyzeTrendPortfolioCapitalByDate = computed(() => buildAnalyzeTrendPortfolioCapitalByDate(holdings.value));
+const includedAnalyzeTrendHoldings = computed(() => holdings.value
+    .filter((holding) => isAnalyzeTrendHoldingIncluded(holding.id)));
+const analyzeTrendIncludedRows = computed(() => buildAnalyzeTrendHoldingRows(
+    includedAnalyzeTrendHoldings.value,
+    analyzeTrendRowLimit.value,
+    analyzeTrendTradeAmounts.value,
+));
+const analyzeTrendHoldingStats = computed(() => buildAnalyzeTrendHoldingStats(analyzeTrendIncludedRows.value));
+const analyzeTrendPortfolioCapitalByDate = computed(() => buildAnalyzeTrendPortfolioCapitalByDate(
+    analyzeTrendIncludedRows.value,
+));
 const selectedAnalyzeTrendRows = computed(() => buildAnalyzeTrendRows(
     selectedAnalyzeHolding.value,
     analyzeTrendPortfolioCapitalByDate.value,
+    analyzeTrendRowLimit.value,
+    analyzeTrendTradeAmounts.value,
 ));
 const selectedAnalyzeTrendSummary = computed(() => buildAnalyzeTrendSummary(selectedAnalyzeTrendRows.value));
+const selectedAnalyzeTrendPortfolioSummary = computed(() => buildAnalyzeTrendPortfolioSummary(
+    analyzeTrendIncludedRows.value,
+    selectedAnalyzeTrendRows.value[0]?.date ?? null,
+    analyzeTrendPortfolioCapitalByDate.value,
+));
+const analyzeTrendInvestmentOptimization = computed(() => buildAnalyzeTrendInvestmentOptimization(
+    analyzeTrendIncludedRows.value,
+    analyzeTrendMaxInvestAmount.value,
+));
+const analyzeTrendTradeAmountInfo = computed(() => analyzeTrendTradeAmountLabel(analyzeTrendTradeAmounts.value));
+const analyzeTrendMaxInvestAmountInfo = computed(() => analyzeTrendMaxInvestAmountLabel(analyzeTrendMaxInvestAmount.value));
+const analyzeTrendInvestmentOptimizationInfo = computed(() => analyzeTrendInvestmentOptimizationLabel(
+    analyzeTrendInvestmentOptimization.value,
+));
 const showAnalyzeSparklineDots = computed(() => isAnalyzeTodayRange(selectedAnalyzeHistoryRange.value));
 const analyzeIntradayDetail = computed(() => analyzeIntradayCandles.value?.intraday ?? null);
 const analyzeIntradayDetailDays = computed(() => {
@@ -492,7 +539,12 @@ function priceChangePercent(price, referencePrice) {
     return ((price - referencePrice) / referencePrice) * 100;
 }
 
-function buildAnalyzeTrendRows(holding, portfolioCapitalByDate = null) {
+function buildAnalyzeTrendRows(
+    holding,
+    portfolioCapitalByDate = null,
+    rowLimit = defaultAnalyzeTrendRowLimit,
+    tradeAmounts = defaultAnalyzeTrendTradeAmounts,
+) {
     const prices = analyzeTrendDailyPrices(holding);
     const patternStats = {};
     const rows = [];
@@ -538,29 +590,40 @@ function buildAnalyzeTrendRows(holding, portfolioCapitalByDate = null) {
         addAnalyzeTrendPatternStats(patternStats, prices, priceIndex, indicators);
     });
 
-    const visibleRows = rows.slice(-200);
+    const visibleRows = rows.slice(-normalizeAnalyzeTrendRowLimit(rowLimit));
 
-    addAnalyzeTrendStreakTrades(visibleRows);
+    addAnalyzeTrendStreakTrades(visibleRows, tradeAmounts);
     addAnalyzeTrendPortfolioCapital(visibleRows, portfolioCapitalByDate);
 
     return visibleRows.reverse();
 }
 
-function buildAnalyzeTrendPortfolioCapitalByDate(holdings) {
+function buildAnalyzeTrendHoldingRows(
+    holdings,
+    rowLimit = defaultAnalyzeTrendRowLimit,
+    tradeAmounts = defaultAnalyzeTrendTradeAmounts,
+) {
     if (!Array.isArray(holdings) || holdings.length === 0) {
+        return [];
+    }
+
+    return holdings.map((holding) => ({
+        holding,
+        rows: buildAnalyzeTrendRows(holding, null, rowLimit, tradeAmounts).slice().reverse(),
+    }));
+}
+
+function buildAnalyzeTrendPortfolioCapitalByDate(holdingTrendRows) {
+    if (!Array.isArray(holdingTrendRows) || holdingTrendRows.length === 0) {
         return new Map();
     }
 
-    const holdingTrendRows = holdings
-        .map((holding) => buildAnalyzeTrendRows(holding).slice().reverse())
-        .filter((rows) => rows.length > 0);
-
-    const dates = [...new Set(holdingTrendRows.flatMap((rows) => rows.map((row) => row.date)))]
+    const dates = [...new Set(holdingTrendRows.flatMap(({ rows }) => rows.map((row) => row.date)))]
         .sort((firstDate, secondDate) => firstDate.localeCompare(secondDate));
 
     return new Map(dates.map((date) => [
         date,
-        holdingTrendRows.reduce((capital, rows) => (
+        holdingTrendRows.reduce((capital, { rows }) => (
             capital + analyzeTrendCapitalAmountAsOf(rows, date)
         ), 0),
     ]));
@@ -572,6 +635,294 @@ function analyzeTrendCapitalAmountAsOf(rows, date) {
         .at(-1);
 
     return row?.streakCapitalAmount ?? 0;
+}
+
+function analyzeTrendCapitalChangeAsOf(rows, date) {
+    const row = rows
+        .filter((trendRow) => trendRow.date <= date)
+        .at(-1);
+
+    return row?.streakCapital ?? 0;
+}
+
+function analyzeTrendWinAmount(rows) {
+    return rows.reduce((wins, row) => wins + (row.streakWin ?? 0), 0);
+}
+
+function buildAnalyzeTrendHoldingStats(holdingTrendRows) {
+    if (!Array.isArray(holdingTrendRows) || holdingTrendRows.length === 0) {
+        return new Map();
+    }
+
+    const holdingStats = holdingTrendRows.map(({ holding, rows }) => ({
+        holdingId: holding.id,
+        label: holding.name || holding.symbol || '',
+        winAmount: analyzeTrendWinAmount(rows),
+    }));
+
+    const rankedStats = [...holdingStats].sort((firstHolding, secondHolding) => {
+        if (secondHolding.winAmount !== firstHolding.winAmount) {
+            return secondHolding.winAmount - firstHolding.winAmount;
+        }
+
+        return firstHolding.label.localeCompare(secondHolding.label);
+    });
+
+    return new Map(rankedStats.map((holding, index) => [
+        holding.holdingId,
+        {
+            winAmount: holding.winAmount,
+            rank: index + 1,
+            total: rankedStats.length,
+        },
+    ]));
+}
+
+function buildAnalyzeTrendPortfolioSummary(holdingTrendRows, date, portfolioCapitalByDate = null) {
+    if (!Array.isArray(holdingTrendRows) || holdingTrendRows.length === 0) {
+        return {
+            amount: 0,
+            actualChangeAmount: 0,
+            changeAmount: 0,
+            changePercent: null,
+            maximumAmount: 0,
+            maximumAmountDate: null,
+            winAmount: 0,
+        };
+    }
+
+    const winAmount = holdingTrendRows.reduce((wins, { rows }) => (
+        wins + analyzeTrendWinAmount(rows)
+    ), 0);
+    const maximumPortfolioCapital = analyzeTrendMaximumPortfolioCapital(portfolioCapitalByDate);
+
+    if (!date) {
+        return {
+            amount: 0,
+            actualChangeAmount: 0,
+            changeAmount: winAmount,
+            changePercent: null,
+            maximumAmount: maximumPortfolioCapital.amount,
+            maximumAmountDate: maximumPortfolioCapital.date,
+            winAmount,
+        };
+    }
+
+    const amount = holdingTrendRows.reduce((capital, { rows }) => (
+        capital + analyzeTrendCapitalAmountAsOf(rows, date)
+    ), 0);
+    const changeAmount = holdingTrendRows.reduce((change, { rows }) => (
+        change + analyzeTrendCapitalChangeAsOf(rows, date)
+    ), 0);
+
+    return {
+        amount,
+        actualChangeAmount: changeAmount,
+        changeAmount: winAmount,
+        changePercent: amount > 0 ? (winAmount / amount) * 100 : null,
+        maximumAmount: maximumPortfolioCapital.amount,
+        maximumAmountDate: maximumPortfolioCapital.date,
+        winAmount,
+    };
+}
+
+function analyzeTrendMaximumPortfolioCapital(portfolioCapitalByDate) {
+    if (!(portfolioCapitalByDate instanceof Map) || portfolioCapitalByDate.size === 0) {
+        return {
+            amount: 0,
+            date: null,
+        };
+    }
+
+    return [...portfolioCapitalByDate.entries()].reduce((maximum, [date, amount]) => {
+        if (amount <= maximum.amount) {
+            return maximum;
+        }
+
+        return {
+            amount,
+            date,
+        };
+    }, {
+        amount: 0,
+        date: null,
+    });
+}
+
+function buildAnalyzeTrendInvestmentOptimization(holdingTrendRows, maxInvestAmount) {
+    const normalizedMaxInvestAmount = normalizeAnalyzeTrendMaxInvestAmount(maxInvestAmount);
+
+    if (!Array.isArray(holdingTrendRows) || holdingTrendRows.length === 0) {
+        return null;
+    }
+
+    const basis = buildAnalyzeTrendInvestmentOptimizationBasis(holdingTrendRows);
+    const maximumCandidateAmount = Math.floor(normalizedMaxInvestAmount / 1000) * 1000;
+    const analyzedTradeAmountKeys = new Set();
+    let bestOptimization = null;
+
+    for (let firstAmount = 0; firstAmount <= maximumCandidateAmount; firstAmount += 1000) {
+        for (let secondAmount = 0; secondAmount <= maximumCandidateAmount; secondAmount += 1000) {
+            for (let laterAmount = 0; laterAmount <= maximumCandidateAmount; laterAmount += 1000) {
+                const tradeAmounts = analyzeTrendNoBuyAdjustedTradeAmounts([
+                    firstAmount,
+                    secondAmount,
+                    laterAmount,
+                ]);
+                const tradeAmountKey = tradeAmounts.join('|');
+
+                if (analyzedTradeAmountKeys.has(tradeAmountKey)) {
+                    continue;
+                }
+
+                analyzedTradeAmountKeys.add(tradeAmountKey);
+
+                const maximumAmount = analyzeTrendMaximumCapitalForTradeAmounts(
+                    basis.capitalCounts,
+                    tradeAmounts,
+                    normalizedMaxInvestAmount,
+                );
+
+                if (maximumAmount === null) {
+                    continue;
+                }
+
+                const optimization = {
+                    profitAmount: analyzeTrendProfitForTradeAmounts(basis.winCoefficients, tradeAmounts),
+                    tradeAmounts,
+                    maximumAmount,
+                };
+
+                if (isBetterAnalyzeTrendInvestmentOptimization(optimization, bestOptimization)) {
+                    bestOptimization = optimization;
+                }
+            }
+        }
+    }
+
+    return bestOptimization;
+}
+
+function analyzeTrendNoBuyAdjustedTradeAmounts(tradeAmounts) {
+    const firstNoBuyIndex = tradeAmounts.findIndex((amount) => amount <= 0);
+
+    if (firstNoBuyIndex === -1) {
+        return tradeAmounts;
+    }
+
+    return tradeAmounts.map((amount, index) => (index >= firstNoBuyIndex ? 0 : amount));
+}
+
+function buildAnalyzeTrendInvestmentOptimizationBasis(holdingTrendRows) {
+    const winCoefficients = [0, 0, 0];
+    const capitalCountsByDate = new Map();
+
+    holdingTrendRows.forEach(({ rows }) => {
+        const holdingBasis = buildAnalyzeTrendHoldingInvestmentOptimizationBasis(rows);
+
+        holdingBasis.winCoefficients.forEach((winCoefficient, index) => {
+            winCoefficients[index] += winCoefficient;
+        });
+
+        holdingBasis.capitalCountsByDate.forEach((capitalCounts, date) => {
+            const portfolioCapitalCounts = capitalCountsByDate.get(date) ?? [0, 0, 0];
+
+            capitalCountsByDate.set(date, portfolioCapitalCounts.map((count, index) => (
+                count + capitalCounts[index]
+            )));
+        });
+    });
+
+    return {
+        capitalCounts: [...capitalCountsByDate.values()],
+        winCoefficients,
+    };
+}
+
+function buildAnalyzeTrendHoldingInvestmentOptimizationBasis(rows) {
+    const winCoefficients = [0, 0, 0];
+    const capitalCountsByDate = new Map();
+    let activeTrades = [];
+
+    rows.forEach((row) => {
+        activeTrades.forEach((trade) => {
+            trade.changePercent += row.dayChangePercent ?? 0;
+
+            if (trade.changePercent >= 3) {
+                winCoefficients[trade.bucket] += trade.changePercent / 100;
+                trade.isClosed = true;
+            }
+        });
+
+        activeTrades = activeTrades.filter((trade) => !trade.isClosed);
+
+        if (row.streakBuySignal) {
+            const tradeNumber = nextAnalyzeTrendStreakTradeNumber(activeTrades);
+
+            activeTrades.push({
+                number: tradeNumber,
+                bucket: analyzeTrendStreakTradeBucket(tradeNumber),
+                changePercent: 0,
+                isClosed: false,
+            });
+        }
+
+        capitalCountsByDate.set(row.date, activeTrades.reduce((capitalCounts, trade) => {
+            capitalCounts[trade.bucket] += 1;
+
+            return capitalCounts;
+        }, [0, 0, 0]));
+    });
+
+    return {
+        capitalCountsByDate,
+        winCoefficients,
+    };
+}
+
+function analyzeTrendMaximumCapitalForTradeAmounts(capitalCounts, tradeAmounts, maxInvestAmount) {
+    let maximumAmount = 0;
+
+    for (const counts of capitalCounts) {
+        const amount = counts.reduce((capital, count, index) => (
+            capital + count * tradeAmounts[index]
+        ), 0);
+
+        if (amount > maxInvestAmount) {
+            return null;
+        }
+
+        maximumAmount = Math.max(maximumAmount, amount);
+    }
+
+    return maximumAmount;
+}
+
+function analyzeTrendProfitForTradeAmounts(winCoefficients, tradeAmounts) {
+    return winCoefficients.reduce((profit, winCoefficient, index) => (
+        profit + winCoefficient * tradeAmounts[index]
+    ), 0);
+}
+
+function isBetterAnalyzeTrendInvestmentOptimization(optimization, bestOptimization) {
+    if (bestOptimization === null) {
+        return true;
+    }
+
+    if (optimization.profitAmount !== bestOptimization.profitAmount) {
+        return optimization.profitAmount > bestOptimization.profitAmount;
+    }
+
+    if (optimization.maximumAmount !== bestOptimization.maximumAmount) {
+        return optimization.maximumAmount < bestOptimization.maximumAmount;
+    }
+
+    return analyzeTrendTradeAmountTotal(optimization.tradeAmounts)
+        < analyzeTrendTradeAmountTotal(bestOptimization.tradeAmounts);
+}
+
+function analyzeTrendTradeAmountTotal(tradeAmounts) {
+    return tradeAmounts.reduce((total, amount) => total + amount, 0);
 }
 
 function addAnalyzeTrendPortfolioCapital(rows, portfolioCapitalByDate) {
@@ -1274,16 +1625,8 @@ function analyzeTrendRecommendationResult(recommendationKey, nextDayChangePercen
 }
 
 function buildAnalyzeTrendSummary(rows) {
-    const completedRows = rows.filter((row) => row.result.key !== 'pending');
-    const rightRows = completedRows.filter((row) => row.result.key === 'right');
-    const latestRecommendation = rows.find((row) => row.recommendation.key === 'buy')?.recommendation ?? null;
-
     return {
         rows: rows.length,
-        completed: completedRows.length,
-        right: rightRows.length,
-        accuracy: completedRows.length === 0 ? null : (rightRows.length / completedRows.length) * 100,
-        latestRecommendation,
     };
 }
 
@@ -1772,6 +2115,15 @@ watch(
         if (['latest', 'flatex'].includes(preferences?.depot_price_source)) {
             depotPriceSource.value = preferences.depot_price_source;
         }
+
+        analyzeTrendRowLimit.value = normalizeAnalyzeTrendRowLimit(preferences?.analyze_trend_row_limit);
+        analyzeTrendTradeAmounts.value = normalizeAnalyzeTrendTradeAmounts(preferences?.analyze_trend_trade_amounts);
+        analyzeTrendMaxInvestAmount.value = normalizeAnalyzeTrendMaxInvestAmount(
+            preferences?.analyze_trend_max_invest_amount,
+        );
+        excludedAnalyzeTrendHoldingIds.value = normalizeAnalyzeTrendExcludedHoldingIds(
+            preferences?.analyze_trend_excluded_holding_ids,
+        );
     },
     { immediate: true },
 );
@@ -1779,6 +2131,10 @@ watch(
 watch(
     holdings,
     (currentHoldings) => {
+        const currentHoldingIds = new Set(currentHoldings.map((holding) => holding.id));
+        excludedAnalyzeTrendHoldingIds.value = excludedAnalyzeTrendHoldingIds.value
+            .filter((holdingId) => currentHoldingIds.has(holdingId));
+
         if (ensureAnalyzeHoldingSelection(currentHoldings)) {
             return;
         }
@@ -1923,6 +2279,7 @@ onBeforeUnmount(() => {
     stopDataExchangeReloadPolling();
     stopDataIntradayReloadPolling();
     stopHoldingDialogKeyboardShortcuts();
+    clearAnalyzeIsinCopiedTimer();
     window.removeEventListener('resize', updateViewportMetrics);
     window.removeEventListener('popstate', applyRouteFromPath);
 });
@@ -2170,6 +2527,186 @@ function navigateDataSubsection(subsection) {
 function selectAnalyzeHolding(holdingId) {
     selectedAnalyzeHoldingId.value = holdingId;
     updateUrlPath();
+}
+
+function copySelectedAnalyzeIsin() {
+    const isin = selectedAnalyzeHolding.value?.isin;
+
+    if (!isin) {
+        return;
+    }
+
+    copyToClipboard(isin);
+    selectedAnalyzeCopiedIsin.value = isin;
+    clearAnalyzeIsinCopiedTimer();
+    analyzeIsinCopiedTimer.value = window.setTimeout(() => {
+        selectedAnalyzeCopiedIsin.value = null;
+        analyzeIsinCopiedTimer.value = null;
+    }, 1600);
+}
+
+function clearAnalyzeIsinCopiedTimer() {
+    if (!analyzeIsinCopiedTimer.value) {
+        return;
+    }
+
+    window.clearTimeout(analyzeIsinCopiedTimer.value);
+    analyzeIsinCopiedTimer.value = null;
+}
+
+function isAnalyzeTrendHoldingIncluded(holdingId) {
+    return !excludedAnalyzeTrendHoldingIds.value.includes(holdingId);
+}
+
+async function toggleAnalyzeTrendHoldingInclusion(holdingId) {
+    const previousExcludedHoldingIds = excludedAnalyzeTrendHoldingIds.value;
+
+    if (isAnalyzeTrendHoldingIncluded(holdingId)) {
+        excludedAnalyzeTrendHoldingIds.value = [...excludedAnalyzeTrendHoldingIds.value, holdingId];
+    } else {
+        excludedAnalyzeTrendHoldingIds.value = excludedAnalyzeTrendHoldingIds.value
+            .filter((excludedHoldingId) => excludedHoldingId !== holdingId);
+    }
+
+    try {
+        await depotsStore.updateUiPreferences({
+            analyze_trend_excluded_holding_ids: excludedAnalyzeTrendHoldingIds.value,
+        });
+    } catch (error) {
+        excludedAnalyzeTrendHoldingIds.value = previousExcludedHoldingIds;
+        transactionsError.value = error.message;
+    }
+}
+
+function normalizeAnalyzeTrendRowLimit(value) {
+    const rowLimit = Number(value);
+
+    if (!Number.isInteger(rowLimit)) {
+        return defaultAnalyzeTrendRowLimit;
+    }
+
+    return Math.min(Math.max(rowLimit, 1), maxAnalyzeTrendRowLimit);
+}
+
+function normalizeAnalyzeTrendTradeAmounts(value) {
+    if (!Array.isArray(value) || value.length !== 3) {
+        return [...defaultAnalyzeTrendTradeAmounts];
+    }
+
+    const tradeAmounts = value.map((amount) => Number(amount));
+
+    if (tradeAmounts.some((amount) => !Number.isInteger(amount))) {
+        return [...defaultAnalyzeTrendTradeAmounts];
+    }
+
+    return tradeAmounts.map((amount) => Math.min(Math.max(amount, 0), maxAnalyzeTrendTradeAmount));
+}
+
+function normalizeAnalyzeTrendMaxInvestAmount(value) {
+    const maxInvestAmount = Number(value);
+
+    if (!Number.isInteger(maxInvestAmount)) {
+        return defaultAnalyzeTrendMaxInvestAmount;
+    }
+
+    return Math.min(Math.max(maxInvestAmount, 0), maxAnalyzeTrendMaxInvestAmount);
+}
+
+function normalizeAnalyzeTrendExcludedHoldingIds(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    return [...new Set(value
+        .map((holdingId) => Number(holdingId))
+        .filter((holdingId) => Number.isInteger(holdingId) && holdingId > 0))];
+}
+
+function editAnalyzeTrendRowLimit() {
+    analyzeTrendRowLimitEditValue.value = String(analyzeTrendRowLimit.value);
+    isAnalyzeTrendRowLimitDialogOpen.value = true;
+}
+
+async function saveAnalyzeTrendRowLimit() {
+    const rowLimit = normalizeAnalyzeTrendRowLimit(analyzeTrendRowLimitEditValue.value);
+
+    try {
+        isAnalyzeTrendRowLimitSaving.value = true;
+        analyzeTrendRowLimit.value = rowLimit;
+
+        await depotsStore.updateUiPreferences({
+            analyze_trend_row_limit: rowLimit,
+        });
+
+        isAnalyzeTrendRowLimitDialogOpen.value = false;
+    } catch (error) {
+        transactionsError.value = error.message;
+    } finally {
+        isAnalyzeTrendRowLimitSaving.value = false;
+    }
+}
+
+function cancelAnalyzeTrendRowLimitEdit() {
+    analyzeTrendRowLimitEditValue.value = String(analyzeTrendRowLimit.value);
+    isAnalyzeTrendRowLimitDialogOpen.value = false;
+}
+
+function editAnalyzeTrendTradeAmounts() {
+    analyzeTrendTradeAmountEditValues.value = analyzeTrendTradeAmounts.value.map((amount) => String(amount));
+    isAnalyzeTrendTradeAmountDialogOpen.value = true;
+}
+
+async function saveAnalyzeTrendTradeAmounts() {
+    const tradeAmounts = normalizeAnalyzeTrendTradeAmounts(analyzeTrendTradeAmountEditValues.value);
+
+    try {
+        isAnalyzeTrendTradeAmountSaving.value = true;
+        analyzeTrendTradeAmounts.value = tradeAmounts;
+
+        await depotsStore.updateUiPreferences({
+            analyze_trend_trade_amounts: tradeAmounts,
+        });
+
+        isAnalyzeTrendTradeAmountDialogOpen.value = false;
+    } catch (error) {
+        transactionsError.value = error.message;
+    } finally {
+        isAnalyzeTrendTradeAmountSaving.value = false;
+    }
+}
+
+function cancelAnalyzeTrendTradeAmountEdit() {
+    analyzeTrendTradeAmountEditValues.value = analyzeTrendTradeAmounts.value.map((amount) => String(amount));
+    isAnalyzeTrendTradeAmountDialogOpen.value = false;
+}
+
+function editAnalyzeTrendMaxInvestAmount() {
+    analyzeTrendMaxInvestAmountEditValue.value = String(analyzeTrendMaxInvestAmount.value);
+    isAnalyzeTrendMaxInvestAmountDialogOpen.value = true;
+}
+
+async function saveAnalyzeTrendMaxInvestAmount() {
+    const maxInvestAmount = normalizeAnalyzeTrendMaxInvestAmount(analyzeTrendMaxInvestAmountEditValue.value);
+
+    try {
+        isAnalyzeTrendMaxInvestAmountSaving.value = true;
+        analyzeTrendMaxInvestAmount.value = maxInvestAmount;
+
+        await depotsStore.updateUiPreferences({
+            analyze_trend_max_invest_amount: maxInvestAmount,
+        });
+
+        isAnalyzeTrendMaxInvestAmountDialogOpen.value = false;
+    } catch (error) {
+        transactionsError.value = error.message;
+    } finally {
+        isAnalyzeTrendMaxInvestAmountSaving.value = false;
+    }
+}
+
+function cancelAnalyzeTrendMaxInvestAmountEdit() {
+    analyzeTrendMaxInvestAmountEditValue.value = String(analyzeTrendMaxInvestAmount.value);
+    isAnalyzeTrendMaxInvestAmountDialogOpen.value = false;
 }
 
 function moveAnalyzeChartWindowBackward() {
@@ -3653,7 +4190,7 @@ function formatDepotOneWeekStartBalance() {
 }
 
 function depotBalanceChangeTaxAmount() {
-    const amount = depotValuationNumber('balance_change_amount');
+    const amount = depotValuationNumber('taxable_stock_gain_amount');
 
     return amount > 0 ? roundCurrencyAmount(amount * kestTaxRate) : 0;
 }
@@ -6800,9 +7337,10 @@ function formatAnalyzeTrendNegativeStreak(streak) {
     return `${streak.count} (${formatPriceChangePercent(streak.changePercent)})`;
 }
 
-function addAnalyzeTrendStreakTrades(rows) {
+function addAnalyzeTrendStreakTrades(rows, tradeAmounts = defaultAnalyzeTrendTradeAmounts) {
     let totalWin = 0;
     let activeTrades = [];
+    const normalizedTradeAmounts = normalizeAnalyzeTrendTradeAmounts(tradeAmounts);
 
     rows.forEach((row) => {
         activeTrades.forEach((trade) => {
@@ -6832,19 +7370,21 @@ function addAnalyzeTrendStreakTrades(rows) {
 
         if (row.streakBuySignal) {
             const tradeNumber = nextAnalyzeTrendStreakTradeNumber(activeTrades);
-            const tradeAmount = analyzeTrendStreakTradeAmount(tradeNumber);
+            const tradeAmount = analyzeTrendStreakTradeAmount(tradeNumber, normalizedTradeAmounts);
 
-            row.streakRecommendations.push({
-                type: 'buy',
-                label: `BUY ${tradeNumber}`,
-            });
+            if (tradeAmount > 0) {
+                activeTrades.push({
+                    number: tradeNumber,
+                    amount: tradeAmount,
+                    changePercent: 0,
+                    isClosed: false,
+                });
 
-            activeTrades.push({
-                number: tradeNumber,
-                amount: tradeAmount,
-                changePercent: 0,
-                isClosed: false,
-            });
+                row.streakRecommendations.push({
+                    type: 'buy',
+                    label: `BUY ${tradeNumber}`,
+                });
+            }
         }
 
         if (activeTrades.length > 0) {
@@ -6860,8 +7400,12 @@ function addAnalyzeTrendStreakTrades(rows) {
     });
 }
 
-function analyzeTrendStreakTradeAmount(tradeNumber) {
-    return tradeNumber === 1 ? 10000 : 5000;
+function analyzeTrendStreakTradeAmount(tradeNumber, tradeAmounts = defaultAnalyzeTrendTradeAmounts) {
+    return tradeAmounts[tradeNumber - 1] ?? tradeAmounts.at(-1);
+}
+
+function analyzeTrendStreakTradeBucket(tradeNumber) {
+    return Math.min(Math.max(tradeNumber, 1), 3) - 1;
 }
 
 function nextAnalyzeTrendStreakTradeNumber(activeTrades) {
@@ -6923,20 +7467,53 @@ function formatAnalyzeTrendWin(value) {
     return `${formatAccountBalance(value)} EUR`;
 }
 
-function formatAnalyzeTrendAccuracy(value) {
-    if (value === null) {
-        return '-';
+function formatAnalyzeTrendSignedWin(value) {
+    if (value === null || value === undefined) {
+        return '';
     }
 
-    return `${value.toFixed(1)}%`;
+    const sign = Number(value) > 0 ? '+' : '';
+
+    return `${sign}${formatAccountBalance(value)} EUR`;
 }
 
-function formatAnalyzeTrendRightSummary(summary) {
-    if (summary.completed === 0) {
-        return '-';
+function analyzeTrendTradeAmountLabel(tradeAmounts) {
+    const [firstAmount, secondAmount, laterAmount] = normalizeAnalyzeTrendTradeAmounts(tradeAmounts);
+
+    return `Invest amounts: 1st ${formatWholeEuroAmount(firstAmount)} | 2nd ${formatWholeEuroAmount(secondAmount)} | 3rd+ ${formatWholeEuroAmount(laterAmount)}`;
+}
+
+function analyzeTrendMaxInvestAmountLabel(maxInvestAmount) {
+    return `Max invest: ${formatWholeEuroAmount(normalizeAnalyzeTrendMaxInvestAmount(maxInvestAmount))}`;
+}
+
+function analyzeTrendInvestmentOptimizationLabel(optimization) {
+    if (!optimization) {
+        return 'Optimal: no valid combination';
     }
 
-    return `${summary.right}/${summary.completed} (${formatAnalyzeTrendAccuracy(summary.accuracy)})`;
+    const [firstAmount, secondAmount, laterAmount] = optimization.tradeAmounts;
+    const profit = formatAnalyzeTrendSignedWin(optimization.profitAmount);
+    const firstAmountLabel = formatWholeEuroAmount(firstAmount);
+    const secondAmountLabel = formatWholeEuroAmount(secondAmount);
+    const laterAmountLabel = formatWholeEuroAmount(laterAmount);
+
+    return `Optimal profit: ${profit} with 1st ${firstAmountLabel} | 2nd ${secondAmountLabel} | 3rd+ ${laterAmountLabel}`;
+}
+
+function formatAnalyzeTrendHoldingRank(stats) {
+    if (!stats) {
+        return '';
+    }
+
+    return `${stats.rank}/${stats.total}`;
+}
+
+function formatWholeEuroAmount(value) {
+    return `${Number(value).toLocaleString('en-US', {
+        maximumFractionDigits: 0,
+        minimumFractionDigits: 0,
+    })} EUR`;
 }
 
 function priceChangePercentClass(changePercent) {
@@ -9625,26 +10202,75 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 </div>
                             </div>
 
-                            <div class="index-watch-strip analyze-detail-stock-menu" aria-label="Analyze trend stocks">
+                            <h3 class="analyze-selected-stock-title">
+                                <span class="analyze-selected-stock-name">{{ selectedAnalyzeScopeLabel }}</span>
                                 <button
+                                    v-if="selectedAnalyzeHolding?.isin"
+                                    type="button"
+                                    class="analyze-selected-stock-isin-copy"
+                                    :class="{ 'analyze-selected-stock-isin-copy--copied': selectedAnalyzeCopiedIsin === selectedAnalyzeHolding.isin }"
+                                    :aria-label="`Copy ISIN ${selectedAnalyzeHolding.isin}`"
+                                    @click="copySelectedAnalyzeIsin"
+                                >
+                                    <span>{{ selectedAnalyzeHolding.isin }}</span>
+                                    <v-icon
+                                        :icon="selectedAnalyzeCopiedIsin === selectedAnalyzeHolding.isin ? 'mdi-check-circle-outline' : 'mdi-content-copy'"
+                                        size="15"
+                                    />
+                                </button>
+                            </h3>
+                            <div class="index-watch-strip analyze-detail-stock-menu" aria-label="Analyze trend stocks">
+                                <div
                                     v-for="holding in holdings"
                                     :key="holding.id"
-                                    type="button"
-                                    class="index-watch-card analyze-holding-card"
-                                    :class="{ 'analyze-holding-card--active': selectedAnalyzeHoldingId === holding.id }"
-                                    :aria-pressed="selectedAnalyzeHoldingId === holding.id"
-                                    @click="selectAnalyzeHolding(holding.id)"
+                                    class="analyze-trend-holding-item"
                                 >
-                                    <span class="index-watch-card-label analyze-holding-card-name">
-                                        {{ holding.name || holding.symbol || '-' }}
-                                    </span>
-                                    <span class="index-watch-card-price analyze-holding-card-price">
-                                        {{ formatHoldingCardPrice(holding) }}
-                                    </span>
-                                    <span class="analyze-holding-card-pieces">
-                                        Pieces: {{ formatPositionPieces(holding) }}
-                                    </span>
-                                </button>
+                                    <button
+                                        type="button"
+                                        class="analyze-trend-include-toggle"
+                                        :class="{ 'analyze-trend-include-toggle--active': isAnalyzeTrendHoldingIncluded(holding.id) }"
+                                        :aria-pressed="isAnalyzeTrendHoldingIncluded(holding.id)"
+                                        :aria-label="isAnalyzeTrendHoldingIncluded(holding.id)
+                                            ? `Exclude ${holding.name || holding.symbol || 'stock'} from All amount`
+                                            : `Include ${holding.name || holding.symbol || 'stock'} in All amount`"
+                                        @click="toggleAnalyzeTrendHoldingInclusion(holding.id)"
+                                    >
+                                        <v-icon
+                                            :icon="isAnalyzeTrendHoldingIncluded(holding.id) ? 'mdi-checkbox-marked' : 'mdi-checkbox-blank-outline'"
+                                            size="18"
+                                        />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="index-watch-card analyze-holding-card"
+                                        :class="{ 'analyze-holding-card--active': selectedAnalyzeHoldingId === holding.id }"
+                                        :aria-pressed="selectedAnalyzeHoldingId === holding.id"
+                                        @click="selectAnalyzeHolding(holding.id)"
+                                    >
+                                        <span class="index-watch-card-label analyze-holding-card-name">
+                                            {{ holding.name || holding.symbol || '-' }}
+                                        </span>
+                                        <span class="index-watch-card-price analyze-holding-card-price">
+                                            {{ formatHoldingCardPrice(holding) }}
+                                        </span>
+                                        <span
+                                            v-if="isAnalyzeTrendHoldingIncluded(holding.id)"
+                                            class="analyze-holding-card-stat"
+                                            :class="priceChangePercentClass(analyzeTrendHoldingStats.get(holding.id)?.winAmount ?? 0)"
+                                        >
+                                            {{ formatAnalyzeTrendSignedWin(analyzeTrendHoldingStats.get(holding.id)?.winAmount ?? 0) }}
+                                        </span>
+                                        <span
+                                            v-if="isAnalyzeTrendHoldingIncluded(holding.id)"
+                                            class="analyze-holding-card-stat"
+                                        >
+                                            Rank: {{ formatAnalyzeTrendHoldingRank(analyzeTrendHoldingStats.get(holding.id)) }}
+                                        </span>
+                                        <span class="analyze-holding-card-pieces">
+                                            Pieces: {{ formatPositionPieces(holding) }}
+                                        </span>
+                                    </button>
+                                </div>
                             </div>
 
                             <v-alert
@@ -9663,24 +10289,67 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             </div>
                             <div v-else class="analyze-trend-panel">
                                 <div class="analyze-trend-summary" aria-label="Trend analysis summary">
-                                    <div class="analyze-trend-summary-item">
+                                    <button
+                                        type="button"
+                                        class="analyze-trend-summary-item analyze-trend-summary-item--button"
+                                        aria-label="Edit trend row count"
+                                        @click="editAnalyzeTrendRowLimit"
+                                    >
                                         <span class="analyze-trend-summary-label">Rows</span>
-                                        <strong>{{ selectedAnalyzeTrendSummary.rows }}</strong>
-                                    </div>
+                                        <strong class="analyze-trend-summary-value-with-icon">
+                                            {{ selectedAnalyzeTrendSummary.rows }}
+                                            <v-icon icon="mdi-pencil" size="16" />
+                                        </strong>
+                                    </button>
                                     <div class="analyze-trend-summary-item">
-                                        <span class="analyze-trend-summary-label">Right</span>
-                                        <strong>
-                                            {{ formatAnalyzeTrendRightSummary(selectedAnalyzeTrendSummary) }}
+                                        <span class="analyze-trend-summary-label">Total +/- over all checked stocks</span>
+                                        <strong :class="priceChangePercentClass(selectedAnalyzeTrendPortfolioSummary.changeAmount)">
+                                            {{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.changeAmount) }}
                                         </strong>
                                     </div>
                                     <div class="analyze-trend-summary-item">
-                                        <span class="analyze-trend-summary-label">Accuracy</span>
-                                        <strong>{{ formatAnalyzeTrendAccuracy(selectedAnalyzeTrendSummary.accuracy) }}</strong>
+                                        <span class="analyze-trend-summary-label">All amount</span>
+                                        <strong>{{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.amount) }}</strong>
                                     </div>
                                     <div class="analyze-trend-summary-item">
-                                        <span class="analyze-trend-summary-label">Latest signal</span>
-                                        <strong>{{ selectedAnalyzeTrendSummary.latestRecommendation?.label ?? '-' }}</strong>
+                                        <span class="analyze-trend-summary-label">Max invest at same time</span>
+                                        <strong>{{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.maximumAmount) }}</strong>
+                                        <span
+                                            v-if="selectedAnalyzeTrendPortfolioSummary.maximumAmountDate"
+                                            class="analyze-trend-summary-note"
+                                        >
+                                            {{ formatAnalyzeTrendDate(selectedAnalyzeTrendPortfolioSummary.maximumAmountDate) }}
+                                        </span>
                                     </div>
+                                    <div class="analyze-trend-summary-item">
+                                        <span class="analyze-trend-summary-label">Actual +/- amount</span>
+                                        <strong :class="priceChangePercentClass(selectedAnalyzeTrendPortfolioSummary.actualChangeAmount)">
+                                            {{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.actualChangeAmount) }}
+                                        </strong>
+                                    </div>
+                                </div>
+                                <div class="analyze-trend-invest-actions">
+                                    <button
+                                        type="button"
+                                        class="analyze-trend-invest-info"
+                                        aria-label="Edit trend invest amounts"
+                                        @click="editAnalyzeTrendTradeAmounts"
+                                    >
+                                        <span>{{ analyzeTrendTradeAmountInfo }}</span>
+                                        <v-icon icon="mdi-pencil" size="14" />
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="analyze-trend-invest-info analyze-trend-max-invest-info"
+                                        aria-label="Edit trend max invest"
+                                        @click="editAnalyzeTrendMaxInvestAmount"
+                                    >
+                                        <span>{{ analyzeTrendMaxInvestAmountInfo }}</span>
+                                        <v-icon icon="mdi-pencil" size="14" />
+                                    </button>
+                                    <span class="analyze-trend-optimization-info">
+                                        {{ analyzeTrendInvestmentOptimizationInfo }}
+                                    </span>
                                 </div>
 
                                 <div class="analyze-detail-table-wrap">
@@ -9761,6 +10430,168 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </v-table>
                                 </div>
                             </div>
+                            <v-dialog
+                                v-model="isAnalyzeTrendRowLimitDialogOpen"
+                                class="analyze-trend-rows-dialog"
+                                persistent
+                                max-width="420"
+                            >
+                                <v-card>
+                                    <v-card-title>Edit rows</v-card-title>
+                                    <v-card-text>
+                                        <div class="text-caption text-medium-emphasis mb-3">
+                                            Number of trend rows shown in the table.
+                                        </div>
+                                        <v-text-field
+                                            v-model="analyzeTrendRowLimitEditValue"
+                                            autofocus
+                                            label="Rows"
+                                            type="number"
+                                            min="1"
+                                            :max="maxAnalyzeTrendRowLimit"
+                                            step="1"
+                                            density="compact"
+                                            @keydown.enter.prevent="saveAnalyzeTrendRowLimit"
+                                        />
+                                    </v-card-text>
+                                    <v-card-actions>
+                                        <v-spacer />
+                                        <v-btn
+                                            type="button"
+                                            variant="text"
+                                            :disabled="isAnalyzeTrendRowLimitSaving"
+                                            @click="cancelAnalyzeTrendRowLimitEdit"
+                                        >
+                                            Cancel
+                                        </v-btn>
+                                        <v-btn
+                                            type="button"
+                                            color="primary"
+                                            variant="flat"
+                                            :loading="isAnalyzeTrendRowLimitSaving"
+                                            @click="saveAnalyzeTrendRowLimit"
+                                        >
+                                            Save
+                                        </v-btn>
+                                    </v-card-actions>
+                                </v-card>
+                            </v-dialog>
+                            <v-dialog
+                                v-model="isAnalyzeTrendTradeAmountDialogOpen"
+                                class="analyze-trend-invest-dialog"
+                                persistent
+                                max-width="460"
+                            >
+                                <v-card>
+                                    <v-card-title>Edit invest amounts</v-card-title>
+                                    <v-card-text>
+                                        <div class="text-caption text-medium-emphasis mb-3">
+                                            Amounts used for the first, second, and later open trend trades.
+                                        </div>
+                                        <v-text-field
+                                            v-model="analyzeTrendTradeAmountEditValues[0]"
+                                            autofocus
+                                            label="First invest"
+                                            type="number"
+                                            min="0"
+                                            :max="maxAnalyzeTrendTradeAmount"
+                                            step="1"
+                                            suffix="EUR"
+                                            density="compact"
+                                            @keydown.enter.prevent="saveAnalyzeTrendTradeAmounts"
+                                        />
+                                        <v-text-field
+                                            v-model="analyzeTrendTradeAmountEditValues[1]"
+                                            label="Second invest"
+                                            type="number"
+                                            min="0"
+                                            :max="maxAnalyzeTrendTradeAmount"
+                                            step="1"
+                                            suffix="EUR"
+                                            density="compact"
+                                            @keydown.enter.prevent="saveAnalyzeTrendTradeAmounts"
+                                        />
+                                        <v-text-field
+                                            v-model="analyzeTrendTradeAmountEditValues[2]"
+                                            label="Third and later invests"
+                                            type="number"
+                                            min="0"
+                                            :max="maxAnalyzeTrendTradeAmount"
+                                            step="1"
+                                            suffix="EUR"
+                                            density="compact"
+                                            @keydown.enter.prevent="saveAnalyzeTrendTradeAmounts"
+                                        />
+                                    </v-card-text>
+                                    <v-card-actions>
+                                        <v-spacer />
+                                        <v-btn
+                                            type="button"
+                                            variant="text"
+                                            :disabled="isAnalyzeTrendTradeAmountSaving"
+                                            @click="cancelAnalyzeTrendTradeAmountEdit"
+                                        >
+                                            Cancel
+                                        </v-btn>
+                                        <v-btn
+                                            type="button"
+                                            color="primary"
+                                            variant="flat"
+                                            :loading="isAnalyzeTrendTradeAmountSaving"
+                                            @click="saveAnalyzeTrendTradeAmounts"
+                                        >
+                                            Save
+                                        </v-btn>
+                                    </v-card-actions>
+                                </v-card>
+                            </v-dialog>
+                            <v-dialog
+                                v-model="isAnalyzeTrendMaxInvestAmountDialogOpen"
+                                class="analyze-trend-max-invest-dialog"
+                                persistent
+                                max-width="420"
+                            >
+                                <v-card>
+                                    <v-card-title>Edit max invest</v-card-title>
+                                    <v-card-text>
+                                        <div class="text-caption text-medium-emphasis mb-3">
+                                            Stored maximum invest amount for trend settings.
+                                        </div>
+                                        <v-text-field
+                                            v-model="analyzeTrendMaxInvestAmountEditValue"
+                                            autofocus
+                                            label="Max invest"
+                                            type="number"
+                                            min="0"
+                                            :max="maxAnalyzeTrendMaxInvestAmount"
+                                            step="1"
+                                            suffix="EUR"
+                                            density="compact"
+                                            @keydown.enter.prevent="saveAnalyzeTrendMaxInvestAmount"
+                                        />
+                                    </v-card-text>
+                                    <v-card-actions>
+                                        <v-spacer />
+                                        <v-btn
+                                            type="button"
+                                            variant="text"
+                                            :disabled="isAnalyzeTrendMaxInvestAmountSaving"
+                                            @click="cancelAnalyzeTrendMaxInvestAmountEdit"
+                                        >
+                                            Cancel
+                                        </v-btn>
+                                        <v-btn
+                                            type="button"
+                                            color="primary"
+                                            variant="flat"
+                                            :loading="isAnalyzeTrendMaxInvestAmountSaving"
+                                            @click="saveAnalyzeTrendMaxInvestAmount"
+                                        >
+                                            Save
+                                        </v-btn>
+                                    </v-card-actions>
+                                </v-card>
+                            </v-dialog>
                         </section>
                         <section
                             v-if="activeAnalyzeSubsection === 'tests'"
@@ -12257,6 +13088,39 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     margin-bottom: 18px;
 }
 
+.analyze-selected-stock-title {
+    align-items: center;
+    color: #145b4b;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 1rem;
+    font-weight: 800;
+    gap: 8px;
+    line-height: 1.25;
+    margin: -6px 0 8px;
+}
+
+.analyze-selected-stock-isin-copy {
+    align-items: center;
+    background: rgba(20, 91, 75, 0.06);
+    border: 1px solid rgba(20, 91, 75, 0.18);
+    border-radius: 4px;
+    color: #145b4b;
+    cursor: pointer;
+    display: inline-flex;
+    font-size: 0.72rem;
+    font-weight: 800;
+    gap: 4px;
+    line-height: 1;
+    padding: 4px 6px;
+}
+
+.analyze-selected-stock-isin-copy--copied {
+    background: rgba(var(--v-theme-success), 0.12);
+    border-color: rgba(var(--v-theme-success), 0.45);
+    color: rgb(var(--v-theme-success));
+}
+
 .analyze-detail-empty {
     border: 1px dashed rgba(20, 91, 75, 0.28);
     border-radius: 6px;
@@ -12489,9 +13353,27 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 }
 
 .analyze-trend-summary-item {
+    background: #ffffff;
     border: 1px solid rgba(20, 91, 75, 0.16);
     border-radius: 6px;
+    color: inherit;
     padding: 10px 12px;
+    text-align: left;
+}
+
+.analyze-trend-summary-item--button {
+    cursor: pointer;
+}
+
+.analyze-trend-summary-item--button:hover {
+    border-color: rgba(20, 91, 75, 0.32);
+}
+
+.analyze-trend-summary-value-with-icon {
+    align-items: center;
+    display: flex;
+    gap: 6px;
+    justify-content: space-between;
 }
 
 .analyze-trend-summary-label {
@@ -12502,6 +13384,49 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     line-height: 1.2;
     margin-bottom: 4px;
     text-transform: uppercase;
+}
+
+.analyze-trend-summary-note {
+    color: #667480;
+    display: block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    line-height: 1.2;
+    margin-top: 4px;
+}
+
+.analyze-trend-invest-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    justify-self: start;
+}
+
+.analyze-trend-invest-info {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    color: #667480;
+    cursor: pointer;
+    display: inline-flex;
+    font-size: 0.78rem;
+    font-weight: 600;
+    gap: 6px;
+    justify-self: start;
+    padding: 0;
+    text-align: left;
+}
+
+.analyze-trend-invest-info:hover {
+    color: #145b4b;
+}
+
+.analyze-trend-optimization-info {
+    color: #145b4b;
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.2;
 }
 
 .analyze-trend-table {
@@ -12546,6 +13471,8 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     display: block;
     font-size: 0.68rem;
     line-height: 1.2;
+    margin-left: auto;
+    text-align: right;
 }
 
 .analyze-trend-cap-amount--portfolio {
@@ -13136,6 +14063,27 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     justify-content: flex-start;
 }
 
+.analyze-trend-holding-item {
+    align-items: stretch;
+    display: flex;
+    gap: 4px;
+}
+
+.analyze-trend-include-toggle {
+    align-items: center;
+    background: rgb(var(--v-theme-surface));
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 4px;
+    color: rgba(var(--v-theme-on-surface), 0.54);
+    display: inline-flex;
+    justify-content: center;
+    min-width: 34px;
+}
+
+.analyze-trend-include-toggle--active {
+    color: rgb(var(--v-theme-primary));
+}
+
 .analyze-holding-card--all {
     gap: 0;
 }
@@ -13146,14 +14094,21 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 }
 
 .analyze-holding-card-name {
-    -webkit-line-clamp: 3;
+    -webkit-line-clamp: 2;
     font-weight: 700;
     margin-top: 0;
+    text-overflow: ellipsis;
 }
 
 .analyze-holding-card-price {
     color: rgb(var(--v-theme-primary));
     font-size: 0.7rem;
+}
+
+.analyze-holding-card-stat {
+    font-size: 0.66rem;
+    font-weight: 700;
+    line-height: 1;
 }
 
 .analyze-holding-card-pieces {

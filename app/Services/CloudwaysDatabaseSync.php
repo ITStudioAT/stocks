@@ -36,7 +36,15 @@ class CloudwaysDatabaseSync
 
         $sourceTables = $this->tableNames($sourceConnectionName);
         $targetTables = $this->tableNames($targetConnectionName);
-        $syncTables = array_values(array_intersect($sourceTables, $targetTables));
+        $matchingTables = array_values(array_intersect($sourceTables, $targetTables));
+        $syncTables = array_values(array_filter(
+            $matchingTables,
+            fn (string $table): bool => $this->missingRequiredTargetColumns(
+                $sourceConnectionName,
+                $targetConnectionName,
+                $table,
+            ) === [],
+        ));
         $skippedTables = array_values(array_diff($sourceTables, $syncTables));
         $syncedTables = [];
 
@@ -201,6 +209,41 @@ class CloudwaysDatabaseSync
             'status' => 'imported',
             'message' => "Imported {$table}: {$rows} row(s), ".count($columns).' column(s).',
         ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function missingRequiredTargetColumns(string $sourceConnectionName, string $targetConnectionName, string $table): array
+    {
+        $sourceColumns = Schema::connection($sourceConnectionName)->getColumnListing($table);
+
+        return collect(Schema::connection($targetConnectionName)->getColumns($table))
+            ->filter(fn (array $column): bool => $this->isRequiredTargetColumn($column))
+            ->pluck('name')
+            ->diff($sourceColumns)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array{name?: string, nullable?: bool, default?: mixed, auto_increment?: bool, generation?: mixed}  $column
+     */
+    private function isRequiredTargetColumn(array $column): bool
+    {
+        if (($column['nullable'] ?? false) === true) {
+            return false;
+        }
+
+        if (($column['default'] ?? null) !== null) {
+            return false;
+        }
+
+        if (($column['auto_increment'] ?? false) === true) {
+            return false;
+        }
+
+        return ($column['generation'] ?? null) === null;
     }
 
     private function repairLatestRealtimePriceLinks(string $targetConnectionName): void

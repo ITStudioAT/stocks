@@ -36,7 +36,7 @@ class AdminDepotController extends Controller
         ]);
     }
 
-    public function active(PriceRefreshScheduler $priceRefreshScheduler, IndexPriceRefreshSettings $indexPriceRefreshSettings, EodhdApiUsage $eodhdApiUsage, UiPreferences $uiPreferences): JsonResponse
+    public function active(Request $request, PriceRefreshScheduler $priceRefreshScheduler, IndexPriceRefreshSettings $indexPriceRefreshSettings, EodhdApiUsage $eodhdApiUsage, UiPreferences $uiPreferences): JsonResponse
     {
         $depot = Depot::query()
             ->where('is_active', true)
@@ -50,7 +50,7 @@ class AdminDepotController extends Controller
             'price_refresh_settings' => $priceRefreshScheduler->payload(),
             'index_price_refresh_settings' => $indexPriceRefreshSettings->payload(),
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
-            'ui_preferences' => $uiPreferences->payload(),
+            'ui_preferences' => $uiPreferences->payload($request->user()),
         ]);
     }
 

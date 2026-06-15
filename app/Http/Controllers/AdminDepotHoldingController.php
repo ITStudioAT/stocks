@@ -112,7 +112,7 @@ class AdminDepotHoldingController extends Controller
                 'price_refresh_settings' => $this->priceRefreshScheduler->payload(),
                 'index_price_refresh_settings' => $this->indexPriceRefreshSettings->payload(),
                 'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
-                'ui_preferences' => $this->uiPreferences->payload(),
+                'ui_preferences' => $this->uiPreferences->payload($request->user()),
                 'holdings' => $holdings->all(),
                 'meta' => [
                     'current_page' => 1,
@@ -140,7 +140,7 @@ class AdminDepotHoldingController extends Controller
             'price_refresh_settings' => $this->priceRefreshScheduler->payload(),
             'index_price_refresh_settings' => $this->indexPriceRefreshSettings->payload(),
             'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
-            'ui_preferences' => $this->uiPreferences->payload(),
+            'ui_preferences' => $this->uiPreferences->payload($request->user()),
             'holdings' => $holdings->items(),
             'meta' => [
                 'current_page' => $holdings->currentPage(),

@@ -386,9 +386,57 @@ class DepotTransactionTest extends TestCase
                 ->assertJsonPath('depot_valuations.latest.current_balance', '57256.56')
                 ->assertJsonPath('depot_valuations.latest.balance_change_amount', '-25980.00')
                 ->assertJsonPath('depot_valuations.latest.balance_change_percent', '-31.21')
+                ->assertJsonPath('depot_valuations.latest.taxable_stock_gain_amount', '0.00')
                 ->assertJsonPath('depot_valuations.latest.one_week_start_balance', '57236.56')
                 ->assertJsonPath('depot_valuations.latest.one_week_change_amount', '20.00')
                 ->assertJsonPath('depot_valuations.latest.one_week_change_percent', '0.03');
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_cash_only_balance_increase_has_no_taxable_stock_gain(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-15 12:00:00', 'UTC'));
+
+        try {
+            $admin = $this->adminUser();
+            $depot = Depot::factory()->create([
+                'account_balance' => '84664.35',
+                'is_active' => true,
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => null,
+                'type' => 'deposit',
+                'pieces' => null,
+                'total_amount' => '83236.56',
+                'unit_price' => null,
+                'cash_delta' => '83236.56',
+                'balance_after' => '83236.56',
+                'booked_at' => '2026-01-01 00:00:00',
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => null,
+                'type' => 'deposit',
+                'pieces' => null,
+                'total_amount' => '1427.79',
+                'unit_price' => null,
+                'cash_delta' => '1427.79',
+                'balance_after' => '84664.35',
+                'booked_at' => '2026-06-15 00:00:00',
+            ]);
+
+            $this->actingAs($admin)
+                ->getJson('/admin/depot-transactions')
+                ->assertOk()
+                ->assertJsonCount(0, 'depot_holdings')
+                ->assertJsonPath('depot_valuations.latest.year_start_balance', '83236.56')
+                ->assertJsonPath('depot_valuations.latest.current_balance', '84664.35')
+                ->assertJsonPath('depot_valuations.latest.balance_change_amount', '1427.79')
+                ->assertJsonPath('depot_valuations.latest.balance_change_percent', '1.72')
+                ->assertJsonPath('depot_valuations.latest.taxable_stock_gain_amount', '0.00');
         } finally {
             Carbon::setTestNow();
         }
@@ -567,6 +615,7 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('depot_valuations.latest.current_balance', '1188.75')
             ->assertJsonPath('depot_valuations.latest.balance_change_amount', '188.75')
             ->assertJsonPath('depot_valuations.latest.balance_change_percent', '18.88')
+            ->assertJsonPath('depot_valuations.latest.taxable_stock_gain_amount', '178.75')
             ->assertJsonPath('depot_valuations.latest.one_week_start_balance', '1000.00')
             ->assertJsonPath('depot_valuations.latest.one_week_change_amount', '188.75')
             ->assertJsonPath('depot_valuations.latest.one_week_change_percent', '18.88');

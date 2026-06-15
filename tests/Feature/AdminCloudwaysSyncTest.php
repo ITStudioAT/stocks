@@ -116,6 +116,51 @@ class AdminCloudwaysSyncTest extends TestCase
         $this->assertSame('Synced 1 table(s) and 1 row(s) from Cloudways.', $events->last()['message']);
     }
 
+    public function test_cloudways_sync_skips_tables_with_missing_required_target_columns(): void
+    {
+        $this->configureCloudwaysTestingConnection();
+        $this->createCloudItemsTableWithRequiredLocalColumn();
+        $this->createCloudItemsTable('cloudways_testing');
+        $this->createCompatibleItemsTable();
+        $this->createCompatibleItemsTable('cloudways_testing');
+
+        DB::table('cloud_items')->insert([
+            'id' => 99,
+            'name' => 'Local stale item',
+            'quantity' => 1,
+            'company_id' => 123,
+        ]);
+        DB::connection('cloudways_testing')->table('cloud_items')->insert([
+            'id' => 1,
+            'name' => 'Remote first item',
+            'quantity' => 10,
+        ]);
+        DB::connection('cloudways_testing')->table('compatible_items')->insert([
+            'id' => 1,
+            'name' => 'Remote compatible item',
+        ]);
+
+        $this->actingAs($this->superAdminUser())
+            ->postJson('/admin/cloudways/sync')
+            ->assertOk()
+            ->assertJsonPath('message', 'Synced 1 table(s) and 1 row(s) from Cloudways.')
+            ->assertJsonPath('sync.synced_tables', 1)
+            ->assertJsonPath('sync.rows', 1)
+            ->assertJsonPath('sync.tables.0.name', 'compatible_items')
+            ->assertJsonPath('sync.skipped_tables.0', 'cloud_items');
+
+        $this->assertDatabaseHas('cloud_items', [
+            'id' => 99,
+            'name' => 'Local stale item',
+            'quantity' => 1,
+            'company_id' => 123,
+        ]);
+        $this->assertDatabaseHas('compatible_items', [
+            'id' => 1,
+            'name' => 'Remote compatible item',
+        ]);
+    }
+
     public function test_cloudways_sync_repairs_latest_realtime_price_links(): void
     {
         $this->configureCloudwaysTestingConnection();
@@ -204,6 +249,32 @@ class AdminCloudwaysSyncTest extends TestCase
         }
 
         Schema::connection($connection)->create('cloud_items', $createTable);
+    }
+
+    private function createCloudItemsTableWithRequiredLocalColumn(): void
+    {
+        Schema::create('cloud_items', function (Blueprint $table): void {
+            $table->id();
+            $table->string('name');
+            $table->integer('quantity');
+            $table->unsignedBigInteger('company_id');
+        });
+    }
+
+    private function createCompatibleItemsTable(?string $connection = null): void
+    {
+        $createTable = function (Blueprint $table): void {
+            $table->id();
+            $table->string('name');
+        };
+
+        if ($connection === null) {
+            Schema::create('compatible_items', $createTable);
+
+            return;
+        }
+
+        Schema::connection($connection)->create('compatible_items', $createTable);
     }
 
     private function createCloudStockTables(string $connection): void

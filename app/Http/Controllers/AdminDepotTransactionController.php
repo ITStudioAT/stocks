@@ -19,7 +19,7 @@ use Illuminate\Validation\ValidationException;
 
 class AdminDepotTransactionController extends Controller
 {
-    public function index(UiPreferences $uiPreferences): JsonResponse
+    public function index(Request $request, UiPreferences $uiPreferences): JsonResponse
     {
         $depot = $this->activeDepot();
 
@@ -29,7 +29,7 @@ class AdminDepotTransactionController extends Controller
                 'depot_valuations' => [],
                 'depot_performance_series' => [],
                 'transactions' => [],
-                'ui_preferences' => $uiPreferences->payload(),
+                'ui_preferences' => $uiPreferences->payload($request->user()),
             ]);
         }
 
@@ -40,7 +40,7 @@ class AdminDepotTransactionController extends Controller
             'depot_valuations' => $this->depotValuationPayloads($depot, $depotHoldings),
             'depot_performance_series' => $this->depotPerformancePayloads($depot, $depotHoldings),
             'transactions' => $this->transactionPayloads($depot),
-            'ui_preferences' => $uiPreferences->payload(),
+            'ui_preferences' => $uiPreferences->payload($request->user()),
         ]);
     }
 
@@ -518,7 +518,7 @@ class AdminDepotTransactionController extends Controller
 
     /**
      * @param  array<int, array{id: int, symbol: ?string, name: ?string, isin: ?string, currency: ?string, latest_price: ?string, previous_day_price: ?string, previous_day_price_date: ?string, previous_day_change_percent: ?string, flatex_price: ?string, year_start_price: ?string, latest_price_fetched_at: ?string, latest_price_status: string, position_pieces: string}>  $depotHoldings
-     * @return array{stock_balance: string, cash_balance: string, account_balance: string, year_start_balance: string, current_balance: string, balance_change_amount: string, balance_change_percent: string, one_week_start_balance: string, one_week_change_amount: string, one_week_change_percent: string}
+     * @return array{stock_balance: string, cash_balance: string, account_balance: string, year_start_balance: string, current_balance: string, balance_change_amount: string, balance_change_percent: string, taxable_stock_gain_amount: string, one_week_start_balance: string, one_week_change_amount: string, one_week_change_percent: string}
      */
     private function depotValuationPayload(Depot $depot, array $depotHoldings, string $source): array
     {
@@ -550,6 +550,7 @@ class AdminDepotTransactionController extends Controller
         $oneWeekChangePercent = $oneWeekStartBalance === 0.0
             ? 0.0
             : ($oneWeekChangeAmount / $oneWeekStartBalance) * 100;
+        $taxableStockGainAmount = max($stockBalance - $this->stockBalanceAt($depot, now()->endOfDay()), 0.0);
 
         return [
             'stock_balance' => $this->decimal($stockBalance, 2),
@@ -559,6 +560,7 @@ class AdminDepotTransactionController extends Controller
             'current_balance' => $this->decimal($currentBalance, 2),
             'balance_change_amount' => $this->decimal($balanceChangeAmount, 2),
             'balance_change_percent' => $this->decimal($balanceChangePercent, 2),
+            'taxable_stock_gain_amount' => $this->decimal($taxableStockGainAmount, 2),
             'one_week_start_balance' => $this->decimal($oneWeekStartBalance, 2),
             'one_week_change_amount' => $this->decimal($oneWeekChangeAmount, 2),
             'one_week_change_percent' => $this->decimal($oneWeekChangePercent, 2),
