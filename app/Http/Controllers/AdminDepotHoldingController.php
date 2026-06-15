@@ -37,6 +37,8 @@ use Throwable;
 
 class AdminDepotHoldingController extends Controller
 {
+    private const WEEKLY_INTRADAY_SAMPLES_PER_DAY = 5;
+
     public function __construct(
         private StockPriceFreshness $stockPriceFreshness,
         private PriceRefreshScheduler $priceRefreshScheduler,
@@ -130,6 +132,7 @@ class AdminDepotHoldingController extends Controller
                 $activeDepot,
                 $includeCharts && ($chartStockId <= 0 || $holding->id === $chartStockId),
                 $includeIntradayCharts,
+                $chartRange,
             ));
 
         return response()->json([
@@ -377,6 +380,7 @@ class AdminDepotHoldingController extends Controller
         ?Depot $activeDepot,
         bool $includeCharts = false,
         bool $includeIntradayCharts = true,
+        ?string $chartRange = null,
     ): array {
         $latestStockPrice = $holding->latestStockPrice;
         $latestStoredPrice = $holding->latestRealtimePrice ?? $latestStockPrice;
@@ -424,7 +428,9 @@ class AdminDepotHoldingController extends Controller
             'latest_price_tick_trend' => $this->latestPriceTrend($latestPrice, $this->previousStoredPrice($holding, $latestStoredPrice)),
             'latest_price_status' => $latestPriceStatus,
             'price_status' => $latestPriceStatus,
-            'latest_price_fetched_at' => $latestStoredPrice?->fetched_at?->toIso8601String() ?? $holding->latest_price_fetched_at?->toIso8601String(),
+            'latest_price_fetched_at' => $latestStoredPrice
+                ? $this->storedStockPriceTimestamp($latestStoredPrice, 'fetched_at')
+                : $holding->latest_price_fetched_at?->toIso8601String(),
             'latest_price_source' => $hasCurrentPrice ? ($latestStoredPrice?->source_name ?? $holding->latest_price_source) : null,
             'latest_price_source_url' => $hasCurrentPrice ? ($latestStoredPrice?->source_url ?? $holding->latest_price_source_url) : null,
             'latest_price_as_of' => $this->sourceDateTimePayload($latestPriceAsOf, $hasCurrentPrice),
@@ -434,7 +440,9 @@ class AdminDepotHoldingController extends Controller
             'price_spread_pct' => $hasCurrentPrice ? ($latestStoredPrice?->spread_pct ?? $holding->price_spread_pct) : null,
             'recent_prices' => $recentStoredPricePayload['prices'],
             'recent_prices_are_fallback' => $recentStoredPricePayload['are_fallback'],
-            'intraday_prices' => $includeCharts && $includeIntradayCharts ? $this->intradayPricePayload($holding) : [],
+            'intraday_prices' => $includeCharts
+                ? $this->intradayPricePayloadForChartRange($holding, $chartRange, $includeIntradayCharts)
+                : [],
             'intraday_candles' => $includeCharts && $includeIntradayCharts ? $this->intradayCandlePayload($holding) : [],
             'daily_prices' => $includeCharts ? $this->dailyPricePayload($holding) : [],
             'validation_errors' => $hasCurrentPrice ? ($latestStoredPrice?->validation_errors ?? []) : [],
@@ -505,6 +513,25 @@ class AdminDepotHoldingController extends Controller
     private function shouldIncludeIntradayCharts(?string $chartRange): bool
     {
         return $chartRange === null || in_array($chartRange, ['today', 'today-1'], true);
+    }
+
+    /**
+     * @return array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>
+     */
+    private function intradayPricePayloadForChartRange(
+        StockHolding $holding,
+        ?string $chartRange,
+        bool $includeIntradayCharts,
+    ): array {
+        if ($chartRange === '1w') {
+            return $this->weeklyIntradaySamplePayload($holding);
+        }
+
+        if (! $includeIntradayCharts) {
+            return [];
+        }
+
+        return $this->intradayPricePayload($holding);
     }
 
     /**
@@ -666,7 +693,9 @@ class AdminDepotHoldingController extends Controller
             ];
         }
 
-        $latestTradingDate = Carbon::parse($latestTradingDay)->toDateString();
+        $latestTradingDate = Carbon::parse($latestTradingDay, 'UTC')
+            ->setTimezone(config('app.timezone'))
+            ->toDateString();
 
         $latestTradingDayRealtimePriceModels = $holding->realtimePrices()
             ->whereNotNull('price')
@@ -705,17 +734,25 @@ class AdminDepotHoldingController extends Controller
         StockHolding $holding,
         Collection $recentRealtimePrices,
     ): ?StockRealtimePrice {
-        $latestTradingDate = $recentRealtimePrices
-            ->last()
-            ?->as_of
-            ?->toDateString();
+        $latestRealtimePrice = $recentRealtimePrices->last();
+        $latestTradingDate = $latestRealtimePrice
+            ? $this->storedStockPriceDateTime($latestRealtimePrice, 'as_of')
+                ?->setTimezone(config('app.timezone'))
+                ->toDateString()
+            : null;
 
         if ($latestTradingDate === null) {
             return null;
         }
 
         $hasPreviousTradingDate = $recentRealtimePrices
-            ->contains(fn (StockRealtimePrice $stockPrice): bool => $stockPrice->as_of?->toDateString() < $latestTradingDate);
+            ->contains(function (StockRealtimePrice $stockPrice) use ($latestTradingDate): bool {
+                $tradingDate = $this->storedStockPriceDateTime($stockPrice, 'as_of')
+                    ?->setTimezone(config('app.timezone'))
+                    ->toDateString();
+
+                return $tradingDate !== null && $tradingDate < $latestTradingDate;
+            });
 
         if ($hasPreviousTradingDate) {
             return null;
@@ -789,6 +826,122 @@ class AdminDepotHoldingController extends Controller
             $holding,
             Carbon::parse($latestStoredDate)->toDateString(),
         );
+    }
+
+    /**
+     * @return array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>
+     */
+    private function weeklyIntradaySamplePayload(StockHolding $holding): array
+    {
+        $latestDate = $this->latestWeeklyIntradaySampleDate($holding);
+
+        if ($latestDate === null) {
+            return [];
+        }
+
+        $startDate = Carbon::parse($latestDate)->subDays(7)->toDateString();
+        $sampledCandles = StockHoldingIntradayCandle::query()
+            ->where('stock_holding_id', $holding->id)
+            ->whereDate('trading_date', '>=', $startDate)
+            ->whereDate('trading_date', '<=', $latestDate)
+            ->where('interval', '5m')
+            ->where('source_key', 'eodhd_intraday')
+            ->whereNotNull('close')
+            ->orderBy('trading_date')
+            ->orderBy('as_of')
+            ->orderBy('id')
+            ->get(['id', 'trading_date', 'close', 'currency', 'as_of', 'timestamp', 'source_name'])
+            ->groupBy(fn (StockHoldingIntradayCandle $intradayCandle): string => $intradayCandle->trading_date->toDateString())
+            ->flatMap(fn (Collection $intradayCandles): Collection => $this->evenlySampleRows(
+                $intradayCandles,
+                self::WEEKLY_INTRADAY_SAMPLES_PER_DAY,
+            ))
+            ->values();
+        $sampledCandleDates = $sampledCandles
+            ->map(fn (StockHoldingIntradayCandle $intradayCandle): string => $intradayCandle->trading_date->toDateString())
+            ->unique()
+            ->values();
+        $sampledRealtimePrices = $holding->realtimePrices()
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->whereDate('as_of', '>=', $startDate)
+            ->whereDate('as_of', '<=', $latestDate)
+            ->orderBy('as_of')
+            ->orderBy('id')
+            ->get(['id', 'price', 'currency', 'as_of', 'source_name', 'price_type'])
+            ->groupBy(function (StockRealtimePrice $stockPrice): string {
+                return $this->storedStockPriceDateTime($stockPrice, 'as_of')
+                    ?->setTimezone(config('app.timezone'))
+                    ->toDateString() ?? '';
+            })
+            ->reject(fn (Collection $stockPrices, string $tradingDate): bool => $tradingDate === ''
+                || $sampledCandleDates->contains($tradingDate))
+            ->flatMap(fn (Collection $stockPrices): Collection => $this->evenlySampleRows(
+                $stockPrices,
+                self::WEEKLY_INTRADAY_SAMPLES_PER_DAY,
+            ))
+            ->values();
+
+        return $sampledCandles
+            ->map(fn (StockHoldingIntradayCandle $intradayCandle): array => [
+                'id' => $intradayCandle->id,
+                'price' => (string) $intradayCandle->close,
+                'currency' => $intradayCandle->currency,
+                'as_of' => $this->storedIntradayCandleTimestamp($intradayCandle),
+                'source_name' => $intradayCandle->source_name,
+                'price_type' => 'intraday',
+            ])
+            ->merge($sampledRealtimePrices->map(fn (StockRealtimePrice $stockPrice): array => [
+                'id' => $stockPrice->id,
+                'price' => (string) $stockPrice->price,
+                'currency' => $stockPrice->currency,
+                'as_of' => $this->storedStockPriceTimestamp($stockPrice, 'as_of'),
+                'source_name' => $stockPrice->source_name,
+                'price_type' => $stockPrice->price_type,
+            ]))
+            ->filter(fn (array $price): bool => $price['as_of'] !== null && $price['price'] !== '')
+            ->sortBy('as_of')
+            ->values()
+            ->all();
+    }
+
+    private function latestWeeklyIntradaySampleDate(StockHolding $holding): ?string
+    {
+        return collect([
+            StockHoldingDailyPrice::query()
+                ->where('stock_holding_id', $holding->id)
+                ->max('trading_date'),
+            $this->latestStoredIntradayDate($holding),
+            $this->latestRealtimeTradingDate($holding),
+        ])
+            ->filter()
+            ->map(fn (Carbon|string $date): string => Carbon::parse($date)->toDateString())
+            ->max();
+    }
+
+    /**
+     * @template TKey of array-key
+     * @template TValue
+     *
+     * @param  Collection<TKey, TValue>  $rows
+     * @return Collection<int, TValue>
+     */
+    private function evenlySampleRows(Collection $rows, int $sampleCount): Collection
+    {
+        $values = $rows->values();
+        $rowCount = $values->count();
+
+        if ($rowCount <= $sampleCount) {
+            return $values;
+        }
+
+        $lastIndex = $rowCount - 1;
+
+        return collect(range(0, $sampleCount - 1))
+            ->map(fn (int $index): mixed => $values->get((int) round(($index / ($sampleCount - 1)) * $lastIndex)))
+            ->filter()
+            ->unique(fn (mixed $row): mixed => $row->id ?? spl_object_id($row))
+            ->values();
     }
 
     /**
@@ -1032,12 +1185,12 @@ class AdminDepotHoldingController extends Controller
             ->orderBy('id')
             ->get(['price', 'as_of'])
             ->map(function (StockRealtimePrice $stockPrice): array {
-                $asOf = Carbon::parse($stockPrice->as_of)->utc();
+                $asOf = $this->storedStockPriceDateTime($stockPrice, 'as_of')?->utc();
 
                 return [
-                    'timestamp' => $asOf->timestamp,
+                    'timestamp' => $asOf?->timestamp,
                     'gmtoffset' => 0,
-                    'datetime' => $asOf->toDateTimeString(),
+                    'datetime' => $asOf?->toDateTimeString(),
                     'open' => null,
                     'high' => null,
                     'low' => null,
@@ -1226,7 +1379,9 @@ class AdminDepotHoldingController extends Controller
 
         return $latestTradingDay === null
             ? null
-            : Carbon::parse($latestTradingDay)->toDateString();
+            : Carbon::parse($latestTradingDay, 'UTC')
+                ->setTimezone(config('app.timezone'))
+                ->toDateString();
     }
 
     private function sourceDateTimePayload(?string $asOf, bool $hasCurrentPrice): ?string
@@ -1244,13 +1399,18 @@ class AdminDepotHoldingController extends Controller
 
     private function storedStockPriceTimestamp(StockPrice|StockRealtimePrice $stockPrice, string $column): ?string
     {
-        $value = $stockPrice->{$column};
+        return $this->storedStockPriceDateTime($stockPrice, $column)?->toIso8601String();
+    }
 
-        if ($value === null) {
+    private function storedStockPriceDateTime(StockPrice|StockRealtimePrice $stockPrice, string $column): ?Carbon
+    {
+        $value = $stockPrice->getRawOriginal($column);
+
+        if ($value === null || trim((string) $value) === '') {
             return null;
         }
 
-        return Carbon::parse($value)->toIso8601String();
+        return Carbon::parse((string) $value, 'UTC');
     }
 
     private function storedIntradayPriceTimestamp(StockHoldingIntradayPrice $intradayPrice): ?string

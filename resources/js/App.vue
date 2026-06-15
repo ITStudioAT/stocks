@@ -1303,23 +1303,45 @@ function analyzeOverviewChartSource(holding, rangeKey, windowOffset) {
     const intradayCandles = Array.isArray(holding?.intraday_candles) ? holding.intraday_candles : [];
     const intradayPrices = Array.isArray(holding?.intraday_prices) ? holding.intraday_prices : [];
     const recentPrices = Array.isArray(holding?.recent_prices) ? holding.recent_prices.filter(isRealtimePriceRow) : [];
-    const chartSources = isAnalyzeTodayRange(rangeKey)
-        ? [
-            { key: 'intraday_candles', prices: intradayCandles },
+    let chartSources = [
+        { key: 'daily_prices', prices: dailyPrices },
+        { key: 'intraday_candles', prices: intradayCandles },
+        { key: 'intraday_prices', prices: intradayPrices },
+        { key: 'realtime_prices', prices: recentPrices },
+    ];
+
+    if (rangeKey === '1w') {
+        chartSources = [
             { key: 'intraday_prices', prices: intradayPrices },
+            { key: 'intraday_candles', prices: intradayCandles },
             { key: 'realtime_prices', prices: recentPrices },
             { key: 'daily_prices', prices: dailyPrices },
-        ]
-        : [
-            { key: 'daily_prices', prices: dailyPrices },
-            { key: 'intraday_candles', prices: intradayCandles },
-            { key: 'intraday_prices', prices: intradayPrices },
-            { key: 'realtime_prices', prices: recentPrices },
         ];
+    }
+
+    if (isAnalyzeTodayRange(rangeKey)) {
+        chartSources = [
+            { key: 'realtime_prices', prices: recentPrices },
+            { key: 'intraday_candles', prices: intradayCandles },
+            { key: 'intraday_prices', prices: intradayPrices },
+            { key: 'daily_prices', prices: dailyPrices },
+        ];
+    }
+
     const chartSourceWindows = chartSources.map((source) => ({
         ...source,
         window: analyzeChartWindow(source.prices, rangeKey, windowOffset),
     }));
+
+    if (isAnalyzeTodayRange(rangeKey)) {
+        const realtimeChartSource = chartSourceWindows.find((source) => source.key === 'realtime_prices'
+            && hasAnalyzeChartPrices(source.window.prices));
+
+        if (realtimeChartSource) {
+            return realtimeChartSource;
+        }
+    }
+
     const sufficientChartSource = chartSourceWindows.find((source) => isSufficientAnalyzeChartWindow(source.window));
 
     if (sufficientChartSource) {
@@ -1383,7 +1405,7 @@ function selectedAnalyzeIntradayTradingDate(intradayPrices) {
         return null;
     }
 
-    const today = localDateKey(new Date());
+    const today = localDateKey(new Date(), displayTimeZone);
 
     if (tradingDates.includes(today)) {
         return today;
@@ -1407,15 +1429,19 @@ function intradayPriceTradingDate(intradayPrice) {
         return null;
     }
 
-    return localDateKey(date);
+    return localDateKey(date, displayTimeZone);
 }
 
-function localDateKey(date) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
+function localDateKey(date, timeZone = displayTimeZone) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).formatToParts(date);
+    const dateParts = Object.fromEntries(parts.map((part) => [part.type, part.value]));
 
-    return `${year}-${month}-${day}`;
+    return `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
 }
 const eodhdUsageItems = computed(() => {
     if (!eodhdApiUsage.value) {
@@ -4406,13 +4432,17 @@ function analyzeChartWindow(prices, rangeKey, windowOffset = 0) {
 }
 
 function analyzeTodayChartWindow(chartPrices, windowOffset) {
-    const tradingDates = [...new Set(chartPrices.map((price) => price.as_of.slice(0, 10)))].sort();
+    const priceDateKeys = chartPrices.map((price) => ({
+        ...price,
+        local_date_key: localDateKey(new Date(price.as_of), displayTimeZone),
+    }));
+    const tradingDates = [...new Set(priceDateKeys.map((price) => price.local_date_key))].sort();
     const maximumWindowOffset = Math.max(tradingDates.length - 1, 0);
     const currentWindowOffset = Math.min(windowOffset, maximumWindowOffset);
     const selectedTradingDate = tradingDates[tradingDates.length - 1 - currentWindowOffset];
 
     return {
-        prices: chartPrices.filter((price) => price.as_of.slice(0, 10) === selectedTradingDate),
+        prices: priceDateKeys.filter((price) => price.local_date_key === selectedTradingDate),
         canMoveBackward: currentWindowOffset < maximumWindowOffset,
         canMoveForward: currentWindowOffset > 0,
     };
@@ -4481,7 +4511,7 @@ function previousAnalyzeTradingClose(prices, currentPrices, rangeKey) {
         return null;
     }
 
-    const currentDate = currentPrices[0].as_of?.slice(0, 10);
+    const currentDate = currentPrices[0].local_date_key ?? localDateKey(new Date(currentPrices[0].as_of), displayTimeZone);
 
     if (!currentDate) {
         return null;
@@ -4492,8 +4522,9 @@ function previousAnalyzeTradingClose(prices, currentPrices, rangeKey) {
             ...price,
             trading_date: price.as_of,
             chart_price: analyzeDailyPriceValue(price),
+            local_date_key: localDateKey(new Date(price.as_of), displayTimeZone),
         }))
-        .filter((price) => price.as_of && price.as_of.slice(0, 10) < currentDate && !Number.isNaN(price.chart_price))
+        .filter((price) => price.as_of && price.local_date_key < currentDate && !Number.isNaN(price.chart_price))
         .sort((first, second) => first.as_of.localeCompare(second.as_of))
         .at(-1) ?? null;
 }
