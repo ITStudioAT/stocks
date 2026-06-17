@@ -4,8 +4,8 @@ namespace App\Services;
 
 use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\StockPriceRefreshRun;
+use Illuminate\Contracts\Queue\Factory as QueueFactory;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -264,7 +264,7 @@ class DepotHoldingPriceRefreshProgress
         $queue = (string) config("queue.connections.{$connection}.queue", 'default');
 
         try {
-            $queueConnection = Queue::connection($connection);
+            $queueConnection = app(QueueFactory::class)->connection($connection);
             $pending = method_exists($queueConnection, 'pendingSize')
                 ? $queueConnection->pendingSize($queue)
                 : $queueConnection->size($queue);

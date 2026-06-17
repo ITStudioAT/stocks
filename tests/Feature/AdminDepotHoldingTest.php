@@ -20,6 +20,7 @@ use App\Services\HistoricalSessionStartPriceFetchStatus;
 use App\Services\IndexWatchItemPriceRefresher;
 use App\Services\StockPriceCatalog;
 use App\Services\WebMarketData\DTO\QuoteSelectionResult;
+use Illuminate\Contracts\Queue\Factory as QueueFactory;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Carbon;
@@ -2279,7 +2280,6 @@ class AdminDepotHoldingTest extends TestCase
     public function test_stale_watchlist_price_refresh_without_a_queue_job_is_failed_when_polled(): void
     {
         config(['queue.default' => 'database']);
-        app('queue')->forgetDrivers();
 
         $admin = $this->adminUser();
         $this->travelTo(Carbon::parse('2026-06-17 12:00:00', 'UTC'));
@@ -2289,13 +2289,16 @@ class AdminDepotHoldingTest extends TestCase
             'status' => 'running',
             'total_count' => 9,
             'processed_count' => 0,
-            'started_at' => now()->subMinutes(20),
             'finished_at' => null,
         ]);
+        $run->update(['started_at' => now()->subHours(3)]);
 
         $progress = app(DepotHoldingPriceRefreshProgress::class);
         $progress->start($run->id, 9);
         $progress->markRunning($run->id);
+
+        $this->assertTrue($run->refresh()->started_at->lessThan(now()->subSeconds(660)));
+        $this->assertSame(0, app(QueueFactory::class)->connection('database')->size('default'));
 
         $this->actingAs($admin)
             ->getJson("/admin/watchlist/holdings/refresh-prices/{$run->id}")
