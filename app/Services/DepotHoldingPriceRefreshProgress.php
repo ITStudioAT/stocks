@@ -2,8 +2,12 @@
 
 namespace App\Services;
 
+use App\Jobs\RefreshDepotHoldingPrices;
+use App\Models\StockPriceRefreshRun;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Str;
+use Throwable;
 
 class DepotHoldingPriceRefreshProgress
 {
@@ -36,6 +40,41 @@ class DepotHoldingPriceRefreshProgress
         $payload = Cache::get($this->key($refreshId));
 
         return is_array($payload) ? $payload : null;
+    }
+
+    /**
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
+     */
+    public function getStored(string $refreshId): ?array
+    {
+        $progress = $this->get($refreshId);
+        $run = StockPriceRefreshRun::query()->find($refreshId);
+
+        if (! $run) {
+            return $progress;
+        }
+
+        if ($this->hasCompletedRun($run)) {
+            return $this->progressFromRun($run);
+        }
+
+        if ($this->hasProcessedAllItems($run)) {
+            $this->finishStoredRun($run);
+
+            return $this->put((string) $run->id, $this->progressFromRun($run->refresh()));
+        }
+
+        if ($this->isOrphaned($run)) {
+            $this->failStoredRun($run);
+
+            return $this->put((string) $run->id, $this->progressFromRun($run->refresh()));
+        }
+
+        if ($progress !== null) {
+            return $progress;
+        }
+
+        return $this->progressFromRun($run);
     }
 
     /**
@@ -123,6 +162,119 @@ class DepotHoldingPriceRefreshProgress
         Cache::put($this->key($refreshId), $payload, now()->addHours(2));
 
         return $payload;
+    }
+
+    /**
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}
+     */
+    private function progressFromRun(StockPriceRefreshRun $run): array
+    {
+        return [
+            'refresh_id' => (string) $run->id,
+            'status' => $run->status,
+            'processed' => $run->processed_count,
+            'total' => $run->total_count,
+            'step' => "{$run->processed_count}/{$run->total_count}",
+            'message' => $this->messageFromRun($run),
+            'current' => null,
+            'started_at' => $run->started_at?->toIso8601String() ?? now()->toIso8601String(),
+            'finished_at' => $run->finished_at?->toIso8601String(),
+            'error' => is_array($run->error_summary) ? ($run->error_summary['message'] ?? null) : null,
+        ];
+    }
+
+    private function messageFromRun(StockPriceRefreshRun $run): string
+    {
+        if ($run->status === 'queued') {
+            return trans_choice('{1} 1 price queued for refresh.|[2,*] :count prices queued for refresh.', $run->total_count);
+        }
+
+        if ($run->status === 'running') {
+            return "Refreshing prices ({$run->processed_count}/{$run->total_count})...";
+        }
+
+        if ($run->status === 'failed') {
+            return 'Price refresh failed.';
+        }
+
+        return trans_choice('{0} No prices refreshed.|{1} 1 price refreshed.|[2,*] :count prices refreshed.', $run->processed_count);
+    }
+
+    private function hasCompletedRun(StockPriceRefreshRun $run): bool
+    {
+        return ! in_array($run->status, ['queued', 'running'], true) || $run->finished_at !== null;
+    }
+
+    private function hasProcessedAllItems(StockPriceRefreshRun $run): bool
+    {
+        return $run->total_count > 0 && $run->processed_count >= $run->total_count;
+    }
+
+    private function finishStoredRun(StockPriceRefreshRun $run): void
+    {
+        $run->update([
+            'status' => $this->completedRunStatus($run),
+            'finished_at' => now(),
+        ]);
+    }
+
+    private function failStoredRun(StockPriceRefreshRun $run): void
+    {
+        $run->update([
+            'status' => 'failed',
+            'finished_at' => now(),
+            'error_summary' => [
+                'message' => 'Price refresh stopped because no queued or running job was found.',
+            ],
+        ]);
+    }
+
+    private function completedRunStatus(StockPriceRefreshRun $run): string
+    {
+        if ($run->success_count === $run->total_count) {
+            return 'finished';
+        }
+
+        if ($run->success_count > 0 || $run->suspicious_count > 0 || $run->stale_count > 0) {
+            return 'partial';
+        }
+
+        return 'failed';
+    }
+
+    private function isOrphaned(StockPriceRefreshRun $run): bool
+    {
+        $lastActivityAt = $run->started_at ?? $run->created_at;
+
+        if ($lastActivityAt === null || $lastActivityAt->greaterThan(now()->subSeconds($this->orphanedAfterSeconds()))) {
+            return false;
+        }
+
+        return $this->queueIsEmpty();
+    }
+
+    private function orphanedAfterSeconds(): int
+    {
+        return (new RefreshDepotHoldingPrices('orphan-check'))->timeout + 60;
+    }
+
+    private function queueIsEmpty(): bool
+    {
+        $connection = (string) config('queue.default');
+        $queue = (string) config("queue.connections.{$connection}.queue", 'default');
+
+        try {
+            $queueConnection = Queue::connection($connection);
+            $pending = method_exists($queueConnection, 'pendingSize')
+                ? $queueConnection->pendingSize($queue)
+                : $queueConnection->size($queue);
+            $delayed = method_exists($queueConnection, 'delayedSize') ? $queueConnection->delayedSize($queue) : 0;
+            $reserved = method_exists($queueConnection, 'reservedSize') ? $queueConnection->reservedSize($queue) : 0;
+        } catch (Throwable) {
+            return false;
+        }
+
+        return ((int) $pending + (int) $delayed + (int) $reserved) === 0;
     }
 
     private function key(string $refreshId): string

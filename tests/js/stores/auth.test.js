@@ -5,6 +5,7 @@ import { request, useAuthStore } from '../../../resources/js/stores/auth';
 function jsonResponse(data, options = {}) {
     return {
         ok: options.ok ?? true,
+        status: options.status ?? 200,
         json: () => Promise.resolve(data),
     };
 }
@@ -41,9 +42,15 @@ describe('request', () => {
             errors: {
                 email: ['The email field is required.'],
             },
-        }, { ok: false })));
+        }, {
+            ok: false,
+            status: 422,
+        })));
 
-        await expect(request('/admin/login-code')).rejects.toThrow('The email field is required.');
+        await expect(request('/admin/login-code')).rejects.toMatchObject({
+            message: 'The email field is required.',
+            status: 422,
+        });
     });
 });
 

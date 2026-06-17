@@ -5,6 +5,7 @@ import { useDepotStore } from '../../../resources/js/stores/depots';
 function jsonResponse(data, options = {}) {
     return {
         ok: options.ok ?? true,
+        status: options.status ?? 200,
         json: () => Promise.resolve(data),
     };
 }
@@ -51,5 +52,38 @@ describe('useDepotStore', () => {
         expect(depots.priceRefreshSettings.status).toBe('updating');
         expect(depots.indexPriceRefreshSettings.status).toBe('updating');
         expect(depots.indexPriceRefreshSettings.status_label).toBe('Updating prices');
+    });
+
+    it('clears stale watchlist price refresh polling without storing an error', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+            message: 'Price refresh not found.',
+        }, {
+            ok: false,
+            status: 404,
+        }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const depots = useDepotStore();
+        depots.priceRefresh = {
+            refresh_id: 'missing-refresh',
+            status: 'running',
+            processed: 0,
+            total: 2,
+            step: '0/2',
+        };
+
+        const data = await depots.loadWatchlistPriceRefresh('missing-refresh');
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/admin/watchlist/holdings/refresh-prices/missing-refresh',
+            expect.any(Object),
+        );
+        expect(data).toEqual({
+            message: '',
+            refresh: null,
+            stale: true,
+        });
+        expect(depots.priceRefresh).toBeNull();
+        expect(depots.holdingsError).toBe('');
     });
 });

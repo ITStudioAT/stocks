@@ -264,7 +264,7 @@ class AdminDepotHoldingController extends Controller
 
     public function refreshPriceStatus(string $refreshId, DepotHoldingPriceRefreshProgress $refreshProgress): JsonResponse
     {
-        $progress = $refreshProgress->get($refreshId);
+        $progress = $refreshProgress->getStored($refreshId);
 
         if ($progress === null) {
             return response()->json([

@@ -3812,6 +3812,14 @@ async function pollPriceRefreshStatus(refreshId) {
         const data = await depotsStore.loadWatchlistPriceRefresh(refreshId);
         holdingMessage.value = data.message;
 
+        if (!data.refresh) {
+            stopPriceRefreshPolling();
+            holdingMessage.value = '';
+            holdingError.value = '';
+
+            return;
+        }
+
         if (isFinishedPriceRefresh(data.refresh)) {
             await finishPriceRefresh(data.refresh);
         }

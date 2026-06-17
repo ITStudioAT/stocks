@@ -11,6 +11,7 @@ use App\Models\StockHoldingDailyPrice;
 use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockHoldingIntradayPrice;
 use App\Models\StockPrice;
+use App\Models\StockPriceRefreshRun;
 use App\Models\StockRealtimePrice;
 use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
@@ -2246,6 +2247,111 @@ class AdminDepotHoldingTest extends TestCase
             'id' => $thirdHolding->id,
             'latest_price' => '300.000000',
         ]);
+    }
+
+    public function test_admin_can_poll_watchlist_price_refresh_after_progress_cache_expires(): void
+    {
+        Queue::fake();
+        $admin = $this->adminUser();
+        StockHolding::factory()->count(2)->create();
+
+        $response = $this->actingAs($admin)
+            ->postJson('/admin/watchlist/holdings/refresh-prices')
+            ->assertAccepted();
+
+        $refreshId = $response->json('refresh.refresh_id');
+
+        Cache::forget("depot-holding-price-refresh:{$refreshId}");
+
+        $this->assertTrue(StockPriceRefreshRun::query()->whereKey($refreshId)->exists());
+
+        $this->actingAs($admin)
+            ->getJson("/admin/watchlist/holdings/refresh-prices/{$refreshId}")
+            ->assertOk()
+            ->assertJsonPath('message', '2 prices queued for refresh.')
+            ->assertJsonPath('refresh.refresh_id', $refreshId)
+            ->assertJsonPath('refresh.status', 'queued')
+            ->assertJsonPath('refresh.processed', 0)
+            ->assertJsonPath('refresh.total', 2)
+            ->assertJsonPath('refresh.step', '0/2');
+    }
+
+    public function test_stale_watchlist_price_refresh_without_a_queue_job_is_failed_when_polled(): void
+    {
+        config(['queue.default' => 'database']);
+        app('queue')->forgetDrivers();
+
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-17 12:00:00', 'UTC'));
+
+        $run = StockPriceRefreshRun::query()->create([
+            'id' => 'orphaned-refresh',
+            'status' => 'running',
+            'total_count' => 9,
+            'processed_count' => 0,
+            'started_at' => now()->subMinutes(20),
+            'finished_at' => null,
+        ]);
+
+        $progress = app(DepotHoldingPriceRefreshProgress::class);
+        $progress->start($run->id, 9);
+        $progress->markRunning($run->id);
+
+        $this->actingAs($admin)
+            ->getJson("/admin/watchlist/holdings/refresh-prices/{$run->id}")
+            ->assertOk()
+            ->assertJsonPath('message', 'Price refresh failed.')
+            ->assertJsonPath('refresh.refresh_id', $run->id)
+            ->assertJsonPath('refresh.status', 'failed')
+            ->assertJsonPath('refresh.processed', 0)
+            ->assertJsonPath('refresh.total', 9)
+            ->assertJsonPath('refresh.step', '0/9')
+            ->assertJsonPath('refresh.error', 'Price refresh stopped because no queued or running job was found.');
+
+        $this->assertDatabaseHas('stock_price_refresh_runs', [
+            'id' => $run->id,
+            'status' => 'failed',
+            'processed_count' => 0,
+        ]);
+        $this->assertNotNull($run->refresh()->finished_at);
+    }
+
+    public function test_watchlist_price_refresh_that_processed_all_items_is_completed_when_polled(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-17 12:00:00', 'UTC'));
+
+        $run = StockPriceRefreshRun::query()->create([
+            'id' => 'processed-refresh',
+            'status' => 'running',
+            'total_count' => 2,
+            'processed_count' => 2,
+            'success_count' => 1,
+            'stale_count' => 1,
+            'started_at' => now()->subMinute(),
+            'finished_at' => null,
+        ]);
+
+        $progress = app(DepotHoldingPriceRefreshProgress::class);
+        $progress->start($run->id, 2);
+        $progress->markRunning($run->id);
+
+        $this->actingAs($admin)
+            ->getJson("/admin/watchlist/holdings/refresh-prices/{$run->id}")
+            ->assertOk()
+            ->assertJsonPath('message', '2 prices refreshed.')
+            ->assertJsonPath('refresh.refresh_id', $run->id)
+            ->assertJsonPath('refresh.status', 'partial')
+            ->assertJsonPath('refresh.processed', 2)
+            ->assertJsonPath('refresh.total', 2)
+            ->assertJsonPath('refresh.step', '2/2');
+
+        $this->assertDatabaseHas('stock_price_refresh_runs', [
+            'id' => $run->id,
+            'status' => 'partial',
+            'processed_count' => 2,
+        ]);
+        $this->assertNotNull($run->refresh()->finished_at);
     }
 
     public function test_admin_can_queue_watchlist_price_refreshes_without_an_active_depot(): void

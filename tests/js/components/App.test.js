@@ -80,9 +80,10 @@ function ndjsonResponse(events) {
     };
 }
 
-function failedJsonResponse(data = {}) {
+function failedJsonResponse(data = {}, options = {}) {
     return {
         ok: false,
+        status: options.status ?? 500,
         json: () => Promise.resolve(data),
     };
 }

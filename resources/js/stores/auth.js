@@ -18,7 +18,11 @@ export async function request(path, options = {}) {
 
     if (!response.ok) {
         const message = data.message ?? Object.values(data.errors ?? {})?.[0]?.[0] ?? 'The request failed.';
-        throw new Error(message);
+        const error = new Error(message);
+        error.status = response.status;
+        error.data = data;
+
+        throw error;
     }
 
     return data;

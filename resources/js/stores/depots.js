@@ -589,6 +589,16 @@ export const useDepotStore = defineStore('depots', {
 
                 return data;
             } catch (error) {
+                if (error.status === 404 && error.message === 'Price refresh not found.') {
+                    this.priceRefresh = null;
+
+                    return {
+                        message: '',
+                        refresh: null,
+                        stale: true,
+                    };
+                }
+
                 this.holdingsError = error.message;
                 throw error;
             }
