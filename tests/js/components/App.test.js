@@ -5401,6 +5401,7 @@ describe('App', () => {
             account_balance: '1000.00',
             is_active: true,
         };
+        let cashTransactionBooked = false;
         const fetchMock = vi.fn((path, options) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -5424,7 +5425,63 @@ describe('App', () => {
             }
 
             if (path === '/admin/depot-transactions') {
-                return Promise.resolve(jsonResponse({ transactions: [] }));
+                return Promise.resolve(jsonResponse(cashTransactionBooked
+                    ? {
+                        depot_holdings: [],
+                        depot_valuations: {
+                            latest: {
+                                stock_balance: '0.00',
+                                cash_balance: '1250.00',
+                                account_balance: '1250.00',
+                                year_start_balance: '1250.00',
+                                current_balance: '1250.00',
+                                balance_change_amount: '0.00',
+                                balance_change_percent: '0.00',
+                                taxable_stock_gain_amount: '0.00',
+                                one_week_start_balance: '1250.00',
+                                one_week_change_amount: '0.00',
+                                one_week_change_percent: '0.00',
+                            },
+                            flatex: {
+                                stock_balance: '0.00',
+                                cash_balance: '1250.00',
+                                account_balance: '1250.00',
+                                year_start_balance: '1250.00',
+                                current_balance: '1250.00',
+                                balance_change_amount: '0.00',
+                                balance_change_percent: '0.00',
+                                taxable_stock_gain_amount: '0.00',
+                                one_week_start_balance: '1250.00',
+                                one_week_change_amount: '0.00',
+                                one_week_change_percent: '0.00',
+                            },
+                        },
+                        depot_performance_series: [
+                            {
+                                date: '2026-01-01',
+                                stock_balance: '0.00',
+                                cash_balance: '1250.00',
+                                account_balance: '1250.00',
+                            },
+                        ],
+                        transactions: [
+                            {
+                                id: 1,
+                                type: 'deposit',
+                                stock_holding_id: null,
+                                stock_label: null,
+                                stock_isin: null,
+                                pieces: null,
+                                total_amount: '250.00',
+                                unit_price: null,
+                                cash_delta: '250.00',
+                                balance_after: '1250.00',
+                                booked_at: '2026-06-05T00:00:00+00:00',
+                                note: null,
+                            },
+                        ],
+                    }
+                    : { transactions: [] }));
             }
 
             if (path.startsWith('/admin/watchlist/holdings?page=1')) {
@@ -5457,6 +5514,8 @@ describe('App', () => {
             }
 
             if (path === '/admin/depot-transactions/cash' && options?.method === 'POST') {
+                cashTransactionBooked = true;
+
                 return Promise.resolve(jsonResponse({
                     message: 'Cash transaction booked.',
                     depot: {
@@ -5503,6 +5562,8 @@ describe('App', () => {
                 note: null,
             }),
         }));
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depot-transactions')).toHaveLength(2);
+        expect(wrapper.text()).toContain('1,250.00 EUR');
     });
 
     it('books stock transaction from the dashboard', async () => {
@@ -5667,7 +5728,7 @@ describe('App', () => {
                 cash_delta: '-350.00',
                 balance_after: '650.00',
                 booked_at: '2026-06-04T10:00:00+00:00',
-                note: null,
+                note: 'Broker buy confirmation',
             },
             {
                 id: 1,
@@ -6021,6 +6082,10 @@ describe('App', () => {
         expect(cashLedgerHeaders).toContain('Cash effect');
         expect(cashLedgerHeaders).toContain('Balance');
         expect(wrapper.find('.desktop-cash-ledger-table tbody tr').text()).toContain('US0378331005');
+        expect(wrapper.find('.desktop-cash-ledger-table tbody tr').text()).toContain('Broker buy confirmation');
+        expect(wrapper.find('.desktop-cash-ledger-table tbody').text()).toContain('Initial funding');
+        const cashLedgerRows = wrapper.findAll('.desktop-cash-ledger-table tbody tr');
+        expect(cashLedgerRows[1].findAll('td')[2].text()).toBe('Initial funding');
         const mobileCashLedgerCards = wrapper.findAll('.mobile-cash-ledger-card');
         expect(mobileCashLedgerCards).toHaveLength(2);
         expect(mobileCashLedgerCards[0].text()).toContain('Buy');
@@ -6029,6 +6094,7 @@ describe('App', () => {
         expect(mobileCashLedgerCards[0].find('.mobile-cash-ledger-row').text()).not.toContain('350.00');
         expect(mobileCashLedgerCards[0].find('.mobile-cash-ledger-stock').text()).toContain('Apple Inc.');
         expect(mobileCashLedgerCards[0].find('.cash-ledger-stock-isin').text()).toBe('US0378331005');
+        expect(mobileCashLedgerCards[0].find('.cash-ledger-note').text()).toBe('Broker buy confirmation');
         expect(mobileCashLedgerCards[0].text()).toContain('-350.00');
         expect(mobileCashLedgerCards[0].text()).toContain('650.00');
         expect(mobileCashLedgerCards[1].text()).toContain('Add cash');
@@ -6036,6 +6102,7 @@ describe('App', () => {
         expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-row').text()).not.toContain('11:00');
         expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-row').text()).not.toContain('1,000.00');
         expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-stock').exists()).toBe(false);
+        expect(mobileCashLedgerCards[1].find('.cash-ledger-note').text()).toBe('Initial funding');
         expect(mobileCashLedgerCards[1].text()).toContain('+1,000.00');
         const desktopDateInput = wrapper.find('#transaction-date-desktop-2');
         desktopDateInput.element.value = '2026-06-03';

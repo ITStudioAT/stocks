@@ -11892,6 +11892,9 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         <div>{{ tx.stock_label }}</div>
                                         <div v-if="tx.stock_isin" class="cash-ledger-stock-isin">{{ tx.stock_isin }}</div>
                                     </div>
+                                    <div v-if="tx.note" class="cash-ledger-note">
+                                        {{ tx.note }}
+                                    </div>
                                     <div class="mobile-cash-ledger-row">
                                         <span :class="Number(tx.cash_delta) >= 0 ? 'text-success' : 'text-error'">
                                             {{ formatCashDelta(tx.cash_delta) }}
@@ -11943,8 +11946,10 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             </v-chip>
                                         </td>
                                         <td>
-                                            <div>{{ tx.stock_label ?? '–' }}</div>
+                                            <div v-if="tx.stock_label">{{ tx.stock_label }}</div>
+                                            <div v-else-if="!tx.note">–</div>
                                             <div v-if="tx.stock_isin" class="cash-ledger-stock-isin">{{ tx.stock_isin }}</div>
+                                            <div v-if="tx.note" class="cash-ledger-note">{{ tx.note }}</div>
                                         </td>
                                         <td class="text-right">{{ tx.pieces != null ? Math.trunc(Number(tx.pieces)) : '–' }}</td>
                                         <td class="text-right" :class="Number(tx.cash_delta) >= 0 ? 'text-success' : 'text-error'">
@@ -12872,6 +12877,14 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     font-weight: 400;
     line-height: 1.2;
     margin-top: 2px;
+}
+
+.cash-ledger-note {
+    color: rgba(var(--v-theme-on-surface), 0.72);
+    font-size: 0.82rem;
+    line-height: 1.35;
+    margin-top: 4px;
+    overflow-wrap: anywhere;
 }
 
 @media (max-width: 600px) {

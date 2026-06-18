@@ -841,10 +841,7 @@ export const useDepotStore = defineStore('depots', {
                     body: JSON.stringify(payload),
                 });
                 this.activeDepot = data.depot;
-                this.depotHoldings = data.depot_holdings ?? this.depotHoldings;
-                this.depotValuations = data.depot_valuations ?? this.depotValuations;
-                this.depotPerformanceSeries = data.depot_performance_series ?? this.depotPerformanceSeries;
-                this.transactions = [data.transaction, ...this.transactions];
+                await this.loadTransactions();
 
                 return data;
             } catch (error) {

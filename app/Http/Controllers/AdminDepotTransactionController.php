@@ -537,7 +537,8 @@ class AdminDepotTransactionController extends Controller
         $cashBalance = (float) $depot->account_balance;
         $yearStartCutoff = now()->startOfYear()->endOfDay();
         $yearStartBalance = $this->cashBalanceAt($depot, $yearStartCutoff)
-            + $this->stockBalanceAt($depot, $yearStartCutoff);
+            + $this->stockBalanceAt($depot, $yearStartCutoff)
+            + $this->cashFlowAfter($depot, $yearStartCutoff);
         $currentBalance = $cashBalance + $stockBalance;
         $oneWeekStartCutoff = now()->subWeek()->endOfDay();
         $oneWeekStartBalance = $this->cashBalanceAt($depot, $oneWeekStartCutoff)
@@ -569,12 +570,21 @@ class AdminDepotTransactionController extends Controller
 
     private function cashBalanceAt(Depot $depot, Carbon $cutoff): float
     {
-        return (float) (DepotTransaction::query()
+        return (float) DepotTransaction::query()
             ->where('depot_id', $depot->id)
             ->where('booked_at', '<=', $cutoff)
-            ->latest('booked_at')
-            ->latest('id')
-            ->value('balance_after') ?? 0);
+            ->sum('cash_delta');
+    }
+
+    private function cashFlowAfter(Depot $depot, Carbon $cutoff): float
+    {
+        return (float) DepotTransaction::query()
+            ->where('depot_id', $depot->id)
+            ->whereNull('stock_holding_id')
+            ->whereIn('type', ['deposit', 'withdrawal'])
+            ->where('booked_at', '>', $cutoff)
+            ->where('booked_at', '<=', now()->endOfDay())
+            ->sum('cash_delta');
     }
 
     private function stockBalanceAt(Depot $depot, Carbon $cutoff): float
@@ -649,7 +659,7 @@ class AdminDepotTransactionController extends Controller
             ->where('booked_at', '<=', $today->copy()->endOfDay())
             ->orderBy('booked_at')
             ->orderBy('id')
-            ->get(['id', 'stock_holding_id', 'type', 'pieces', 'total_amount', 'balance_after', 'booked_at']);
+            ->get(['id', 'stock_holding_id', 'type', 'pieces', 'total_amount', 'cash_delta', 'balance_after', 'booked_at']);
         $stockTransactionsByHoldingId = $transactions
             ->whereNotNull('stock_holding_id')
             ->whereIn('type', ['buy', 'sell'])
@@ -707,11 +717,9 @@ class AdminDepotTransactionController extends Controller
      */
     private function cashBalanceFromTransactions(Collection $transactions, Carbon $cutoff): float
     {
-        $latestTransaction = $transactions
+        return (float) $transactions
             ->filter(fn (DepotTransaction $transaction): bool => $transaction->booked_at?->lte($cutoff) ?? false)
-            ->last();
-
-        return (float) ($latestTransaction?->balance_after ?? 0);
+            ->sum(fn (DepotTransaction $transaction): float => (float) $transaction->cash_delta);
     }
 
     /**

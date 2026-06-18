@@ -395,14 +395,14 @@ class DepotTransactionTest extends TestCase
         }
     }
 
-    public function test_cash_only_balance_increase_has_no_taxable_stock_gain(): void
+    public function test_cash_only_movements_adjust_the_year_start_balance(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-15 12:00:00', 'UTC'));
 
         try {
             $admin = $this->adminUser();
             $depot = Depot::factory()->create([
-                'account_balance' => '84664.35',
+                'account_balance' => '84464.35',
                 'is_active' => true,
             ]);
             DepotTransaction::factory()->create([
@@ -427,15 +427,26 @@ class DepotTransactionTest extends TestCase
                 'balance_after' => '84664.35',
                 'booked_at' => '2026-06-15 00:00:00',
             ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => null,
+                'type' => 'withdrawal',
+                'pieces' => null,
+                'total_amount' => '200.00',
+                'unit_price' => null,
+                'cash_delta' => '-200.00',
+                'balance_after' => '84464.35',
+                'booked_at' => '2026-06-15 01:00:00',
+            ]);
 
             $this->actingAs($admin)
                 ->getJson('/admin/depot-transactions')
                 ->assertOk()
                 ->assertJsonCount(0, 'depot_holdings')
-                ->assertJsonPath('depot_valuations.latest.year_start_balance', '83236.56')
-                ->assertJsonPath('depot_valuations.latest.current_balance', '84664.35')
-                ->assertJsonPath('depot_valuations.latest.balance_change_amount', '1427.79')
-                ->assertJsonPath('depot_valuations.latest.balance_change_percent', '1.72')
+                ->assertJsonPath('depot_valuations.latest.year_start_balance', '84464.35')
+                ->assertJsonPath('depot_valuations.latest.current_balance', '84464.35')
+                ->assertJsonPath('depot_valuations.latest.balance_change_amount', '0.00')
+                ->assertJsonPath('depot_valuations.latest.balance_change_percent', '0.00')
                 ->assertJsonPath('depot_valuations.latest.taxable_stock_gain_amount', '0.00');
         } finally {
             Carbon::setTestNow();
@@ -449,7 +460,7 @@ class DepotTransactionTest extends TestCase
         try {
             $admin = $this->adminUser();
             $depot = Depot::factory()->create([
-                'account_balance' => '800.00',
+                'account_balance' => '955.00',
                 'is_active' => true,
             ]);
             $holding = StockHolding::factory()->create([
@@ -479,6 +490,17 @@ class DepotTransactionTest extends TestCase
                 'balance_after' => '800.00',
                 'booked_at' => '2026-02-01 00:00:00',
             ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => null,
+                'type' => 'deposit',
+                'pieces' => null,
+                'total_amount' => '155.00',
+                'unit_price' => null,
+                'cash_delta' => '155.00',
+                'balance_after' => '500.00',
+                'booked_at' => '2026-06-10 00:00:00',
+            ]);
             StockHoldingDailyPrice::factory()->create([
                 'stock_holding_id' => $holding->id,
                 'trading_date' => '2026-02-01',
@@ -494,14 +516,17 @@ class DepotTransactionTest extends TestCase
 
             $series = collect($response->json('depot_performance_series'));
             $februaryFirstPoint = $series->firstWhere('date', '2026-02-01');
+            $juneTenthPoint = $series->firstWhere('date', '2026-06-10');
             $latestPoint = $series->last();
 
             $this->assertSame('240.00', $februaryFirstPoint['stock_balance']);
             $this->assertSame('800.00', $februaryFirstPoint['cash_balance']);
             $this->assertSame('1040.00', $februaryFirstPoint['account_balance']);
+            $this->assertSame('955.00', $juneTenthPoint['cash_balance']);
+            $this->assertSame('1195.00', $juneTenthPoint['account_balance']);
             $this->assertSame('2026-06-13', $latestPoint['date']);
             $this->assertSame('300.00', $latestPoint['stock_balance']);
-            $this->assertSame('1100.00', $latestPoint['account_balance']);
+            $this->assertSame('1255.00', $latestPoint['account_balance']);
         } finally {
             Carbon::setTestNow();
         }
