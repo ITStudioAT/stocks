@@ -5565,6 +5565,8 @@ describe('App', () => {
         await addCashButton.trigger('click');
         await flushPromises();
 
+        expect(document.body.textContent).toContain('Related stock / ISIN');
+
         const cashAmountInput = document.body.querySelector('#cash-transaction-form input[type="number"]');
         cashAmountInput.value = '250';
         cashAmountInput.dispatchEvent(new Event('input', { bubbles: true }));
@@ -5578,6 +5580,7 @@ describe('App', () => {
             method: 'POST',
             body: JSON.stringify({
                 type: 'deposit',
+                stock_holding_id: null,
                 total_amount: 250,
                 booked_at: '2026-06-05',
                 note: null,
@@ -5794,6 +5797,16 @@ describe('App', () => {
                 balance_change_amount: '33.00',
                 balance_change_percent: '3.30',
                 taxable_stock_gain_amount: '33.00',
+                balance_change_with_broker_bonus_amount: '33.00',
+                balance_change_with_broker_bonus_percent: '3.30',
+                opening_balance: '0.00',
+                total_deposits: '1000.00',
+                total_withdrawals: '0.00',
+                dividend_amount: '0.00',
+                interest_amount: '0.00',
+                fee_amount: '0.00',
+                tax_amount: '0.00',
+                broker_bonus_amount: '0.00',
                 month_start_balance: '1000.00',
                 month_change_amount: '33.00',
                 month_change_percent: '3.30',
@@ -5810,6 +5823,16 @@ describe('App', () => {
                 balance_change_amount: '10.00',
                 balance_change_percent: '1.00',
                 taxable_stock_gain_amount: '10.00',
+                balance_change_with_broker_bonus_amount: '10.00',
+                balance_change_with_broker_bonus_percent: '1.00',
+                opening_balance: '0.00',
+                total_deposits: '1000.00',
+                total_withdrawals: '0.00',
+                dividend_amount: '0.00',
+                interest_amount: '0.00',
+                fee_amount: '0.00',
+                tax_amount: '0.00',
+                broker_bonus_amount: '0.00',
                 month_start_balance: '1000.00',
                 month_change_amount: '10.00',
                 month_change_percent: '1.00',
@@ -5909,6 +5932,16 @@ describe('App', () => {
                         balance_change_amount: '10.50',
                         balance_change_percent: '1.05',
                         taxable_stock_gain_amount: '10.50',
+                        balance_change_with_broker_bonus_amount: '10.50',
+                        balance_change_with_broker_bonus_percent: '1.05',
+                        opening_balance: '0.00',
+                        total_deposits: '1000.00',
+                        total_withdrawals: '0.00',
+                        dividend_amount: '0.00',
+                        interest_amount: '0.00',
+                        fee_amount: '0.00',
+                        tax_amount: '0.00',
+                        broker_bonus_amount: '0.00',
                         month_start_balance: '1000.00',
                         month_change_amount: '10.50',
                         month_change_percent: '1.05',
@@ -5989,6 +6022,7 @@ describe('App', () => {
         expect(wrapper.text()).toContain('+3.30% · +33.00 EUR');
         expect(wrapper.findAll('.depot-balance-card')).toHaveLength(4);
         expect(wrapper.find('.depot-balance-card tbody td:nth-child(2)').classes()).toContain('text-right');
+        expect(wrapper.find('.depot-cashflow-card').exists()).toBe(false);
         expect(wrapper.text()).toContain('Depot performance');
         expect(wrapper.text()).toContain('01.01 to now');
         expect(wrapper.text()).toContain('01.01.2026 1,000.00 EUR');
@@ -6130,7 +6164,7 @@ describe('App', () => {
         expect(mobileCashLedgerCards[0].find('.cash-ledger-note').text()).toBe('Broker buy confirmation');
         expect(mobileCashLedgerCards[0].text()).toContain('-350.00');
         expect(mobileCashLedgerCards[0].text()).toContain('650.00');
-        expect(mobileCashLedgerCards[1].text()).toContain('Add cash');
+        expect(mobileCashLedgerCards[1].text()).toContain('Deposit');
         expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-row').text()).toContain('04.06.2026');
         expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-row').text()).not.toContain('11:00');
         expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-row').text()).not.toContain('1,000.00');
@@ -6205,7 +6239,7 @@ describe('App', () => {
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings/1/flatex-price')).toHaveLength(1);
     });
 
-    it('shows the cash ledger below the performance chart and paginates it by ten rows', async () => {
+    it('shows the cash ledger below the performance chart and paginates it by twenty rows', async () => {
         window.history.pushState({}, '', '/admin/menu/depot');
         const depot = {
             id: 1,
@@ -6229,7 +6263,7 @@ describe('App', () => {
             one_week_change_amount: '0.00',
             one_week_change_percent: '0.00',
         };
-        const ledgerTransactions = Array.from({ length: 11 }, (_, transactionIndex) => ({
+        const ledgerTransactions = Array.from({ length: 21 }, (_, transactionIndex) => ({
             id: transactionIndex + 1,
             type: 'deposit',
             stock_holding_id: null,
@@ -6240,7 +6274,7 @@ describe('App', () => {
             unit_price: null,
             cash_delta: '10.00',
             balance_after: String(1000 + transactionIndex * 10),
-            booked_at: `2026-06-${String(11 - transactionIndex).padStart(2, '0')}T00:00:00+00:00`,
+            booked_at: `2026-06-${String(21 - transactionIndex).padStart(2, '0')}T00:00:00+00:00`,
             note: `Ledger note ${String(transactionIndex + 1).padStart(2, '0')}`,
         }));
         const fetchMock = vi.fn((path) => {
@@ -6320,9 +6354,9 @@ describe('App', () => {
         expect(performanceCard.exists()).toBe(true);
         expect(cashLedgerSection.exists()).toBe(true);
         expect(performanceCard.element.compareDocumentPosition(cashLedgerSection.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-        expect(cashLedgerRows).toHaveLength(10);
-        expect(firstPageLedgerText).toContain('Ledger note 10');
-        expect(firstPageLedgerText).not.toContain('Ledger note 11');
+        expect(cashLedgerRows).toHaveLength(20);
+        expect(firstPageLedgerText).toContain('Ledger note 20');
+        expect(firstPageLedgerText).not.toContain('Ledger note 21');
         expect(wrapper.find('.cash-ledger-pagination').exists()).toBe(true);
     });
 

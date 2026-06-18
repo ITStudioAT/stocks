@@ -140,7 +140,7 @@ class AdminDepotController extends Controller
         $positionPiecesByHoldingId = DepotTransaction::query()
             ->where('depot_id', $depot->id)
             ->whereNotNull('stock_holding_id')
-            ->whereIn('type', ['buy', 'sell'])
+            ->whereIn('type', DepotTransaction::StockTypes)
             ->get(['stock_holding_id', 'type', 'pieces'])
             ->groupBy('stock_holding_id')
             ->map(function ($transactions): float {

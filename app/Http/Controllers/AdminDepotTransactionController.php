@@ -48,21 +48,28 @@ class AdminDepotTransactionController extends Controller
     {
         $depot = $this->activeDepotOrFail();
         $validated = $request->validate([
-            'type' => ['required', Rule::in(['deposit', 'withdrawal'])],
+            'type' => ['required', Rule::in(DepotTransaction::CashTypes)],
+            'stock_holding_id' => ['nullable', Rule::exists(StockHolding::class, 'id')],
             'total_amount' => ['required', 'numeric', 'min:0.01', 'max:9999999999999.99'],
+            'currency' => ['nullable', 'string', 'size:3'],
             'booked_at' => ['nullable', 'date'],
             'note' => ['nullable', 'string', 'max:255'],
         ]);
         $bookedAt = isset($validated['booked_at'])
             ? $request->date('booked_at')->startOfDay()
             : null;
+        $holding = isset($validated['stock_holding_id'])
+            ? StockHolding::query()->findOrFail($validated['stock_holding_id'])
+            : null;
 
         $transaction = $booker->bookCash(
             depot: $depot,
             type: $validated['type'],
+            holding: $holding,
             totalAmount: (string) $validated['total_amount'],
             note: $validated['note'] ?? null,
             bookedAt: $bookedAt,
+            currency: $validated['currency'] ?? 'EUR',
         );
 
         $depotHoldings = $this->depotHoldingPayloads($transaction->depot->refresh());
@@ -106,7 +113,7 @@ class AdminDepotTransactionController extends Controller
     {
         $depot = $this->activeDepotOrFail();
         $validated = $request->validate([
-            'type' => ['required', Rule::in(['buy', 'sell'])],
+            'type' => ['required', Rule::in(DepotTransaction::StockTypes)],
             'stock_holding_id' => ['required', Rule::exists(StockHolding::class, 'id')],
             'pieces' => ['required', 'numeric', 'min:0.00000001', 'max:999999999999.99999999'],
             'total_amount' => ['required', 'numeric', 'min:0.01', 'max:9999999999999.99'],
@@ -126,6 +133,7 @@ class AdminDepotTransactionController extends Controller
             totalAmount: (string) $validated['total_amount'],
             note: $validated['note'] ?? null,
             bookedAt: $bookedAt,
+            currency: $holding->currency ?? 'EUR',
         );
 
         $depotHoldings = $this->depotHoldingPayloads($depot);
@@ -181,7 +189,7 @@ class AdminDepotTransactionController extends Controller
         $transactionsByHoldingId = DepotTransaction::query()
             ->where('depot_id', $depot->id)
             ->whereNotNull('stock_holding_id')
-            ->whereIn('type', ['buy', 'sell'])
+            ->whereIn('type', DepotTransaction::StockTypes)
             ->orderBy('booked_at')
             ->orderBy('id')
             ->get(['id', 'stock_holding_id', 'type', 'pieces', 'total_amount', 'booked_at'])
@@ -518,7 +526,7 @@ class AdminDepotTransactionController extends Controller
 
     /**
      * @param  array<int, array{id: int, symbol: ?string, name: ?string, isin: ?string, currency: ?string, latest_price: ?string, previous_day_price: ?string, previous_day_price_date: ?string, previous_day_change_percent: ?string, flatex_price: ?string, year_start_price: ?string, latest_price_fetched_at: ?string, latest_price_status: string, position_pieces: string}>  $depotHoldings
-     * @return array{stock_balance: string, cash_balance: string, account_balance: string, year_start_balance: string, current_balance: string, balance_change_amount: string, balance_change_percent: string, taxable_stock_gain_amount: string, month_start_balance: string, month_change_amount: string, month_change_percent: string, one_week_start_balance: string, one_week_change_amount: string, one_week_change_percent: string}
+     * @return array<string, string>
      */
     private function depotValuationPayload(Depot $depot, array $depotHoldings, string $source): array
     {
@@ -535,11 +543,14 @@ class AdminDepotTransactionController extends Controller
             return (float) $price * (float) $pieces;
         });
         $cashBalance = (float) $depot->account_balance;
-        $yearStartCutoff = now()->startOfYear()->endOfDay();
-        $yearStartBalance = $this->cashBalanceAt($depot, $yearStartCutoff)
-            + $this->stockBalanceAt($depot, $yearStartCutoff)
-            + $this->externalCashFlowAfter($depot, $yearStartCutoff);
         $currentBalance = $cashBalance + $stockBalance;
+        $cashFlowSummary = $this->cashFlowSummary($depot, $cashBalance, now()->endOfDay());
+        $balanceChangeWithBrokerBonusAmount = $currentBalance
+            + $cashFlowSummary['total_withdrawals']
+            - $cashFlowSummary['total_deposits']
+            - $cashFlowSummary['opening_balance'];
+        $balanceChangeAmount = $balanceChangeWithBrokerBonusAmount - $cashFlowSummary['broker_bonus_amount'];
+        $yearStartBalance = $currentBalance - $balanceChangeWithBrokerBonusAmount;
         $oneWeekStartCutoff = now()->subWeek()->endOfDay();
         $oneWeekStartBalance = $this->cashBalanceAt($depot, $oneWeekStartCutoff)
             + $this->stockMarketBalanceAt($depot, $oneWeekStartCutoff)
@@ -548,7 +559,6 @@ class AdminDepotTransactionController extends Controller
         $monthStartBalance = $this->cashBalanceAt($depot, $monthStartCutoff)
             + $this->stockMarketBalanceAt($depot, $monthStartCutoff)
             + $this->externalCashFlowAfter($depot, $monthStartCutoff);
-        $balanceChangeAmount = $currentBalance - $yearStartBalance;
         $balanceChangePercent = $yearStartBalance === 0.0
             ? 0.0
             : ($balanceChangeAmount / $yearStartBalance) * 100;
@@ -570,7 +580,17 @@ class AdminDepotTransactionController extends Controller
             'current_balance' => $this->decimal($currentBalance, 2),
             'balance_change_amount' => $this->decimal($balanceChangeAmount, 2),
             'balance_change_percent' => $this->decimal($balanceChangePercent, 2),
+            'balance_change_with_broker_bonus_amount' => $this->decimal($balanceChangeWithBrokerBonusAmount, 2),
+            'balance_change_with_broker_bonus_percent' => $this->decimal($yearStartBalance === 0.0 ? 0.0 : ($balanceChangeWithBrokerBonusAmount / $yearStartBalance) * 100, 2),
             'taxable_stock_gain_amount' => $this->decimal($taxableStockGainAmount, 2),
+            'opening_balance' => $this->decimal($cashFlowSummary['opening_balance'], 2),
+            'total_deposits' => $this->decimal($cashFlowSummary['total_deposits'], 2),
+            'total_withdrawals' => $this->decimal($cashFlowSummary['total_withdrawals'], 2),
+            'dividend_amount' => $this->decimal($cashFlowSummary['dividend_amount'], 2),
+            'interest_amount' => $this->decimal($cashFlowSummary['interest_amount'], 2),
+            'fee_amount' => $this->decimal($cashFlowSummary['fee_amount'], 2),
+            'tax_amount' => $this->decimal($cashFlowSummary['tax_amount'], 2),
+            'broker_bonus_amount' => $this->decimal($cashFlowSummary['broker_bonus_amount'], 2),
             'month_start_balance' => $this->decimal($monthStartBalance, 2),
             'month_change_amount' => $this->decimal($monthChangeAmount, 2),
             'month_change_percent' => $this->decimal($monthChangePercent, 2),
@@ -582,18 +602,77 @@ class AdminDepotTransactionController extends Controller
 
     private function cashBalanceAt(Depot $depot, Carbon $cutoff): float
     {
-        return (float) DepotTransaction::query()
+        return $this->initialCashBalance($depot) + (float) DepotTransaction::query()
             ->where('depot_id', $depot->id)
             ->where('booked_at', '<=', $cutoff)
             ->sum('cash_delta');
+    }
+
+    private function initialCashBalance(Depot $depot): float
+    {
+        $cashDelta = (float) DepotTransaction::query()
+            ->where('depot_id', $depot->id)
+            ->where('booked_at', '<=', now()->endOfDay())
+            ->sum('cash_delta');
+
+        return round((float) $depot->account_balance - $cashDelta, 2);
+    }
+
+    /**
+     * @return array{
+     *     opening_balance: float,
+     *     total_deposits: float,
+     *     total_withdrawals: float,
+     *     dividend_amount: float,
+     *     interest_amount: float,
+     *     fee_amount: float,
+     *     tax_amount: float,
+     *     broker_bonus_amount: float
+     * }
+     */
+    private function cashFlowSummary(Depot $depot, float $currentCashBalance, Carbon $cutoff): array
+    {
+        $transactions = DepotTransaction::query()
+            ->where('depot_id', $depot->id)
+            ->whereIn('type', DepotTransaction::CashTypes)
+            ->where('booked_at', '<=', $cutoff)
+            ->get(['type', 'total_amount', 'cash_delta']);
+        $openingBalance = $this->cashAmountByType($transactions, 'opening_balance', 'cash_delta');
+        $cashDelta = (float) DepotTransaction::query()
+            ->where('depot_id', $depot->id)
+            ->where('booked_at', '<=', $cutoff)
+            ->sum('cash_delta');
+        $inferredOpeningBalance = $openingBalance > 0.0
+            ? 0.0
+            : max(round($currentCashBalance - $cashDelta, 2), 0.0);
+
+        return [
+            'opening_balance' => $openingBalance + $inferredOpeningBalance,
+            'total_deposits' => $this->cashAmountByType($transactions, 'deposit'),
+            'total_withdrawals' => $this->cashAmountByType($transactions, 'withdrawal'),
+            'dividend_amount' => $this->cashAmountByType($transactions, 'dividend'),
+            'interest_amount' => $this->cashAmountByType($transactions, 'interest'),
+            'fee_amount' => $this->cashAmountByType($transactions, 'fee'),
+            'tax_amount' => $this->cashAmountByType($transactions, 'tax'),
+            'broker_bonus_amount' => $this->cashAmountByType($transactions, 'broker_bonus'),
+        ];
+    }
+
+    /**
+     * @param  Collection<int, DepotTransaction>  $transactions
+     */
+    private function cashAmountByType(Collection $transactions, string $type, string $amountColumn = 'total_amount'): float
+    {
+        return (float) $transactions
+            ->filter(fn (DepotTransaction $transaction): bool => $transaction->type === $type)
+            ->sum(fn (DepotTransaction $transaction): float => abs((float) $transaction->{$amountColumn}));
     }
 
     private function externalCashFlowAfter(Depot $depot, Carbon $cutoff): float
     {
         return (float) DepotTransaction::query()
             ->where('depot_id', $depot->id)
-            ->whereNull('stock_holding_id')
-            ->whereIn('type', ['deposit', 'withdrawal'])
+            ->whereIn('type', DepotTransaction::ExternalCashflowTypes)
             ->where('booked_at', '>', $cutoff)
             ->where('booked_at', '<=', now()->endOfDay())
             ->sum('cash_delta');
@@ -604,7 +683,7 @@ class AdminDepotTransactionController extends Controller
         $transactionsByHoldingId = DepotTransaction::query()
             ->where('depot_id', $depot->id)
             ->whereNotNull('stock_holding_id')
-            ->whereIn('type', ['buy', 'sell'])
+            ->whereIn('type', DepotTransaction::StockTypes)
             ->where('booked_at', '<=', $cutoff)
             ->orderBy('booked_at')
             ->orderBy('id')
@@ -622,7 +701,7 @@ class AdminDepotTransactionController extends Controller
         $openPiecesByHoldingId = DepotTransaction::query()
             ->where('depot_id', $depot->id)
             ->whereNotNull('stock_holding_id')
-            ->whereIn('type', ['buy', 'sell'])
+            ->whereIn('type', DepotTransaction::StockTypes)
             ->where('booked_at', '<=', $cutoff)
             ->orderBy('booked_at')
             ->orderBy('id')
@@ -672,9 +751,12 @@ class AdminDepotTransactionController extends Controller
             ->orderBy('booked_at')
             ->orderBy('id')
             ->get(['id', 'stock_holding_id', 'type', 'pieces', 'total_amount', 'cash_delta', 'balance_after', 'booked_at']);
+        $initialCashBalance = round((float) $depot->account_balance - $transactions->sum(
+            fn (DepotTransaction $transaction): float => (float) $transaction->cash_delta,
+        ), 2);
         $stockTransactionsByHoldingId = $transactions
             ->whereNotNull('stock_holding_id')
-            ->whereIn('type', ['buy', 'sell'])
+            ->whereIn('type', DepotTransaction::StockTypes)
             ->groupBy('stock_holding_id');
         $dailyPricesByHoldingId = $this->dailyPricesByHoldingId($stockTransactionsByHoldingId->keys());
         $points = [];
@@ -684,7 +766,7 @@ class AdminDepotTransactionController extends Controller
             $isToday = $date->isSameDay($today);
             $cashBalance = $isToday
                 ? (float) $depot->account_balance
-                : $this->cashBalanceFromTransactions($transactions, $cutoff);
+                : $this->cashBalanceFromTransactions($transactions, $cutoff, $initialCashBalance);
             $cashBalance += $this->externalCashFlowFromTransactionsAfter($transactions, $cutoff);
             $stockBalance = $isToday
                 ? $this->currentStockBalance($currentDepotHoldings)
@@ -728,9 +810,9 @@ class AdminDepotTransactionController extends Controller
     /**
      * @param  Collection<int, DepotTransaction>  $transactions
      */
-    private function cashBalanceFromTransactions(Collection $transactions, Carbon $cutoff): float
+    private function cashBalanceFromTransactions(Collection $transactions, Carbon $cutoff, float $initialCashBalance = 0.0): float
     {
-        return (float) $transactions
+        return $initialCashBalance + (float) $transactions
             ->filter(fn (DepotTransaction $transaction): bool => $transaction->booked_at?->lte($cutoff) ?? false)
             ->sum(fn (DepotTransaction $transaction): float => (float) $transaction->cash_delta);
     }
@@ -742,8 +824,7 @@ class AdminDepotTransactionController extends Controller
     {
         return (float) $transactions
             ->filter(fn (DepotTransaction $transaction): bool => (
-                $transaction->stock_holding_id === null
-                && in_array($transaction->type, ['deposit', 'withdrawal'], true)
+                in_array($transaction->type, DepotTransaction::ExternalCashflowTypes, true)
                 && ($transaction->booked_at?->gt($cutoff) ?? false)
                 && ($transaction->booked_at?->lte(now()->endOfDay()) ?? false)
             ))
@@ -797,7 +878,7 @@ class AdminDepotTransactionController extends Controller
     }
 
     /**
-     * @return array<int, array{id: int, type: string, stock_holding_id: ?int, stock_label: ?string, stock_isin: ?string, pieces: ?string, total_amount: string, unit_price: ?string, cash_delta: string, balance_after: string, booked_at: ?string, note: ?string}>
+     * @return array<int, array{id: int, type: string, stock_holding_id: ?int, stock_label: ?string, stock_isin: ?string, pieces: ?string, total_amount: string, currency: string, unit_price: ?string, cash_delta: string, balance_after: string, booked_at: ?string, note: ?string, is_external_cashflow: bool, affects_performance: bool}>
      */
     private function transactionPayloads(Depot $depot): array
     {
@@ -813,7 +894,7 @@ class AdminDepotTransactionController extends Controller
     }
 
     /**
-     * @return array{id: int, type: string, stock_holding_id: ?int, stock_label: ?string, stock_isin: ?string, pieces: ?string, total_amount: string, unit_price: ?string, cash_delta: string, balance_after: string, booked_at: ?string, note: ?string}
+     * @return array{id: int, type: string, stock_holding_id: ?int, stock_label: ?string, stock_isin: ?string, pieces: ?string, total_amount: string, currency: string, unit_price: ?string, cash_delta: string, balance_after: string, booked_at: ?string, note: ?string, is_external_cashflow: bool, affects_performance: bool}
      */
     private function transactionPayload(DepotTransaction $transaction): array
     {
@@ -827,11 +908,14 @@ class AdminDepotTransactionController extends Controller
             'stock_isin' => $holding?->isin,
             'pieces' => $transaction->pieces,
             'total_amount' => $transaction->total_amount,
+            'currency' => $transaction->currency ?? 'EUR',
             'unit_price' => $transaction->unit_price,
             'cash_delta' => $transaction->cash_delta,
             'balance_after' => $transaction->balance_after,
             'booked_at' => $transaction->booked_at?->toIso8601String(),
             'note' => $transaction->note,
+            'is_external_cashflow' => $transaction->is_external_cashflow,
+            'affects_performance' => $transaction->affects_performance,
         ];
     }
 }

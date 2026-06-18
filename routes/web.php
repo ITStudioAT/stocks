@@ -54,7 +54,7 @@ Route::get('/depot-sum-sign', function () {
     $transactionsByHoldingId = DepotTransaction::query()
         ->where('depot_id', $depot->id)
         ->whereNotNull('stock_holding_id')
-        ->whereIn('type', ['buy', 'sell'])
+        ->whereIn('type', DepotTransaction::StockTypes)
         ->get(['stock_holding_id', 'type', 'pieces', 'total_amount', 'booked_at'])
         ->groupBy('stock_holding_id');
 

@@ -38,8 +38,11 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('depot.account_balance', '1250.25')
             ->assertJsonPath('transaction.type', 'deposit')
             ->assertJsonPath('transaction.total_amount', '250.25')
+            ->assertJsonPath('transaction.currency', 'EUR')
             ->assertJsonPath('transaction.cash_delta', '250.25')
-            ->assertJsonPath('transaction.balance_after', '1250.25');
+            ->assertJsonPath('transaction.balance_after', '1250.25')
+            ->assertJsonPath('transaction.is_external_cashflow', true)
+            ->assertJsonPath('transaction.affects_performance', false);
 
         $this->assertDatabaseHas('depot_transactions', [
             'depot_id' => $depot->id,
@@ -57,9 +60,48 @@ class DepotTransactionTest extends TestCase
             ])
             ->assertCreated()
             ->assertJsonPath('depot.account_balance', '1150.25')
-            ->assertJsonPath('transaction.cash_delta', '-100.00');
+            ->assertJsonPath('transaction.cash_delta', '-100.00')
+            ->assertJsonPath('depot_valuations.latest.balance_change_amount', '0.00')
+            ->assertJsonPath('depot_valuations.latest.total_deposits', '250.25')
+            ->assertJsonPath('depot_valuations.latest.total_withdrawals', '100.00');
 
         $this->assertSame('1150.25', $depot->refresh()->account_balance);
+    }
+
+    public function test_admin_can_book_stock_linked_dividend_as_performance_cash(): void
+    {
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create([
+            'account_balance' => '1000.00',
+            'is_active' => true,
+        ]);
+        $holding = StockHolding::factory()->create([
+            'name' => 'iShares ETF',
+            'isin' => 'DE000A0D8Q23',
+        ]);
+
+        $this->actingAs($admin)
+            ->postJson('/admin/depot-transactions/cash', [
+                'type' => 'dividend',
+                'stock_holding_id' => $holding->id,
+                'total_amount' => '123.45',
+                'booked_at' => '2026-06-15',
+                'note' => 'Erträgnisausschüttung DE000A0D8Q23',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('transaction.type', 'dividend')
+            ->assertJsonPath('transaction.stock_holding_id', $holding->id)
+            ->assertJsonPath('transaction.stock_label', 'iShares ETF')
+            ->assertJsonPath('transaction.stock_isin', 'DE000A0D8Q23')
+            ->assertJsonPath('transaction.cash_delta', '123.45')
+            ->assertJsonPath('transaction.is_external_cashflow', false)
+            ->assertJsonPath('transaction.affects_performance', true)
+            ->assertJsonPath('depot_valuations.latest.opening_balance', '1000.00')
+            ->assertJsonPath('depot_valuations.latest.total_deposits', '0.00')
+            ->assertJsonPath('depot_valuations.latest.dividend_amount', '123.45')
+            ->assertJsonPath('depot_valuations.latest.balance_change_amount', '123.45');
+
+        $this->assertSame('1123.45', $depot->refresh()->account_balance);
     }
 
     public function test_admin_can_book_stock_buy_and_sell_transactions(): void
@@ -313,7 +355,7 @@ class DepotTransactionTest extends TestCase
             ->assertJsonValidationErrors('booked_at');
     }
 
-    public function test_admin_can_list_opening_cash_deposit_transaction(): void
+    public function test_admin_can_list_opening_balance_transaction(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-13 12:00:00', 'UTC'));
 
@@ -335,10 +377,10 @@ class DepotTransactionTest extends TestCase
                 'adjusted_close' => '140.00000000',
             ]);
 
-            $deposit = DepotTransaction::factory()->create([
+            $openingBalance = DepotTransaction::factory()->create([
                 'depot_id' => $depot->id,
                 'stock_holding_id' => null,
-                'type' => 'deposit',
+                'type' => 'opening_balance',
                 'pieces' => null,
                 'total_amount' => '83236.56',
                 'unit_price' => null,
@@ -346,6 +388,7 @@ class DepotTransactionTest extends TestCase
                 'balance_after' => '83236.56',
                 'booked_at' => '2026-01-01 00:00:00',
                 'note' => 'Opening cash balance',
+                'is_external_cashflow' => true,
             ]);
 
             DepotTransaction::factory()->create([
@@ -376,8 +419,8 @@ class DepotTransactionTest extends TestCase
                 ->getJson('/admin/depot-transactions')
                 ->assertOk()
                 ->assertJsonCount(3, 'transactions')
-                ->assertJsonPath('transactions.2.id', $deposit->id)
-                ->assertJsonPath('transactions.2.type', 'deposit')
+                ->assertJsonPath('transactions.2.id', $openingBalance->id)
+                ->assertJsonPath('transactions.2.type', 'opening_balance')
                 ->assertJsonPath('transactions.2.total_amount', '83236.56')
                 ->assertJsonPath('transactions.2.cash_delta', '83236.56')
                 ->assertJsonPath('transactions.2.balance_after', '83236.56')
@@ -411,13 +454,14 @@ class DepotTransactionTest extends TestCase
             DepotTransaction::factory()->create([
                 'depot_id' => $depot->id,
                 'stock_holding_id' => null,
-                'type' => 'deposit',
+                'type' => 'opening_balance',
                 'pieces' => null,
                 'total_amount' => '83236.56',
                 'unit_price' => null,
                 'cash_delta' => '83236.56',
                 'balance_after' => '83236.56',
                 'booked_at' => '2026-01-01 00:00:00',
+                'is_external_cashflow' => true,
             ]);
             DepotTransaction::factory()->create([
                 'depot_id' => $depot->id,
@@ -450,6 +494,9 @@ class DepotTransactionTest extends TestCase
                 ->assertJsonPath('depot_valuations.latest.current_balance', '84464.35')
                 ->assertJsonPath('depot_valuations.latest.balance_change_amount', '0.00')
                 ->assertJsonPath('depot_valuations.latest.balance_change_percent', '0.00')
+                ->assertJsonPath('depot_valuations.latest.opening_balance', '83236.56')
+                ->assertJsonPath('depot_valuations.latest.total_deposits', '1427.79')
+                ->assertJsonPath('depot_valuations.latest.total_withdrawals', '200.00')
                 ->assertJsonPath('depot_valuations.latest.month_start_balance', '84464.35')
                 ->assertJsonPath('depot_valuations.latest.month_change_amount', '0.00')
                 ->assertJsonPath('depot_valuations.latest.month_change_percent', '0.00')
@@ -486,13 +533,14 @@ class DepotTransactionTest extends TestCase
             DepotTransaction::factory()->create([
                 'depot_id' => $depot->id,
                 'stock_holding_id' => null,
-                'type' => 'deposit',
+                'type' => 'opening_balance',
                 'pieces' => null,
                 'total_amount' => '1000.00',
                 'unit_price' => null,
                 'cash_delta' => '1000.00',
                 'balance_after' => '1000.00',
                 'booked_at' => '2026-01-01 00:00:00',
+                'is_external_cashflow' => true,
             ]);
             DepotTransaction::factory()->create([
                 'depot_id' => $depot->id,
@@ -558,13 +606,14 @@ class DepotTransactionTest extends TestCase
         DepotTransaction::factory()->create([
             'depot_id' => $depot->id,
             'stock_holding_id' => null,
-            'type' => 'deposit',
+            'type' => 'opening_balance',
             'pieces' => null,
             'total_amount' => '1000.00',
             'unit_price' => null,
             'cash_delta' => '1000.00',
             'balance_after' => '1000.00',
             'booked_at' => '2026-01-01 00:00:00',
+            'is_external_cashflow' => true,
         ]);
         $otherDepot = Depot::factory()->create([
             'is_active' => false,
@@ -663,6 +712,41 @@ class DepotTransactionTest extends TestCase
 
         $this->assertSame(['AAPL'], collect($response->json('depot_holdings'))->pluck('symbol')->all());
         $this->assertSame('710.00', $depot->refresh()->account_balance);
+    }
+
+    public function test_depot_profit_infers_opening_cash_when_no_opening_balance_transaction_exists(): void
+    {
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create([
+            'account_balance' => '700.00',
+            'is_active' => true,
+        ]);
+        $holding = StockHolding::factory()->create([
+            'latest_price' => '110.000000',
+            'flatex_price' => '110.000000',
+        ]);
+
+        DepotTransaction::factory()->create([
+            'depot_id' => $depot->id,
+            'stock_holding_id' => $holding->id,
+            'type' => 'buy',
+            'pieces' => '3.00000000',
+            'total_amount' => '300.00',
+            'unit_price' => '100.00000000',
+            'cash_delta' => '-300.00',
+            'balance_after' => '700.00',
+            'booked_at' => '2026-06-10 00:00:00',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/depot-transactions')
+            ->assertOk()
+            ->assertJsonPath('depot_valuations.latest.cash_balance', '700.00')
+            ->assertJsonPath('depot_valuations.latest.stock_balance', '330.00')
+            ->assertJsonPath('depot_valuations.latest.current_balance', '1030.00')
+            ->assertJsonPath('depot_valuations.latest.opening_balance', '1000.00')
+            ->assertJsonPath('depot_valuations.latest.balance_change_amount', '30.00')
+            ->assertJsonPath('depot_valuations.latest.balance_change_percent', '3.00');
     }
 
     public function test_depot_holding_payload_uses_latest_realtime_price_when_available(): void
@@ -797,6 +881,154 @@ class DepotTransactionTest extends TestCase
         } finally {
             Carbon::setTestNow();
         }
+    }
+
+    public function test_depot_profit_formula_excludes_external_cashflows(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-12-31 12:00:00', 'UTC'));
+
+        try {
+            $admin = $this->adminUser();
+
+            $this->assertDepotValuation($admin, '22000.00', [
+                ['type' => 'opening_balance', 'amount' => '20000.00', 'booked_at' => '2026-01-01 00:00:00'],
+            ], [
+                'opening_balance' => '20000.00',
+                'total_deposits' => '0.00',
+                'total_withdrawals' => '0.00',
+                'balance_change_amount' => '2000.00',
+                'balance_change_with_broker_bonus_amount' => '2000.00',
+            ]);
+
+            $this->assertDepotValuation($admin, '27000.00', [
+                ['type' => 'opening_balance', 'amount' => '20000.00', 'booked_at' => '2026-01-01 00:00:00'],
+                ['type' => 'deposit', 'amount' => '5000.00', 'booked_at' => '2026-03-15 00:00:00'],
+            ], [
+                'opening_balance' => '20000.00',
+                'total_deposits' => '5000.00',
+                'total_withdrawals' => '0.00',
+                'balance_change_amount' => '2000.00',
+            ]);
+
+            $this->assertDepotValuation($admin, '19000.00', [
+                ['type' => 'opening_balance', 'amount' => '20000.00', 'booked_at' => '2026-01-01 00:00:00'],
+                ['type' => 'withdrawal', 'amount' => '3000.00', 'booked_at' => '2026-08-20 00:00:00'],
+            ], [
+                'opening_balance' => '20000.00',
+                'total_deposits' => '0.00',
+                'total_withdrawals' => '3000.00',
+                'balance_change_amount' => '2000.00',
+            ]);
+
+            $this->assertDepotValuation($admin, '29000.00', [
+                ['type' => 'opening_balance', 'amount' => '20000.00', 'booked_at' => '2026-01-01 00:00:00'],
+                ['type' => 'deposit', 'amount' => '5000.00', 'booked_at' => '2026-03-15 00:00:00'],
+                ['type' => 'withdrawal', 'amount' => '2000.00', 'booked_at' => '2026-08-20 00:00:00'],
+            ], [
+                'opening_balance' => '20000.00',
+                'total_deposits' => '5000.00',
+                'total_withdrawals' => '2000.00',
+                'balance_change_amount' => '6000.00',
+                'balance_change_percent' => '26.09',
+            ]);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_depot_reports_income_costs_and_broker_bonus_separately(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-12-31 12:00:00', 'UTC'));
+
+        try {
+            $admin = $this->adminUser();
+
+            $this->assertDepotValuation($admin, '20105.00', [
+                ['type' => 'opening_balance', 'amount' => '20000.00', 'booked_at' => '2026-01-01 00:00:00'],
+                ['type' => 'dividend', 'amount' => '100.00', 'booked_at' => '2026-04-12 00:00:00'],
+                ['type' => 'interest', 'amount' => '5.00', 'booked_at' => '2026-04-30 00:00:00'],
+            ], [
+                'balance_change_amount' => '105.00',
+                'total_deposits' => '0.00',
+                'dividend_amount' => '100.00',
+                'interest_amount' => '5.00',
+            ]);
+
+            $this->assertDepotValuation($admin, '19964.60', [
+                ['type' => 'opening_balance', 'amount' => '20000.00', 'booked_at' => '2026-01-01 00:00:00'],
+                ['type' => 'fee', 'amount' => '7.90', 'booked_at' => '2026-05-02 00:00:00'],
+                ['type' => 'tax', 'amount' => '27.50', 'booked_at' => '2026-05-03 00:00:00'],
+            ], [
+                'balance_change_amount' => '-35.40',
+                'fee_amount' => '7.90',
+                'tax_amount' => '27.50',
+            ]);
+
+            $this->assertDepotValuation($admin, '20100.00', [
+                ['type' => 'opening_balance', 'amount' => '20000.00', 'booked_at' => '2026-01-01 00:00:00'],
+                ['type' => 'broker_bonus', 'amount' => '100.00', 'booked_at' => '2026-02-01 00:00:00'],
+            ], [
+                'balance_change_amount' => '0.00',
+                'balance_change_with_broker_bonus_amount' => '100.00',
+                'broker_bonus_amount' => '100.00',
+            ]);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    /**
+     * @param  array<int, array{type: string, amount: string, booked_at: string}>  $transactions
+     * @param  array<string, string>  $expectations
+     */
+    private function assertDepotValuation(User $admin, string $currentPortfolioValue, array $transactions, array $expectations): void
+    {
+        Depot::query()->update(['is_active' => false]);
+
+        $depot = Depot::factory()->create([
+            'account_balance' => $currentPortfolioValue,
+            'is_active' => true,
+        ]);
+
+        foreach ($transactions as $transaction) {
+            $this->createCashTransaction(
+                depot: $depot,
+                type: $transaction['type'],
+                amount: $transaction['amount'],
+                bookedAt: $transaction['booked_at'],
+            );
+        }
+
+        $response = $this->actingAs($admin)
+            ->getJson('/admin/depot-transactions')
+            ->assertOk()
+            ->assertJsonPath('depot_valuations.latest.current_balance', $currentPortfolioValue);
+
+        foreach ($expectations as $key => $expectedValue) {
+            $response->assertJsonPath("depot_valuations.latest.{$key}", $expectedValue);
+        }
+    }
+
+    private function createCashTransaction(Depot $depot, string $type, string $amount, string $bookedAt): DepotTransaction
+    {
+        $absoluteAmount = abs((float) $amount);
+        $cashDelta = in_array($type, DepotTransaction::NegativeCashDeltaTypes, true)
+            ? -$absoluteAmount
+            : $absoluteAmount;
+
+        return DepotTransaction::factory()->create([
+            'depot_id' => $depot->id,
+            'stock_holding_id' => null,
+            'type' => $type,
+            'pieces' => null,
+            'total_amount' => number_format($absoluteAmount, 2, '.', ''),
+            'unit_price' => null,
+            'cash_delta' => number_format($cashDelta, 2, '.', ''),
+            'balance_after' => $depot->account_balance,
+            'booked_at' => $bookedAt,
+            'is_external_cashflow' => in_array($type, DepotTransaction::ExternalCashflowTypes, true),
+            'affects_performance' => in_array($type, DepotTransaction::PerformanceCashTypes, true),
+        ]);
     }
 
     private function adminUser(): User

@@ -18,7 +18,17 @@ const defaultAnalyzeTrendTradeAmounts = [7000, 5000, 3000];
 const maxAnalyzeTrendTradeAmount = 1000000;
 const defaultAnalyzeTrendMaxInvestAmount = 0;
 const maxAnalyzeTrendMaxInvestAmount = 1000000;
-const cashLedgerPageSize = 10;
+const cashLedgerPageSize = 20;
+const cashTransactionTypeOptions = [
+    { title: 'Start balance', value: 'opening_balance' },
+    { title: 'Deposit', value: 'deposit' },
+    { title: 'Withdrawal', value: 'withdrawal' },
+    { title: 'Dividend', value: 'dividend' },
+    { title: 'Interest', value: 'interest' },
+    { title: 'Fee', value: 'fee' },
+    { title: 'Tax', value: 'tax' },
+    { title: 'Broker bonus', value: 'broker_bonus' },
+];
 
 const { lgAndDown, mdAndDown, smAndDown } = useDisplay();
 
@@ -386,6 +396,27 @@ const paginatedCashLedgerTransactions = computed(() => {
     const start = (cashLedgerPage.value - 1) * cashLedgerPageSize;
 
     return transactions.value.slice(start, start + cashLedgerPageSize);
+});
+const cashTransactionStockOptions = computed(() => {
+    const optionById = new Map();
+
+    [...depotHoldings.value, ...holdings.value].forEach((holding) => {
+        if (!holding?.id || optionById.has(holding.id)) {
+            return;
+        }
+
+        const label = [
+            holding.name || holding.symbol || `Stock ${holding.id}`,
+            holding.isin,
+        ].filter(Boolean).join(' · ');
+
+        optionById.set(holding.id, {
+            title: label,
+            value: holding.id,
+        });
+    });
+
+    return Array.from(optionById.values());
 });
 const selectedAnalyzeHolding = computed(() => holdings.value.find((holding) => holding.id === selectedAnalyzeHoldingId.value) ?? null);
 const selectedAnalyzeScopeLabel = computed(() => {
@@ -3363,6 +3394,7 @@ function openCashTransactionDialog(type) {
         total_amount: '',
         booked_at: localDateInputValue(),
         note: '',
+        stock_holding_id: null,
     };
     holdingError.value = '';
     holdingMessage.value = '';
@@ -3381,6 +3413,7 @@ async function bookCashTransaction() {
     try {
         const data = await depotsStore.bookCashTransaction({
             type: cashTransactionForm.value.type,
+            stock_holding_id: cashTransactionForm.value.stock_holding_id,
             total_amount: Number(cashTransactionForm.value.total_amount),
             booked_at: cashTransactionForm.value.booked_at || null,
             note: cashTransactionForm.value.note || null,
@@ -3969,11 +4002,33 @@ async function updateTransactionDate(transaction, bookedAt) {
 }
 
 function transactionTypeColor(type) {
-    return { deposit: 'success', withdrawal: 'error', buy: 'warning', sell: 'teal' }[type] ?? 'default';
+    return {
+        opening_balance: 'primary',
+        deposit: 'success',
+        withdrawal: 'error',
+        dividend: 'teal',
+        interest: 'cyan',
+        fee: 'warning',
+        tax: 'deep-orange',
+        broker_bonus: 'purple',
+        buy: 'warning',
+        sell: 'teal',
+    }[type] ?? 'default';
 }
 
 function transactionTypeLabel(type) {
-    return { deposit: 'Add cash', withdrawal: 'Withdraw', buy: 'Buy', sell: 'Sell' }[type] ?? type;
+    return {
+        opening_balance: 'Start balance',
+        deposit: 'Deposit',
+        withdrawal: 'Withdrawal',
+        dividend: 'Dividend',
+        interest: 'Interest',
+        fee: 'Fee',
+        tax: 'Tax',
+        broker_bonus: 'Broker bonus',
+        buy: 'Buy',
+        sell: 'Sell',
+    }[type] ?? type;
 }
 
 function formatCashDelta(value) {
@@ -8229,6 +8284,7 @@ function emptyDepotForm() {
 function emptyCashTransactionForm() {
     return {
         type: 'deposit',
+        stock_holding_id: null,
         total_amount: '',
         booked_at: localDateInputValue(),
         note: '',
@@ -10826,10 +10882,27 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                     <v-dialog v-model="isCashTransactionDialogOpen" persistent max-width="480">
                         <v-card>
                             <v-card-title>
-                                {{ cashTransactionForm.type === 'deposit' ? 'Add cash' : 'Withdraw cash' }}
+                                {{ transactionTypeLabel(cashTransactionForm.type) }}
                             </v-card-title>
                             <v-card-text>
                                 <form id="cash-transaction-form" @submit.prevent="bookCashTransaction">
+                                    <v-select
+                                        v-model="cashTransactionForm.type"
+                                        :items="cashTransactionTypeOptions"
+                                        item-title="title"
+                                        item-value="value"
+                                        label="Type"
+                                        required
+                                    />
+                                    <v-select
+                                        v-model="cashTransactionForm.stock_holding_id"
+                                        :items="cashTransactionStockOptions"
+                                        clearable
+                                        item-title="title"
+                                        item-value="value"
+                                        label="Related stock / ISIN"
+                                        no-data-text="No depot stocks"
+                                    />
                                     <v-text-field
                                         v-model="cashTransactionForm.total_amount"
                                         label="Amount"
@@ -11733,6 +11806,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </tbody>
                                 </v-table>
                             </v-card>
+
                         </div>
 
                         <div v-if="activeDepot" class="mt-6">

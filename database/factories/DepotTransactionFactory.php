@@ -28,11 +28,14 @@ class DepotTransactionFactory extends Factory
             'type' => 'buy',
             'pieces' => $pieces,
             'total_amount' => $totalAmount,
+            'currency' => 'EUR',
             'unit_price' => $totalAmount / $pieces,
             'cash_delta' => -$totalAmount,
             'balance_after' => $this->faker->randomFloat(2, 0, 250000),
             'booked_at' => now(),
             'note' => $this->faker->optional()->sentence(),
+            'is_external_cashflow' => false,
+            'affects_performance' => false,
         ];
     }
 }
