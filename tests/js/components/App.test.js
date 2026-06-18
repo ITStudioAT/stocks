@@ -403,7 +403,20 @@ describe('App', () => {
                             latest_price_trend: 'up',
                             latest_price_change_pct: '2.28',
                             latest_price_status: 'fresh',
-                            recent_prices: [],
+                            recent_prices: [
+                                {
+                                    id: 101,
+                                    price: '305.000000',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-18T16:30:00+00:00',
+                                },
+                                {
+                                    id: 102,
+                                    price: '306.320010',
+                                    currency: 'EUR',
+                                    as_of: '2026-06-19T16:30:00+00:00',
+                                },
+                            ],
                             position_pieces: '2.00000000',
                         },
                         {
@@ -637,6 +650,8 @@ describe('App', () => {
         const microsoftCells = landscapeRows[1].findAll('td');
         expect(appleCells[1].text()).toContain('306.32');
         expect(appleCells[1].text()).toContain('+2.28% · 299.50');
+        expect(appleCells[1].find('[aria-label="Day indicator: Price increased"]').exists()).toBe(true);
+        expect(appleCells[1].find('.recent-price-trend-dot--day').classes()).toContain('recent-price-trend-dot-up');
         expect(microsoftCells[1].text()).toContain('429.95 USD');
         expect(microsoftCells[1].text()).toContain('+2.37% · 420.00 USD');
     });
@@ -5438,6 +5453,9 @@ describe('App', () => {
                                 balance_change_amount: '0.00',
                                 balance_change_percent: '0.00',
                                 taxable_stock_gain_amount: '0.00',
+                                month_start_balance: '1250.00',
+                                month_change_amount: '0.00',
+                                month_change_percent: '0.00',
                                 one_week_start_balance: '1250.00',
                                 one_week_change_amount: '0.00',
                                 one_week_change_percent: '0.00',
@@ -5451,6 +5469,9 @@ describe('App', () => {
                                 balance_change_amount: '0.00',
                                 balance_change_percent: '0.00',
                                 taxable_stock_gain_amount: '0.00',
+                                month_start_balance: '1250.00',
+                                month_change_amount: '0.00',
+                                month_change_percent: '0.00',
                                 one_week_start_balance: '1250.00',
                                 one_week_change_amount: '0.00',
                                 one_week_change_percent: '0.00',
@@ -5773,6 +5794,9 @@ describe('App', () => {
                 balance_change_amount: '33.00',
                 balance_change_percent: '3.30',
                 taxable_stock_gain_amount: '33.00',
+                month_start_balance: '1000.00',
+                month_change_amount: '33.00',
+                month_change_percent: '3.30',
                 one_week_start_balance: '990.00',
                 one_week_change_amount: '43.00',
                 one_week_change_percent: '4.34',
@@ -5786,6 +5810,9 @@ describe('App', () => {
                 balance_change_amount: '10.00',
                 balance_change_percent: '1.00',
                 taxable_stock_gain_amount: '10.00',
+                month_start_balance: '1000.00',
+                month_change_amount: '10.00',
+                month_change_percent: '1.00',
                 one_week_start_balance: '995.00',
                 one_week_change_amount: '15.00',
                 one_week_change_percent: '1.51',
@@ -5882,6 +5909,9 @@ describe('App', () => {
                         balance_change_amount: '10.50',
                         balance_change_percent: '1.05',
                         taxable_stock_gain_amount: '10.50',
+                        month_start_balance: '1000.00',
+                        month_change_amount: '10.50',
+                        month_change_percent: '1.05',
                         one_week_start_balance: '995.00',
                         one_week_change_amount: '15.50',
                         one_week_change_percent: '1.56',
@@ -5954,7 +5984,10 @@ describe('App', () => {
         expect(wrapper.text()).toContain('990.00 EUR');
         expect(wrapper.text()).toContain('1 week');
         expect(wrapper.text()).toContain('+4.34% · +43.00 EUR');
-        expect(wrapper.findAll('.depot-balance-card')).toHaveLength(3);
+        expect(wrapper.text()).toContain(`Balance 01.${sessionHeaderDate(0).slice(3, 6)}`);
+        expect(wrapper.text()).toContain('Month');
+        expect(wrapper.text()).toContain('+3.30% · +33.00 EUR');
+        expect(wrapper.findAll('.depot-balance-card')).toHaveLength(4);
         expect(wrapper.find('.depot-balance-card tbody td:nth-child(2)').classes()).toContain('text-right');
         expect(wrapper.text()).toContain('Depot performance');
         expect(wrapper.text()).toContain('01.01 to now');
@@ -6172,7 +6205,128 @@ describe('App', () => {
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings/1/flatex-price')).toHaveLength(1);
     });
 
-    it('does not correct cash-only depot balance gains', async () => {
+    it('shows the cash ledger below the performance chart and paginates it by ten rows', async () => {
+        window.history.pushState({}, '', '/admin/menu/depot');
+        const depot = {
+            id: 1,
+            name: 'Main depot',
+            account_balance: '1000.00',
+            is_active: true,
+        };
+        const depotValuation = {
+            stock_balance: '0.00',
+            cash_balance: '1000.00',
+            account_balance: '1000.00',
+            year_start_balance: '1000.00',
+            current_balance: '1000.00',
+            balance_change_amount: '0.00',
+            balance_change_percent: '0.00',
+            taxable_stock_gain_amount: '0.00',
+            month_start_balance: '1000.00',
+            month_change_amount: '0.00',
+            month_change_percent: '0.00',
+            one_week_start_balance: '1000.00',
+            one_week_change_amount: '0.00',
+            one_week_change_percent: '0.00',
+        };
+        const ledgerTransactions = Array.from({ length: 11 }, (_, transactionIndex) => ({
+            id: transactionIndex + 1,
+            type: 'deposit',
+            stock_holding_id: null,
+            stock_label: null,
+            stock_isin: null,
+            pieces: null,
+            total_amount: '10.00',
+            unit_price: null,
+            cash_delta: '10.00',
+            balance_after: String(1000 + transactionIndex * 10),
+            booked_at: `2026-06-${String(11 - transactionIndex).padStart(2, '0')}T00:00:00+00:00`,
+            note: `Ledger note ${String(transactionIndex + 1).padStart(2, '0')}`,
+        }));
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/depot-transactions') {
+                return Promise.resolve(jsonResponse({
+                    depot_holdings: [],
+                    depot_valuations: {
+                        latest: depotValuation,
+                        flatex: depotValuation,
+                    },
+                    depot_performance_series: [
+                        {
+                            date: '2026-01-01',
+                            stock_balance: '0.00',
+                            cash_balance: '1000.00',
+                            account_balance: '1000.00',
+                        },
+                    ],
+                    transactions: ledgerTransactions,
+                }));
+            }
+
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null },
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [depot],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 1, from: 1, to: 1 },
+                }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const performanceCard = wrapper.find('.depot-performance-card');
+        const cashLedgerSection = wrapper.find('.cash-ledger-section');
+        const cashLedgerRows = wrapper.findAll('.desktop-cash-ledger-table tbody tr');
+        const firstPageLedgerText = wrapper.find('.desktop-cash-ledger-table tbody').text();
+
+        expect(performanceCard.exists()).toBe(true);
+        expect(cashLedgerSection.exists()).toBe(true);
+        expect(performanceCard.element.compareDocumentPosition(cashLedgerSection.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(cashLedgerRows).toHaveLength(10);
+        expect(firstPageLedgerText).toContain('Ledger note 10');
+        expect(firstPageLedgerText).not.toContain('Ledger note 11');
+        expect(wrapper.find('.cash-ledger-pagination').exists()).toBe(true);
+    });
+
+    it('does not tax cash-only depot balance gains', async () => {
         window.history.pushState({}, '', '/admin/menu/depot');
         const depot = {
             id: 1,
@@ -6185,11 +6339,14 @@ describe('App', () => {
                 stock_balance: '0.00',
                 cash_balance: '84664.35',
                 account_balance: '84664.35',
-                year_start_balance: '83236.56',
+                year_start_balance: '84664.35',
                 current_balance: '84664.35',
-                balance_change_amount: '1427.79',
-                balance_change_percent: '1.72',
+                balance_change_amount: '0.00',
+                balance_change_percent: '0.00',
                 taxable_stock_gain_amount: '0.00',
+                month_start_balance: '84664.35',
+                month_change_amount: '0.00',
+                month_change_percent: '0.00',
                 one_week_start_balance: '84664.35',
                 one_week_change_amount: '0.00',
                 one_week_change_percent: '0.00',
@@ -6198,11 +6355,14 @@ describe('App', () => {
                 stock_balance: '0.00',
                 cash_balance: '84664.35',
                 account_balance: '84664.35',
-                year_start_balance: '83236.56',
+                year_start_balance: '84664.35',
                 current_balance: '84664.35',
-                balance_change_amount: '1427.79',
-                balance_change_percent: '1.72',
+                balance_change_amount: '0.00',
+                balance_change_percent: '0.00',
                 taxable_stock_gain_amount: '0.00',
+                month_start_balance: '84664.35',
+                month_change_amount: '0.00',
+                month_change_percent: '0.00',
                 one_week_start_balance: '84664.35',
                 one_week_change_amount: '0.00',
                 one_week_change_percent: '0.00',
@@ -6281,9 +6441,8 @@ describe('App', () => {
         await flushPromises();
 
         expect(wrapper.text()).toContain('Balance 01.01.');
-        expect(wrapper.text()).toContain('83,236.56 EUR');
         expect(wrapper.text()).toContain('84,664.35 EUR');
-        expect(wrapper.text()).toContain('+1.72% · +1,427.79 EUR');
+        expect(wrapper.text()).toContain('0.00% · 0.00 EUR');
         expect(wrapper.text()).toContain('Corrected balance (-27,5%)');
         expect(wrapper.text()).toContain('Corrected +/-');
         expect(wrapper.text()).not.toContain('84,271.71 EUR');

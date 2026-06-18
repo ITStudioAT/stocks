@@ -518,7 +518,7 @@ class AdminDepotTransactionController extends Controller
 
     /**
      * @param  array<int, array{id: int, symbol: ?string, name: ?string, isin: ?string, currency: ?string, latest_price: ?string, previous_day_price: ?string, previous_day_price_date: ?string, previous_day_change_percent: ?string, flatex_price: ?string, year_start_price: ?string, latest_price_fetched_at: ?string, latest_price_status: string, position_pieces: string}>  $depotHoldings
-     * @return array{stock_balance: string, cash_balance: string, account_balance: string, year_start_balance: string, current_balance: string, balance_change_amount: string, balance_change_percent: string, taxable_stock_gain_amount: string, one_week_start_balance: string, one_week_change_amount: string, one_week_change_percent: string}
+     * @return array{stock_balance: string, cash_balance: string, account_balance: string, year_start_balance: string, current_balance: string, balance_change_amount: string, balance_change_percent: string, taxable_stock_gain_amount: string, month_start_balance: string, month_change_amount: string, month_change_percent: string, one_week_start_balance: string, one_week_change_amount: string, one_week_change_percent: string}
      */
     private function depotValuationPayload(Depot $depot, array $depotHoldings, string $source): array
     {
@@ -538,15 +538,24 @@ class AdminDepotTransactionController extends Controller
         $yearStartCutoff = now()->startOfYear()->endOfDay();
         $yearStartBalance = $this->cashBalanceAt($depot, $yearStartCutoff)
             + $this->stockBalanceAt($depot, $yearStartCutoff)
-            + $this->cashFlowAfter($depot, $yearStartCutoff);
+            + $this->externalCashFlowAfter($depot, $yearStartCutoff);
         $currentBalance = $cashBalance + $stockBalance;
         $oneWeekStartCutoff = now()->subWeek()->endOfDay();
         $oneWeekStartBalance = $this->cashBalanceAt($depot, $oneWeekStartCutoff)
-            + $this->stockMarketBalanceAt($depot, $oneWeekStartCutoff);
+            + $this->stockMarketBalanceAt($depot, $oneWeekStartCutoff)
+            + $this->externalCashFlowAfter($depot, $oneWeekStartCutoff);
+        $monthStartCutoff = now()->startOfMonth()->endOfDay();
+        $monthStartBalance = $this->cashBalanceAt($depot, $monthStartCutoff)
+            + $this->stockMarketBalanceAt($depot, $monthStartCutoff)
+            + $this->externalCashFlowAfter($depot, $monthStartCutoff);
         $balanceChangeAmount = $currentBalance - $yearStartBalance;
         $balanceChangePercent = $yearStartBalance === 0.0
             ? 0.0
             : ($balanceChangeAmount / $yearStartBalance) * 100;
+        $monthChangeAmount = $currentBalance - $monthStartBalance;
+        $monthChangePercent = $monthStartBalance === 0.0
+            ? 0.0
+            : ($monthChangeAmount / $monthStartBalance) * 100;
         $oneWeekChangeAmount = $currentBalance - $oneWeekStartBalance;
         $oneWeekChangePercent = $oneWeekStartBalance === 0.0
             ? 0.0
@@ -562,6 +571,9 @@ class AdminDepotTransactionController extends Controller
             'balance_change_amount' => $this->decimal($balanceChangeAmount, 2),
             'balance_change_percent' => $this->decimal($balanceChangePercent, 2),
             'taxable_stock_gain_amount' => $this->decimal($taxableStockGainAmount, 2),
+            'month_start_balance' => $this->decimal($monthStartBalance, 2),
+            'month_change_amount' => $this->decimal($monthChangeAmount, 2),
+            'month_change_percent' => $this->decimal($monthChangePercent, 2),
             'one_week_start_balance' => $this->decimal($oneWeekStartBalance, 2),
             'one_week_change_amount' => $this->decimal($oneWeekChangeAmount, 2),
             'one_week_change_percent' => $this->decimal($oneWeekChangePercent, 2),
@@ -576,7 +588,7 @@ class AdminDepotTransactionController extends Controller
             ->sum('cash_delta');
     }
 
-    private function cashFlowAfter(Depot $depot, Carbon $cutoff): float
+    private function externalCashFlowAfter(Depot $depot, Carbon $cutoff): float
     {
         return (float) DepotTransaction::query()
             ->where('depot_id', $depot->id)
@@ -673,6 +685,7 @@ class AdminDepotTransactionController extends Controller
             $cashBalance = $isToday
                 ? (float) $depot->account_balance
                 : $this->cashBalanceFromTransactions($transactions, $cutoff);
+            $cashBalance += $this->externalCashFlowFromTransactionsAfter($transactions, $cutoff);
             $stockBalance = $isToday
                 ? $this->currentStockBalance($currentDepotHoldings)
                 : $this->stockMarketBalanceFromCollections($stockTransactionsByHoldingId, $dailyPricesByHoldingId, $cutoff);
@@ -719,6 +732,21 @@ class AdminDepotTransactionController extends Controller
     {
         return (float) $transactions
             ->filter(fn (DepotTransaction $transaction): bool => $transaction->booked_at?->lte($cutoff) ?? false)
+            ->sum(fn (DepotTransaction $transaction): float => (float) $transaction->cash_delta);
+    }
+
+    /**
+     * @param  Collection<int, DepotTransaction>  $transactions
+     */
+    private function externalCashFlowFromTransactionsAfter(Collection $transactions, Carbon $cutoff): float
+    {
+        return (float) $transactions
+            ->filter(fn (DepotTransaction $transaction): bool => (
+                $transaction->stock_holding_id === null
+                && in_array($transaction->type, ['deposit', 'withdrawal'], true)
+                && ($transaction->booked_at?->gt($cutoff) ?? false)
+                && ($transaction->booked_at?->lte(now()->endOfDay()) ?? false)
+            ))
             ->sum(fn (DepotTransaction $transaction): float => (float) $transaction->cash_delta);
     }
 

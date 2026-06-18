@@ -18,6 +18,7 @@ const defaultAnalyzeTrendTradeAmounts = [7000, 5000, 3000];
 const maxAnalyzeTrendTradeAmount = 1000000;
 const defaultAnalyzeTrendMaxInvestAmount = 0;
 const maxAnalyzeTrendMaxInvestAmount = 1000000;
+const cashLedgerPageSize = 10;
 
 const { lgAndDown, mdAndDown, smAndDown } = useDisplay();
 
@@ -208,6 +209,7 @@ const viewportWidth = ref(window.visualViewport?.width ?? window.innerWidth);
 const viewportHeight = ref(window.visualViewport?.height ?? window.innerHeight);
 const cashTransactionForm = ref(emptyCashTransactionForm());
 const stockTransactionForm = ref(emptyStockTransactionForm());
+const cashLedgerPage = ref(1);
 const editingFlatexHoldingId = ref(null);
 const flatexPriceEditValue = ref('');
 const flatexPriceEditInput = ref(null);
@@ -379,6 +381,12 @@ const sessionHeaderDates = computed(() => {
 const selectedIndexRecentPrices = computed(() => selectedIndexWatchItem.value?.recent_prices ?? []);
 const selectedIndexChart = computed(() => buildIndexPriceChart(selectedIndexRecentPrices.value));
 const depotPerformanceChart = computed(() => buildDepotPerformanceChart(depotPerformanceSeries?.value ?? []));
+const cashLedgerPageCount = computed(() => Math.max(Math.ceil(transactions.value.length / cashLedgerPageSize), 1));
+const paginatedCashLedgerTransactions = computed(() => {
+    const start = (cashLedgerPage.value - 1) * cashLedgerPageSize;
+
+    return transactions.value.slice(start, start + cashLedgerPageSize);
+});
 const selectedAnalyzeHolding = computed(() => holdings.value.find((holding) => holding.id === selectedAnalyzeHoldingId.value) ?? null);
 const selectedAnalyzeScopeLabel = computed(() => {
     if (selectedAnalyzeHoldingId.value === null) {
@@ -2126,6 +2134,19 @@ watch(
         );
     },
     { immediate: true },
+);
+
+watch(
+    () => transactions.value.length,
+    () => {
+        if (cashLedgerPage.value > cashLedgerPageCount.value) {
+            cashLedgerPage.value = cashLedgerPageCount.value;
+        }
+
+        if (cashLedgerPage.value < 1) {
+            cashLedgerPage.value = 1;
+        }
+    },
 );
 
 watch(
@@ -4197,6 +4218,10 @@ function formatDepotOneWeekStartBalance() {
     return `${formatAccountBalance(depotValuationNumber('one_week_start_balance'))} EUR`;
 }
 
+function formatDepotMonthStartBalance() {
+    return `${formatAccountBalance(depotValuationNumber('month_start_balance'))} EUR`;
+}
+
 function depotBalanceChangeTaxAmount() {
     const amount = depotValuationNumber('taxable_stock_gain_amount');
 
@@ -4236,6 +4261,13 @@ function formatDepotOneWeekChangeAmount() {
     return `${sign}${formatAccountBalance(amount)} EUR`;
 }
 
+function formatDepotMonthChangeAmount() {
+    const amount = depotValuationNumber('month_change_amount');
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${formatAccountBalance(amount)} EUR`;
+}
+
 function formatDepotBalanceChangePercent() {
     const amount = depotValuationNumber('balance_change_percent');
     const sign = amount > 0 ? '+' : '';
@@ -4255,6 +4287,13 @@ function formatDepotCorrectedBalanceChangePercent() {
 
 function formatDepotOneWeekChangePercent() {
     const amount = depotValuationNumber('one_week_change_percent');
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${amount.toFixed(2)}%`;
+}
+
+function formatDepotMonthChangePercent() {
+    const amount = depotValuationNumber('month_change_percent');
     const sign = amount > 0 ? '+' : '';
 
     return `${sign}${amount.toFixed(2)}%`;
@@ -4353,12 +4392,33 @@ function depotOneWeekChangeClass() {
     };
 }
 
+function depotMonthChangeClass() {
+    const amount = depotValuationNumber('month_change_amount');
+
+    return {
+        'text-success': amount > 0,
+        'text-error': amount < 0,
+        'text-medium-emphasis': amount === 0,
+    };
+}
+
 function formatCurrentDayMonth() {
     return formatDayMonthDaysAgo(0);
 }
 
 function formatOneWeekAgoDayMonth() {
     return formatDayMonthDaysAgo(7);
+}
+
+function formatMonthStartDayMonth() {
+    const date = new Date();
+    date.setDate(1);
+
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: displayTimeZone,
+        day: '2-digit',
+        month: '2-digit',
+    }).format(date);
 }
 
 function formatDayMonthDaysAgo(daysAgo) {
@@ -7175,6 +7235,26 @@ function recentStoredPriceTrendLabel(recentPrice) {
     return labels[recentPrice.trend] ?? labels.flat;
 }
 
+function holdingDayTrend(holding) {
+    const latestRecentPriceTrend = recentPricesForExpandedHolding(holding).at(-1)?.trend ?? null;
+
+    if (latestRecentPriceTrend && latestRecentPriceTrend !== 'flat') {
+        return latestRecentPriceTrend;
+    }
+
+    return holding.latest_price_tick_trend
+        ?? holding.latest_price_trend
+        ?? latestRecentPriceTrend;
+}
+
+function holdingDayTrendDotClass(holding) {
+    return recentStoredPriceTrendDotClass({ trend: holdingDayTrend(holding) });
+}
+
+function holdingDayTrendLabel(holding) {
+    return `Day indicator: ${recentStoredPriceTrendLabel({ trend: holdingDayTrend(holding) })}`;
+}
+
 function latestPriceClass(holding) {
     return {
         'bg-success text-white': holding.latest_price_trend === 'up',
@@ -8737,13 +8817,22 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             </div>
                                         </td>
                                         <td v-if="isHandsetLandscape">
-                                            <span class="latest-price-value d-inline-flex flex-column" :class="mobileHoldingPriceClass(holding)">
-                                                <span>{{ formatMobileHoldingPrice(holding) }}</span>
+                                            <span class="handset-landscape-price">
                                                 <span
-                                                    v-if="mobileHoldingPriceChangeText(holding)"
-                                                    class="latest-price-change"
-                                                >
-                                                    {{ mobileHoldingPriceChangeText(holding) }}
+                                                    v-if="holdingDayTrend(holding)"
+                                                    class="recent-price-trend-dot recent-price-trend-dot--day"
+                                                    :class="holdingDayTrendDotClass(holding)"
+                                                    :aria-label="holdingDayTrendLabel(holding)"
+                                                    :title="holdingDayTrendLabel(holding)"
+                                                />
+                                                <span class="latest-price-value d-inline-flex flex-column" :class="mobileHoldingPriceClass(holding)">
+                                                    <span>{{ formatMobileHoldingPrice(holding) }}</span>
+                                                    <span
+                                                        v-if="mobileHoldingPriceChangeText(holding)"
+                                                        class="latest-price-change"
+                                                    >
+                                                        {{ mobileHoldingPriceChangeText(holding) }}
+                                                    </span>
                                                 </span>
                                             </span>
                                         </td>
@@ -11621,6 +11710,29 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </tbody>
                                 </v-table>
                             </v-card>
+
+                            <v-card class="depot-balance-card" variant="outlined" width="100%" max-width="480">
+                                <v-table density="compact">
+                                    <tbody>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">Balance {{ formatMonthStartDayMonth() }}</td>
+                                            <td class="text-right">{{ formatDepotMonthStartBalance() }}</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">Balance {{ formatCurrentDayMonth() }}</td>
+                                            <td class="text-right">{{ formatDepotCurrentBalance() }}</td>
+                                        </tr>
+                                        <tr>
+                                            <td class="text-medium-emphasis text-caption">Month</td>
+                                            <td class="text-right">
+                                                <span :class="depotMonthChangeClass()">
+                                                    {{ formatDepotMonthChangePercent() }} · {{ formatDepotMonthChangeAmount() }}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </v-table>
+                            </v-card>
                         </div>
 
                         <div v-if="activeDepot" class="mt-6">
@@ -11827,141 +11939,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             <p v-else-if="!transactionsLoading" class="text-medium-emphasis text-body-2 mt-2">No stocks in this depot.</p>
                         </div>
 
-                        <div v-if="activeDepot" class="cash-ledger-section mt-6">
-                            <div class="d-flex align-center justify-space-between flex-wrap ga-3 mb-2">
-                                <p class="text-overline text-medium-emphasis mb-0">Cash ledger</p>
-                                <div class="d-flex align-center ga-2">
-                                    <v-btn
-                                        color="success"
-                                        prepend-icon="mdi-cash-plus"
-                                        variant="tonal"
-                                        @click="openCashTransactionDialog('deposit')"
-                                    >
-                                        Add cash
-                                    </v-btn>
-                                    <v-btn
-                                        color="error"
-                                        prepend-icon="mdi-cash-minus"
-                                        variant="tonal"
-                                        @click="openCashTransactionDialog('withdrawal')"
-                                    >
-                                        Withdraw
-                                    </v-btn>
-                                </div>
-                            </div>
-                            <v-progress-linear v-if="transactionsLoading" indeterminate class="mb-2" />
-                            <v-alert v-if="transactionsError" type="error" variant="tonal" density="compact" class="mb-2">
-                                {{ transactionsError }}
-                            </v-alert>
-                            <div v-if="transactions.length > 0" class="mobile-cash-ledger">
-                                <article
-                                    v-for="tx in transactions"
-                                    :key="`mobile-transaction-${tx.id}`"
-                                    class="mobile-cash-ledger-card"
-                                >
-                                    <div class="mobile-cash-ledger-row">
-                                        <span>
-                                            <v-chip :color="transactionTypeColor(tx.type)" density="comfortable" size="x-small" variant="tonal">
-                                                {{ transactionTypeLabel(tx.type) }}
-                                            </v-chip>
-                                        </span>
-                                        <span class="cash-ledger-date-control">
-                                            <button
-                                                type="button"
-                                                class="cash-ledger-date-button"
-                                                :disabled="transactionsLoading"
-                                                :aria-label="`Edit transaction date ${formatTransactionDate(tx.booked_at)}`"
-                                                @click="openTransactionDatePicker(tx.id, 'mobile')"
-                                            >
-                                                <span>{{ formatTransactionDate(tx.booked_at) }}</span>
-                                                <v-icon icon="mdi-calendar-edit" size="x-small" />
-                                            </button>
-                                            <input
-                                                :id="transactionDateInputId(tx.id, 'mobile')"
-                                                class="cash-ledger-date-picker"
-                                                type="date"
-                                                :value="transactionDateInputValue(tx.booked_at)"
-                                                :disabled="transactionsLoading"
-                                                tabindex="-1"
-                                                aria-label="Transaction date"
-                                                @change="updateTransactionDate(tx, $event.target.value)"
-                                            >
-                                        </span>
-                                    </div>
-                                    <div v-if="tx.stock_label" class="mobile-cash-ledger-stock">
-                                        <div>{{ tx.stock_label }}</div>
-                                        <div v-if="tx.stock_isin" class="cash-ledger-stock-isin">{{ tx.stock_isin }}</div>
-                                    </div>
-                                    <div v-if="tx.note" class="cash-ledger-note">
-                                        {{ tx.note }}
-                                    </div>
-                                    <div class="mobile-cash-ledger-row">
-                                        <span :class="Number(tx.cash_delta) >= 0 ? 'text-success' : 'text-error'">
-                                            {{ formatCashDelta(tx.cash_delta) }}
-                                        </span>
-                                        <span>{{ formatAccountBalance(tx.balance_after) }}</span>
-                                    </div>
-                                </article>
-                            </div>
-                            <v-table v-if="transactions.length > 0" class="desktop-cash-ledger-table" density="compact">
-                                <thead>
-                                    <tr>
-                                        <th>Date</th>
-                                        <th>Type</th>
-                                        <th>Stock</th>
-                                        <th class="text-right">Pieces</th>
-                                        <th class="text-right">Cash effect</th>
-                                        <th class="text-right">Balance</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr v-for="tx in transactions" :key="tx.id">
-                                        <td class="text-caption text-medium-emphasis">
-                                            <span class="cash-ledger-date-control">
-                                                <button
-                                                    type="button"
-                                                    class="cash-ledger-date-button"
-                                                    :disabled="transactionsLoading"
-                                                    :aria-label="`Edit transaction date ${formatTransactionDate(tx.booked_at)}`"
-                                                    @click="openTransactionDatePicker(tx.id, 'desktop')"
-                                                >
-                                                    <span>{{ formatTransactionDate(tx.booked_at) }}</span>
-                                                    <v-icon icon="mdi-calendar-edit" size="x-small" />
-                                                </button>
-                                                <input
-                                                    :id="transactionDateInputId(tx.id, 'desktop')"
-                                                    class="cash-ledger-date-picker"
-                                                    type="date"
-                                                    :value="transactionDateInputValue(tx.booked_at)"
-                                                    :disabled="transactionsLoading"
-                                                    tabindex="-1"
-                                                    aria-label="Transaction date"
-                                                    @change="updateTransactionDate(tx, $event.target.value)"
-                                                >
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <v-chip :color="transactionTypeColor(tx.type)" density="comfortable" size="x-small" variant="tonal">
-                                                {{ transactionTypeLabel(tx.type) }}
-                                            </v-chip>
-                                        </td>
-                                        <td>
-                                            <div v-if="tx.stock_label">{{ tx.stock_label }}</div>
-                                            <div v-else-if="!tx.note">–</div>
-                                            <div v-if="tx.stock_isin" class="cash-ledger-stock-isin">{{ tx.stock_isin }}</div>
-                                            <div v-if="tx.note" class="cash-ledger-note">{{ tx.note }}</div>
-                                        </td>
-                                        <td class="text-right">{{ tx.pieces != null ? Math.trunc(Number(tx.pieces)) : '–' }}</td>
-                                        <td class="text-right" :class="Number(tx.cash_delta) >= 0 ? 'text-success' : 'text-error'">
-                                            {{ formatCashDelta(tx.cash_delta) }}
-                                        </td>
-                                        <td class="text-right">{{ formatAccountBalance(tx.balance_after) }}</td>
-                                    </tr>
-                                </tbody>
-                            </v-table>
-                            <p v-else-if="!transactionsLoading" class="text-medium-emphasis text-body-2 mt-2">No transactions yet.</p>
-                        </div>
-
                         <v-card v-if="activeDepot" class="depot-performance-card mt-6" variant="outlined">
                             <v-card-text>
                                 <div class="d-flex align-center justify-space-between flex-wrap ga-3 mb-3">
@@ -12138,6 +12115,152 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 </p>
                             </v-card-text>
                         </v-card>
+
+                        <div v-if="activeDepot" class="cash-ledger-section mt-6">
+                            <div class="d-flex align-center justify-space-between flex-wrap ga-3 mb-2">
+                                <p class="text-overline text-medium-emphasis mb-0">Cash ledger</p>
+                                <div class="d-flex align-center ga-2">
+                                    <v-btn
+                                        color="success"
+                                        prepend-icon="mdi-cash-plus"
+                                        variant="tonal"
+                                        @click="openCashTransactionDialog('deposit')"
+                                    >
+                                        Add cash
+                                    </v-btn>
+                                    <v-btn
+                                        color="error"
+                                        prepend-icon="mdi-cash-minus"
+                                        variant="tonal"
+                                        @click="openCashTransactionDialog('withdrawal')"
+                                    >
+                                        Withdraw
+                                    </v-btn>
+                                </div>
+                            </div>
+                            <v-progress-linear v-if="transactionsLoading" indeterminate class="mb-2" />
+                            <v-alert v-if="transactionsError" type="error" variant="tonal" density="compact" class="mb-2">
+                                {{ transactionsError }}
+                            </v-alert>
+                            <div v-if="transactions.length > 0" class="mobile-cash-ledger">
+                                <article
+                                    v-for="tx in paginatedCashLedgerTransactions"
+                                    :key="`mobile-transaction-${tx.id}`"
+                                    class="mobile-cash-ledger-card"
+                                >
+                                    <div class="mobile-cash-ledger-row">
+                                        <span>
+                                            <v-chip :color="transactionTypeColor(tx.type)" density="comfortable" size="x-small" variant="tonal">
+                                                {{ transactionTypeLabel(tx.type) }}
+                                            </v-chip>
+                                        </span>
+                                        <span class="cash-ledger-date-control">
+                                            <button
+                                                type="button"
+                                                class="cash-ledger-date-button"
+                                                :disabled="transactionsLoading"
+                                                :aria-label="`Edit transaction date ${formatTransactionDate(tx.booked_at)}`"
+                                                @click="openTransactionDatePicker(tx.id, 'mobile')"
+                                            >
+                                                <span>{{ formatTransactionDate(tx.booked_at) }}</span>
+                                                <v-icon icon="mdi-calendar-edit" size="x-small" />
+                                            </button>
+                                            <input
+                                                :id="transactionDateInputId(tx.id, 'mobile')"
+                                                class="cash-ledger-date-picker"
+                                                type="date"
+                                                :value="transactionDateInputValue(tx.booked_at)"
+                                                :disabled="transactionsLoading"
+                                                tabindex="-1"
+                                                aria-label="Transaction date"
+                                                @change="updateTransactionDate(tx, $event.target.value)"
+                                            >
+                                        </span>
+                                    </div>
+                                    <div v-if="tx.stock_label" class="mobile-cash-ledger-stock">
+                                        <div>{{ tx.stock_label }}</div>
+                                        <div v-if="tx.stock_isin" class="cash-ledger-stock-isin">{{ tx.stock_isin }}</div>
+                                    </div>
+                                    <div v-if="tx.note" class="cash-ledger-note">
+                                        {{ tx.note }}
+                                    </div>
+                                    <div class="mobile-cash-ledger-row">
+                                        <span :class="Number(tx.cash_delta) >= 0 ? 'text-success' : 'text-error'">
+                                            {{ formatCashDelta(tx.cash_delta) }}
+                                        </span>
+                                        <span>{{ formatAccountBalance(tx.balance_after) }}</span>
+                                    </div>
+                                </article>
+                            </div>
+                            <v-table v-if="transactions.length > 0" class="desktop-cash-ledger-table" density="compact">
+                                <thead>
+                                    <tr>
+                                        <th>Date</th>
+                                        <th>Type</th>
+                                        <th>Stock</th>
+                                        <th class="text-right">Pieces</th>
+                                        <th class="text-right">Cash effect</th>
+                                        <th class="text-right">Balance</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="tx in paginatedCashLedgerTransactions" :key="tx.id">
+                                        <td class="text-caption text-medium-emphasis">
+                                            <span class="cash-ledger-date-control">
+                                                <button
+                                                    type="button"
+                                                    class="cash-ledger-date-button"
+                                                    :disabled="transactionsLoading"
+                                                    :aria-label="`Edit transaction date ${formatTransactionDate(tx.booked_at)}`"
+                                                    @click="openTransactionDatePicker(tx.id, 'desktop')"
+                                                >
+                                                    <span>{{ formatTransactionDate(tx.booked_at) }}</span>
+                                                    <v-icon icon="mdi-calendar-edit" size="x-small" />
+                                                </button>
+                                                <input
+                                                    :id="transactionDateInputId(tx.id, 'desktop')"
+                                                    class="cash-ledger-date-picker"
+                                                    type="date"
+                                                    :value="transactionDateInputValue(tx.booked_at)"
+                                                    :disabled="transactionsLoading"
+                                                    tabindex="-1"
+                                                    aria-label="Transaction date"
+                                                    @change="updateTransactionDate(tx, $event.target.value)"
+                                                >
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <v-chip :color="transactionTypeColor(tx.type)" density="comfortable" size="x-small" variant="tonal">
+                                                {{ transactionTypeLabel(tx.type) }}
+                                            </v-chip>
+                                        </td>
+                                        <td>
+                                            <div v-if="tx.stock_label">{{ tx.stock_label }}</div>
+                                            <div v-else-if="!tx.note">–</div>
+                                            <div v-if="tx.stock_isin" class="cash-ledger-stock-isin">{{ tx.stock_isin }}</div>
+                                            <div v-if="tx.note" class="cash-ledger-note">{{ tx.note }}</div>
+                                        </td>
+                                        <td class="text-right">{{ tx.pieces != null ? Math.trunc(Number(tx.pieces)) : '–' }}</td>
+                                        <td class="text-right" :class="Number(tx.cash_delta) >= 0 ? 'text-success' : 'text-error'">
+                                            {{ formatCashDelta(tx.cash_delta) }}
+                                        </td>
+                                        <td class="text-right">{{ formatAccountBalance(tx.balance_after) }}</td>
+                                    </tr>
+                                </tbody>
+                            </v-table>
+                            <div
+                                v-if="cashLedgerPageCount > 1"
+                                class="cash-ledger-pagination d-flex justify-center mt-3"
+                            >
+                                <v-pagination
+                                    v-model="cashLedgerPage"
+                                    :length="cashLedgerPageCount"
+                                    :total-visible="smAndDown ? 3 : 7"
+                                    density="comfortable"
+                                />
+                            </div>
+                            <p v-if="transactions.length === 0 && !transactionsLoading" class="text-medium-emphasis text-body-2 mt-2">No transactions yet.</p>
+                        </div>
 
                         <v-alert v-else type="info" variant="tonal" density="compact" class="mt-4">
                             No active depot found.
@@ -14911,6 +15034,12 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     width: 12px;
 }
 
+.handset-landscape-price {
+    align-items: center;
+    display: inline-flex;
+    gap: 8px;
+}
+
 .recent-price-trend-dots {
     align-items: center;
     display: flex;
@@ -14924,6 +15053,15 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     display: inline-block;
     height: 8px;
     width: 8px;
+}
+
+.recent-price-trend-dot--day {
+    box-shadow:
+        0 0 0 2px rgb(var(--v-theme-surface)),
+        0 0 0 3px rgba(var(--v-theme-on-surface), 0.16);
+    flex: 0 0 auto;
+    height: 10px;
+    width: 10px;
 }
 
 .recent-price-trend-dot-up {
