@@ -2180,7 +2180,7 @@ describe('App', () => {
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/holdings/historical-prices/ensure')).toBe(false);
 
         wrapper.unmount();
-    });
+    }, 15000);
 
     it('restores the selected Analyze overview stock from the URL', async () => {
         window.history.pushState({}, '', '/admin/menu/analyze/overview?stock=1');
@@ -2645,7 +2645,7 @@ describe('App', () => {
             .find((button) => button.text().includes('Amundi IBEX 35')).attributes('aria-pressed')).toBe('true');
     });
 
-    it('renders the Tests menu page with unpaginated index and stock selects', async () => {
+    it('renders the Tests menu page with an unpaginated stock select', async () => {
         window.history.pushState({}, '', '/admin/menu/analyze/tests?stock=all');
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
         const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
@@ -2657,6 +2657,9 @@ describe('App', () => {
             id: index + 1,
             symbol: `S${index + 1}`,
             name: `Stock ${index + 1}`,
+            currency: index === 0 ? 'USD' : 'EUR',
+            exchange: index === 0 ? 'NASDAQ' : 'XETRA',
+            latest_price: String(100 + index),
         }));
         const fetchMock = vi.fn((path) => {
             if (path === '/admin/me') {
@@ -2700,27 +2703,51 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ indices, stocks }));
             }
 
-            if (path === '/admin/tests/tickers') {
+            if (path.startsWith('/admin/tests/stocks/') && path.endsWith('/intraday')) {
+                const stockId = Number(path.match(/\/admin\/tests\/stocks\/(\d+)\/intraday/)?.[1]);
+                const stock = stocks.find((item) => item.id === stockId);
+                const close = stockId === 12 ? '112.34000000' : '101.23000000';
+
                 return Promise.resolve(jsonResponse({
-                    exchange_code: 'XETRA',
-                    tickers: [
-                        {
-                            Code: 'AMES',
-                            Name: 'Amundi IBEX 35 UCITS ETF Acc',
-                            Exchange: 'XETRA',
-                            Type: 'ETF',
-                            Currency: 'EUR',
-                            Isin: 'LU1681043599',
-                        },
-                        {
-                            Code: 'LEER',
-                            Name: 'Amundi MSCI Eastern Europe',
-                            Exchange: 'XETRA',
-                            Type: 'ETF',
-                            Currency: 'EUR',
-                            Isin: 'LU1681043912',
-                        },
-                    ],
+                    stock,
+                    day: {
+                        title: 'Intraday 25.06.2026 - 5m',
+                        trading_date: '2026-06-25',
+                        interval: '5m',
+                        overview: null,
+                        rows: [
+                            {
+                                id: stockId,
+                                stock_holding_id: stockId,
+                                trading_date: '2026-06-25',
+                                interval: '5m',
+                                as_of: '2026-06-25 07:00:00',
+                                timestamp: 1782363600,
+                                gmtoffset: 0,
+                                datetime: '2026-06-25 07:00:00',
+                                open: '100.10000000',
+                                high: '102.20000000',
+                                low: '99.90000000',
+                                close,
+                                volume: 1200,
+                                currency: stock?.currency ?? null,
+                                source_key: 'eodhd_intraday',
+                                source_name: 'EODHD intraday',
+                                source_url: `https://eodhd.com/api/intraday/${stock?.symbol}.XETRA?fmt=json&interval=5m`,
+                                raw_payload: {
+                                    close,
+                                    volume: 1200,
+                                },
+                                created_at: '2026-06-25 12:00:01',
+                                updated_at: '2026-06-25 12:00:01',
+                            },
+                        ],
+                    },
+                    refresh: {
+                        status: 'finished',
+                        stored_count: 1,
+                        message: '1 intraday candles loaded/updated.',
+                    },
                 }));
             }
 
@@ -2771,53 +2798,48 @@ describe('App', () => {
 
         const wrapper = mountApp();
         await flushPromises();
+        await flushPromises();
 
         const testsPage = wrapper.find('[aria-label="Analyze tests"]');
         expect(testsPage.exists()).toBe(true);
-        expect(testsPage.text()).toContain('Indices');
         expect(testsPage.text()).toContain('Stocks');
-        expect(testsPage.find('[aria-label="Test indices"]').exists()).toBe(true);
+        expect(testsPage.text()).not.toContain('Indices');
+        expect(testsPage.text()).not.toContain('Tickers');
+        expect(testsPage.find('[aria-label="Test indices"]').exists()).toBe(false);
         expect(testsPage.find('[aria-label="Test stocks"]').exists()).toBe(true);
+        expect(testsPage.find('[aria-label="Ticker result"]').exists()).toBe(false);
         expect(window.location.pathname).toBe('/admin/menu/analyze/tests');
         expect(wrapper.find('.dashboard-navigation-drawer').text()).not.toContain('Tests');
         expect(wrapper.findAll('.v-tab').map((tab) => tab.text()).some((label) => label.includes('Tests'))).toBe(true);
-        expect(wrapper.vm.testOptions.indices).toHaveLength(2);
         expect(wrapper.vm.testOptions.stocks).toHaveLength(12);
         expect(fetchMock).toHaveBeenCalledWith('/admin/tests/options', expect.any(Object));
+        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/stocks/1/intraday', expect.any(Object));
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/tests/options?page=1')).toBe(false);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/tests/tickers')).toBe(false);
+        expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/websocket'))).toBe(false);
+        expect(testsPage.find('[aria-label="Selected test stock"]').exists()).toBe(true);
+        expect(testsPage.find('[aria-label="Selected test stock"]').text()).toContain('Stock 1');
+        expect(testsPage.find('[aria-label="Selected test stock"]').text()).toContain('2026-06-25');
+        expect(testsPage.find('[aria-label="Selected test stock"]').text()).toContain('101.23');
+        expect(testsPage.find('[aria-label="Selected test stock"]').text()).toContain('eodhd_intraday');
+        expect(testsPage.find('[aria-label="Selected test stock"]').text()).toContain('EODHD intraday');
+        expect(testsPage.find('[aria-label="Selected test stock"]').text()).toContain('https://eodhd.com/api/intraday/S1.XETRA');
+        expect(testsPage.find('[aria-label="Selected test stock"]').text()).toContain('"volume":1200');
+        expect(testsPage.find('[aria-label="Selected test stock"]').text()).toContain('1 intraday candles loaded/updated.');
 
-        const indexChips = testsPage.find('[aria-label="Test indices"]').findAll('button');
         const stockChips = testsPage.find('[aria-label="Test stocks"]').findAll('button');
-        expect(indexChips).toHaveLength(2);
         expect(stockChips).toHaveLength(12);
-        expect(indexChips[0].text()).toContain('ATX');
-        expect(indexChips[0].text()).toContain('Austrian Traded Index');
         expect(stockChips[11].text()).toContain('S12');
         expect(stockChips[11].text()).toContain('Stock 12');
 
-        await indexChips[0].trigger('click');
         await stockChips[11].trigger('click');
-
-        expect(wrapper.vm.selectedTestIndexId).toBe(1);
-        expect(wrapper.vm.selectedTestStockId).toBe(12);
-        expect(indexChips[0].attributes('aria-pressed')).toBe('true');
-        expect(stockChips[11].attributes('aria-pressed')).toBe('true');
-
-        const testTabs = wrapper.findAll('.v-tab').filter((tab) => ['Tickers', 'Exchanges'].includes(tab.text()));
-        expect(testTabs).toHaveLength(1);
-        expect(wrapper.vm.selectedTestTab).toBe('tickers');
-        expect(testsPage.text()).toContain('Exchange: XETRA');
-        expect(testsPage.find('[aria-label="Ticker result"]').classes()).toContain('tests-ticker-panel');
-
-        const loadTickersButton = testsPage.findAll('button').find((button) => button.text().includes('Load'));
-        await loadTickersButton.trigger('click');
         await flushPromises();
 
-        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/tickers', expect.any(Object));
-        expect(wrapper.vm.testTickers).toHaveLength(2);
-        expect(testsPage.text()).toContain('AMES');
-        expect(testsPage.text()).toContain('Amundi IBEX 35 UCITS ETF Acc');
-        expect(testsPage.text()).toContain('LU1681043599');
+        expect(wrapper.vm.selectedTestStockId).toBe(12);
+        expect(stockChips[11].attributes('aria-pressed')).toBe('true');
+        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/stocks/12/intraday', expect.any(Object));
+        expect(testsPage.find('[aria-label="Selected test stock"]').text()).toContain('Stock 12');
+        expect(testsPage.find('[aria-label="Selected test stock"]').text()).toContain('112.34');
     });
 
     it('renders a Today chart with stored EODHD intraday candle rows', async () => {

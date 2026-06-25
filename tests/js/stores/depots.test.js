@@ -86,4 +86,43 @@ describe('useDepotStore', () => {
         expect(depots.priceRefresh).toBeNull();
         expect(depots.holdingsError).toBe('');
     });
+
+    it('loads today intraday values for a selected test stock', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+            stock: {
+                id: 5,
+                symbol: 'AMES',
+                name: 'Amundi IBEX 35 UCITS ETF',
+                currency: 'EUR',
+            },
+            day: {
+                trading_date: '2026-06-25',
+                interval: '5m',
+                overview: null,
+                rows: [
+                    {
+                        datetime: '2026-06-25 07:00:00',
+                        open: '498.10000000',
+                        high: '499.20000000',
+                        low: '497.90000000',
+                        close: '499.15000000',
+                        volume: 1200,
+                    },
+                ],
+            },
+            refresh: {
+                message: '1 intraday candles loaded/updated.',
+            },
+        }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const depots = useDepotStore();
+        const data = await depots.loadTestIntraday(5);
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/stocks/5/intraday', expect.any(Object));
+        expect(data.day.rows[0].close).toBe('499.15000000');
+        expect(depots.testIntraday.stock.symbol).toBe('AMES');
+        expect(depots.testIntradayLoading).toBe(false);
+        expect(depots.testIntradayError).toBe('');
+    });
 });

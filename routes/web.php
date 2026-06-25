@@ -171,6 +171,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::get('/admin/queue/status', [AdminQueueStatusController::class, 'show'])->name('admin.queue.status');
     Route::post('/admin/queue/clear', [AdminQueueStatusController::class, 'clear'])->name('admin.queue.clear');
     Route::get('/admin/tests/options', [AdminTestsController::class, 'options'])->name('admin.tests.options');
+    Route::get('/admin/tests/stocks/{holding}/intraday', [AdminTestsController::class, 'intraday'])->name('admin.tests.stocks.intraday');
     Route::get('/admin/tests/tickers', [AdminTestsController::class, 'tickers'])->name('admin.tests.tickers');
     Route::get('/admin/tests/exchanges', [AdminTestsController::class, 'exchanges'])->name('admin.tests.exchanges');
     Route::get('/admin/data/exchanges', [AdminDataController::class, 'exchanges'])->name('admin.data.exchanges');

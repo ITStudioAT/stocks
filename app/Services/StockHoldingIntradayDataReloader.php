@@ -62,7 +62,70 @@ class StockHoldingIntradayDataReloader
      */
     public function candlePayloads(StockHolding $holding): array
     {
-        $days = collect($this->lastOverviewDays($holding));
+        return $this->candlePayloadsForDays($holding, collect($this->lastOverviewDays($holding)));
+    }
+
+    /**
+     * @return array{title: string, trading_date: string, interval: string, overview: ?string, rows: array<int, array<string, mixed>>}
+     */
+    public function todayCandlePayload(StockHolding $holding): array
+    {
+        return $this->candlePayloadsForDays($holding, collect([$this->todayOverviewDay($holding)]))[0];
+    }
+
+    public function reloadToday(StockHolding $holding): StockHoldingIntradayReloadRun
+    {
+        $day = $this->todayOverviewDay($holding);
+        $run = StockHoldingIntradayReloadRun::query()->create([
+            'id' => 'intraday-today-'.Str::uuid()->toString(),
+            'stock_holding_id' => $holding->id,
+            'status' => 'running',
+            'date_from' => $day['date']->toDateString(),
+            'date_to' => $day['date']->toDateString(),
+            'started_at' => now(),
+        ]);
+
+        if (! $day['is_trading_day']) {
+            $run->update([
+                'status' => 'finished',
+                'stored_count' => 0,
+                'message' => $day['overview'] ?? 'Market is closed today.',
+                'finished_at' => now(),
+            ]);
+
+            return $run->refresh();
+        }
+
+        try {
+            $records = $this->fetchIntradayRecords($holding, $day['date']);
+            $storedCount = $this->storeRecords($holding, $day['date'], $records);
+
+            $run->update([
+                'status' => 'finished',
+                'stored_count' => $storedCount,
+                'message' => "{$storedCount} intraday candles loaded/updated.",
+                'finished_at' => now(),
+            ]);
+        } catch (Throwable $exception) {
+            $run->update([
+                'status' => 'failed',
+                'message' => 'Intraday reload failed.',
+                'error_summary' => ['message' => Str::limit($exception->getMessage(), 255, '')],
+                'finished_at' => now(),
+            ]);
+
+            throw $exception;
+        }
+
+        return $run->refresh();
+    }
+
+    /**
+     * @param  Collection<int, array{date: Carbon, is_trading_day: bool, overview: ?string}>  $days
+     * @return array<int, array{title: string, trading_date: string, interval: string, overview: ?string, rows: array<int, array<string, mixed>>}>
+     */
+    private function candlePayloadsForDays(StockHolding $holding, Collection $days): array
+    {
         $tradeDates = $days
             ->map(fn (array $day): string => $day['date']->toDateString())
             ->values();
@@ -90,7 +153,28 @@ class StockHoldingIntradayDataReloader
                     ->orWhereNotNull('close');
             })
             ->orderBy('as_of')
-            ->get(['trading_date', 'interval', 'timestamp', 'gmtoffset', 'datetime', 'open', 'high', 'low', 'close', 'volume'])
+            ->get([
+                'id',
+                'stock_holding_id',
+                'trading_date',
+                'interval',
+                'as_of',
+                'timestamp',
+                'gmtoffset',
+                'datetime',
+                'open',
+                'high',
+                'low',
+                'close',
+                'volume',
+                'currency',
+                'source_key',
+                'source_name',
+                'source_url',
+                'raw_payload',
+                'created_at',
+                'updated_at',
+            ])
             ->groupBy(fn (StockHoldingIntradayCandle $candle): string => $candle->trading_date?->toDateString() ?? '');
 
         return $days
@@ -765,6 +849,42 @@ class StockHoldingIntradayDataReloader
     }
 
     /**
+     * @return array{date: Carbon, is_trading_day: bool, overview: ?string}
+     */
+    private function todayOverviewDay(StockHolding $holding): array
+    {
+        $exchange = $this->exchangeForHolding($holding);
+        $timezone = $exchange?->timezone ?: 'Europe/Vienna';
+        $holidayLabels = $this->holidayLabels($exchange);
+        $workingDays = $this->workingDays($exchange);
+        $date = now($timezone)->startOfDay();
+        $dateKey = $date->toDateString();
+        $holidayLabel = $holidayLabels[$dateKey] ?? null;
+
+        if ($holidayLabel !== null) {
+            return [
+                'date' => $date,
+                'is_trading_day' => false,
+                'overview' => "Market closed: {$holidayLabel}",
+            ];
+        }
+
+        if (! in_array(Str::lower($date->format('D')), $workingDays, true)) {
+            return [
+                'date' => $date,
+                'is_trading_day' => false,
+                'overview' => 'Market closed today.',
+            ];
+        }
+
+        return [
+            'date' => $date,
+            'is_trading_day' => true,
+            'overview' => null,
+        ];
+    }
+
+    /**
      * @return array<int, array<string, mixed>>
      */
     private function fetchIntradayRecords(StockHolding $holding, Carbon $fromDay, ?Carbon $toDay = null): array
@@ -984,6 +1104,11 @@ class StockHoldingIntradayDataReloader
     private function candlePayload(StockHoldingIntradayCandle $candle): array
     {
         return [
+            'id' => $candle->id,
+            'stock_holding_id' => $candle->stock_holding_id,
+            'trading_date' => $candle->trading_date?->toDateString(),
+            'interval' => $candle->interval,
+            'as_of' => $this->rawDateTime($candle, 'as_of'),
             'timestamp' => $candle->timestamp,
             'gmtoffset' => $candle->gmtoffset,
             'datetime' => $candle->datetime,
@@ -992,7 +1117,25 @@ class StockHoldingIntradayDataReloader
             'low' => $candle->low === null ? null : (string) $candle->low,
             'close' => $candle->close === null ? null : (string) $candle->close,
             'volume' => $candle->volume,
+            'currency' => $candle->currency,
+            'source_key' => $candle->source_key,
+            'source_name' => $candle->source_name,
+            'source_url' => $candle->source_url,
+            'raw_payload' => $candle->raw_payload,
+            'created_at' => $this->rawDateTime($candle, 'created_at'),
+            'updated_at' => $this->rawDateTime($candle, 'updated_at'),
         ];
+    }
+
+    private function rawDateTime(StockHoldingIntradayCandle $candle, string $key): ?string
+    {
+        $value = $candle->getRawOriginal($key);
+
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        return (string) $value;
     }
 
     private function sourceUrl(StockHolding $holding, Carbon $fromDay, Carbon $toDay): string

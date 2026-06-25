@@ -419,10 +419,12 @@ class AdminDepotTransactionController extends Controller
         StockPrice|StockRealtimePrice|null $latestStoredPrice,
         ?StockHoldingDailyPrice $previousDailyPrice,
     ): array {
-        $dailyPrice = $previousDailyPrice?->adjusted_close ?? $previousDailyPrice?->close;
+        $dailyPrice = $previousDailyPrice?->close ?? $previousDailyPrice?->adjusted_close;
         $dailyDate = $previousDailyPrice?->trading_date?->copy()->startOfDay();
         $previousStoredPrice = $this->previousStoredPriceForLatestRealtime($holding, $latestStoredPrice);
-        $previousStoredPriceDate = $this->storedPriceDate($previousStoredPrice);
+        $previousStoredPriceDate = $previousStoredPrice instanceof StockRealtimePrice
+            ? $previousStoredPrice->as_of?->copy()->startOfDay()
+            : $this->storedPriceDate($previousStoredPrice);
 
         if ($previousStoredPrice?->price !== null && $previousStoredPriceDate !== null && ($dailyDate === null || $previousStoredPriceDate->gt($dailyDate))) {
             return [
@@ -437,10 +439,16 @@ class AdminDepotTransactionController extends Controller
         ];
     }
 
-    private function previousStoredPriceForLatestRealtime(StockHolding $holding, StockPrice|StockRealtimePrice|null $latestStoredPrice): ?StockPrice
+    private function previousStoredPriceForLatestRealtime(StockHolding $holding, StockPrice|StockRealtimePrice|null $latestStoredPrice): StockPrice|StockRealtimePrice|null
     {
         if (! $latestStoredPrice instanceof StockRealtimePrice) {
             return null;
+        }
+
+        $previousRealtimePrice = $this->previousRealtimePriceForLatestRealtime($holding, $latestStoredPrice);
+
+        if ($previousRealtimePrice !== null) {
+            return $previousRealtimePrice;
         }
 
         $latestStoredPriceDate = $this->storedPriceDate($latestStoredPrice);
@@ -454,6 +462,23 @@ class AdminDepotTransactionController extends Controller
         return $previousStoredPriceDate->lt($latestStoredPriceDate)
             ? $previousStoredPrice
             : null;
+    }
+
+    private function previousRealtimePriceForLatestRealtime(StockHolding $holding, StockRealtimePrice $latestStoredPrice): ?StockRealtimePrice
+    {
+        $latestPriceDate = $latestStoredPrice->as_of?->copy()->startOfDay();
+
+        if ($latestPriceDate === null) {
+            return null;
+        }
+
+        return StockRealtimePrice::query()
+            ->where('stock_holding_id', $holding->id)
+            ->whereNotNull('price')
+            ->whereDate('as_of', '<', $latestPriceDate->toDateString())
+            ->orderByDesc('as_of')
+            ->orderByDesc('id')
+            ->first();
     }
 
     private function latestStoredPrice(StockHolding $holding): StockPrice|StockRealtimePrice|null

@@ -57,11 +57,10 @@ const {
     intradayBackfillRefresh,
     queueStatus,
     testOptions,
-    testTickerExchangeCode,
-    testTickers,
     testExchanges,
     testExchangeDetails,
     testExchangeDetailErrors,
+    testIntraday,
     dataExchanges,
     dataExchangeRefresh,
     dataIntradayStocks,
@@ -82,8 +81,8 @@ const {
     exchangeTradingTimesLoading,
     queueStatusLoading,
     testOptionsLoading,
-    testTickersLoading,
     testExchangesLoading,
+    testIntradayLoading,
     dataExchangesLoading,
     dataExchangeReloadLoading,
     dataIntradayLoading,
@@ -96,8 +95,8 @@ const {
     exchangeTradingTimesError,
     queueStatusError,
     testOptionsError,
-    testTickersError,
     testExchangesError,
+    testIntradayError,
     dataExchangesError,
     dataIntradayError,
     stockSearchError,
@@ -143,9 +142,7 @@ const isAnalyzeTrendTradeAmountDialogOpen = ref(false);
 const isAnalyzeTrendTradeAmountSaving = ref(false);
 const isAnalyzeTrendMaxInvestAmountDialogOpen = ref(false);
 const isAnalyzeTrendMaxInvestAmountSaving = ref(false);
-const selectedTestIndexId = ref(null);
 const selectedTestStockId = ref(null);
-const selectedTestTab = ref('tickers');
 const selectedDataIntradayStockId = ref(null);
 const expandedDataIntradayDays = ref({});
 const expandedAnalyzeIntradayDays = ref({});
@@ -252,6 +249,16 @@ const watchListTableColumnCount = computed(() => {
     return isCompactWatchListTable.value ? 7 : 9;
 });
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
+const selectedTestStock = computed(() => testOptions.value.stocks
+    .find((stock) => stock.id === selectedTestStockId.value) ?? null);
+const selectedTestIntraday = computed(() => {
+    if (testIntraday.value?.stock?.id !== selectedTestStockId.value) {
+        return null;
+    }
+
+    return testIntraday.value;
+});
+const selectedTestIntradayRows = computed(() => selectedTestIntraday.value?.day?.rows ?? []);
 const isPriceRefreshRunning = computed(() => {
     if (!priceRefresh.value || isFinishedPriceRefresh(priceRefresh.value)) {
         return false;
@@ -2221,7 +2228,9 @@ watch(
         ensureAnalyzeHoldingSelection();
 
         if (section === 'analyze' && subsection === 'tests') {
-            depotsStore.loadTestOptions();
+            depotsStore.loadTestOptions()
+                .then(() => ensureSelectedTestStock())
+                .catch(() => {});
         }
 
         if (section === 'data' && dataSubsection === 'exchanges') {
@@ -2245,6 +2254,13 @@ watch(
                 })
                 .catch(() => {});
         }
+    },
+);
+
+watch(
+    [activeSection, activeAnalyzeSubsection, selectedTestStockId],
+    () => {
+        loadSelectedTestIntraday();
     },
 );
 
@@ -2339,6 +2355,33 @@ onBeforeUnmount(() => {
 function updateViewportMetrics() {
     viewportWidth.value = window.visualViewport?.width ?? window.innerWidth;
     viewportHeight.value = window.visualViewport?.height ?? window.innerHeight;
+}
+
+function ensureSelectedTestStock() {
+    if (selectedTestStockId.value !== null
+        && testOptions.value.stocks.some((stock) => stock.id === selectedTestStockId.value)) {
+        return;
+    }
+
+    selectedTestStockId.value = testOptions.value.stocks[0]?.id ?? null;
+}
+
+function shouldLoadTestIntraday() {
+    return activeSection.value === 'analyze'
+        && activeAnalyzeSubsection.value === 'tests'
+        && selectedTestStockId.value !== null;
+}
+
+async function loadSelectedTestIntraday() {
+    if (!shouldLoadTestIntraday()) {
+        return;
+    }
+
+    try {
+        await depotsStore.loadTestIntraday(selectedTestStockId.value);
+    } catch {
+        // The store exposes the error beside the last known intraday data.
+    }
 }
 
 function navigateSection(section) {
@@ -7745,6 +7788,38 @@ function formatDateTime(value) {
     }).format(date);
 }
 
+function formatTestIntradayPrice(value) {
+    return formatPriceValue(value, null);
+}
+
+function formatTestIntradayVolume(value) {
+    if (value === null || value === undefined || value === '') {
+        return '-';
+    }
+
+    return formatInteger(value);
+}
+
+function formatTestIntradayValue(value) {
+    if (value === null || value === undefined || value === '') {
+        return '-';
+    }
+
+    return String(value);
+}
+
+function formatTestIntradayPayload(value) {
+    if (value === null || value === undefined || value === '') {
+        return '-';
+    }
+
+    if (typeof value === 'string') {
+        return value;
+    }
+
+    return JSON.stringify(value);
+}
+
 function formatSourceDateTime(value) {
     if (!value || typeof value !== 'string') {
         return '-';
@@ -10763,27 +10838,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 
                             <div class="tests-chip-groups">
                                 <div class="tests-chip-group">
-                                    <h2 class="tests-chip-heading">Indices</h2>
-                                    <div class="tests-chip-list" aria-label="Test indices">
-                                        <button
-                                            v-for="indexItem in testOptions.indices"
-                                            :key="`test-index-${indexItem.id}`"
-                                            type="button"
-                                            class="tests-chip"
-                                            :class="{ 'tests-chip--active': selectedTestIndexId === indexItem.id }"
-                                            :aria-pressed="selectedTestIndexId === indexItem.id"
-                                            :title="indexItem.name"
-                                            @click="selectedTestIndexId = indexItem.id"
-                                        >
-                                            <span class="tests-chip-symbol">{{ indexItem.symbol || '-' }}</span>
-                                            <span class="tests-chip-name">{{ indexItem.name || indexItem.symbol || `Index ${indexItem.id}` }}</span>
-                                        </button>
-                                        <span v-if="!testOptionsLoading && testOptions.indices.length === 0" class="tests-chip-empty">
-                                            No indices.
-                                        </span>
-                                    </div>
-                                </div>
-                                <div class="tests-chip-group">
                                     <h2 class="tests-chip-heading">Stocks</h2>
                                     <div class="tests-chip-list" aria-label="Test stocks">
                                         <button
@@ -10806,76 +10860,155 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 </div>
                             </div>
 
-                            <v-tabs
-                                v-model="selectedTestTab"
-                                class="tests-tabs"
-                                color="primary"
+                            <v-card
+                                v-if="selectedTestStock"
+                                class="test-selected-stock-card"
+                                variant="tonal"
+                                aria-label="Selected test stock"
                             >
-                                <v-tab value="tickers">Tickers</v-tab>
-                            </v-tabs>
-                            <div
-                                v-if="selectedTestTab === 'tickers'"
-                                class="tests-ticker-panel"
-                                aria-label="Ticker result"
-                            >
-                                <div class="tests-ticker-actions">
-                                    <div>
-                                        <div class="tests-chip-heading">EODHD symbols</div>
-                                        <div class="text-caption text-medium-emphasis">
-                                            Exchange: {{ testTickerExchangeCode }}
+                                <div class="test-selected-stock-card-header">
+                                    <div class="test-selected-stock-summary">
+                                        <div class="tests-chip-heading">Selected stock</div>
+                                        <h3 class="test-selected-stock-title">
+                                            {{ selectedTestStock.name || selectedTestStock.symbol || `Stock ${selectedTestStock.id}` }}
+                                        </h3>
+                                        <div class="test-selected-stock-meta">
+                                            <span>{{ selectedTestStock.symbol || '-' }}</span>
+                                            <span v-if="selectedTestStock.exchange">{{ selectedTestStock.exchange }}</span>
+                                            <span v-if="selectedTestStock.currency">{{ selectedTestStock.currency }}</span>
                                         </div>
                                     </div>
                                     <v-btn
-                                        color="primary"
-                                        prepend-icon="mdi-download-outline"
                                         type="button"
+                                        color="primary"
                                         variant="tonal"
-                                        :loading="testTickersLoading"
-                                        @click="depotsStore.loadTestTickers"
+                                        :loading="testIntradayLoading"
+                                        @click="loadSelectedTestIntraday"
                                     >
-                                        Load
+                                        Refresh
                                     </v-btn>
                                 </div>
+
                                 <v-alert
-                                    v-if="testTickersError"
-                                    class="mt-3"
+                                    v-if="testIntradayError"
+                                    class="mt-4"
                                     density="compact"
-                                    type="error"
+                                    type="warning"
                                     variant="tonal"
                                 >
-                                    {{ testTickersError }}
+                                    {{ testIntradayError }}
                                 </v-alert>
-                                <div
-                                    v-if="testTickers.length > 0"
-                                    class="tests-ticker-table-wrap"
+
+                                <div class="test-intraday-summary">
+                                    <div>
+                                        <span class="test-intraday-label">Trading date</span>
+                                        <strong>{{ selectedTestIntraday?.day?.trading_date ?? '-' }}</strong>
+                                    </div>
+                                    <div>
+                                        <span class="test-intraday-label">Rows</span>
+                                        <strong>{{ formatInteger(selectedTestIntradayRows.length) }}</strong>
+                                    </div>
+                                    <div>
+                                        <span class="test-intraday-label">Stored price</span>
+                                        <strong>{{ formatPriceValue(selectedTestStock.latest_price, selectedTestStock.currency, { showCurrency: true }) }}</strong>
+                                    </div>
+                                </div>
+
+                                <v-alert
+                                    v-if="selectedTestIntraday?.day?.overview"
+                                    class="mt-4"
+                                    density="compact"
+                                    type="info"
+                                    variant="tonal"
                                 >
-                                    <v-table class="tests-ticker-table" density="compact">
+                                    {{ selectedTestIntraday.day.overview }}
+                                </v-alert>
+
+                                <div
+                                    v-if="selectedTestIntradayRows.length > 0"
+                                    class="test-intraday-table-wrap"
+                                >
+                                    <v-table class="test-intraday-table" density="compact">
                                         <thead>
                                             <tr>
-                                                <th>Code</th>
-                                                <th>Name</th>
-                                                <th>Exchange</th>
-                                                <th>Type</th>
+                                                <th>ID</th>
+                                                <th>Stock ID</th>
+                                                <th>Trading date</th>
+                                                <th>Interval</th>
+                                                <th>As of</th>
+                                                <th>Timestamp</th>
+                                                <th>GMT offset</th>
+                                                <th>Time</th>
+                                                <th class="text-right">Open</th>
+                                                <th class="text-right">High</th>
+                                                <th class="text-right">Low</th>
+                                                <th class="text-right">Close</th>
+                                                <th class="text-right">Volume</th>
                                                 <th>Currency</th>
-                                                <th>ISIN</th>
+                                                <th>Source key</th>
+                                                <th>Source name</th>
+                                                <th>Source URL</th>
+                                                <th>Raw payload</th>
+                                                <th>Created</th>
+                                                <th>Updated</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             <tr
-                                                v-for="(ticker, index) in testTickers"
-                                                :key="ticker.Code ?? ticker.code ?? index"
+                                                v-for="(row, index) in selectedTestIntradayRows"
+                                                :key="`${row.timestamp ?? row.datetime ?? index}`"
                                             >
-                                                <td>{{ ticker.Code ?? ticker.code ?? '-' }}</td>
-                                                <td>{{ ticker.Name ?? ticker.name ?? '-' }}</td>
-                                                <td>{{ ticker.Exchange ?? ticker.exchange ?? '-' }}</td>
-                                                <td>{{ ticker.Type ?? ticker.type ?? '-' }}</td>
-                                                <td>{{ ticker.Currency ?? ticker.currency ?? '-' }}</td>
-                                                <td>{{ ticker.Isin ?? ticker.ISIN ?? ticker.isin ?? '-' }}</td>
+                                                <td>{{ formatTestIntradayValue(row.id) }}</td>
+                                                <td>{{ formatTestIntradayValue(row.stock_holding_id) }}</td>
+                                                <td>{{ formatTestIntradayValue(row.trading_date) }}</td>
+                                                <td>{{ formatTestIntradayValue(row.interval) }}</td>
+                                                <td>{{ formatTestIntradayValue(row.as_of) }}</td>
+                                                <td>{{ formatTestIntradayValue(row.timestamp) }}</td>
+                                                <td>{{ formatTestIntradayValue(row.gmtoffset) }}</td>
+                                                <td>{{ formatDateTime(row.datetime) }}</td>
+                                                <td class="text-right">{{ formatTestIntradayPrice(row.open) }}</td>
+                                                <td class="text-right">{{ formatTestIntradayPrice(row.high) }}</td>
+                                                <td class="text-right">{{ formatTestIntradayPrice(row.low) }}</td>
+                                                <td class="text-right">{{ formatTestIntradayPrice(row.close) }}</td>
+                                                <td class="text-right">{{ formatTestIntradayVolume(row.volume) }}</td>
+                                                <td>{{ formatTestIntradayValue(row.currency) }}</td>
+                                                <td>{{ formatTestIntradayValue(row.source_key) }}</td>
+                                                <td>{{ formatTestIntradayValue(row.source_name) }}</td>
+                                                <td class="test-intraday-cell-long">{{ formatTestIntradayValue(row.source_url) }}</td>
+                                                <td class="test-intraday-cell-long">{{ formatTestIntradayPayload(row.raw_payload) }}</td>
+                                                <td>{{ formatTestIntradayValue(row.created_at) }}</td>
+                                                <td>{{ formatTestIntradayValue(row.updated_at) }}</td>
                                             </tr>
                                         </tbody>
                                     </v-table>
                                 </div>
-                            </div>
+                                <v-alert
+                                    v-else-if="!testIntradayLoading && selectedTestIntraday"
+                                    class="mt-4"
+                                    density="compact"
+                                    type="info"
+                                    variant="tonal"
+                                >
+                                    No intraday values found for today.
+                                </v-alert>
+
+                                <div
+                                    v-if="selectedTestIntraday?.refresh?.message"
+                                    class="test-intraday-caption"
+                                >
+                                    {{ selectedTestIntraday.refresh.message }}
+                                </div>
+                            </v-card>
+
+                            <v-alert
+                                v-else
+                                class="mt-4"
+                                density="compact"
+                                type="info"
+                                variant="tonal"
+                            >
+                                Select a stock to load today's intraday values.
+                            </v-alert>
                         </section>
                     </section>
 
@@ -13849,21 +13982,111 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     font-size: 0.82rem;
 }
 
-.tests-tabs {
-    margin-top: 20px;
+.test-selected-stock-card {
+    border: 1px solid rgba(var(--v-theme-primary), 0.2);
+    border-radius: 6px;
+    margin-top: 18px;
+    padding: 18px;
 }
 
-.tests-ticker-panel {
-    height: 2000px;
-    margin-top: 14px;
-    overflow: auto;
-}
-
-.tests-ticker-actions {
-    align-items: center;
+.test-selected-stock-card-header {
+    align-items: flex-start;
     display: flex;
-    gap: 12px;
+    gap: 16px;
     justify-content: space-between;
+}
+
+.test-selected-stock-summary {
+    min-width: 0;
+}
+
+.test-selected-stock-title {
+    color: #102731;
+    font-size: 1.02rem;
+    font-weight: 850;
+    line-height: 1.25;
+    margin: 0;
+}
+
+.test-selected-stock-meta {
+    color: rgba(var(--v-theme-on-surface), 0.68);
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 0.8rem;
+    font-weight: 700;
+    gap: 8px;
+    margin-top: 5px;
+}
+
+.test-intraday-summary {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    margin-top: 16px;
+}
+
+.test-intraday-summary > div {
+    background: #ffffff;
+    border: 1px solid #d9e5e8;
+    border-radius: 5px;
+    min-width: 0;
+    padding: 10px 12px;
+}
+
+.test-intraday-label {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 800;
+    line-height: 1.2;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+}
+
+.test-intraday-summary strong {
+    color: #0f2630;
+    display: block;
+    font-size: 0.94rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.test-intraday-table-wrap {
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 5px;
+    margin-top: 14px;
+    overflow-x: auto;
+}
+
+.test-intraday-table {
+    min-width: 1900px;
+}
+
+.test-intraday-table :deep(th) {
+    color: rgba(var(--v-theme-on-surface), 0.68);
+    font-size: 0.72rem;
+    letter-spacing: 0;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.test-intraday-table :deep(td) {
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.test-intraday-cell-long {
+    max-width: 360px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.test-intraday-caption {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    font-size: 0.78rem;
+    margin-top: 12px;
 }
 
 .tests-ticker-table-wrap {

@@ -822,6 +822,107 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('depot_valuations.latest.current_balance', '1242.50');
     }
 
+    public function test_depot_holding_payload_uses_daily_close_for_previous_day_price(): void
+    {
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create([
+            'account_balance' => '1000.00',
+            'is_active' => true,
+        ]);
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'AAPL',
+            'currency' => 'USD',
+            'latest_price' => '191.500000',
+            'latest_price_fetched_at' => Carbon::parse('2026-06-15 08:00:00', 'UTC'),
+        ]);
+        StockHoldingDailyPrice::factory()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-12',
+            'close' => '188.00000000',
+            'adjusted_close' => '180.00000000',
+            'currency' => 'USD',
+        ]);
+        DepotTransaction::factory()->create([
+            'depot_id' => $depot->id,
+            'stock_holding_id' => $holding->id,
+            'type' => 'buy',
+            'pieces' => '2.50000000',
+            'total_amount' => '300.00',
+            'unit_price' => '120.00000000',
+            'cash_delta' => '-300.00',
+            'balance_after' => '700.00',
+            'booked_at' => '2026-06-10 00:00:00',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/depot-transactions')
+            ->assertOk()
+            ->assertJsonPath('depot_holdings.0.previous_day_price', '188.00000000')
+            ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-06-12')
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '1.86');
+    }
+
+    public function test_depot_holding_payload_prefers_previous_day_realtime_price_over_stale_daily_price(): void
+    {
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create([
+            'account_balance' => '1000.00',
+            'is_active' => true,
+        ]);
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'CEBS',
+            'currency' => 'EUR',
+            'latest_price' => '8.931000',
+        ]);
+        $latestRealtimePrice = StockRealtimePrice::factory()->create([
+            'stock_holding_id' => $holding->id,
+            'symbol' => 'CEBS',
+            'currency' => 'EUR',
+            'price' => '8.93100000',
+            'as_of' => Carbon::parse('2026-06-25 07:50:00', 'UTC'),
+            'fetched_at' => Carbon::parse('2026-06-25 08:07:42', 'UTC'),
+            'freshness_status' => 'fresh',
+        ]);
+        $holding->update([
+            'latest_realtime_price_id' => $latestRealtimePrice->id,
+        ]);
+        StockRealtimePrice::factory()->create([
+            'stock_holding_id' => $holding->id,
+            'symbol' => 'CEBS',
+            'currency' => 'EUR',
+            'price' => '8.87800000',
+            'as_of' => Carbon::parse('2026-06-24 13:36:00', 'UTC'),
+            'fetched_at' => Carbon::parse('2026-06-25 05:13:42', 'UTC'),
+            'freshness_status' => 'stale',
+        ]);
+        StockHoldingDailyPrice::factory()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-17',
+            'close' => '10.16400000',
+            'adjusted_close' => '10.16400000',
+            'currency' => 'EUR',
+        ]);
+        DepotTransaction::factory()->create([
+            'depot_id' => $depot->id,
+            'stock_holding_id' => $holding->id,
+            'type' => 'buy',
+            'pieces' => '1000.00000000',
+            'total_amount' => '8931.00',
+            'unit_price' => '8.93100000',
+            'cash_delta' => '-8931.00',
+            'balance_after' => '1000.00',
+            'booked_at' => '2026-06-24 00:00:00',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/depot-transactions')
+            ->assertOk()
+            ->assertJsonPath('depot_holdings.0.latest_price', '8.93100000')
+            ->assertJsonPath('depot_holdings.0.previous_day_price', '8.87800000')
+            ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-06-24')
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '0.60');
+    }
+
     public function test_depot_year_start_price_uses_only_current_open_lots_after_sells(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-12 12:00:00', 'UTC'));

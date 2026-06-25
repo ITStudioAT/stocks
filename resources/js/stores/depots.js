@@ -29,6 +29,7 @@ export const useDepotStore = defineStore('depots', {
         testExchanges: [],
         testExchangeDetails: {},
         testExchangeDetailErrors: {},
+        testIntraday: null,
         dataExchanges: [],
         dataExchangeRefresh: null,
         dataIntradayStocks: [],
@@ -74,6 +75,7 @@ export const useDepotStore = defineStore('depots', {
         testOptionsLoading: false,
         testTickersLoading: false,
         testExchangesLoading: false,
+        testIntradayLoading: false,
         dataExchangesLoading: false,
         dataExchangeReloadLoading: false,
         dataIntradayLoading: false,
@@ -88,6 +90,7 @@ export const useDepotStore = defineStore('depots', {
         testOptionsError: '',
         testTickersError: '',
         testExchangesError: '',
+        testIntradayError: '',
         dataExchangesError: '',
         dataIntradayError: '',
         stockSearchError: '',
@@ -251,6 +254,23 @@ export const useDepotStore = defineStore('depots', {
                 throw error;
             } finally {
                 this.testTickersLoading = false;
+            }
+        },
+        async loadTestIntraday(stockId) {
+            this.testIntradayLoading = true;
+            this.testIntradayError = '';
+
+            try {
+                const data = await request(`/admin/tests/stocks/${stockId}/intraday`);
+                this.testIntraday = data;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.testIntradayError = error.message;
+                throw error;
+            } finally {
+                this.testIntradayLoading = false;
             }
         },
         async loadTestExchanges() {

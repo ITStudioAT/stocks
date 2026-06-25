@@ -7,6 +7,7 @@ use App\Models\StockHolding;
 use App\Services\EodhdApiClient;
 use App\Services\EodhdApiUsage;
 use App\Services\EodhdExchangeDataImporter;
+use App\Services\StockHoldingIntradayDataReloader;
 use Illuminate\Http\JsonResponse;
 use RuntimeException;
 
@@ -28,12 +29,8 @@ class AdminTestsController extends Controller
                 ->values()
                 ->all(),
             'stocks' => StockHolding::query()
-                ->get(['id', 'name', 'symbol'])
-                ->map(fn (StockHolding $holding): array => [
-                    'id' => $holding->id,
-                    'symbol' => $holding->symbol,
-                    'name' => $holding->name ?: $holding->symbol,
-                ])
+                ->get(['id', 'name', 'symbol', 'currency', 'exchange', 'mic_code', 'latest_price', 'latest_price_as_of'])
+                ->map(fn (StockHolding $holding): array => $this->stockPayload($holding))
                 ->sortBy('name', SORT_NATURAL | SORT_FLAG_CASE)
                 ->values()
                 ->all(),
@@ -167,5 +164,43 @@ class AdminTestsController extends Controller
             'exchange_detail_errors' => $exchangeDetailErrors,
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
+    }
+
+    public function intraday(StockHolding $holding, StockHoldingIntradayDataReloader $reloader, EodhdApiUsage $eodhdApiUsage): JsonResponse
+    {
+        try {
+            $refresh = $reloader->reloadToday($holding);
+        } catch (RuntimeException $exception) {
+            return response()->json([
+                'message' => $exception->getMessage(),
+                'stock' => $this->stockPayload($holding),
+                'day' => $reloader->todayCandlePayload($holding),
+                'eodhd_api_usage' => $eodhdApiUsage->payload(),
+            ], 422);
+        }
+
+        return response()->json([
+            'stock' => $this->stockPayload($holding),
+            'day' => $reloader->todayCandlePayload($holding),
+            'refresh' => $reloader->refreshPayload($refresh),
+            'eodhd_api_usage' => $eodhdApiUsage->payload(),
+        ]);
+    }
+
+    /**
+     * @return array{id: int, symbol: ?string, name: ?string, currency: ?string, exchange: ?string, mic_code: ?string, latest_price: ?string, latest_price_as_of: ?string}
+     */
+    private function stockPayload(StockHolding $holding): array
+    {
+        return [
+            'id' => $holding->id,
+            'symbol' => $holding->symbol,
+            'name' => $holding->name ?: $holding->symbol,
+            'currency' => $holding->currency,
+            'exchange' => $holding->exchange,
+            'mic_code' => $holding->mic_code,
+            'latest_price' => $holding->latest_price,
+            'latest_price_as_of' => $holding->latest_price_as_of,
+        ];
     }
 }
