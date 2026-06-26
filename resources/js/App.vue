@@ -67,6 +67,8 @@ const {
     dataIntradaySelectedStockId,
     dataIntradayDays,
     dataIntradayRefresh,
+    dataRepairSummary,
+    stockHistoricalPriceCoverage,
     analyzeIntradayCandles,
     holdingIntradayCandles,
     holdingIntradayCandlesLoading,
@@ -87,6 +89,7 @@ const {
     dataExchangeReloadLoading,
     dataIntradayLoading,
     dataIntradayReloadLoading,
+    dataRepairLoading,
     stockSearchLoading,
     analyzeIntradayCandlesLoading,
     error: depotsError,
@@ -99,6 +102,7 @@ const {
     testIntradayError,
     dataExchangesError,
     dataIntradayError,
+    dataRepairError,
     stockSearchError,
     analyzeIntradayCandlesError,
 } = storeToRefs(depotsStore);
@@ -123,7 +127,7 @@ const loginMode = ref('password');
 const localError = ref('');
 const activeSection = ref('dashboard');
 const activeAnalyzeSubsection = ref('overview');
-const activeDataSubsection = ref('exchanges');
+const activeDataSubsection = ref('overview');
 const selectedAnalyzeHistoryRange = ref('1y');
 const selectedAnalyzeHistoryWindowOffset = ref(0);
 const selectedAnalyzeHoldingId = ref(null);
@@ -144,6 +148,7 @@ const isAnalyzeTrendMaxInvestAmountDialogOpen = ref(false);
 const isAnalyzeTrendMaxInvestAmountSaving = ref(false);
 const selectedTestStockId = ref(null);
 const selectedDataIntradayStockId = ref(null);
+const selectedDataHistoricStockId = ref(null);
 const expandedDataIntradayDays = ref({});
 const expandedAnalyzeIntradayDays = ref({});
 const profileLastName = ref('');
@@ -209,6 +214,16 @@ const priceRefreshSettingsTimer = ref(null);
 const isPriceRefreshSettingsPolling = ref(false);
 const historicalPriceFetchTimer = ref(null);
 const isHistoricalPriceFetchPolling = ref(false);
+const endOfDayRepairTimer = ref(null);
+const endOfDayRepairLoading = ref(false);
+const endOfDayRepairCurrentStock = ref('');
+const historicalDataRepairLoading = ref(false);
+const historicalDataRepairCurrentStock = ref('');
+const selectedDataHistoricCopiedIsin = ref(null);
+const dataHistoricIsinCopiedTimer = ref(null);
+const selectedDataHistoricIntradayCoverage = ref(null);
+const dataHistoricalPriceLoading = ref(false);
+const dataHistoricalPriceError = ref('');
 const dataExchangeReloadTimer = ref(null);
 const dataIntradayReloadTimer = ref(null);
 const isDashboardMenuCompact = ref(smAndDown.value);
@@ -226,6 +241,7 @@ const cloudwaysSyncMessage = ref('');
 const cloudwaysSyncError = ref('');
 const cloudwaysSyncProgressMessage = ref('');
 const cloudwaysSyncResult = ref(null);
+let selectedDataHistoricIntradayCoverageRequestId = 0;
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
@@ -321,6 +337,75 @@ const isDataExchangeReloadRunning = computed(() => ['queued', 'running'].include
 const selectedDataIntradayStock = computed(() => dataIntradayStocks.value.find((stock) => stock.id === selectedDataIntradayStockId.value) ?? null);
 const dataIntradayLastUpdatedAt = computed(() => dataIntradayRefresh.value?.finished_at ?? null);
 const isDataIntradayReloadRunning = computed(() => ['queued', 'running'].includes(dataIntradayRefresh.value?.status));
+const dataHistoricalPriceHoldings = computed(() => stockHistoricalPriceCoverage.value?.holdings ?? []);
+const endOfDayRepairSummary = computed(() => dataRepairSummary.value?.end_of_day ?? null);
+const historicalDataRepairSummary = computed(() => dataRepairSummary.value?.historical_data ?? null);
+const selectedDataHistoricStock = computed(() => {
+    const holdings = dataHistoricalPriceHoldings.value;
+    const selectedStockId = Number(selectedDataHistoricStockId.value);
+    const selectedStock = holdings.find((stock) => stock.id === selectedStockId);
+
+    return selectedStock ?? holdings[0] ?? null;
+});
+const selectedDataHistoricStockLiveSummary = computed(() => {
+    const stock = selectedDataHistoricStock.value;
+    const rawRecordCount = Number(stock?.latest_realtime_day_record_count ?? 0);
+    const recordCount = Number.isFinite(rawRecordCount) ? rawRecordCount : 0;
+    const rawPreviousRecordCount = Number(stock?.previous_realtime_day_record_count ?? 0);
+    const previousRecordCount = Number.isFinite(rawPreviousRecordCount) ? rawPreviousRecordCount : 0;
+    const rawTableRowCount = Number(stock?.latest_realtime_table_row_count ?? 0);
+    const tableRowCount = Number.isFinite(rawTableRowCount) ? rawTableRowCount : 0;
+
+    return stock === null
+        ? null
+        : {
+            lastDate: formatRecentStoredPriceDate({ as_of: stock.latest_realtime_date ?? null }),
+            firstTime: formatRecentStoredPriceTime({ as_of: stock.latest_realtime_day_first_record_at ?? null }),
+            lastTime: formatRecentStoredPriceTime({ as_of: stock.latest_realtime_day_last_record_at ?? null }),
+            recordCount,
+            previousDate: formatRecentStoredPriceDate({ as_of: stock.previous_realtime_date ?? null }),
+            previousFirstTime: formatRecentStoredPriceTime({ as_of: stock.previous_realtime_day_first_record_at ?? null }),
+            previousLastTime: formatRecentStoredPriceTime({ as_of: stock.previous_realtime_day_last_record_at ?? null }),
+            previousRecordCount,
+            tableRowCount,
+        };
+});
+const selectedDataHistoricStockIntradayCoverageSummary = computed(() => {
+    const coverage = selectedDataHistoricIntradayCoverage.value;
+    const rawRowCount = Number(coverage?.row_count ?? 0);
+    const rowCount = Number.isFinite(rawRowCount) ? rawRowCount : 0;
+    const rawTradingDayCount = Number(coverage?.trading_day_count ?? 0);
+    const tradingDayCount = Number.isFinite(rawTradingDayCount) ? rawTradingDayCount : 0;
+    const rawTableRowCount = Number(coverage?.table_row_count ?? 0);
+    const tableRowCount = Number.isFinite(rawTableRowCount) ? rawTableRowCount : 0;
+
+    return coverage === null
+        ? null
+        : {
+            firstDate: formatRecentStoredPriceDate({ as_of: coverage.first_date ?? null }),
+            lastDate: formatRecentStoredPriceDate({ as_of: coverage.last_date ?? null }),
+            rowCount,
+            tradingDayCount,
+            averageRowsPerDay: tradingDayCount === 0 ? 0 : rowCount / tradingDayCount,
+            tableRowCount,
+        };
+});
+const selectedDataHistoricStockEndOfDaySummary = computed(() => {
+    const stock = selectedDataHistoricStock.value;
+    const rawRowCount = Number(stock?.end_of_day_row_count ?? 0);
+    const rowCount = Number.isFinite(rawRowCount) ? rawRowCount : 0;
+    const rawTableRowCount = Number(stock?.end_of_day_table_row_count ?? 0);
+    const tableRowCount = Number.isFinite(rawTableRowCount) ? rawTableRowCount : 0;
+
+    return stock === null
+        ? null
+        : {
+            firstDate: formatRecentStoredPriceDate({ as_of: stock.end_of_day_first_date ?? null }),
+            lastDate: formatRecentStoredPriceDate({ as_of: stock.end_of_day_last_date ?? null }),
+            rowCount,
+            tableRowCount,
+        };
+});
 const EXCHANGE_REFRESH_DISMISSED_KEY = 'exchange_refresh_dismissed_id';
 const dismissedDataExchangeRefreshId = ref(sessionStorage.getItem(EXCHANGE_REFRESH_DISMISSED_KEY));
 const dataExchangeRefreshVisible = computed(() => {
@@ -1984,14 +2069,19 @@ const analyzeSubmenuItems = [
 ];
 const dataSubmenuItems = [
     {
+        key: 'overview',
+        label: 'Overview',
+        icon: 'mdi-view-dashboard-outline',
+    },
+    {
         key: 'exchanges',
         label: 'Exchanges',
         icon: 'mdi-swap-horizontal',
     },
     {
-        key: 'intraday',
-        label: 'Intraday',
-        icon: 'mdi-chart-timeline-variant',
+        key: 'repair',
+        label: 'Repair',
+        icon: 'mdi-wrench-outline',
     },
 ];
 const analyzeHistoryRangeItems = [
@@ -2243,17 +2333,30 @@ watch(
                 .catch(() => {});
         }
 
-        if (section === 'data' && dataSubsection === 'intraday') {
-            depotsStore.loadDataIntraday(selectedDataIntradayStockId.value)
-                .then((data) => {
-                    selectedDataIntradayStockId.value = data.selected_stock_id ?? selectedDataIntradayStockId.value;
-
-                    if (['queued', 'running'].includes(data.refresh?.status)) {
-                        startDataIntradayReloadPolling(data.refresh.refresh_id);
-                    }
-                })
-                .catch(() => {});
+        if (section === 'data' && dataSubsection === 'overview') {
+            loadDataHistoricalPriceCoverage().catch(() => {});
         }
+
+        if (section === 'data' && dataSubsection === 'repair') {
+            depotsStore.loadDataRepair().catch(() => {});
+        }
+    },
+);
+
+watch(
+    [activeSection, activeDataSubsection, selectedDataHistoricStockId],
+    ([section, dataSubsection, selectedStockId]) => {
+        if (section !== 'data' || dataSubsection !== 'overview') {
+            return;
+        }
+
+        if (selectedStockId === null || selectedStockId === undefined || Number.isNaN(Number(selectedStockId))) {
+            selectedDataHistoricIntradayCoverage.value = null;
+
+            return;
+        }
+
+        loadSelectedDataHistoricStockIntradayCoverage(selectedStockId).catch(() => {});
     },
 );
 
@@ -2348,6 +2451,7 @@ onBeforeUnmount(() => {
     stopDataIntradayReloadPolling();
     stopHoldingDialogKeyboardShortcuts();
     clearAnalyzeIsinCopiedTimer();
+    clearDataHistoricIsinCopiedTimer();
     window.removeEventListener('resize', updateViewportMetrics);
     window.removeEventListener('popstate', applyRouteFromPath);
 });
@@ -2392,7 +2496,7 @@ function navigateSection(section) {
     }
 
     if (section === 'data' && !isDataSubsection(activeDataSubsection.value)) {
-        activeDataSubsection.value = 'exchanges';
+        activeDataSubsection.value = 'overview';
     }
 
     clearSectionMessages();
@@ -2640,6 +2744,31 @@ function copySelectedAnalyzeIsin() {
     }, 1600);
 }
 
+function copySelectedDataHistoricIsin() {
+    const isin = selectedDataHistoricStock.value?.isin;
+
+    if (!isin) {
+        return;
+    }
+
+    copyToClipboard(isin);
+    selectedDataHistoricCopiedIsin.value = isin;
+    clearDataHistoricIsinCopiedTimer();
+    dataHistoricIsinCopiedTimer.value = window.setTimeout(() => {
+        selectedDataHistoricCopiedIsin.value = null;
+        dataHistoricIsinCopiedTimer.value = null;
+    }, 1600);
+}
+
+function clearDataHistoricIsinCopiedTimer() {
+    if (!dataHistoricIsinCopiedTimer.value) {
+        return;
+    }
+
+    window.clearTimeout(dataHistoricIsinCopiedTimer.value);
+    dataHistoricIsinCopiedTimer.value = null;
+}
+
 function clearAnalyzeIsinCopiedTimer() {
     if (!analyzeIsinCopiedTimer.value) {
         return;
@@ -2853,10 +2982,14 @@ function applyRouteFromPath() {
         }
 
         if (normalizedSection === 'data') {
+            const dataSubsection = subsectionSegment === 'historic'
+                ? 'overview'
+                : subsectionSegment;
+
             activeSection.value = 'data';
-            activeDataSubsection.value = isDataSubsection(subsectionSegment)
-                ? subsectionSegment
-                : 'exchanges';
+            activeDataSubsection.value = isDataSubsection(dataSubsection)
+                ? dataSubsection
+                : 'overview';
             updateUrlPath({ replace: true });
 
             return;
@@ -3770,6 +3903,170 @@ async function pollHistoricalPriceFetches() {
     }
 }
 
+function setDataHistoricStockFromCoverage() {
+    const holdings = dataHistoricalPriceHoldings.value;
+    const selectedStockId = Number(selectedDataHistoricStockId.value);
+    const hasSelection = !Number.isNaN(selectedStockId)
+        && holdings.some((stock) => stock.id === selectedStockId);
+
+    if (holdings.length === 0) {
+        selectedDataHistoricStockId.value = null;
+        selectedDataHistoricIntradayCoverage.value = null;
+
+        return;
+    }
+
+    if (!hasSelection) {
+        selectedDataHistoricStockId.value = holdings[0].id ?? null;
+    }
+}
+
+async function loadSelectedDataHistoricStockIntradayCoverage(stockId = null) {
+    const targetStockId = Number(stockId ?? selectedDataHistoricStockId.value);
+
+    if (Number.isNaN(targetStockId) || targetStockId <= 0) {
+        selectedDataHistoricIntradayCoverage.value = null;
+
+        return null;
+    }
+
+    const requestId = ++selectedDataHistoricIntradayCoverageRequestId;
+
+    try {
+        const data = await request(`/admin/watchlist/holdings/${targetStockId}/intraday-candles/coverage`);
+
+        if (requestId === selectedDataHistoricIntradayCoverageRequestId) {
+            selectedDataHistoricIntradayCoverage.value = data.coverage ?? null;
+
+            return data;
+        }
+    } catch (error) {
+        if (requestId === selectedDataHistoricIntradayCoverageRequestId) {
+            selectedDataHistoricIntradayCoverage.value = null;
+        }
+
+        throw error;
+    }
+
+    return null;
+}
+
+async function loadDataHistoricalPriceCoverage() {
+    if (dataHistoricalPriceLoading.value) {
+        return null;
+    }
+
+    dataHistoricalPriceLoading.value = true;
+    dataHistoricalPriceError.value = '';
+
+    try {
+        const data = await depotsStore.ensureStockHistoricalPrices();
+        setDataHistoricStockFromCoverage();
+        await loadSelectedDataHistoricStockIntradayCoverage().catch(() => {});
+        return data;
+    } catch (error) {
+        dataHistoricalPriceError.value = error.message;
+
+        throw error;
+    } finally {
+        dataHistoricalPriceLoading.value = false;
+    }
+}
+
+async function repairEndOfDayData() {
+    if (endOfDayRepairLoading.value) {
+        return;
+    }
+
+    const missingStocks = endOfDayRepairSummary.value?.missing_stocks ?? [];
+
+    if (missingStocks.length === 0) {
+        return;
+    }
+
+    endOfDayRepairLoading.value = true;
+    endOfDayRepairCurrentStock.value = '';
+    dataRepairError.value = '';
+
+    try {
+        for (const stock of missingStocks) {
+            endOfDayRepairCurrentStock.value = stock.label || `Stock ${stock.id}`;
+            await depotsStore.repairEndOfDayStock(stock.id);
+        }
+
+        window.location.reload();
+    } catch (error) {
+        dataRepairError.value = error.message;
+        endOfDayRepairLoading.value = false;
+        endOfDayRepairCurrentStock.value = '';
+    }
+}
+
+async function repairHistoricalData() {
+    if (historicalDataRepairLoading.value) {
+        return;
+    }
+
+    const missingStocks = historicalDataRepairSummary.value?.missing_stocks ?? [];
+
+    if (missingStocks.length === 0) {
+        return;
+    }
+
+    historicalDataRepairLoading.value = true;
+    historicalDataRepairCurrentStock.value = '';
+    dataRepairError.value = '';
+
+    try {
+        for (const stock of missingStocks) {
+            historicalDataRepairCurrentStock.value = stock.label || `Stock ${stock.id}`;
+            await depotsStore.repairHistoricalDataStock(stock.id);
+        }
+
+        window.location.reload();
+    } catch (error) {
+        dataRepairError.value = error.message;
+        historicalDataRepairLoading.value = false;
+        historicalDataRepairCurrentStock.value = '';
+    }
+}
+
+function startEndOfDayRepairPolling(refreshId) {
+    stopEndOfDayRepairPolling();
+    endOfDayRepairTimer.value = window.setInterval(() => pollEndOfDayRepair(refreshId), 3000);
+    pollEndOfDayRepair(refreshId).catch(() => {});
+}
+
+function stopEndOfDayRepairPolling() {
+    if (!endOfDayRepairTimer.value) {
+        return;
+    }
+
+    window.clearInterval(endOfDayRepairTimer.value);
+    endOfDayRepairTimer.value = null;
+}
+
+async function pollEndOfDayRepair(refreshId) {
+    try {
+        const data = await depotsStore.loadStockHistoricalPriceRefresh(refreshId);
+
+        if (['queued', 'running'].includes(data.refresh?.status)) {
+            return;
+        }
+
+        stopEndOfDayRepairPolling();
+        window.location.reload();
+    } catch (error) {
+        stopEndOfDayRepairPolling();
+        dataHistoricalPriceError.value = error.message;
+        endOfDayRepairLoading.value = false;
+    }
+}
+
+function selectDataHistoricStock(stockId) {
+    selectedDataHistoricStockId.value = stockId;
+}
+
 async function ensureAnalyzeDetailIntradayCandles() {
     if (activeSection.value !== 'analyze' || activeAnalyzeSubsection.value !== 'detail') {
         return;
@@ -4089,7 +4386,14 @@ function formatAccountBalance(value) {
 }
 
 function formatInteger(value) {
-    return new Intl.NumberFormat('en-US').format(Number(value ?? 0));
+    return new Intl.NumberFormat('de-AT').format(Number(value ?? 0));
+}
+
+function formatAveragePerDay(value) {
+    return new Intl.NumberFormat('de-AT', {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+    }).format(Number(value ?? 0));
 }
 
 function formatDataExchangeTitle(exchange) {
@@ -7738,7 +8042,7 @@ function formatRecentStoredPriceTime(recentPrice) {
     }
 
     return new Intl.DateTimeFormat('de-AT', {
-        timeZone: 'Europe/Vienna',
+        timeZone: displayTimeZone,
         hour: '2-digit',
         minute: '2-digit',
         hourCycle: 'h23',
@@ -7753,7 +8057,7 @@ function formatRecentStoredPriceDate(recentPrice) {
     }
 
     return new Intl.DateTimeFormat('de-AT', {
-        timeZone: 'Europe/Vienna',
+        timeZone: displayTimeZone,
         day: '2-digit',
         month: '2-digit',
         year: 'numeric',
@@ -8326,6 +8630,7 @@ function clearSectionMessages() {
     holdingError.value = '';
     priceRefreshScheduleMessage.value = '';
     priceRefreshScheduleError.value = '';
+    dataHistoricalPriceError.value = '';
     isPriceRefreshScheduleEditing.value = false;
     isIndexPriceRefreshScheduleEditing.value = false;
     userMessage.value = '';
@@ -11296,181 +11601,367 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                         </div>
                         </section>
 
-                        <section
-                            v-if="activeDataSubsection === 'intraday'"
-                            aria-label="Data intraday"
-                        >
-                            <div class="data-exchange-actions mb-4">
-                                <div>
-                                    <h2 class="text-h5">Intraday</h2>
-                                    <div class="text-caption text-medium-emphasis">
-                                        Last updated:
-                                        {{ dataIntradayLastUpdatedAt ? formatDateTime(dataIntradayLastUpdatedAt) : 'Never' }}
+                            <section
+                                v-if="activeDataSubsection === 'overview'"
+                                aria-label="Data overview"
+                            >
+                                <div class="data-exchange-actions mb-4">
+                                    <div>
+                                        <h2 class="text-h5">Overview</h2>
                                     </div>
+                                    <div v-if="endOfDayRepairCurrentStock" class="text-caption text-medium-emphasis mb-4">
+                                        Updating: {{ endOfDayRepairCurrentStock }}
+                                    </div>
+                                    <v-btn
+                                        color="primary"
+                                        prepend-icon="mdi-refresh"
+                                        type="button"
+                                        variant="flat"
+                                        :disabled="dataHistoricalPriceLoading"
+                                        :loading="dataHistoricalPriceLoading"
+                                        @click="loadDataHistoricalPriceCoverage"
+                                    >
+                                        Reload Overview
+                                    </v-btn>
                                 </div>
-                                <v-btn
-                                    color="primary"
-                                    prepend-icon="mdi-refresh"
-                                    type="button"
-                                    variant="flat"
-                                    :disabled="!selectedDataIntradayStockId || isDataIntradayReloadRunning"
-                                    :loading="dataIntradayReloadLoading"
-                                    @click="reloadDataIntraday"
-                                >
-                                    Reload Intraday
-                                </v-btn>
-                            </div>
 
                             <v-alert
-                                v-if="dataIntradayError"
+                                v-if="dataHistoricalPriceError"
                                 class="mb-4"
                                 density="compact"
                                 type="error"
                                 variant="tonal"
                             >
-                                {{ dataIntradayError }}
+                                {{ dataHistoricalPriceError }}
                             </v-alert>
 
-                            <v-sheet
-                                v-if="dataIntradayRefreshVisible"
-                                border
-                                class="mb-4"
-                                rounded
-                            >
-                                <div class="d-flex align-center justify-space-between ga-3 flex-wrap pa-4">
-                                    <div>
-                                        <div class="text-subtitle-2">{{ formatDataIntradayReloadMessage() }}</div>
-                                        <div class="text-caption text-medium-emphasis">
-                                            {{ dataIntradayRefresh.step }}
-                                            <template v-if="dataIntradayRefresh.current">
-                                                · {{ dataIntradayRefresh.current }}
-                                            </template>
-                                        </div>
-                                    </div>
-                                    <div class="d-flex align-center ga-2">
-                                        <v-chip
-                                            size="small"
-                                            :color="dataIntradayRefresh.status === 'failed' ? 'error' : (isDataIntradayReloadRunning ? 'primary' : 'success')"
-                                            variant="tonal"
-                                        >
-                                            {{ dataIntradayRefresh.status }}
-                                        </v-chip>
-                                        <v-btn
-                                            v-if="!isDataIntradayReloadRunning"
-                                            icon="mdi-close"
-                                            size="x-small"
-                                            variant="text"
-                                            @click="dismissDataIntradayRefresh"
-                                        />
-                                    </div>
-                                </div>
-                                <div class="data-progress-wrap">
-                                    <v-progress-linear
-                                        color="primary"
-                                        height="8"
-                                        rounded
-                                        :indeterminate="dataIntradayRefresh.status === 'queued'"
-                                        :model-value="dataIntradayReloadProgressValue"
-                                    />
-                                </div>
-                            </v-sheet>
+                            <v-progress-linear v-if="dataHistoricalPriceLoading" indeterminate color="primary" class="mb-4" />
 
                             <div class="tests-chip-group mb-4">
                                 <h2 class="tests-chip-heading">Stocks</h2>
-                                <div class="tests-chip-list" aria-label="Intraday stocks">
+                                <div class="tests-chip-list" aria-label="Overview stocks">
                                     <button
-                                        v-for="stock in dataIntradayStocks"
-                                        :key="`data-intraday-stock-${stock.id}`"
+                                        v-for="stock in dataHistoricalPriceHoldings"
+                                        :key="`data-historic-stock-${stock.id}`"
                                         type="button"
                                         class="tests-chip"
-                                        :class="{ 'tests-chip--active': selectedDataIntradayStockId === stock.id || dataIntradaySelectedStockId === stock.id }"
-                                        :aria-pressed="selectedDataIntradayStockId === stock.id || dataIntradaySelectedStockId === stock.id"
-                                        :title="stock.name"
-                                        @click="selectDataIntradayStock(stock.id)"
+                                        :class="{ 'tests-chip--active': selectedDataHistoricStock?.id === stock.id }"
+                                        :aria-pressed="selectedDataHistoricStock?.id === stock.id"
+                                        @click="selectDataHistoricStock(stock.id)"
                                     >
                                         <span class="tests-chip-symbol">{{ stock.symbol || '-' }}</span>
                                         <span class="tests-chip-name">{{ stock.name || stock.symbol || `Stock ${stock.id}` }}</span>
                                     </button>
-                                    <span v-if="!dataIntradayLoading && dataIntradayStocks.length === 0" class="tests-chip-empty">
-                                        No stocks.
+                                    <span v-if="!dataHistoricalPriceLoading && dataHistoricalPriceHoldings.length === 0" class="tests-chip-empty">
+                                        No stocks stored for historical coverage.
                                     </span>
                                 </div>
                             </div>
 
-                            <div v-if="selectedDataIntradayStock" class="text-caption text-medium-emphasis mb-3">
-                                {{ selectedDataIntradayStock.name }} · {{ selectedDataIntradayStock.symbol || '-' }} · interval 5m
-                            </div>
-
-                            <v-progress-linear v-if="dataIntradayLoading" indeterminate color="primary" class="mb-4" />
-
-                            <div class="data-intraday-panel">
-                                <section
-                                    v-for="day in dataIntradayDays"
-                                    :key="day.trading_date"
-                                    class="data-intraday-day"
-                                >
-                                    <button
-                                        type="button"
-                                        class="data-intraday-day-header"
-                                        :aria-expanded="isDataIntradayDayExpanded(day)"
-                                        @click="toggleDataIntradayDay(day)"
-                                    >
-                                        <span class="data-intraday-day-title">{{ formatDataIntradayDayTitle(day) }}</span>
-                                        <span class="data-intraday-day-count">{{ formatInteger(day.rows?.length ?? 0) }} rows</span>
-                                        <v-icon
-                                            :icon="isDataIntradayDayExpanded(day) ? 'mdi-chevron-up' : 'mdi-chevron-down'"
-                                            size="20"
-                                        />
-                                    </button>
-                                    <div v-if="isDataIntradayDayExpanded(day)" class="data-intraday-day-body">
-                                        <div
-                                            v-if="day.overview"
-                                            class="data-intraday-day-overview"
-                                        >
-                                            {{ day.overview }}
+                            <section v-if="selectedDataHistoricStock" class="test-selected-stock-card">
+                                <div class="test-selected-stock-card-header">
+                                    <div class="test-selected-stock-summary">
+                                        <h3 class="test-selected-stock-title">{{ selectedDataHistoricStock.name || selectedDataHistoricStock.symbol || `Stock ${selectedDataHistoricStock.id}` }}</h3>
+                                        <div class="test-selected-stock-meta">
+                                            <span>Symbol: {{ selectedDataHistoricStock.symbol || '-' }}</span>
+                                            <span>Exchange: {{ selectedDataHistoricStock.exchange || '-' }}</span>
+                                            <span>Currency: {{ selectedDataHistoricStock.currency || '-' }}</span>
+                                            <span>Instrument: {{ selectedDataHistoricStock.instrument_type || '-' }}</span>
+                                            <span>Country: {{ selectedDataHistoricStock.country || '-' }}</span>
                                         </div>
-                                        <div class="tests-ticker-table-wrap">
-                                            <v-table class="tests-ticker-table" density="compact">
-                                                <thead>
-                                                    <tr>
-                                                        <th>Timestamp</th>
-                                                        <th>GMT Offset</th>
-                                                        <th>Datetime</th>
-                                                        <th class="text-right">Open</th>
-                                                        <th class="text-right">High</th>
-                                                        <th class="text-right">Low</th>
-                                                        <th class="text-right">Close</th>
-                                                        <th class="text-right">Volume</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    <tr
-                                                        v-for="(row, index) in day.rows"
-                                                        :key="row.timestamp ?? row.datetime ?? index"
-                                                    >
-                                                        <td>{{ formatAnalyzeIntradayCandleValue(row.timestamp) }}</td>
-                                                        <td>{{ formatAnalyzeIntradayCandleValue(row.gmtoffset) }}</td>
-                                                        <td>{{ formatAnalyzeIntradayCandleDateTime(row) }}</td>
-                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.open) }}</td>
-                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.high) }}</td>
-                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.low) }}</td>
-                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.close) }}</td>
-                                                        <td class="text-right">{{ formatAnalyzeIntradayCandleValue(row.volume) }}</td>
-                                                    </tr>
-                                                </tbody>
-                                            </v-table>
+                                        <div class="mt-2">
+                                            <button
+                                                v-if="selectedDataHistoricStock?.isin"
+                                                type="button"
+                                                class="analyze-selected-stock-isin-copy"
+                                                :class="{ 'analyze-selected-stock-isin-copy--copied': selectedDataHistoricCopiedIsin === selectedDataHistoricStock.isin }"
+                                                :aria-label="`Copy ISIN ${selectedDataHistoricStock.isin}`"
+                                                @click="copySelectedDataHistoricIsin"
+                                            >
+                                                <span>{{ selectedDataHistoricStock.isin }}</span>
+                                                <v-icon
+                                                    :icon="selectedDataHistoricCopiedIsin === selectedDataHistoricStock.isin ? 'mdi-check-circle-outline' : 'mdi-content-copy'"
+                                                    size="15"
+                                                />
+                                            </button>
                                         </div>
                                     </div>
-                                </section>
-                                <v-sheet
-                                    v-if="!dataIntradayLoading && dataIntradayDays.length === 0"
-                                    border
-                                    rounded
-                                    class="pa-4 text-medium-emphasis"
-                                >
-                                    No intraday data stored for this stock yet.
-                                </v-sheet>
-                            </div>
+                                </div>
+                            </section>
+                            <section v-if="selectedDataHistoricStockLiveSummary" class="test-selected-stock-card mt-4">
+                                <div class="test-selected-stock-card-header">
+                                    <div class="test-selected-stock-summary">
+                                        <h3 class="test-selected-stock-title">Live-Daten:</h3>
+                                        <p class="test-affected-table-caption text-medium-emphasis">
+                                            Affected table: stock_realtime_prices · Total rows:
+                                            {{ formatInteger(selectedDataHistoricStockLiveSummary.tableRowCount) }}
+                                        </p>
+                                        <div class="test-intraday-summary test-intraday-summary--live">
+                                            <div>
+                                                <span class="test-intraday-label">Last date</span>
+                                                <strong>{{ selectedDataHistoricStockLiveSummary.lastDate }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">First time</span>
+                                                <strong>{{ selectedDataHistoricStockLiveSummary.firstTime }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">Last time</span>
+                                                <strong>{{ selectedDataHistoricStockLiveSummary.lastTime }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">Rows this day</span>
+                                                <strong>{{ formatInteger(selectedDataHistoricStockLiveSummary.recordCount) }}</strong>
+                                            </div>
+                                            <div class="test-intraday-summary-next-row">
+                                                <span class="test-intraday-label">Day before</span>
+                                                <strong>{{ selectedDataHistoricStockLiveSummary.previousDate }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">Previous first time</span>
+                                                <strong>{{ selectedDataHistoricStockLiveSummary.previousFirstTime }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">Previous last time</span>
+                                                <strong>{{ selectedDataHistoricStockLiveSummary.previousLastTime }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">Rows previous day</span>
+                                                <strong>{{ formatInteger(selectedDataHistoricStockLiveSummary.previousRecordCount) }}</strong>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+                            <section v-if="selectedDataHistoricStockIntradayCoverageSummary" class="test-selected-stock-card mt-4">
+                                <div class="test-selected-stock-card-header">
+                                    <div class="test-selected-stock-summary">
+                                        <h3 class="test-selected-stock-title">Historical Data</h3>
+                                        <p class="test-affected-table-caption text-medium-emphasis">
+                                            Affected table: stock_holding_intraday_candles · Total rows:
+                                            {{ formatInteger(selectedDataHistoricStockIntradayCoverageSummary.tableRowCount) }}
+                                        </p>
+                                        <div class="test-intraday-summary">
+                                            <div>
+                                                <span class="test-intraday-label">First date</span>
+                                                <strong>{{ selectedDataHistoricStockIntradayCoverageSummary.firstDate }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">Last date</span>
+                                                <strong>{{ selectedDataHistoricStockIntradayCoverageSummary.lastDate }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">Rows</span>
+                                                <strong>{{ formatInteger(selectedDataHistoricStockIntradayCoverageSummary.rowCount) }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">Days stored</span>
+                                                <strong>{{ formatInteger(selectedDataHistoricStockIntradayCoverageSummary.tradingDayCount) }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">Avg/day</span>
+                                                <strong>{{ formatAveragePerDay(selectedDataHistoricStockIntradayCoverageSummary.averageRowsPerDay) }}</strong>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+                            <section v-if="selectedDataHistoricStockEndOfDaySummary" class="test-selected-stock-card mt-4">
+                                <div class="test-selected-stock-card-header">
+                                    <div class="test-selected-stock-summary">
+                                        <h3 class="test-selected-stock-title">End-Of-Day-Data</h3>
+                                        <p class="test-affected-table-caption text-medium-emphasis">
+                                            Affected table: stock_prices · Total rows:
+                                            {{ formatInteger(selectedDataHistoricStockEndOfDaySummary.tableRowCount) }}
+                                        </p>
+                                        <div class="test-intraday-summary">
+                                            <div>
+                                                <span class="test-intraday-label">First date</span>
+                                                <strong>{{ selectedDataHistoricStockEndOfDaySummary.firstDate }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">Last date</span>
+                                                <strong>{{ selectedDataHistoricStockEndOfDaySummary.lastDate }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">Rows</span>
+                                                <strong>{{ formatInteger(selectedDataHistoricStockEndOfDaySummary.rowCount) }}</strong>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+                        </section>
+
+                        <section
+                            v-if="activeDataSubsection === 'repair'"
+                            aria-label="Data repair"
+                        >
+                            <h2 class="text-h5 mb-4">Repair</h2>
+
+                            <v-card border flat class="pa-4">
+                                <v-card-title class="pa-0 mb-3 text-subtitle-1">
+                                    End Of Day
+                                </v-card-title>
+                                <p class="text-caption text-medium-emphasis mb-3">
+                                    Affected table: stock_prices
+                                </p>
+                                <v-card-text class="pa-0">
+                                    <v-alert
+                                        v-if="dataRepairError"
+                                        class="mb-4"
+                                        density="compact"
+                                        type="error"
+                                        variant="tonal"
+                                    >
+                                        {{ dataRepairError }}
+                                    </v-alert>
+                                    <v-progress-linear v-if="dataRepairLoading" indeterminate color="primary" class="mb-4" />
+                                    <div v-if="endOfDayRepairSummary" class="test-intraday-summary mb-4">
+                                        <div>
+                                            <span
+                                                class="test-intraday-label"
+                                                :class="{ 'data-repair-missing-count': Number(endOfDayRepairSummary.missing_stocks_count) > 0 }"
+                                            >
+                                                Missing 1y+
+                                            </span>
+                                            <strong :class="{ 'data-repair-missing-count': Number(endOfDayRepairSummary.missing_stocks_count) > 0 }">
+                                                {{ formatInteger(endOfDayRepairSummary.missing_stocks_count) }}
+                                            </strong>
+                                        </div>
+                                        <div>
+                                            <span
+                                                class="test-intraday-label"
+                                                :class="{ 'data-repair-covered-count': Number(endOfDayRepairSummary.covered_stocks_count) > 0 }"
+                                            >
+                                                Covered
+                                            </span>
+                                            <strong class="data-repair-covered-count">
+                                                {{ formatInteger(endOfDayRepairSummary.covered_stocks_count) }}
+                                            </strong>
+                                        </div>
+                                        <div>
+                                            <span class="test-intraday-label">Total stocks</span>
+                                            <strong>{{ formatInteger(endOfDayRepairSummary.total_stocks_count) }}</strong>
+                                        </div>
+                                        <div>
+                                            <span class="test-intraday-label">Minimum date</span>
+                                            <strong>{{ endOfDayRepairSummary.minimum_date }}</strong>
+                                        </div>
+                                        <div>
+                                            <span
+                                                class="test-intraday-label"
+                                                :class="endOfDayRepairSummary.actual_date && endOfDayRepairSummary.actual_date <= endOfDayRepairSummary.minimum_date ? 'data-repair-covered-count' : 'data-repair-missing-count'"
+                                            >
+                                                Actual minimum date
+                                            </span>
+                                            <strong
+                                                :class="endOfDayRepairSummary.actual_date && endOfDayRepairSummary.actual_date <= endOfDayRepairSummary.minimum_date ? 'data-repair-covered-count' : 'data-repair-missing-count'"
+                                            >
+                                                {{ endOfDayRepairSummary.actual_date || '-' }}
+                                            </strong>
+                                        </div>
+                                    </div>
+                                    <v-btn
+                                        color="primary"
+                                        prepend-icon="mdi-calendar-sync-outline"
+                                        type="button"
+                                        variant="flat"
+                                        :disabled="Number(endOfDayRepairSummary?.missing_stocks_count ?? 0) === 0"
+                                        :loading="dataRepairLoading"
+                                        @click="repairEndOfDayData"
+                                    >
+                                        Repair
+                                    </v-btn>
+                                </v-card-text>
+                            </v-card>
+                            <v-card border flat class="pa-4 mt-4">
+                                <v-card-title class="pa-0 text-subtitle-1">
+                                    Historical Data
+                                </v-card-title>
+                                <p class="text-caption text-medium-emphasis mb-3">
+                                    Affected table: stock_holding_intraday_candles
+                                </p>
+                                <v-card-text class="pa-0">
+                                    <div v-if="historicalDataRepairSummary" class="test-intraday-summary">
+                                        <div>
+                                            <span
+                                                class="test-intraday-label"
+                                                :class="{ 'data-repair-missing-count': Number(historicalDataRepairSummary.missing_stocks_count) > 0 }"
+                                            >
+                                                Missing 1y+
+                                            </span>
+                                            <strong :class="{ 'data-repair-missing-count': Number(historicalDataRepairSummary.missing_stocks_count) > 0 }">
+                                                {{ formatInteger(historicalDataRepairSummary.missing_stocks_count) }}
+                                            </strong>
+                                        </div>
+                                        <div>
+                                            <span
+                                                class="test-intraday-label"
+                                                :class="{ 'data-repair-covered-count': Number(historicalDataRepairSummary.covered_stocks_count) > 0 }"
+                                            >
+                                                Covered
+                                            </span>
+                                            <strong class="data-repair-covered-count">
+                                                {{ formatInteger(historicalDataRepairSummary.covered_stocks_count) }}
+                                            </strong>
+                                        </div>
+                                        <div>
+                                            <span class="test-intraday-label">Total stocks</span>
+                                            <strong>{{ formatInteger(historicalDataRepairSummary.total_stocks_count) }}</strong>
+                                        </div>
+                                        <div>
+                                            <span class="test-intraday-label">Minimum date</span>
+                                            <strong>{{ historicalDataRepairSummary.minimum_date }}</strong>
+                                        </div>
+                                        <div>
+                                            <span
+                                                class="test-intraday-label"
+                                                :class="historicalDataRepairSummary.actual_minimum_date && historicalDataRepairSummary.actual_minimum_date <= historicalDataRepairSummary.minimum_date ? 'data-repair-covered-count' : 'data-repair-missing-count'"
+                                            >
+                                                Actual minimum date
+                                            </span>
+                                            <strong
+                                                :class="historicalDataRepairSummary.actual_minimum_date && historicalDataRepairSummary.actual_minimum_date <= historicalDataRepairSummary.minimum_date ? 'data-repair-covered-count' : 'data-repair-missing-count'"
+                                            >
+                                                {{ historicalDataRepairSummary.actual_minimum_date || '-' }}
+                                            </strong>
+                                        </div>
+                                        <div>
+                                            <span class="test-intraday-label">Last trading day</span>
+                                            <strong>{{ historicalDataRepairSummary.last_trading_day }}</strong>
+                                        </div>
+                                        <div>
+                                            <span
+                                                class="test-intraday-label"
+                                                :class="historicalDataRepairSummary.actual_last_trading_day && historicalDataRepairSummary.actual_last_trading_day >= historicalDataRepairSummary.last_trading_day ? 'data-repair-covered-count' : 'data-repair-missing-count'"
+                                            >
+                                                Actual Last trading day
+                                            </span>
+                                            <strong
+                                                :class="historicalDataRepairSummary.actual_last_trading_day && historicalDataRepairSummary.actual_last_trading_day >= historicalDataRepairSummary.last_trading_day ? 'data-repair-covered-count' : 'data-repair-missing-count'"
+                                            >
+                                                {{ historicalDataRepairSummary.actual_last_trading_day || '-' }}
+                                            </strong>
+                                        </div>
+                                    </div>
+                                    <div v-if="historicalDataRepairCurrentStock" class="text-caption text-medium-emphasis mt-4">
+                                        Updating: {{ historicalDataRepairCurrentStock }}
+                                    </div>
+                                    <v-btn
+                                        class="mt-4"
+                                        color="primary"
+                                        prepend-icon="mdi-calendar-sync-outline"
+                                        type="button"
+                                        variant="flat"
+                                        :disabled="Number(historicalDataRepairSummary?.missing_stocks_count ?? 0) === 0"
+                                        :loading="historicalDataRepairLoading"
+                                        @click="repairHistoricalData"
+                                    >
+                                        Repair
+                                    </v-btn>
+                                </v-card-text>
+                            </v-card>
                         </section>
                     </section>
 
@@ -13997,7 +14488,9 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 }
 
 .test-selected-stock-summary {
+    flex: 1 1 auto;
     min-width: 0;
+    width: 100%;
 }
 
 .test-selected-stock-title {
@@ -14018,11 +14511,26 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     margin-top: 5px;
 }
 
+.test-affected-table-caption {
+    font-size: 0.68rem;
+    line-height: 1.2;
+    margin: 3px 0 0;
+}
+
 .test-intraday-summary {
     display: grid;
     gap: 10px;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    grid-template-columns: repeat(auto-fill, 160px);
     margin-top: 16px;
+    width: 100%;
+}
+
+.test-intraday-summary--live {
+    grid-template-columns: repeat(4, 160px);
+}
+
+.test-intraday-summary-next-row {
+    grid-column-start: 1;
 }
 
 .test-intraday-summary > div {
@@ -14050,6 +14558,14 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     font-variant-numeric: tabular-nums;
     line-height: 1.25;
     overflow-wrap: anywhere;
+}
+
+.test-intraday-summary .data-repair-missing-count {
+    color: rgb(var(--v-theme-error));
+}
+
+.test-intraday-summary .data-repair-covered-count {
+    color: rgb(var(--v-theme-success));
 }
 
 .test-intraday-table-wrap {

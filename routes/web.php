@@ -159,6 +159,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::post('/admin/depot-transactions/cash', [AdminDepotTransactionController::class, 'storeCash'])->name('admin.depot-transactions.cash.store');
     Route::post('/admin/depot-transactions/stocks', [AdminDepotTransactionController::class, 'storeStock'])->name('admin.depot-transactions.stocks.store');
     Route::get('/admin/watchlist/holdings', [AdminDepotHoldingController::class, 'index'])->name('admin.watchlist.holdings.index');
+    Route::get('/admin/watchlist/holdings/{holding}/intraday-candles/coverage', [AdminStockHistoricalPriceController::class, 'intradayCoverage'])->name('admin.watchlist.holdings.intraday-candles.coverage');
     Route::get('/admin/watchlist/holdings/{holding}/intraday-candles', [AdminDepotHoldingController::class, 'intradayCandles'])->name('admin.watchlist.holdings.intraday-candles');
     Route::get('/admin/watchlist/exchange-trading-times', [AdminDepotHoldingController::class, 'exchangeTradingTimes'])->name('admin.watchlist.exchange-trading-times');
     Route::get('/admin/watchlist/holdings/pdf', [AdminDepotHoldingController::class, 'exportPdf'])->name('admin.watchlist.holdings.pdf');
@@ -180,6 +181,11 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::get('/admin/data/intraday', [AdminDataController::class, 'intraday'])->name('admin.data.intraday');
     Route::post('/admin/data/intraday/reload', [AdminDataController::class, 'reloadIntraday'])->name('admin.data.intraday.reload');
     Route::get('/admin/data/intraday/reload/{refreshId}', [AdminDataController::class, 'reloadIntradayStatus'])->name('admin.data.intraday.reload.status');
+    Route::get('/admin/data/repair', [AdminDataController::class, 'repair'])->name('admin.data.repair');
+    Route::post('/admin/data/repair/end-of-day', [AdminDataController::class, 'repairEndOfDay'])->name('admin.data.repair.endOfDay');
+    Route::post('/admin/data/repair/end-of-day/{holding}', [AdminDataController::class, 'repairEndOfDayStock'])->name('admin.data.repair.endOfDay.stock');
+    Route::post('/admin/data/repair/historical-data', [AdminDataController::class, 'repairHistoricalData'])->name('admin.data.repair.historicalData');
+    Route::post('/admin/data/repair/historical-data/{holding}', [AdminDataController::class, 'repairHistoricalDataStock'])->name('admin.data.repair.historicalData.stock');
     Route::post('/admin/watchlist/holdings/historical-prices/ensure', [AdminStockHistoricalPriceController::class, 'ensure'])->name('admin.watchlist.holdings.historical-prices.ensure');
     Route::get('/admin/watchlist/holdings/historical-prices/{refreshId}', [AdminStockHistoricalPriceController::class, 'status'])->name('admin.watchlist.holdings.historical-prices.status');
     Route::patch('/admin/watchlist/holdings/{holding}/flatex-price', [AdminDepotHoldingController::class, 'updateFlatexPrice'])->name('admin.watchlist.holdings.flatex-price');

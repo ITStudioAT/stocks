@@ -36,6 +36,7 @@ export const useDepotStore = defineStore('depots', {
         dataIntradaySelectedStockId: null,
         dataIntradayDays: [],
         dataIntradayRefresh: null,
+        dataRepairSummary: null,
         stockHistoricalPriceCoverage: null,
         stockHistoricalPriceRefresh: null,
         analyzeIntradayCandles: null,
@@ -80,6 +81,7 @@ export const useDepotStore = defineStore('depots', {
         dataExchangeReloadLoading: false,
         dataIntradayLoading: false,
         dataIntradayReloadLoading: false,
+        dataRepairLoading: false,
         stockSearchLoading: false,
         analyzeIntradayCandlesLoading: false,
         error: '',
@@ -93,6 +95,7 @@ export const useDepotStore = defineStore('depots', {
         testIntradayError: '',
         dataExchangesError: '',
         dataIntradayError: '',
+        dataRepairError: '',
         stockSearchError: '',
         analyzeIntradayCandlesError: '',
     }),
@@ -404,6 +407,93 @@ export const useDepotStore = defineStore('depots', {
                 return data;
             } catch (error) {
                 this.dataIntradayError = error.message;
+                throw error;
+            }
+        },
+        async loadDataRepair() {
+            this.dataRepairLoading = true;
+            this.dataRepairError = '';
+
+            try {
+                const data = await request('/admin/data/repair');
+                this.dataRepairSummary = data;
+
+                return data;
+            } catch (error) {
+                this.dataRepairError = error.message;
+                throw error;
+            } finally {
+                this.dataRepairLoading = false;
+            }
+        },
+        async repairEndOfDayData() {
+            this.dataRepairLoading = true;
+            this.dataRepairError = '';
+
+            try {
+                const data = await request('/admin/data/repair/end-of-day', {
+                    method: 'POST',
+                });
+                this.dataRepairSummary = data.repair ?? this.dataRepairSummary;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.dataRepairError = error.message;
+                throw error;
+            } finally {
+                this.dataRepairLoading = false;
+            }
+        },
+        async repairEndOfDayStock(stockId) {
+            this.dataRepairError = '';
+
+            try {
+                const data = await request(`/admin/data/repair/end-of-day/${stockId}`, {
+                    method: 'POST',
+                });
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.dataRepairError = error.message;
+                throw error;
+            }
+        },
+        async repairHistoricalData() {
+            this.dataRepairLoading = true;
+            this.dataRepairError = '';
+
+            try {
+                const data = await request('/admin/data/repair/historical-data', {
+                    method: 'POST',
+                });
+                this.dataRepairSummary = {
+                    ...(this.dataRepairSummary ?? {}),
+                    ...(data.repair ?? {}),
+                };
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.dataRepairError = error.message;
+                throw error;
+            } finally {
+                this.dataRepairLoading = false;
+            }
+        },
+        async repairHistoricalDataStock(stockId) {
+            this.dataRepairError = '';
+
+            try {
+                const data = await request(`/admin/data/repair/historical-data/${stockId}`, {
+                    method: 'POST',
+                });
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.dataRepairError = error.message;
                 throw error;
             }
         },

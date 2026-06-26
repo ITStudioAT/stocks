@@ -7,9 +7,12 @@ use App\Models\StockHistoricalPriceFetchItem;
 use App\Models\StockHistoricalPriceFetchRun;
 use App\Models\StockHolding;
 use App\Models\StockHoldingDailyPrice;
+use App\Models\StockPrice;
+use App\Models\StockRealtimePrice;
 use App\Models\User;
 use App\Services\StockHistoricalDailyPriceFetcher;
 use App\Services\StockHistoricalPriceService;
+use App\Services\StockPriceCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -28,11 +31,68 @@ class AdminStockHistoricalPriceTest extends TestCase
 
         try {
             $admin = $this->adminUser();
-            StockHolding::factory()->create([
+            $holding = StockHolding::factory()->create([
                 'symbol' => 'AAPL',
                 'name' => 'Apple Inc.',
                 'country' => 'United States',
                 'currency' => 'USD',
+            ]);
+            StockRealtimePrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'symbol' => 'AAPL',
+                'currency' => 'USD',
+                'price' => '190.00000000',
+                'as_of' => Carbon::parse('2026-06-04 07:30:00', 'UTC'),
+                'fetched_at' => Carbon::parse('2026-06-04 07:30:00', 'UTC'),
+            ]);
+            StockRealtimePrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'symbol' => 'AAPL',
+                'currency' => 'USD',
+                'price' => '191.00000000',
+                'as_of' => Carbon::parse('2026-06-04 15:30:00', 'UTC'),
+                'fetched_at' => Carbon::parse('2026-06-04 15:30:00', 'UTC'),
+            ]);
+            StockRealtimePrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'symbol' => 'AAPL',
+                'currency' => 'USD',
+                'price' => '192.00000000',
+                'as_of' => Carbon::parse('2026-06-05 08:00:00', 'UTC'),
+                'fetched_at' => Carbon::parse('2026-06-05 08:00:00', 'UTC'),
+            ]);
+            StockRealtimePrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'symbol' => 'AAPL',
+                'currency' => 'USD',
+                'price' => '193.00000000',
+                'as_of' => Carbon::parse('2026-06-05 12:00:00', 'UTC'),
+                'fetched_at' => Carbon::parse('2026-06-05 12:00:00', 'UTC'),
+            ]);
+            $instrumentKey = app(StockPriceCatalog::class)->instrumentKeyForHolding($holding);
+            StockPrice::factory()->create([
+                'instrument_key' => $instrumentKey,
+                'symbol' => 'AAPL',
+                'currency' => 'USD',
+                'price' => '188.00000000',
+                'as_of' => Carbon::parse('2026-06-03 20:00:00', 'UTC'),
+                'fetched_at' => Carbon::parse('2026-06-03 20:00:00', 'UTC'),
+            ]);
+            StockPrice::factory()->create([
+                'instrument_key' => $instrumentKey,
+                'symbol' => 'AAPL',
+                'currency' => 'USD',
+                'price' => '188.50000000',
+                'as_of' => Carbon::parse('2026-06-04 12:00:00', 'UTC'),
+                'fetched_at' => Carbon::parse('2026-06-04 12:00:00', 'UTC'),
+            ]);
+            StockPrice::factory()->create([
+                'instrument_key' => $instrumentKey,
+                'symbol' => 'AAPL',
+                'currency' => 'USD',
+                'price' => '189.00000000',
+                'as_of' => Carbon::parse('2026-06-04 20:00:00', 'UTC'),
+                'fetched_at' => Carbon::parse('2026-06-04 20:00:00', 'UTC'),
             ]);
 
             $response = $this->actingAs($admin)
@@ -41,6 +101,16 @@ class AdminStockHistoricalPriceTest extends TestCase
                 ->assertJsonPath('coverage.total_count', 1)
                 ->assertJsonPath('coverage.available_count', 0)
                 ->assertJsonPath('coverage.missing_count', 1)
+                ->assertJsonPath('coverage.holdings.0.latest_realtime_day_record_count', 2)
+                ->assertJsonPath('coverage.holdings.0.previous_realtime_day_record_count', 2)
+                ->assertJsonPath('coverage.holdings.0.previous_realtime_date', '2026-06-04T17:30:00+02:00')
+                ->assertJsonPath('coverage.holdings.0.previous_realtime_day_first_record_at', '2026-06-04T09:30:00+02:00')
+                ->assertJsonPath('coverage.holdings.0.previous_realtime_day_last_record_at', '2026-06-04T17:30:00+02:00')
+                ->assertJsonPath('coverage.holdings.0.latest_realtime_table_row_count', 4)
+                ->assertJsonPath('coverage.holdings.0.end_of_day_first_date', '2026-06-03')
+                ->assertJsonPath('coverage.holdings.0.end_of_day_last_date', '2026-06-04')
+                ->assertJsonPath('coverage.holdings.0.end_of_day_row_count', 2)
+                ->assertJsonPath('coverage.holdings.0.end_of_day_table_row_count', 3)
                 ->assertJsonPath('refresh.status', 'queued')
                 ->assertJsonPath('refresh.total', 1);
 
