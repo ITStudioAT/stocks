@@ -217,8 +217,10 @@ const isHistoricalPriceFetchPolling = ref(false);
 const endOfDayRepairTimer = ref(null);
 const endOfDayRepairLoading = ref(false);
 const endOfDayRepairCurrentStock = ref('');
+const endOfDayRepairProgress = ref('');
 const historicalDataRepairLoading = ref(false);
 const historicalDataRepairCurrentStock = ref('');
+const historicalDataRepairProgress = ref('');
 const selectedDataHistoricCopiedIsin = ref(null);
 const dataHistoricIsinCopiedTimer = ref(null);
 const selectedDataHistoricIntradayCoverage = ref(null);
@@ -3986,19 +3988,23 @@ async function repairEndOfDayData() {
 
     endOfDayRepairLoading.value = true;
     endOfDayRepairCurrentStock.value = '';
+    endOfDayRepairProgress.value = '';
     dataRepairError.value = '';
 
     try {
-        for (const stock of missingStocks) {
-            endOfDayRepairCurrentStock.value = stock.label || `Stock ${stock.id}`;
-            await depotsStore.repairEndOfDayStock(stock.id);
-        }
+        await repairStocksSequentially(
+            missingStocks,
+            endOfDayRepairCurrentStock,
+            endOfDayRepairProgress,
+            (stock) => depotsStore.repairEndOfDayStock(stock.id),
+        );
 
         window.location.reload();
     } catch (error) {
         dataRepairError.value = error.message;
         endOfDayRepairLoading.value = false;
         endOfDayRepairCurrentStock.value = '';
+        endOfDayRepairProgress.value = '';
     }
 }
 
@@ -4015,19 +4021,43 @@ async function repairHistoricalData() {
 
     historicalDataRepairLoading.value = true;
     historicalDataRepairCurrentStock.value = '';
+    historicalDataRepairProgress.value = '';
     dataRepairError.value = '';
 
     try {
-        for (const stock of missingStocks) {
-            historicalDataRepairCurrentStock.value = stock.label || `Stock ${stock.id}`;
-            await depotsStore.repairHistoricalDataStock(stock.id);
-        }
+        await repairStocksSequentially(
+            missingStocks,
+            historicalDataRepairCurrentStock,
+            historicalDataRepairProgress,
+            (stock) => depotsStore.repairHistoricalDataStock(stock.id),
+        );
 
         window.location.reload();
     } catch (error) {
         dataRepairError.value = error.message;
         historicalDataRepairLoading.value = false;
         historicalDataRepairCurrentStock.value = '';
+        historicalDataRepairProgress.value = '';
+    }
+}
+
+async function repairStocksSequentially(stocks, currentStockRef, progressRef, repairStock) {
+    const queuedStockIds = new Set();
+    const queue = stocks.filter((stock) => {
+        if (queuedStockIds.has(stock.id)) {
+            return false;
+        }
+
+        queuedStockIds.add(stock.id);
+
+        return true;
+    });
+
+    for (const [index, stock] of queue.entries()) {
+        progressRef.value = `${index + 1}/${queue.length}`;
+        currentStockRef.value = stock.label || `Stock ${stock.id}`;
+
+        await repairStock(stock);
     }
 }
 
@@ -11610,7 +11640,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         <h2 class="text-h5">Overview</h2>
                                     </div>
                                     <div v-if="endOfDayRepairCurrentStock" class="text-caption text-medium-emphasis mb-4">
-                                        Updating: {{ endOfDayRepairCurrentStock }}
+                                        Updating {{ endOfDayRepairProgress }}: {{ endOfDayRepairCurrentStock }}
                                     </div>
                                     <v-btn
                                         color="primary"
@@ -11876,7 +11906,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 </v-card-text>
                             </v-card>
                             <v-card border flat class="pa-4 mt-4">
-                                <v-card-title class="pa-0 text-subtitle-1">
+                                <v-card-title class="pa-0 mb-3 text-subtitle-1">
                                     Historical Data
                                 </v-card-title>
                                 <p class="text-caption text-medium-emphasis mb-3">
@@ -11946,7 +11976,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         </div>
                                     </div>
                                     <div v-if="historicalDataRepairCurrentStock" class="text-caption text-medium-emphasis mt-4">
-                                        Updating: {{ historicalDataRepairCurrentStock }}
+                                        Updating {{ historicalDataRepairProgress }}: {{ historicalDataRepairCurrentStock }}
                                     </div>
                                     <v-btn
                                         class="mt-4"

@@ -76,6 +76,7 @@ class StockHistoricalDataRepairService
                 'id' => $holding->id,
                 'label' => collect([$holding->symbol, $holding->name])->filter()->implode(' - '),
             ])
+            ->unique('id')
             ->values()
             ->all();
     }

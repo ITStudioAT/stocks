@@ -59,6 +59,16 @@ class StockHistoricalIntradayCandleRepairService
         $dateTo = $this->lastTradingDay()->endOfDay();
         $storedCount = 0;
 
+        if ($this->isCovered($holding, $dateFrom->toDateString(), $dateTo->toDateString())) {
+            return [
+                'stock' => [
+                    'id' => $holding->id,
+                    'label' => collect([$holding->symbol, $holding->name])->filter()->implode(' - '),
+                ],
+                'stored_candles_count' => 0,
+            ];
+        }
+
         foreach ($this->missingDateRanges($holding, $dateFrom, $dateTo) as $range) {
             $storedCount += $this->storeIntradayCandlesFromEodhd($holding, $range['from'], $range['to']);
         }
@@ -92,6 +102,18 @@ class StockHistoricalIntradayCandleRepairService
             ->get(['id', 'name', 'symbol', 'exchange', 'mic_code', 'currency'])
             ->filter(fn (StockHolding $holding): bool => ! $coveredHoldingIds->has($holding->id))
             ->values();
+    }
+
+    private function isCovered(StockHolding $holding, string $minimumDate, string $lastTradingDay): bool
+    {
+        return StockHoldingIntradayCandle::query()
+            ->where('stock_holding_id', $holding->id)
+            ->where('interval', self::Interval)
+            ->where('source_key', self::SourceKey)
+            ->selectRaw('MIN(trading_date) as first_date, MAX(trading_date) as last_date')
+            ->havingRaw('MIN(trading_date) <= ?', [$minimumDate])
+            ->havingRaw('MAX(trading_date) >= ?', [$lastTradingDay])
+            ->exists();
     }
 
     private function storeIntradayCandlesFromEodhd(StockHolding $holding, Carbon $dateFrom, Carbon $dateTo): int

@@ -99,6 +99,16 @@ class StockEndOfDayRepairService
         $dateTo = now();
         $storedCount = 0;
 
+        if (! $this->isMissing($holding)) {
+            return [
+                'stock' => [
+                    'id' => $holding->id,
+                    'label' => $this->holdingLabel($holding),
+                ],
+                'stored_prices_count' => 0,
+            ];
+        }
+
         foreach ($this->missingDateRanges($holding, $dateFrom, $dateTo) as $range) {
             $storedCount += $this->storeEndOfDayPricesFromEodhd(
                 $holding,
@@ -137,6 +147,7 @@ class StockEndOfDayRepairService
 
         return $holdings
             ->filter(fn (StockHolding $holding): bool => ! $coveredInstrumentKeys->has($this->stockPriceCatalog->instrumentKeyForHolding($holding)))
+            ->unique('id')
             ->values();
     }
 
@@ -162,6 +173,14 @@ class StockEndOfDayRepairService
         return StockHolding::query()
             ->orderBy('id')
             ->get(['id', 'name', 'isin', 'wkn', 'symbol', 'exchange', 'mic_code', 'currency', 'trading_times']);
+    }
+
+    private function isMissing(StockHolding $holding): bool
+    {
+        return ! $this->stockPriceCatalog->pricesForHolding($holding)
+            ->whereNotNull('price')
+            ->where('as_of', '<=', now()->subYear()->endOfDay())
+            ->exists();
     }
 
     private function storeEndOfDayPricesFromEodhd(StockHolding $holding, string $dateFrom, string $dateTo): int
