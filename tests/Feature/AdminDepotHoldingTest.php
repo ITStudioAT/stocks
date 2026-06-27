@@ -812,7 +812,7 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.symbol', 'LYXIB')
             ->assertJsonPath('holdings.0.latest_price', '191.500000')
             ->assertJsonPath('holdings.0.start_price', '190.000000')
-            ->assertJsonPath('holdings.0.end_price', '193.000000')
+            ->assertJsonPath('holdings.0.end_price', '191.500000')
             ->assertJsonPath('holdings.0.end_price_24', '194.500000')
             ->assertJsonPath('holdings.0.end_price_48', '189.750000')
             ->assertJsonPath('holdings.0.start_price_date', '2026-06-04')
@@ -822,6 +822,46 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.historical_prices_fetching', false)
             ->assertJsonPath('holdings.0.latest_price_trend', 'down')
             ->assertJsonPath('holdings.0.latest_price_change_pct', '-1.54');
+    }
+
+    public function test_admin_listing_uses_realtime_price_for_end_price_when_it_is_newer_than_intraday_candle(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-04 10:00:00', 'Europe/Berlin'));
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'LYXIB',
+            'currency' => 'EUR',
+            'end_price' => '90.00000000',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+        $this->createIntradayCandle($holding, '2026-06-04', '2026-06-04 08:00:00', '101.00');
+        $this->createRealtimeQuote($holding, '2026-06-04 08:05:00', '102.25');
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.end_price', '102.250000')
+            ->assertJsonPath('holdings.0.end_price_date', '2026-06-04');
+    }
+
+    public function test_admin_listing_uses_intraday_candle_close_for_end_price_when_it_is_newer_than_realtime_price(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-04 10:00:00', 'Europe/Berlin'));
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'LYXIB',
+            'currency' => 'EUR',
+            'end_price' => '90.00000000',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+        $this->createRealtimeQuote($holding, '2026-06-04 08:00:00', '102.25');
+        $this->createIntradayCandle($holding, '2026-06-04', '2026-06-04 08:05:00', '103.75');
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.end_price', '103.750000')
+            ->assertJsonPath('holdings.0.end_price_date', '2026-06-04');
     }
 
     public function test_admin_listing_does_not_queue_missing_historical_session_prices(): void
@@ -1862,7 +1902,7 @@ class AdminDepotHoldingTest extends TestCase
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
             ->assertJsonPath('holdings.0.start_price', '191.000000')
-            ->assertJsonPath('holdings.0.end_price', null)
+            ->assertJsonPath('holdings.0.end_price', '195.250000')
             ->assertJsonPath('holdings.0.latest_price', '195.250000')
             ->assertJsonPath('holdings.0.latest_price_trend', 'up')
             ->assertJsonPath('holdings.0.latest_price_change_pct', '2.23');
@@ -1924,7 +1964,7 @@ class AdminDepotHoldingTest extends TestCase
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
             ->assertJsonPath('holdings.0.start_price', '100.000000')
-            ->assertJsonPath('holdings.0.end_price', '120.000000')
+            ->assertJsonPath('holdings.0.end_price', '110.000000')
             ->assertJsonPath('holdings.0.latest_price', '110.000000')
             ->assertJsonPath('holdings.0.end_price_24', '100.000000')
             ->assertJsonPath('holdings.0.end_price_24_date', '2026-06-03')
