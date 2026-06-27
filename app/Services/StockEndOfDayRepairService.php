@@ -6,14 +6,11 @@ use App\Models\StockHolding;
 use App\Models\StockPrice;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Str;
-use RuntimeException;
 
 class StockEndOfDayRepairService
 {
     public function __construct(
-        private EodhdApiClient $apiClient,
-        private EodhdMarketData $marketData,
+        private EodhdEndOfDayDataService $endOfDayDataService,
         private StockPriceCatalog $stockPriceCatalog,
     ) {}
 
@@ -65,25 +62,17 @@ class StockEndOfDayRepairService
      */
     public function repair(): array
     {
-        $dateFrom = now()->subYear()->toDateString();
-        $dateTo = now()->toDateString();
         $holdings = $this->missingHoldings();
-        $storedCount = 0;
-
-        foreach ($holdings as $holding) {
-            foreach ($this->missingDateRanges($holding, Carbon::parse($dateFrom), Carbon::parse($dateTo)) as $range) {
-                $storedCount += $this->storeEndOfDayPricesFromEodhd(
-                    $holding,
-                    $range['from']->toDateString(),
-                    $range['to']->toDateString(),
-                );
-            }
-        }
+        $result = $this->endOfDayDataService->syncHoldings(
+            $holdings,
+            now('Europe/Vienna')->subYear()->startOfDay(),
+            now('Europe/Vienna')->startOfDay(),
+        );
 
         return [
             'message' => trans_choice('{0} No missing stocks found.|{1} 1 stock repaired.|[2,*] :count stocks repaired.', $holdings->count()),
             'repaired_stocks_count' => $holdings->count(),
-            'stored_prices_count' => $storedCount,
+            'stored_prices_count' => $result['stored_count'],
             'repair' => [
                 'end_of_day' => $this->summary(),
             ],
@@ -95,10 +84,6 @@ class StockEndOfDayRepairService
      */
     public function repairHolding(StockHolding $holding): array
     {
-        $dateFrom = now()->subYear();
-        $dateTo = now();
-        $storedCount = 0;
-
         if (! $this->isMissing($holding)) {
             return [
                 'stock' => [
@@ -109,20 +94,18 @@ class StockEndOfDayRepairService
             ];
         }
 
-        foreach ($this->missingDateRanges($holding, $dateFrom, $dateTo) as $range) {
-            $storedCount += $this->storeEndOfDayPricesFromEodhd(
-                $holding,
-                $range['from']->toDateString(),
-                $range['to']->toDateString(),
-            );
-        }
+        $result = $this->endOfDayDataService->syncHolding(
+            $holding,
+            now('Europe/Vienna')->subYear()->startOfDay(),
+            now('Europe/Vienna')->startOfDay(),
+        );
 
         return [
             'stock' => [
                 'id' => $holding->id,
                 'label' => $this->holdingLabel($holding),
             ],
-            'stored_prices_count' => $storedCount,
+            'stored_prices_count' => $result['stored_count'],
         ];
     }
 
@@ -183,143 +166,6 @@ class StockEndOfDayRepairService
             ->exists();
     }
 
-    private function storeEndOfDayPricesFromEodhd(StockHolding $holding, string $dateFrom, string $dateTo): int
-    {
-        $symbol = Str::upper((string) $holding->symbol);
-
-        if ($symbol === '') {
-            return 0;
-        }
-
-        $exchangeCode = $this->marketData->exchangeCodeForHolding($holding);
-
-        if ($exchangeCode === '') {
-            throw new RuntimeException("Missing EODHD exchange code for {$symbol}.");
-        }
-
-        $response = $this->apiClient->get("eod/{$symbol}.{$exchangeCode}", [
-            'from' => $dateFrom,
-            'to' => $dateTo,
-            'period' => 'd',
-            'fmt' => 'json',
-        ]);
-        $payload = $response->json();
-
-        if (! is_array($payload)) {
-            throw new RuntimeException("EODHD returned an invalid EOD response for {$symbol}.");
-        }
-
-        if (($payload['status'] ?? null) === 'error') {
-            throw new RuntimeException((string) ($payload['message'] ?? "EODHD returned an error response for {$symbol}."));
-        }
-
-        $instrumentKey = $this->stockPriceCatalog->instrumentKeyForHolding($holding);
-        $now = now();
-        $storedCount = 0;
-
-        foreach ($payload as $record) {
-            if (! is_array($record) || ! is_numeric($record['close'] ?? null) || ! is_string($record['date'] ?? null)) {
-                continue;
-            }
-
-            $tradingDate = Carbon::parse($record['date'])->toDateString();
-            $price = number_format((float) $record['close'], 8, '.', '');
-
-            $storedCount += StockPrice::query()->insertOrIgnore([
-                [
-                    'quote_hash' => hash('sha256', "{$instrumentKey}|eodhd_eod|{$tradingDate}|close"),
-                    'instrument_key' => $instrumentKey,
-                    'source_key' => 'eodhd_eod',
-                    'source_name' => 'EODHD EOD',
-                    'source_url' => $this->sourceUrl($symbol, $exchangeCode, $dateFrom, $dateTo),
-                    'source_quality' => 'official_venue',
-                    'venue' => $holding->exchange,
-                    'mic' => $holding->mic_code,
-                    'isin' => $holding->isin,
-                    'wkn' => $holding->wkn,
-                    'symbol' => $symbol,
-                    'currency' => $this->currency($holding->currency),
-                    'close' => $price,
-                    'price' => $price,
-                    'price_type' => 'historical_eod',
-                    'as_of' => Carbon::parse($tradingDate, 'UTC')->endOfDay(),
-                    'fetched_at' => $now,
-                    'freshness_status' => 'historical',
-                    'validation_status' => 'valid',
-                    'validation_errors' => [],
-                    'raw_payload' => $record,
-                    'trading_times' => $holding->trading_times,
-                    'created_at' => $now,
-                    'updated_at' => $now,
-                ],
-            ]);
-        }
-
-        return $storedCount;
-    }
-
-    /**
-     * @return array<int, array{from: Carbon, to: Carbon}>
-     */
-    private function missingDateRanges(StockHolding $holding, Carbon $dateFrom, Carbon $dateTo): array
-    {
-        $storedDates = $this->stockPriceCatalog->pricesForHolding($holding)
-            ->whereNotNull('price')
-            ->whereNotNull('as_of')
-            ->where('as_of', '>=', $dateFrom->copy()->startOfDay())
-            ->where('as_of', '<=', $dateTo->copy()->endOfDay())
-            ->pluck('as_of')
-            ->map(fn (mixed $asOf): string => Carbon::parse($asOf)->toDateString())
-            ->flip();
-        $ranges = [];
-        $rangeStart = null;
-        $previousMissingDate = null;
-        $date = $dateFrom->copy()->startOfDay();
-
-        while ($date->lte($dateTo)) {
-            if (! $date->isWeekday()) {
-                $date->addDay();
-
-                continue;
-            }
-
-            if ($storedDates->has($date->toDateString())) {
-                if ($rangeStart !== null && $previousMissingDate !== null) {
-                    $ranges[] = [
-                        'from' => $rangeStart->copy(),
-                        'to' => $previousMissingDate->copy(),
-                    ];
-                }
-
-                $rangeStart = null;
-                $previousMissingDate = null;
-                $date->addDay();
-
-                continue;
-            }
-
-            $rangeStart ??= $date->copy();
-            $previousMissingDate = $date->copy();
-            $date->addDay();
-        }
-
-        if ($rangeStart !== null && $previousMissingDate !== null) {
-            $ranges[] = [
-                'from' => $rangeStart->copy(),
-                'to' => $previousMissingDate->copy(),
-            ];
-        }
-
-        return $ranges;
-    }
-
-    private function sourceUrl(string $symbol, string $exchangeCode, string $dateFrom, string $dateTo): string
-    {
-        $baseUrl = rtrim((string) config('services.eodhd.base_url', 'https://eodhd.com/api'), '/');
-
-        return "{$baseUrl}/eod/{$symbol}.{$exchangeCode}?from={$dateFrom}&to={$dateTo}&period=d&fmt=json";
-    }
-
     private function holdingLabel(StockHolding $holding): string
     {
         return collect([$holding->symbol, $holding->name])->filter()->implode(' - ');
@@ -339,12 +185,5 @@ class StockEndOfDayRepairService
         return $firstStoredDate === null
             ? null
             : Carbon::parse($firstStoredDate)->toDateString();
-    }
-
-    private function currency(?string $currency): ?string
-    {
-        $currency = Str::upper(trim((string) $currency));
-
-        return $currency !== '' ? Str::limit($currency, 3, '') : null;
     }
 }

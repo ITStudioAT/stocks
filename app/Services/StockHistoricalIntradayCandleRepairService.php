@@ -18,6 +18,7 @@ class StockHistoricalIntradayCandleRepairService
     public function __construct(
         private EodhdApiClient $apiClient,
         private EodhdMarketData $marketData,
+        private CompletedTradingDay $completedTradingDay,
         private StockHistoricalDataRepairService $summaryService,
     ) {}
 
@@ -32,7 +33,7 @@ class StockHistoricalIntradayCandleRepairService
     public function repair(): array
     {
         $dateFrom = now()->subYear()->startOfDay();
-        $dateTo = $this->lastTradingDay()->endOfDay();
+        $dateTo = $this->completedTradingDay->date()->endOfDay();
         $holdings = $this->missingHoldings($dateFrom->toDateString(), $dateTo->toDateString());
         $storedCount = 0;
 
@@ -56,7 +57,7 @@ class StockHistoricalIntradayCandleRepairService
     public function repairHolding(StockHolding $holding): array
     {
         $dateFrom = now()->subYear()->startOfDay();
-        $dateTo = $this->lastTradingDay()->endOfDay();
+        $dateTo = $this->completedTradingDay->date()->endOfDay();
         $storedCount = 0;
 
         if ($this->isCovered($holding, $dateFrom->toDateString(), $dateTo->toDateString())) {
@@ -92,8 +93,8 @@ class StockHistoricalIntradayCandleRepairService
             ->where('source_key', self::SourceKey)
             ->selectRaw('stock_holding_id, MIN(trading_date) as first_date, MAX(trading_date) as last_date')
             ->groupBy('stock_holding_id')
-            ->havingRaw('MIN(trading_date) <= ?', [$minimumDate])
-            ->havingRaw('MAX(trading_date) >= ?', [$lastTradingDay])
+            ->havingRaw('DATE(MIN(trading_date)) <= ?', [$minimumDate])
+            ->havingRaw('DATE(MAX(trading_date)) >= ?', [$lastTradingDay])
             ->pluck('stock_holding_id')
             ->flip();
 
@@ -111,8 +112,8 @@ class StockHistoricalIntradayCandleRepairService
             ->where('interval', self::Interval)
             ->where('source_key', self::SourceKey)
             ->selectRaw('MIN(trading_date) as first_date, MAX(trading_date) as last_date')
-            ->havingRaw('MIN(trading_date) <= ?', [$minimumDate])
-            ->havingRaw('MAX(trading_date) >= ?', [$lastTradingDay])
+            ->havingRaw('DATE(MIN(trading_date)) <= ?', [$minimumDate])
+            ->havingRaw('DATE(MAX(trading_date)) >= ?', [$lastTradingDay])
             ->exists();
     }
 
@@ -288,17 +289,6 @@ class StockHistoricalIntradayCandleRepairService
         $baseUrl = rtrim((string) config('services.eodhd.base_url', 'https://eodhd.com/api'), '/');
 
         return "{$baseUrl}/intraday/{$symbol}.{$exchangeCode}?from={$dateFrom->copy()->utc()->timestamp}&to={$dateTo->copy()->utc()->timestamp}&interval=".self::Interval.'&fmt=json';
-    }
-
-    private function lastTradingDay(): Carbon
-    {
-        $date = now()->startOfDay()->subDay();
-
-        while ($date->isWeekend()) {
-            $date->subDay();
-        }
-
-        return $date;
     }
 
     private function decimal(mixed $value): ?string

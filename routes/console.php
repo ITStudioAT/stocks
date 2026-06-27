@@ -12,10 +12,14 @@ Schedule::command('price-refresh:dispatch-due')
     ->everyMinute()
     ->withoutOverlapping(10);
 
-Schedule::command('historical-session-prices:dispatch-due')
+Schedule::command('intraday-candles:dispatch-due')
     ->everyMinute()
     ->withoutOverlapping(10);
 
-Schedule::command('intraday-candles:dispatch-due')
+Schedule::command('end-of-day-data:dispatch-due')
+    ->everyMinute()
+    ->withoutOverlapping(10);
+
+Schedule::command('indices-data:dispatch-due')
     ->everyMinute()
     ->withoutOverlapping(10);

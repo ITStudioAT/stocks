@@ -2,20 +2,18 @@
 
 namespace App\Services;
 
-use App\Jobs\BackfillMissingStockHoldingIntradayCandles;
 use App\Models\AppConfig;
-use App\Models\StockHoldingIntradayReloadRun;
 use Illuminate\Support\Carbon;
 
-class IntradayCandleBackfillScheduler
+class EndOfDayDataUpdateScheduler
 {
-    private const ConfigKey = 'intraday_candle_backfill.schedule';
+    private const ConfigKey = 'end_of_day_data_update.schedule';
 
     private const Timezone = 'Europe/Vienna';
 
     public function __construct(
-        private StockHoldingIntradayDataReloader $reloader,
-        private StockHistoricalDataRepairService $historicalDataRepairService,
+        private EodhdEndOfDayDataService $endOfDayDataService,
+        private StockHistoricalPriceService $historicalPriceService,
     ) {}
 
     /**
@@ -42,13 +40,10 @@ class IntradayCandleBackfillScheduler
      */
     public function payload(): array
     {
-        $settings = $this->settings();
-        $isRunning = $this->reloader->runningRun() !== null;
-
         return [
-            ...$settings,
-            'status' => $isRunning ? 'updating' : 'waiting',
-            'status_label' => $isRunning ? 'Backfilling intraday data' : 'waiting',
+            ...$this->settings(),
+            'status' => 'waiting',
+            'status_label' => 'waiting',
         ];
     }
 
@@ -69,23 +64,35 @@ class IntradayCandleBackfillScheduler
         return $this->settings();
     }
 
+    public function markRefreshed(?Carbon $refreshedAt = null): array
+    {
+        $refreshedAt ??= now(self::Timezone);
+        $settings = [
+            ...$this->settings(),
+            'last_dispatched_at' => $refreshedAt->copy()->setTimezone(self::Timezone)->toIso8601String(),
+            'last_dispatched_on' => $refreshedAt->copy()->setTimezone(self::Timezone)->toDateString(),
+        ];
+        $settings['next_refresh_at'] = $this->nextRefreshAt($refreshedAt->copy()->setTimezone(self::Timezone), $settings);
+        $this->storeSettings($settings);
+
+        return $this->settings();
+    }
+
     public function dispatchDue(): int
     {
-        if ($this->reloader->runningRun() !== null) {
-            return 0;
-        }
-
         $settings = $this->settings();
         $now = now(self::Timezone);
         $scheduledAt = $this->scheduledAt($now, $settings['daily_time']);
         $nextRefreshAt = Carbon::parse($settings['next_refresh_at'], self::Timezone);
 
-        if ($this->hasMissingHistoricalData()) {
+        if ($this->hasMissingEndOfDayData()) {
             if ($now->lessThan($nextRefreshAt)) {
                 return 0;
             }
 
-            return $this->dispatchNow() ? 1 : 0;
+            $this->dispatchNow();
+
+            return 1;
         }
 
         if (! $this->isDispatchDay($now)) {
@@ -100,43 +107,29 @@ class IntradayCandleBackfillScheduler
             return 0;
         }
 
-        return $this->dispatchNow() ? 1 : 0;
+        $this->dispatchNow();
+
+        return 1;
     }
 
-    public function dispatchNow(): ?StockHoldingIntradayReloadRun
+    /**
+     * @return array{
+     *     requested_count: int,
+     *     stored_count: int,
+     *     skipped_count: int,
+     *     failed_count: int,
+     *     date_from: string,
+     *     date_to: string,
+     *     errors: array<int, string>,
+     * }
+     */
+    public function dispatchNow(): array
     {
-        $run = $this->reloader->runningRun();
+        $result = $this->endOfDayDataService->syncLatestMissing();
 
-        if (! $run) {
-            $run = $this->reloader->createMissingYearRun();
+        $this->markRefreshed();
 
-            BackfillMissingStockHoldingIntradayCandles::dispatch($run->id);
-        }
-
-        $now = now(self::Timezone);
-        $settings = [
-            ...$this->settings(),
-            'last_dispatched_at' => $now->toIso8601String(),
-            'last_dispatched_on' => $now->toDateString(),
-        ];
-        $settings['next_refresh_at'] = $this->nextRefreshAt($now, $settings);
-        $this->storeSettings($settings);
-
-        return $run;
-    }
-
-    public function markRefreshed(?Carbon $refreshedAt = null): array
-    {
-        $refreshedAt ??= now(self::Timezone);
-        $settings = [
-            ...$this->settings(),
-            'last_dispatched_at' => $refreshedAt->copy()->setTimezone(self::Timezone)->toIso8601String(),
-            'last_dispatched_on' => $refreshedAt->copy()->setTimezone(self::Timezone)->toDateString(),
-        ];
-        $settings['next_refresh_at'] = $this->nextRefreshAt($refreshedAt->copy()->setTimezone(self::Timezone), $settings);
-        $this->storeSettings($settings);
-
-        return $this->settings();
+        return $result;
     }
 
     /**
@@ -183,7 +176,7 @@ class IntradayCandleBackfillScheduler
      */
     private function nextRefreshAt(Carbon $from, array $settings): string
     {
-        if ($this->hasMissingHistoricalData() && $settings['last_dispatched_at'] !== null) {
+        if ($this->hasMissingEndOfDayData() && $settings['last_dispatched_at'] !== null) {
             return Carbon::parse($settings['last_dispatched_at'], self::Timezone)
                 ->addMinutes($settings['interval_minutes'])
                 ->toIso8601String();
@@ -218,9 +211,9 @@ class IntradayCandleBackfillScheduler
         return $date->isWeekday();
     }
 
-    private function hasMissingHistoricalData(): bool
+    private function hasMissingEndOfDayData(): bool
     {
-        return $this->historicalDataRepairService->summary()['missing_stocks_count'] > 0;
+        return $this->historicalPriceService->coverage()['end_of_day_outdated_stocks'] !== [];
     }
 
     private function scheduledAt(Carbon $day, string $dailyTime): Carbon

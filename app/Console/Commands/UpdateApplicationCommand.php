@@ -145,7 +145,6 @@ class UpdateApplicationCommand extends Command
 
         $commands['Caching Laravel optimized files'] = 'php artisan optimize';
         $commands['Restarting queue workers'] = 'php artisan queue:restart';
-        $commands['Dispatching due historical session prices'] = 'php artisan historical-session-prices:dispatch-due';
 
         return $commands;
     }

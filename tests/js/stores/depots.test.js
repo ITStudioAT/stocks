@@ -15,28 +15,28 @@ describe('useDepotStore', () => {
         setActivePinia(createPinia());
     });
 
-    it('stores stock and index schedule status from a queued watchlist price refresh', async () => {
+    it('stores stock schedule status from an EODHD realtime sync', async () => {
         const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-            message: '2 prices queued for refresh.',
+            message: 'EODHD sync: 2 record(s) created, 2 record(s) updated.',
             refresh: {
                 refresh_id: 'refresh-1',
-                status: 'queued',
-                processed: 0,
+                status: 'finished',
+                processed: 2,
                 total: 2,
-                step: '0/2',
-                message: '2 prices queued for refresh.',
+                step: '2/2',
+                message: 'EODHD sync: 2 record(s) created, 2 record(s) updated.',
                 current: null,
                 started_at: '2026-06-05T09:31:00+00:00',
-                finished_at: null,
+                finished_at: '2026-06-05T09:31:01+00:00',
                 error: null,
             },
             price_refresh_settings: {
-                status: 'updating',
-                status_label: 'Updating prices',
+                status: 'waiting',
+                status_label: 'waiting',
             },
             index_price_refresh_settings: {
-                status: 'updating',
-                status_label: 'Updating prices',
+                status: 'waiting',
+                status_label: 'waiting',
             },
         }));
         vi.stubGlobal('fetch', fetchMock);
@@ -48,10 +48,10 @@ describe('useDepotStore', () => {
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/refresh-prices', expect.objectContaining({
             method: 'POST',
         }));
-        expect(depots.priceRefresh.status).toBe('queued');
-        expect(depots.priceRefreshSettings.status).toBe('updating');
-        expect(depots.indexPriceRefreshSettings.status).toBe('updating');
-        expect(depots.indexPriceRefreshSettings.status_label).toBe('Updating prices');
+        expect(depots.priceRefresh.status).toBe('finished');
+        expect(depots.priceRefreshSettings.status).toBe('waiting');
+        expect(depots.indexPriceRefreshSettings.status).toBe('waiting');
+        expect(depots.indexPriceRefreshSettings.status_label).toBe('waiting');
     });
 
     it('clears stale watchlist price refresh polling without storing an error', async () => {
@@ -124,5 +124,72 @@ describe('useDepotStore', () => {
         expect(depots.testIntraday.stock.symbol).toBe('AMES');
         expect(depots.testIntradayLoading).toBe(false);
         expect(depots.testIntradayError).toBe('');
+    });
+
+    it('requests every watchlist holding when requested', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+            depot: null,
+            holdings: [],
+            meta: {
+                current_page: 1,
+                last_page: 1,
+                per_page: 0,
+                total: 0,
+                from: null,
+                to: null,
+            },
+        }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const depots = useDepotStore();
+
+        await depots.loadWatchlistHoldings(1, { allHoldings: true });
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings?page=1&all=1', expect.any(Object));
+    });
+
+    it('merges end-of-day repair results without dropping historical data info', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+            repair: {
+                end_of_day: {
+                    missing_stocks_count: 0,
+                    covered_stocks_count: 2,
+                },
+            },
+            eodhd_api_usage: {
+                credits_limit: 100000,
+                credits_used: 42,
+            },
+        }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const depots = useDepotStore();
+        depots.dataRepairSummary = {
+            historical_data: {
+                missing_stocks_count: 1,
+                covered_stocks_count: 4,
+            },
+            end_of_day: {
+                missing_stocks_count: 2,
+                covered_stocks_count: 0,
+            },
+        };
+
+        await depots.repairEndOfDayData();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/data/repair/end-of-day', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(depots.dataRepairSummary).toEqual({
+            historical_data: {
+                missing_stocks_count: 1,
+                covered_stocks_count: 4,
+            },
+            end_of_day: {
+                missing_stocks_count: 0,
+                covered_stocks_count: 2,
+            },
+        });
+        expect(depots.eodhdApiUsage.credits_used).toBe(42);
     });
 });

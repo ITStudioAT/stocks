@@ -2,95 +2,27 @@
 
 namespace App\Services;
 
-use App\Jobs\FetchStockHistoricalPrices;
-use App\Models\StockHistoricalPriceFetchItem;
-use App\Models\StockHistoricalPriceFetchRun;
 use App\Models\StockHolding;
 use App\Models\StockHoldingDailyPrice;
 use App\Models\StockPrice;
 use App\Models\StockRealtimePrice;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Str;
+use Illuminate\Support\Collection;
 
 class StockHistoricalPriceService
 {
     public function __construct(
+        private CompletedTradingDay $completedTradingDay,
         private StockPriceCatalog $stockPriceCatalog,
     ) {}
 
     /**
-     * @return array{message: string, coverage: array<string, mixed>, refresh: array<string, mixed>|null}
-     */
-    public function ensure(): array
-    {
-        $coverage = $this->coverage();
-
-        if ($coverage['is_complete']) {
-            return [
-                'message' => 'Historical stock prices are available.',
-                'coverage' => $coverage,
-                'refresh' => null,
-            ];
-        }
-
-        $runningRun = $this->runningRun();
-
-        if ($runningRun !== null) {
-            return [
-                'message' => 'Historical stock prices are being fetched.',
-                'coverage' => $coverage,
-                'refresh' => $this->refreshPayload($runningRun),
-            ];
-        }
-
-        $missingHoldingIds = collect($coverage['holdings'])
-            ->filter(fn (array $holding): bool => ! $holding['is_available'])
-            ->pluck('id')
-            ->all();
-
-        if ($missingHoldingIds === []) {
-            return [
-                'message' => 'Historical stock prices are available.',
-                'coverage' => $coverage,
-                'refresh' => null,
-            ];
-        }
-
-        $run = $this->createRun($missingHoldingIds, $coverage['date_from'], $coverage['date_to']);
-
-        FetchStockHistoricalPrices::dispatch($run->id);
-
-        return [
-            'message' => trans_choice('{1} 1 stock queued for historical price fetching.|[2,*] :count stocks queued for historical price fetching.', count($missingHoldingIds)),
-            'coverage' => $coverage,
-            'refresh' => $this->refreshPayload($run),
-        ];
-    }
-
-    /**
-     * @return array<string, mixed>|null
-     */
-    public function status(string $refreshId): ?array
-    {
-        $run = StockHistoricalPriceFetchRun::query()->find($refreshId);
-
-        if (! $run) {
-            return null;
-        }
-
-        return [
-            'message' => $this->message($run),
-            'coverage' => $this->coverage(),
-            'refresh' => $this->refreshPayload($run),
-        ];
-    }
-
-    /**
-     * @return array{date_from: string, date_to: string, required_to: string, is_complete: bool, total_count: int, available_count: int, missing_count: int, holdings: array<int, array{id: int, name: ?string, symbol: ?string, isin: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_realtime_date: ?string, latest_realtime_rows: int, latest_realtime_day_first_record_at: ?string, latest_realtime_day_last_record_at: ?string, latest_realtime_day_record_count: int, latest_realtime_table_row_count: int, previous_realtime_date: ?string, previous_realtime_day_first_record_at: ?string, previous_realtime_day_last_record_at: ?string, previous_realtime_day_record_count: int, end_of_day_first_date: ?string, end_of_day_last_date: ?string, end_of_day_row_count: int, end_of_day_table_row_count: int, is_available: bool, stored_count: int, stored_required_count: int, expected_required_count: int, first_date: ?string, latest_date: ?string}>}
+     * @return array{date_from: string, date_to: string, required_to: string, is_complete: bool, total_count: int, available_count: int, missing_count: int, end_of_day_outdated_stocks: array<int, array{id: int, label: string, db_last_date: ?string}>, holdings: array<int, array{id: int, name: ?string, symbol: ?string, isin: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_realtime_date: ?string, latest_realtime_rows: int, latest_realtime_day_first_record_at: ?string, latest_realtime_day_last_record_at: ?string, latest_realtime_day_record_count: int, latest_realtime_table_row_count: int, previous_realtime_date: ?string, previous_realtime_day_first_record_at: ?string, previous_realtime_day_last_record_at: ?string, previous_realtime_day_record_count: int, end_of_day_first_date: ?string, end_of_day_expected_last_date: string, end_of_day_last_date: ?string, end_of_day_row_count: int, end_of_day_table_row_count: int, is_available: bool, stored_count: int, stored_required_count: int, expected_required_count: int, first_date: ?string, latest_date: ?string}>}
      */
     public function coverage(): array
     {
         $range = $this->range();
+        $expectedEndOfDayLastDate = $this->completedTradingDay->date();
         $tableRowCounts = [
             'stock_prices' => StockPrice::query()->count(),
             'stock_realtime_prices' => StockRealtimePrice::query()->count(),
@@ -110,7 +42,7 @@ class StockHistoricalPriceService
                 'currency',
             ]);
         $coverage = $holdings
-            ->map(fn (StockHolding $holding): array => $this->holdingCoverage($holding, $range['from'], $range['to'], $range['required_to'], $tableRowCounts))
+            ->map(fn (StockHolding $holding): array => $this->holdingCoverage($holding, $range['from'], $range['to'], $range['required_to'], $expectedEndOfDayLastDate, $tableRowCounts))
             ->values();
         $availableCount = $coverage->where('is_available', true)->count();
 
@@ -122,39 +54,9 @@ class StockHistoricalPriceService
             'total_count' => $holdings->count(),
             'available_count' => $availableCount,
             'missing_count' => $holdings->count() - $availableCount,
+            'end_of_day_outdated_stocks' => $this->endOfDayOutdatedStocks($coverage),
             'holdings' => $coverage->all(),
         ];
-    }
-
-    /**
-     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: ?string, finished_at: ?string, error: ?string, success_count: int, unavailable_count: int, failed_count: int, stored_count: int}
-     */
-    public function refreshPayload(StockHistoricalPriceFetchRun $run): array
-    {
-        return [
-            'refresh_id' => $run->id,
-            'status' => $run->status,
-            'processed' => $run->processed_count,
-            'total' => $run->total_count,
-            'step' => "{$run->processed_count}/{$run->total_count}",
-            'message' => $this->message($run),
-            'current' => $run->current,
-            'started_at' => $run->started_at?->toIso8601String(),
-            'finished_at' => $run->finished_at?->toIso8601String(),
-            'error' => is_array($run->error_summary) ? ($run->error_summary['message'] ?? null) : null,
-            'success_count' => $run->success_count,
-            'unavailable_count' => $run->unavailable_count,
-            'failed_count' => $run->failed_count,
-            'stored_count' => (int) $run->items()->sum('stored_count'),
-        ];
-    }
-
-    public function runningRun(): ?StockHistoricalPriceFetchRun
-    {
-        return StockHistoricalPriceFetchRun::query()
-            ->whereIn('status', ['queued', 'running'])
-            ->latest()
-            ->first();
     }
 
     /**
@@ -235,37 +137,17 @@ class StockHistoricalPriceService
     }
 
     /**
-     * @param  array<int, int>  $stockHoldingIds
-     */
-    private function createRun(array $stockHoldingIds, string $dateFrom, string $dateTo): StockHistoricalPriceFetchRun
-    {
-        $run = StockHistoricalPriceFetchRun::query()->create([
-            'id' => 'history-'.Str::uuid()->toString(),
-            'status' => 'queued',
-            'date_from' => $dateFrom,
-            'date_to' => $dateTo,
-            'total_count' => count($stockHoldingIds),
-        ]);
-
-        foreach ($stockHoldingIds as $stockHoldingId) {
-            StockHistoricalPriceFetchItem::query()->create([
-                'fetch_run_id' => $run->id,
-                'stock_holding_id' => $stockHoldingId,
-                'status' => 'queued',
-                'date_from' => $dateFrom,
-                'date_to' => $dateTo,
-            ]);
-        }
-
-        return $run;
-    }
-
-    /**
      * @param  array{stock_prices: int, stock_realtime_prices: int}  $tableRowCounts
-     * @return array{id: int, name: ?string, symbol: ?string, isin: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_realtime_date: ?string, latest_realtime_rows: int, latest_realtime_day_first_record_at: ?string, latest_realtime_day_last_record_at: ?string, latest_realtime_day_record_count: int, latest_realtime_table_row_count: int, previous_realtime_date: ?string, previous_realtime_day_first_record_at: ?string, previous_realtime_day_last_record_at: ?string, previous_realtime_day_record_count: int, end_of_day_first_date: ?string, end_of_day_last_date: ?string, end_of_day_row_count: int, end_of_day_table_row_count: int, is_available: bool, stored_count: int, stored_required_count: int, expected_required_count: int, first_date: ?string, latest_date: ?string}
+     * @return array{id: int, name: ?string, symbol: ?string, isin: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_realtime_date: ?string, latest_realtime_rows: int, latest_realtime_day_first_record_at: ?string, latest_realtime_day_last_record_at: ?string, latest_realtime_day_record_count: int, latest_realtime_table_row_count: int, previous_realtime_date: ?string, previous_realtime_day_first_record_at: ?string, previous_realtime_day_last_record_at: ?string, previous_realtime_day_record_count: int, end_of_day_first_date: ?string, end_of_day_expected_last_date: string, end_of_day_last_date: ?string, end_of_day_row_count: int, end_of_day_table_row_count: int, is_available: bool, stored_count: int, stored_required_count: int, expected_required_count: int, first_date: ?string, latest_date: ?string}
      */
-    private function holdingCoverage(StockHolding $holding, Carbon $from, Carbon $to, Carbon $requiredTo, array $tableRowCounts): array
-    {
+    private function holdingCoverage(
+        StockHolding $holding,
+        Carbon $from,
+        Carbon $to,
+        Carbon $requiredTo,
+        Carbon $expectedEndOfDayLastDate,
+        array $tableRowCounts,
+    ): array {
         $prices = StockHoldingDailyPrice::query()
             ->where('stock_holding_id', $holding->id)
             ->whereBetween('trading_date', [$from->toDateString(), $to->toDateString()]);
@@ -316,6 +198,7 @@ class StockHistoricalPriceService
             'previous_realtime_day_last_record_at' => $previousRealtimeDaySummary['last_record_at'],
             'previous_realtime_day_record_count' => $previousRealtimeDaySummary['record_count'],
             'end_of_day_first_date' => $endOfDaySummary['first_date'],
+            'end_of_day_expected_last_date' => $expectedEndOfDayLastDate->toDateString(),
             'end_of_day_last_date' => $endOfDaySummary['last_date'],
             'end_of_day_row_count' => $endOfDaySummary['row_count'],
             'end_of_day_table_row_count' => $tableRowCounts['stock_prices'],
@@ -347,6 +230,23 @@ class StockHistoricalPriceService
             'last_date' => $tradingDates->last(),
             'row_count' => $tradingDates->count(),
         ];
+    }
+
+    /**
+     * @param  Collection<int, array{id: int, name: ?string, symbol: ?string, end_of_day_expected_last_date: string, end_of_day_last_date: ?string}>  $coverage
+     * @return array<int, array{id: int, label: string, db_last_date: ?string}>
+     */
+    private function endOfDayOutdatedStocks(Collection $coverage): array
+    {
+        return $coverage
+            ->filter(fn (array $holding): bool => $holding['end_of_day_last_date'] !== $holding['end_of_day_expected_last_date'])
+            ->map(fn (array $holding): array => [
+                'id' => $holding['id'],
+                'label' => collect([$holding['symbol'], $holding['name']])->filter()->implode(' - '),
+                'db_last_date' => $holding['end_of_day_last_date'],
+            ])
+            ->values()
+            ->all();
     }
 
     /**
@@ -385,7 +285,6 @@ class StockHistoricalPriceService
             'record_count' => (int) ($summary->record_count ?? 0),
         ];
     }
-
 
     private function latestRealtimeTimestamp(StockHolding $holding): ?string
     {
@@ -452,26 +351,5 @@ class StockHistoricalPriceService
         }
 
         return $count;
-    }
-
-    private function message(StockHistoricalPriceFetchRun $run): string
-    {
-        if ($run->status === 'queued') {
-            return trans_choice('{1} 1 stock queued for historical price fetching.|[2,*] :count stocks queued for historical price fetching.', $run->total_count);
-        }
-
-        if ($run->status === 'running') {
-            return "Fetching historical stock prices ({$run->processed_count}/{$run->total_count})...";
-        }
-
-        if ($run->status === 'failed') {
-            return 'Historical stock price fetching failed.';
-        }
-
-        if ($run->status === 'partial') {
-            return 'Historical stock price fetching finished with missing data.';
-        }
-
-        return 'Historical stock prices fetched.';
     }
 }

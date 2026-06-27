@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Models\AppConfig;
-use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
 use App\Models\StockPriceRefreshRun;
 use App\Models\User;
@@ -19,7 +18,7 @@ class PriceRefreshScheduler
     ) {}
 
     /**
-     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}
+     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}
      */
     public function settings(): array
     {
@@ -39,7 +38,7 @@ class PriceRefreshScheduler
     }
 
     /**
-     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string, status: string, status_label: string, is_trading_time: bool, current_interval_minutes: int}
+     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string, status: string, status_label: string, is_trading_time: bool, current_interval_minutes: int}
      */
     public function payload(): array
     {
@@ -51,6 +50,8 @@ class PriceRefreshScheduler
             'trading_interval_minutes' => $settings['trading_interval_minutes'],
             'trading_starts_before_minutes' => $settings['trading_starts_before_minutes'],
             'trading_ends_after_minutes' => $settings['trading_ends_after_minutes'],
+            'trading_start_time' => $settings['trading_start_time'],
+            'trading_end_time' => $settings['trading_end_time'],
             'closed_refresh_enabled' => $settings['closed_refresh_enabled'],
             'closed_interval_minutes' => $settings['closed_interval_minutes'],
             'last_refreshed_at' => $settings['last_refreshed_at'],
@@ -87,6 +88,8 @@ class PriceRefreshScheduler
         bool $closedRefreshEnabled,
         int $closedIntervalMinutes,
         ?User $recipient = null,
+        ?string $tradingStartTime = null,
+        ?string $tradingEndTime = null,
     ): array {
         $previousSettings = $this->settings();
         $previousIntervalMinutes = $this->currentIntervalMinutes(
@@ -98,6 +101,8 @@ class PriceRefreshScheduler
             'trading_interval_minutes' => $tradingIntervalMinutes,
             'trading_starts_before_minutes' => $tradingStartsBeforeMinutes,
             'trading_ends_after_minutes' => $tradingEndsAfterMinutes,
+            'trading_start_time' => $tradingStartTime ?? $previousSettings['trading_start_time'],
+            'trading_end_time' => $tradingEndTime ?? $previousSettings['trading_end_time'],
             'closed_refresh_enabled' => $closedRefreshEnabled,
             'closed_interval_minutes' => $closedIntervalMinutes,
         ];
@@ -108,7 +113,7 @@ class PriceRefreshScheduler
         $refresh = null;
 
         if ($this->shouldDispatchAfterSettingsChange($previousIntervalMinutes, $settings, $isTradingTime)) {
-            $refresh = $this->dispatchWatchlist($recipient, includeIndexes: false)['progress'];
+            $refresh = $this->dispatchWatchlist($recipient)['progress'];
         }
 
         return [
@@ -136,18 +141,17 @@ class PriceRefreshScheduler
             return 0;
         }
 
-        return $this->dispatchWatchlist(includeIndexes: false)['job_count'];
+        return $this->dispatchWatchlist()['sync_count'];
     }
 
     /**
-     * @return array{progress: ?array, job_count: int, total_holdings: int, total_instruments: int}
+     * @return array{progress: ?array, sync_count: int, total_holdings: int}
      */
-    public function dispatchWatchlist(?User $recipient = null, bool $includeIndexes = true): array
+    public function dispatchWatchlist(?User $recipient = null): array
     {
         $settings = $this->settings();
         $totalHoldings = StockHolding::query()->count();
-        $totalInstruments = $totalHoldings + ($includeIndexes ? IndexWatchItem::query()->count() : 0);
-        $progress = $this->dispatcher->dispatch($recipient, $includeIndexes);
+        $progress = $this->dispatcher->dispatch($recipient);
 
         $this->storeSettings([
             ...$settings,
@@ -157,14 +161,30 @@ class PriceRefreshScheduler
 
         return [
             'progress' => $progress,
-            'job_count' => $progress === null ? 0 : 1,
+            'sync_count' => $progress === null ? 0 : 1,
             'total_holdings' => $totalHoldings,
-            'total_instruments' => $totalInstruments,
         ];
     }
 
     /**
-     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}
+     */
+    public function markRefreshed(?Carbon $refreshedAt = null): array
+    {
+        $settings = $this->settings();
+        $refreshedAt ??= now();
+
+        $this->storeSettings([
+            ...$settings,
+            'last_refreshed_at' => $refreshedAt->toIso8601String(),
+            'next_refresh_at' => $this->nextRefreshAt($refreshedAt, $settings),
+        ]);
+
+        return $this->settings();
+    }
+
+    /**
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
      */
     private function nextRefreshAt(Carbon $from, array $settings): string
     {
@@ -181,7 +201,7 @@ class PriceRefreshScheduler
     }
 
     /**
-     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
      */
     private function currentIntervalMinutes(array $settings, bool $isTradingTime): int
     {
@@ -191,7 +211,7 @@ class PriceRefreshScheduler
     }
 
     /**
-     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
      */
     private function shouldDispatchAfterSettingsChange(int $previousIntervalMinutes, array $settings, bool $isTradingTime): bool
     {
@@ -207,8 +227,8 @@ class PriceRefreshScheduler
     }
 
     /**
-     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
-     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}
      */
     private function recalculateRefreshTimes(array $settings): array
     {
@@ -225,7 +245,7 @@ class PriceRefreshScheduler
     }
 
     /**
-     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
      */
     private function recalculatedNextRefreshAt(Carbon $from, array $settings): string
     {
@@ -251,7 +271,7 @@ class PriceRefreshScheduler
     }
 
     /**
-     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
      */
     private function nextTradingRefreshAt(Carbon $from, array $settings): Carbon
     {
@@ -273,7 +293,7 @@ class PriceRefreshScheduler
     }
 
     /**
-     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
      */
     private function nextTradingStartsAt(string $tradingTimes, Carbon $from, array $settings): ?Carbon
     {
@@ -311,7 +331,7 @@ class PriceRefreshScheduler
     }
 
     /**
-     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}|null  $settings
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}|null  $settings
      */
     private function isAnyHoldingWithinTradingTimes(?Carbon $at = null, ?array $settings = null): bool
     {
@@ -325,7 +345,7 @@ class PriceRefreshScheduler
     }
 
     /**
-     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
      */
     private function isTradingTime(string $tradingTimes, Carbon $at, array $settings): bool
     {
@@ -347,11 +367,19 @@ class PriceRefreshScheduler
     }
 
     /**
-     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
      * @return array{timezone: string, open_minute: int, close_minute: int}|null
      */
     private function tradingWindow(string $tradingTimes, array $settings): ?array
     {
+        if ($settings['trading_start_time'] !== null && $settings['trading_end_time'] !== null) {
+            return [
+                'timezone' => 'Europe/Vienna',
+                'open_minute' => $this->timeToMinute($settings['trading_start_time']),
+                'close_minute' => $this->timeToMinute($settings['trading_end_time']),
+            ];
+        }
+
         if (! preg_match('/(?<![:\d])(?<open_hour>\d{1,2}):(?<open_minute>\d{2})(?::\d{2})?\s*(?:-|to|until|bis)\s*(?<close_hour>\d{1,2}):(?<close_minute>\d{2})(?::\d{2})?/i', $tradingTimes, $matches)) {
             return null;
         }
@@ -368,7 +396,7 @@ class PriceRefreshScheduler
     }
 
     /**
-     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}
+     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}
      */
     private function defaultSettings(): array
     {
@@ -376,6 +404,8 @@ class PriceRefreshScheduler
             'trading_interval_minutes' => 20,
             'trading_starts_before_minutes' => 0,
             'trading_ends_after_minutes' => 0,
+            'trading_start_time' => null,
+            'trading_end_time' => null,
             'closed_refresh_enabled' => true,
             'closed_interval_minutes' => 60,
             'last_refreshed_at' => null,
@@ -385,7 +415,7 @@ class PriceRefreshScheduler
 
     /**
      * @param  array<string, mixed>|null  $value
-     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}
+     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}
      */
     private function normalizeSettings(?array $value): array
     {
@@ -398,6 +428,8 @@ class PriceRefreshScheduler
             'trading_interval_minutes' => (int) $settings['trading_interval_minutes'],
             'trading_starts_before_minutes' => (int) $settings['trading_starts_before_minutes'],
             'trading_ends_after_minutes' => (int) $settings['trading_ends_after_minutes'],
+            'trading_start_time' => $this->validTime($settings['trading_start_time'] ?? null),
+            'trading_end_time' => $this->validTime($settings['trading_end_time'] ?? null),
             'closed_refresh_enabled' => (bool) $settings['closed_refresh_enabled'],
             'closed_interval_minutes' => (int) $settings['closed_interval_minutes'],
             'last_refreshed_at' => is_string($settings['last_refreshed_at']) ? $settings['last_refreshed_at'] : null,
@@ -406,7 +438,7 @@ class PriceRefreshScheduler
     }
 
     /**
-     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string}  $settings
      */
     private function storeSettings(array $settings): void
     {
@@ -423,5 +455,23 @@ class PriceRefreshScheduler
         }
 
         return Carbon::parse($value);
+    }
+
+    private function timeToMinute(string $time): int
+    {
+        [$hours, $minutes] = array_map('intval', explode(':', $time));
+
+        return ($hours * 60) + $minutes;
+    }
+
+    private function validTime(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+
+        return preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/', $value) === 1
+            ? $value
+            : null;
     }
 }

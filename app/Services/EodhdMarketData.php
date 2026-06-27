@@ -8,9 +8,7 @@ use App\Models\StockHolding;
 use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockPrice;
 use App\Models\StockRealtimePrice;
-use App\Services\WebMarketData\DTO\InstrumentIdentity;
 use App\Services\WebMarketData\DTO\ParsedQuote;
-use App\Services\WebMarketData\DTO\QuoteSelectionResult;
 use App\Services\WebMarketData\DTO\ValidatedQuote;
 use App\Services\WebMarketData\DTO\WebSourceCandidate;
 use App\Services\WebMarketData\MarketHours;
@@ -34,9 +32,9 @@ class EodhdMarketData
 
     private const RealtimeSourceKey = 'eodhd_realtime';
 
-    private const IntradaySourceKey = 'eodhd_intraday';
-
     private const EodSourceKey = 'eodhd_eod';
+
+    private const IntradaySourceKey = 'eodhd_intraday';
 
     public function __construct(
         private StockPriceCatalog $stockPriceCatalog,
@@ -45,106 +43,6 @@ class EodhdMarketData
         private MarketHours $marketHours,
         private EodhdApiClient $apiClient,
     ) {}
-
-    public function resolve(StockHolding $holding): QuoteSelectionResult
-    {
-        $errors = [];
-        $historicalQuotes = [];
-        $realtimeCandidate = $this->candidate($holding, self::RealtimeSourceKey, 'EODHD real-time');
-        [$quote, $historicalQuotes] = $this->realtimeQuote($holding, $realtimeCandidate, $errors);
-        $attemptedSources = [$realtimeCandidate];
-
-        if ($quote === null) {
-            $intradayCandidate = $this->currentFiveMinuteIntradayCandidate($holding);
-            $quote = $this->currentFiveMinuteIntradayQuote($holding, $intradayCandidate, $errors);
-            $attemptedSources[] = $intradayCandidate;
-        }
-
-        $validatedQuote = $quote
-            ? $this->validator->validate($quote, InstrumentIdentity::fromHolding($holding))
-            : null;
-
-        $result = new QuoteSelectionResult(
-            selectedQuote: $validatedQuote?->isSelectable() ? $validatedQuote : null,
-            quotes: $validatedQuote ? [$validatedQuote] : [],
-            attemptedSources: $attemptedSources,
-            errors: $errors,
-            status: $this->resultStatus($validatedQuote),
-        );
-
-        $fetchedStockPrice = $this->storeFetchedQuote($holding, $validatedQuote);
-
-        $this->persistResult($holding, $result, $fetchedStockPrice);
-        $this->persistHistoricalQuotes($holding, $historicalQuotes);
-
-        $this->refreshSessionPriceFields($holding->refresh(), $validatedQuote);
-
-        return $result;
-    }
-
-    private function currentFiveMinuteIntradayCandidate(StockHolding $holding): WebSourceCandidate
-    {
-        $session = $this->sessionPriceWindow($holding, null);
-
-        return $this->candidate(
-            $holding,
-            self::IntradaySourceKey,
-            'EODHD intraday',
-            $session === null
-                ? $this->intradayUrl($holding, now()->startOfDay(), now(), '5m')
-                : $this->intradayUrl($holding, $session['open'], $this->currentSessionIntradayUntil($session), '5m'),
-        );
-    }
-
-    /**
-     * @param  array<int, string>  $errors
-     */
-    private function currentFiveMinuteIntradayQuote(
-        StockHolding $holding,
-        WebSourceCandidate $candidate,
-        array &$errors,
-    ): ?ParsedQuote {
-        $session = $this->sessionPriceWindow($holding, null);
-
-        if ($session === null || ! $session['is_current_trading_day']) {
-            return null;
-        }
-
-        $until = $this->currentSessionIntradayUntil($session);
-
-        if ($until->lessThanOrEqualTo($session['open'])) {
-            return null;
-        }
-
-        $records = $this->intradayRecordsForInterval($holding, $session['open'], $until, '5m', $errors);
-
-        if ($records === []) {
-            return null;
-        }
-
-        $this->persistIntradayCandles(
-            $holding,
-            $session['date'],
-            '5m',
-            $records,
-            $candidate->url,
-        );
-
-        $record = $this->latestPriceRecordBetween($records, $session['open'], $until);
-
-        if ($record === null) {
-            return null;
-        }
-
-        return $this->quoteFromPayload(
-            holding: $holding,
-            candidate: $candidate,
-            payload: $record,
-            priceKey: 'close',
-            priceType: 'intraday',
-            freshnessStatus: 'fresh',
-        );
-    }
 
     public function refreshSessionPriceFields(StockHolding $holding, ?ValidatedQuote $latestQuote = null): void
     {
@@ -156,14 +54,9 @@ class EodhdMarketData
 
         $startQuote = $session['is_current_trading_day']
             ? $this->intradayStartQuote($holding, $session['open'], $session['close'])
-            : $this->dailyOpenQuote($holding, $session['date'], $session['open']);
-        $endQuote = $session['is_open']
-            ? null
-            : $this->dailyCloseQuote($holding, $session['date'], $session['close']);
-        $end24Quote = $this->dailyCloseQuote($holding, $session['previous_date'], $session['previous_close']);
-        $end48Quote = $this->dailyCloseQuote($holding, $session['two_ago_date'], $session['two_ago_close']);
+            : null;
 
-        collect([$startQuote, $endQuote, $end24Quote, $end48Quote])
+        collect([$startQuote])
             ->filter()
             ->each(fn (ValidatedQuote $quote): StockPrice => $this->storeHistoricalQuote($holding, $quote));
 
@@ -173,14 +66,11 @@ class EodhdMarketData
                 ?? $this->storedSessionStartPrice($holding, $session['open'], $session['close']),
             'end_price' => $session['is_open']
                 ? null
-                : $this->quotePrice($endQuote)
-                    ?? $this->quotePriceWithinWindow($latestQuote, $session['open'], $session['close']->copy()->addDay())
+                : $this->quotePriceWithinWindow($latestQuote, $session['open'], $session['close']->copy()->addDay())
                     ?? $this->storedSessionLatestRealtimePrice($holding, $session['open'], $session['close']->copy()->addDay())
                     ?? $this->storedSessionEndPrice($holding, $session['open'], $session['close']->copy()->addDay()),
-            'end_price_24' => $this->quotePrice($end24Quote)
-                ?? $this->storedSessionEndPrice($holding, $session['previous_open'], $session['today_open']),
-            'end_price_48' => $this->quotePrice($end48Quote)
-                ?? $this->storedSessionEndPrice($holding, $session['two_ago_open'], $session['previous_open']),
+            'end_price_24' => $this->storedSessionEndPrice($holding, $session['previous_open'], $session['today_open']),
+            'end_price_48' => $this->storedSessionEndPrice($holding, $session['two_ago_open'], $session['previous_open']),
         ]);
     }
 
@@ -362,30 +252,6 @@ class EodhdMarketData
             : $session['date']->toDateString();
     }
 
-    public function dailyOpenQuote(StockHolding $holding, Carbon $sessionDate, Carbon $asOf): ?ValidatedQuote
-    {
-        return $this->dailyQuote(
-            holding: $holding,
-            sessionDate: $sessionDate,
-            asOf: $asOf,
-            priceKey: 'open',
-            priceType: 'historical_session_start',
-            sourceName: 'EODHD EOD open',
-        );
-    }
-
-    public function dailyCloseQuote(StockHolding $holding, Carbon $sessionDate, Carbon $asOf): ?ValidatedQuote
-    {
-        return $this->dailyQuote(
-            holding: $holding,
-            sessionDate: $sessionDate,
-            asOf: $asOf,
-            priceKey: 'close',
-            priceType: 'historical_session_end',
-            sourceName: 'EODHD EOD close',
-        );
-    }
-
     public function storeHistoricalQuote(StockHolding $holding, ValidatedQuote $validatedQuote): StockPrice
     {
         $stockPrice = $this->stockPriceCatalog->store(
@@ -484,48 +350,6 @@ class EodhdMarketData
     }
 
     /**
-     * @return array{0: ?ParsedQuote, 1: array<int, ValidatedQuote>}
-     */
-    private function realtimeQuote(StockHolding $holding, WebSourceCandidate $candidate, array &$errors): array
-    {
-        $response = $this->get("real-time/{$this->eodhdSymbol($holding)}", [
-            'fmt' => 'json',
-        ], $errors);
-
-        if (! $response) {
-            return [null, []];
-        }
-
-        $payload = $response->json();
-
-        if (! is_array($payload)) {
-            $errors[] = 'EODHD returned an invalid real-time response.';
-
-            return [null, []];
-        }
-
-        if (($payload['status'] ?? null) === 'error') {
-            $errors[] = $this->errorMessage($payload);
-
-            return [null, []];
-        }
-
-        $quote = $this->quoteFromPayload(
-            holding: $holding,
-            candidate: $candidate,
-            payload: $payload,
-            priceKey: 'close',
-            priceType: 'last',
-            freshnessStatus: 'fresh',
-        );
-
-        return [
-            $quote,
-            $quote ? $this->historicalQuotesFromRealtimePayload($holding, $quote, $payload) : [],
-        ];
-    }
-
-    /**
      * @return array<int, array<string, mixed>>
      */
     private function intradayRecords(StockHolding $holding, Carbon $from, Carbon $until, array &$errors): array
@@ -582,79 +406,6 @@ class EodhdMarketData
             ->all();
     }
 
-    private function dailyQuote(
-        StockHolding $holding,
-        Carbon $sessionDate,
-        Carbon $asOf,
-        string $priceKey,
-        string $priceType,
-        string $sourceName,
-    ): ?ValidatedQuote {
-        $candidate = $this->candidate(
-            $holding,
-            self::EodSourceKey,
-            $sourceName,
-            $this->eodUrl($holding, $sessionDate),
-        );
-        $errors = [];
-        $records = $this->dailyRecords($holding, $sessionDate, $errors);
-        $record = collect($records)->first();
-
-        if (! is_array($record)) {
-            return null;
-        }
-
-        $record['timestamp'] = $asOf->copy()->utc()->timestamp;
-
-        $quote = $this->quoteFromPayload(
-            holding: $holding,
-            candidate: $candidate,
-            payload: $record,
-            priceKey: $priceKey,
-            priceType: $priceType,
-            freshnessStatus: 'historical',
-        );
-
-        return $quote ? $this->validatedHistoricalQuote($quote) : null;
-    }
-
-    /**
-     * @return array<int, array<string, mixed>>
-     */
-    private function dailyRecords(StockHolding $holding, Carbon $sessionDate, array &$errors): array
-    {
-        $date = $sessionDate->toDateString();
-        $response = $this->get("eod/{$this->eodhdSymbol($holding)}", [
-            'from' => $date,
-            'to' => $date,
-            'period' => 'd',
-            'fmt' => 'json',
-        ], $errors);
-
-        if (! $response) {
-            return [];
-        }
-
-        $payload = $response->json();
-
-        if (! is_array($payload)) {
-            $errors[] = 'EODHD returned an invalid EOD response.';
-
-            return [];
-        }
-
-        if (($payload['status'] ?? null) === 'error') {
-            $errors[] = $this->errorMessage($payload);
-
-            return [];
-        }
-
-        return collect($payload)
-            ->filter(fn (mixed $record): bool => is_array($record))
-            ->values()
-            ->all();
-    }
-
     /**
      * @param  array<string, mixed>  $payload
      */
@@ -693,70 +444,6 @@ class EodhdMarketData
             freshnessStatus: $freshnessStatus,
             rawPayload: $payload,
         );
-    }
-
-    /**
-     * @param  array<string, mixed>  $payload
-     * @return array<int, ValidatedQuote>
-     */
-    private function historicalQuotesFromRealtimePayload(StockHolding $holding, ParsedQuote $quote, array $payload): array
-    {
-        $session = $this->sessionAsOfTimes($holding, $quote);
-
-        if ($session === null) {
-            return [];
-        }
-
-        return collect([
-            $this->historicalRealtimeQuote(
-                holding: $holding,
-                payload: $payload,
-                priceKey: 'open',
-                priceType: 'historical_session_start',
-                sourceName: 'EODHD real-time open',
-                asOf: $session['today_open'],
-            ),
-            $this->historicalRealtimeQuote(
-                holding: $holding,
-                payload: $payload,
-                priceKey: 'previousClose',
-                priceType: 'historical_session_end',
-                sourceName: 'EODHD previous close',
-                asOf: $session['previous_close'],
-            ),
-        ])
-            ->filter()
-            ->values()
-            ->all();
-    }
-
-    /**
-     * @param  array<string, mixed>  $payload
-     */
-    private function historicalRealtimeQuote(
-        StockHolding $holding,
-        array $payload,
-        string $priceKey,
-        string $priceType,
-        string $sourceName,
-        Carbon $asOf,
-    ): ?ValidatedQuote {
-        $quote = $this->quoteFromPayload(
-            holding: $holding,
-            candidate: $this->candidate(
-                $holding,
-                self::RealtimeSourceKey,
-                $sourceName,
-                $this->realtimeUrl($holding),
-            ),
-            payload: $payload,
-            priceKey: $priceKey,
-            priceType: $priceType,
-            freshnessStatus: 'historical',
-            asOf: $asOf,
-        );
-
-        return $quote ? $this->validatedHistoricalQuote($quote) : null;
     }
 
     /**
@@ -889,73 +576,6 @@ class EodhdMarketData
         return $session['is_open']
             ? now()->utc()
             : $session['close'];
-    }
-
-    private function persistResult(
-        StockHolding $holding,
-        QuoteSelectionResult $result,
-        StockPrice|StockRealtimePrice|null $fetchedStockPrice = null,
-    ): void {
-        if (! $result->selectedQuote) {
-            if (! $this->holdingHasStoredPrice($holding)) {
-                $holding->update([
-                    'latest_stock_price_id' => null,
-                    'latest_realtime_price_id' => null,
-                    'latest_price_source' => null,
-                    'latest_price_source_url' => null,
-                    'latest_price_as_of' => null,
-                    'price_status' => 'unavailable_now',
-                    'latest_price_type' => null,
-                    'price_spread_pct' => null,
-                ]);
-
-                return;
-            }
-
-            $holding->update([
-                'price_status' => 'unavailable_now',
-            ]);
-
-            return;
-        }
-
-        if ($this->selectedQuoteIsOlderThanHolding($result->selectedQuote, $holding)) {
-            return;
-        }
-
-        $quote = $result->selectedQuote->quote;
-        $selectedPrice = $fetchedStockPrice ?? $this->storeSelectedQuote($holding, $result->selectedQuote);
-        $latestPriceColumn = $selectedPrice instanceof StockRealtimePrice
-            ? 'latest_realtime_price_id'
-            : 'latest_stock_price_id';
-
-        $holding->update([
-            'currency' => $quote->currency ?? $holding->currency,
-            $latestPriceColumn => $selectedPrice->id,
-            'price_status' => $result->status,
-            'source_verified_at' => now(),
-            'trading_times' => $selectedPrice->trading_times,
-        ]);
-    }
-
-    private function storeFetchedQuote(StockHolding $holding, ?ValidatedQuote $validatedQuote): StockPrice|StockRealtimePrice|null
-    {
-        if ($validatedQuote === null || $validatedQuote->quote->price === null || $validatedQuote->quote->asOf === null) {
-            return null;
-        }
-
-        return $this->storeSelectedQuote($holding, $validatedQuote);
-    }
-
-    private function storeSelectedQuote(StockHolding $holding, ValidatedQuote $validatedQuote): StockPrice|StockRealtimePrice
-    {
-        $tradingTimes = $this->marketHours->tradingTimes($validatedQuote->quote);
-
-        if ($validatedQuote->quote->sourceKey === self::RealtimeSourceKey) {
-            return $this->stockRealtimePriceCatalog->store($holding, $validatedQuote, $tradingTimes);
-        }
-
-        return $this->stockPriceCatalog->store($holding, $validatedQuote, $tradingTimes);
     }
 
     /**
@@ -1133,26 +753,6 @@ class EodhdMarketData
             ->where('as_of', '<', $until->copy()->utc());
     }
 
-    /**
-     * @param  array<int, ValidatedQuote>  $historicalQuotes
-     */
-    private function persistHistoricalQuotes(StockHolding $holding, array $historicalQuotes): void
-    {
-        foreach ($historicalQuotes as $historicalQuote) {
-            if ($historicalQuote->quote->sourceKey === self::RealtimeSourceKey) {
-                $this->stockRealtimePriceCatalog->store(
-                    $holding,
-                    $historicalQuote,
-                    $holding->trading_times ?? $this->marketHours->tradingTimes($historicalQuote->quote),
-                );
-
-                continue;
-            }
-
-            $this->storeHistoricalQuote($holding, $historicalQuote);
-        }
-    }
-
     private function get(string $path, array $query, array &$errors): ?Response
     {
         if (! $this->apiClient->configured()) {
@@ -1176,23 +776,6 @@ class EodhdMarketData
         }
 
         return $response;
-    }
-
-    private function resultStatus(?ValidatedQuote $quote): string
-    {
-        if ($quote === null) {
-            return 'unavailable';
-        }
-
-        if ($quote->isSelectable()) {
-            return $quote->freshnessStatus;
-        }
-
-        if ($quote->validationStatus === 'invalid' || $quote->freshnessStatus === 'invalid') {
-            return 'invalid';
-        }
-
-        return 'unavailable';
     }
 
     /**
@@ -1390,12 +973,12 @@ class EodhdMarketData
         StockHolding $holding,
         string $sourceKey,
         string $sourceName,
-        ?string $url = null,
+        string $url,
     ): WebSourceCandidate {
         return new WebSourceCandidate(
             sourceKey: $sourceKey,
             sourceName: $sourceName,
-            url: $url ?? $this->realtimeUrl($holding),
+            url: $url,
             parserKey: $sourceKey,
             quality: 'market_data_vendor',
             priority: 10,
@@ -1404,11 +987,6 @@ class EodhdMarketData
             confidenceScore: 100,
             verified: true,
         );
-    }
-
-    private function realtimeUrl(StockHolding $holding): string
-    {
-        return "{$this->baseUrl()}/real-time/{$this->eodhdSymbol($holding)}?fmt=json";
     }
 
     /**
@@ -1577,13 +1155,6 @@ class EodhdMarketData
     private function intradayUrl(StockHolding $holding, Carbon $from, Carbon $until, string $interval = '1m'): string
     {
         return "{$this->baseUrl()}/intraday/{$this->eodhdSymbol($holding)}?from={$from->copy()->utc()->timestamp}&to={$until->copy()->utc()->timestamp}&interval={$interval}&fmt=json";
-    }
-
-    private function eodUrl(StockHolding $holding, Carbon $sessionDate): string
-    {
-        $date = $sessionDate->toDateString();
-
-        return "{$this->baseUrl()}/eod/{$this->eodhdSymbol($holding)}?from={$date}&to={$date}&period=d&fmt=json";
     }
 
     private function baseUrl(): string
@@ -1772,52 +1343,5 @@ class EodhdMarketData
         return is_string($message) && trim($message) !== ''
             ? $message
             : 'EODHD returned an error response.';
-    }
-
-    private function selectedQuoteIsOlderThanHolding(ValidatedQuote $quote, StockHolding $holding): bool
-    {
-        if (! $this->holdingHasStoredPrice($holding)) {
-            return false;
-        }
-
-        $holdingAsOf = $this->holdingLatestPriceAsOf($holding);
-
-        if ($holdingAsOf === null || $quote->quote->asOf === null) {
-            return false;
-        }
-
-        return $quote->quote->asOf->lt($holdingAsOf);
-    }
-
-    private function holdingLatestPriceAsOf(StockHolding $holding): ?Carbon
-    {
-        $realtimePrice = $holding->latestRealtimePrice ?? $holding->latestRealtimePrice()->first();
-
-        if ($realtimePrice?->as_of !== null) {
-            return $realtimePrice->as_of;
-        }
-
-        $stockPrice = $holding->latestStockPrice ?? $holding->latestStockPrice()->first();
-
-        if ($stockPrice?->as_of !== null) {
-            return $stockPrice->as_of;
-        }
-
-        if (! $holding->latest_price_as_of) {
-            return null;
-        }
-
-        try {
-            return Carbon::parse($holding->latest_price_as_of);
-        } catch (Throwable) {
-            return null;
-        }
-    }
-
-    private function holdingHasStoredPrice(StockHolding $holding): bool
-    {
-        return $holding->latest_realtime_price_id !== null
-            || $holding->latest_stock_price_id !== null
-            || $holding->latest_price !== null;
     }
 }

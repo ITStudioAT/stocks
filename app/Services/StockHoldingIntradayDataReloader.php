@@ -401,6 +401,24 @@ class StockHoldingIntradayDataReloader
         ]);
     }
 
+    public function createLatestMissingRun(Carbon $targetDate): StockHoldingIntradayReloadRun
+    {
+        $dateTo = $targetDate->copy()->startOfDay();
+        $holdings = $this->latestMissingHoldings($dateTo);
+        $dateFrom = $this->latestMissingRunDateFrom($holdings, $dateTo);
+
+        return StockHoldingIntradayReloadRun::query()->create([
+            'id' => 'intraday-latest-missing-'.Str::uuid()->toString(),
+            'stock_holding_id' => null,
+            'status' => 'queued',
+            'total_count' => $holdings->count(),
+            'date_from' => $dateFrom->toDateString(),
+            'date_to' => $dateTo->toDateString(),
+            'started_at' => now(),
+            'message' => 'Latest missing intraday sync queued.',
+        ]);
+    }
+
     public function runningRun(): ?StockHoldingIntradayReloadRun
     {
         return StockHoldingIntradayReloadRun::query()
@@ -571,6 +589,61 @@ class StockHoldingIntradayDataReloader
         ]);
     }
 
+    public function importLatestMissing(string $runId): void
+    {
+        $run = StockHoldingIntradayReloadRun::query()->find($runId);
+
+        if (! $run) {
+            return;
+        }
+
+        $dateTo = ($run->date_to ?? now('Europe/Vienna'))->copy()->startOfDay();
+        $holdings = $this->latestMissingHoldings($dateTo);
+        $dateFrom = $this->latestMissingRunDateFrom($holdings, $dateTo);
+
+        $run->update([
+            'status' => 'running',
+            'started_at' => $run->started_at ?? now(),
+            'total_count' => $holdings->count(),
+            'date_from' => $dateFrom->toDateString(),
+            'date_to' => $dateTo->toDateString(),
+            'message' => 'Syncing latest missing intraday candles...',
+        ]);
+
+        foreach ($holdings as $holding) {
+            $run->update([
+                'current' => $holding->name ?: $holding->symbol,
+            ]);
+
+            try {
+                $storedCount = $this->backfillLatestMissingForHolding($holding, $dateTo, $run);
+                $run->increment('stored_count', $storedCount);
+                $run->increment('success_count');
+            } catch (Throwable $exception) {
+                $run->increment('failed_count');
+                $run->update([
+                    'error_summary' => ['message' => Str::limit($exception->getMessage(), 255, '')],
+                ]);
+            } finally {
+                $run->increment('processed_count');
+            }
+        }
+
+        $run->refresh();
+        $run->update([
+            'status' => $run->failed_count > 0 ? ($run->success_count > 0 ? 'partial' : 'failed') : 'finished',
+            'current' => null,
+            'message' => $this->reloadAllMessage([
+                'total' => $run->total_count,
+                'success_count' => $run->success_count,
+                'failed_count' => $run->failed_count,
+                'stored_count' => $run->stored_count,
+                'message' => '',
+            ]),
+            'finished_at' => now(),
+        ]);
+    }
+
     public function fail(string $runId, string $message): void
     {
         $run = StockHoldingIntradayReloadRun::query()->find($runId);
@@ -715,6 +788,117 @@ class StockHoldingIntradayDataReloader
         }
 
         return $storedCount;
+    }
+
+    private function backfillLatestMissingForHolding(
+        StockHolding $holding,
+        Carbon $dateTo,
+        StockHoldingIntradayReloadRun $run,
+    ): int {
+        $dateFrom = $this->latestMissingDateFrom($holding, $dateTo);
+
+        if ($dateFrom === null) {
+            return 0;
+        }
+
+        $exchange = $this->exchangeForHolding($holding);
+        $timezone = $exchange?->timezone ?: 'Europe/Vienna';
+        $tradingDays = $this->tradingDaysInRange($holding, $dateFrom, $dateTo);
+        $missingDateKeys = collect($tradingDays)
+            ->map(fn (Carbon $day): string => $day->toDateString())
+            ->flip()
+            ->all();
+        $holdingName = $holding->name ?: ($holding->symbol ?: "Stock {$holding->id}");
+
+        foreach ($tradingDays as $day) {
+            $this->deleteEmptyPriceRows($holding, $day);
+        }
+
+        $run->update([
+            'current' => "Fetching data for {$holdingName}",
+            'message' => "Fetching data for {$holdingName}: {$dateFrom->toDateString()} to {$dateTo->toDateString()}...",
+        ]);
+
+        $records = $this->fetchIntradayRecords($holding, $dateFrom, $dateTo);
+
+        $run->update([
+            'current' => "Storing data for {$holdingName}",
+            'message' => "Storing data for {$holdingName}: preparing ".count($records).' rows...',
+        ]);
+
+        return $this->storeRangeRecords($holding, $dateFrom, $dateTo, $records, $timezone, $missingDateKeys, $run, $holdingName);
+    }
+
+    /**
+     * @return Collection<int, StockHolding>
+     */
+    private function latestMissingHoldings(Carbon $dateTo): Collection
+    {
+        return StockHolding::query()
+            ->leftJoin('stock_holding_intraday_candles', function ($join): void {
+                $join->on('stock_holdings.id', '=', 'stock_holding_intraday_candles.stock_holding_id')
+                    ->where('stock_holding_intraday_candles.interval', self::Interval)
+                    ->where('stock_holding_intraday_candles.source_key', self::SourceKey);
+            })
+            ->groupBy(
+                'stock_holdings.id',
+                'stock_holdings.name',
+                'stock_holdings.symbol',
+                'stock_holdings.exchange',
+                'stock_holdings.mic_code',
+                'stock_holdings.currency',
+            )
+            ->havingRaw('MAX(stock_holding_intraday_candles.trading_date) IS NULL OR DATE(MAX(stock_holding_intraday_candles.trading_date)) < ?', [
+                $dateTo->toDateString(),
+            ])
+            ->orderBy('stock_holdings.id')
+            ->select([
+                'stock_holdings.id',
+                'stock_holdings.name',
+                'stock_holdings.symbol',
+                'stock_holdings.exchange',
+                'stock_holdings.mic_code',
+                'stock_holdings.currency',
+            ])
+            ->selectRaw('MAX(stock_holding_intraday_candles.trading_date) as latest_date')
+            ->get();
+    }
+
+    private function latestMissingRunDateFrom(Collection $holdings, Carbon $dateTo): Carbon
+    {
+        return $holdings
+            ->map(fn (StockHolding $holding): ?Carbon => $this->latestMissingDateFrom($holding, $dateTo))
+            ->filter()
+            ->sortBy(fn (Carbon $date): int => $date->timestamp)
+            ->first()
+            ?->copy()
+            ?? $dateTo->copy();
+    }
+
+    private function latestMissingDateFrom(StockHolding $holding, Carbon $dateTo): ?Carbon
+    {
+        $latestDate = $this->latestStoredTradingDate($holding);
+        $dateFrom = $latestDate === null
+            ? $dateTo->copy()->startOfDay()
+            : $latestDate->copy()->addDay()->startOfDay();
+
+        return $dateFrom->gt($dateTo)
+            ? null
+            : $dateFrom;
+    }
+
+    private function latestStoredTradingDate(StockHolding $holding): ?Carbon
+    {
+        $latestDate = $holding->getAttribute('latest_date')
+            ?? StockHoldingIntradayCandle::query()
+                ->where('stock_holding_id', $holding->id)
+                ->where('interval', self::Interval)
+                ->where('source_key', self::SourceKey)
+                ->max('trading_date');
+
+        return $latestDate === null
+            ? null
+            : Carbon::parse($latestDate, 'Europe/Vienna')->startOfDay();
     }
 
     /**

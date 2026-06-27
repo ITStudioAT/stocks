@@ -23,8 +23,8 @@ class DepotHoldingPriceRefreshProgress
             'total' => $total,
             'step' => "0/{$total}",
             'message' => $total === 0
-                ? 'No prices queued for refresh.'
-                : trans_choice('{1} 1 price queued for refresh.|[2,*] :count prices queued for refresh.', $total),
+                ? 'No stock realtime prices synced.'
+                : trans_choice('{1} 1 stock realtime price sync started.|[2,*] :count stock realtime price syncs started.', $total),
             'current' => null,
             'started_at' => now()->toIso8601String(),
             'finished_at' => $total === 0 ? now()->toIso8601String() : null,
@@ -127,6 +127,30 @@ class DepotHoldingPriceRefreshProgress
     /**
      * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
      */
+    public function finishWithSummary(
+        string $refreshId,
+        int $processed,
+        int $total,
+        string $message,
+        string $status = 'finished',
+        ?string $error = null,
+    ): ?array {
+        return $this->update($refreshId, fn (array $payload): array => [
+            ...$payload,
+            'status' => $status,
+            'processed' => $processed,
+            'total' => $total,
+            'step' => "{$processed}/{$total}",
+            'message' => $message,
+            'current' => null,
+            'finished_at' => now()->toIso8601String(),
+            'error' => $error === null ? null : Str::limit($error, 255, ''),
+        ]);
+    }
+
+    /**
+     * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
+     */
     public function fail(string $refreshId, string $error): ?array
     {
         return $this->update($refreshId, fn (array $payload): array => [
@@ -186,7 +210,7 @@ class DepotHoldingPriceRefreshProgress
     private function messageFromRun(StockPriceRefreshRun $run): string
     {
         if ($run->status === 'queued') {
-            return trans_choice('{1} 1 price queued for refresh.|[2,*] :count prices queued for refresh.', $run->total_count);
+            return trans_choice('{1} 1 stock realtime price sync queued.|[2,*] :count stock realtime price syncs queued.', $run->total_count);
         }
 
         if ($run->status === 'running') {

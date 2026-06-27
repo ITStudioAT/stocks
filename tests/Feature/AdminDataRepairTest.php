@@ -46,30 +46,8 @@ class AdminDataRepairTest extends TestCase
             'as_of' => '2026-01-15 16:00:00',
             'fetched_at' => '2026-01-15 16:00:00',
         ]);
-        StockHoldingIntradayCandle::query()->create([
-            'stock_holding_id' => $coveredHolding->id,
-            'trading_date' => '2025-06-26',
-            'interval' => '5m',
-            'as_of' => '2025-06-26 08:00:00',
-            'timestamp' => 1750924800,
-            'datetime' => '2025-06-26 08:00:00',
-            'close' => '123.45000000',
-            'source_key' => 'eodhd_intraday',
-            'source_name' => 'EODHD intraday',
-            'source_url' => 'https://example.com/intraday',
-        ]);
-        StockHoldingIntradayCandle::query()->create([
-            'stock_holding_id' => $coveredHolding->id,
-            'trading_date' => '2026-06-25',
-            'interval' => '5m',
-            'as_of' => '2026-06-25 08:00:00',
-            'timestamp' => 1782374400,
-            'datetime' => '2026-06-25 08:00:00',
-            'close' => '124.45000000',
-            'source_key' => 'eodhd_intraday',
-            'source_name' => 'EODHD intraday',
-            'source_url' => 'https://example.com/intraday',
-        ]);
+        $this->createIntradayCandle($coveredHolding, '2025-06-26');
+        $this->createIntradayCandle($coveredHolding, '2026-06-25');
 
         $this->actingAs($this->adminUser())
             ->getJson('/admin/data/repair')
@@ -88,9 +66,62 @@ class AdminDataRepairTest extends TestCase
             ->assertJsonPath('historical_data.missing_stocks_count', 2);
     }
 
+    public function test_admin_repair_summary_uses_current_weekday_after_trading_day_closed(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-26 18:00:00', 'Europe/Vienna'));
+
+        $coveredHolding = StockHolding::factory()->create([
+            'isin' => 'US0378331005',
+            'symbol' => 'AAPL',
+        ]);
+        $staleHolding = StockHolding::factory()->create([
+            'isin' => 'US5949181045',
+            'symbol' => 'MSFT',
+        ]);
+
+        $this->createIntradayCandle($coveredHolding, '2025-06-26');
+        $this->createIntradayCandle($coveredHolding, '2026-06-26');
+        $this->createIntradayCandle($staleHolding, '2025-06-26');
+        $this->createIntradayCandle($staleHolding, '2026-06-25');
+
+        $this->actingAs($this->adminUser())
+            ->getJson('/admin/data/repair')
+            ->assertOk()
+            ->assertJsonPath('historical_data.minimum_date', '2025-06-26')
+            ->assertJsonPath('historical_data.actual_minimum_date', '2025-06-26')
+            ->assertJsonPath('historical_data.last_trading_day', '2026-06-26')
+            ->assertJsonPath('historical_data.actual_last_trading_day', '2026-06-25')
+            ->assertJsonPath('historical_data.total_stocks_count', 2)
+            ->assertJsonPath('historical_data.covered_stocks_count', 1)
+            ->assertJsonPath('historical_data.missing_stocks_count', 1)
+            ->assertJsonPath('historical_data.missing_stocks.0.id', $staleHolding->id)
+            ->assertJsonPath('historical_data.missing_stocks.0.db_minimum_date', '2025-06-26')
+            ->assertJsonPath('historical_data.missing_stocks.0.db_last_trading_day', '2026-06-25')
+            ->assertJsonPath('historical_data.missing_stocks.0.missing_ranges.0.from', '2026-06-26')
+            ->assertJsonPath('historical_data.missing_stocks.0.missing_ranges.0.to', '2026-06-26');
+    }
+
     public function test_guest_cannot_view_data_repair_summary(): void
     {
         $this->getJson('/admin/data/repair')->assertUnauthorized();
+    }
+
+    private function createIntradayCandle(StockHolding $holding, string $tradingDate): StockHoldingIntradayCandle
+    {
+        $asOf = Carbon::parse("{$tradingDate} 08:00:00", 'UTC');
+
+        return StockHoldingIntradayCandle::query()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => $tradingDate,
+            'interval' => '5m',
+            'as_of' => $asOf,
+            'timestamp' => $asOf->timestamp,
+            'datetime' => $asOf->toDateTimeString(),
+            'close' => '123.45000000',
+            'source_key' => 'eodhd_intraday',
+            'source_name' => 'EODHD intraday',
+            'source_url' => 'https://example.com/intraday',
+        ]);
     }
 
     private function adminUser(): User

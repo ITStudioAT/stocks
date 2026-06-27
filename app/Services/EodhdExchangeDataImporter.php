@@ -235,6 +235,7 @@ class EodhdExchangeDataImporter
                 'trading_hours' => $exchange->trading_hours ?? [],
                 'holidays' => $exchange->holidays ?? [],
                 'synced_at' => $exchange->synced_at?->toIso8601String(),
+                'updated_at' => $exchange->updated_at?->toIso8601String(),
             ])
             ->values()
             ->all();

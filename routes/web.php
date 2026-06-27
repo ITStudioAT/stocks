@@ -147,6 +147,8 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::patch('/admin/price-refresh-settings', [AdminPriceRefreshSettingsController::class, 'update'])->name('admin.price-refresh-settings.update');
     Route::patch('/admin/index-price-refresh-settings', [AdminPriceRefreshSettingsController::class, 'updateIndex'])->name('admin.index-price-refresh-settings.update');
     Route::patch('/admin/intraday-backfill-settings', [AdminPriceRefreshSettingsController::class, 'updateIntradayBackfill'])->name('admin.intraday-backfill-settings.update');
+    Route::patch('/admin/end-of-day-data-update-settings', [AdminPriceRefreshSettingsController::class, 'updateEndOfDayData'])->name('admin.end-of-day-data-update-settings.update');
+    Route::patch('/admin/index-data-update-settings', [AdminPriceRefreshSettingsController::class, 'updateIndexData'])->name('admin.index-data-update-settings.update');
     Route::post('/admin/intraday-backfill/run', [AdminPriceRefreshSettingsController::class, 'runIntradayBackfill'])->name('admin.intraday-backfill.run');
     Route::get('/admin/intraday-backfill/{refreshId}', [AdminPriceRefreshSettingsController::class, 'intradayBackfillStatus'])->name('admin.intraday-backfill.status');
     Route::get('/admin/ui-preferences', [AdminUiPreferencesController::class, 'show'])->name('admin.ui-preferences.show');
@@ -160,6 +162,9 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::post('/admin/depot-transactions/stocks', [AdminDepotTransactionController::class, 'storeStock'])->name('admin.depot-transactions.stocks.store');
     Route::get('/admin/watchlist/holdings', [AdminDepotHoldingController::class, 'index'])->name('admin.watchlist.holdings.index');
     Route::get('/admin/watchlist/holdings/{holding}/intraday-candles/coverage', [AdminStockHistoricalPriceController::class, 'intradayCoverage'])->name('admin.watchlist.holdings.intraday-candles.coverage');
+    Route::get('/admin/watchlist/holdings/{holding}/realtime-prices/latest', [AdminDepotHoldingController::class, 'latestRealtimePrices'])->name('admin.watchlist.holdings.realtime-prices.latest');
+    Route::get('/admin/watchlist/holdings/{holding}/intraday-candles/latest-days', [AdminDepotHoldingController::class, 'latestIntradayCandles'])->name('admin.watchlist.holdings.intraday-candles.latest-days');
+    Route::get('/admin/watchlist/holdings/{holding}/end-of-day-prices/latest-days', [AdminDepotHoldingController::class, 'latestEndOfDayPrices'])->name('admin.watchlist.holdings.end-of-day-prices.latest-days');
     Route::get('/admin/watchlist/holdings/{holding}/intraday-candles', [AdminDepotHoldingController::class, 'intradayCandles'])->name('admin.watchlist.holdings.intraday-candles');
     Route::get('/admin/watchlist/exchange-trading-times', [AdminDepotHoldingController::class, 'exchangeTradingTimes'])->name('admin.watchlist.exchange-trading-times');
     Route::get('/admin/watchlist/holdings/pdf', [AdminDepotHoldingController::class, 'exportPdf'])->name('admin.watchlist.holdings.pdf');
@@ -178,6 +183,10 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::get('/admin/data/exchanges', [AdminDataController::class, 'exchanges'])->name('admin.data.exchanges');
     Route::post('/admin/data/exchanges/reload', [AdminDataController::class, 'reload'])->name('admin.data.exchanges.reload');
     Route::get('/admin/data/exchanges/reload/{refreshId}', [AdminDataController::class, 'reloadStatus'])->name('admin.data.exchanges.reload.status');
+    Route::post('/admin/data/realtime/sync', [AdminDataController::class, 'syncRealtime'])->name('admin.data.realtime.sync');
+    Route::post('/admin/data/end-of-day/sync', [AdminDataController::class, 'syncEndOfDay'])->name('admin.data.endOfDay.sync');
+    Route::post('/admin/data/indices/sync', [AdminDataController::class, 'syncIndices'])->name('admin.data.indices.sync');
+    Route::post('/admin/data/historical/sync', [AdminDataController::class, 'syncHistorical'])->name('admin.data.historical.sync');
     Route::get('/admin/data/intraday', [AdminDataController::class, 'intraday'])->name('admin.data.intraday');
     Route::post('/admin/data/intraday/reload', [AdminDataController::class, 'reloadIntraday'])->name('admin.data.intraday.reload');
     Route::get('/admin/data/intraday/reload/{refreshId}', [AdminDataController::class, 'reloadIntradayStatus'])->name('admin.data.intraday.reload.status');
@@ -186,8 +195,8 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::post('/admin/data/repair/end-of-day/{holding}', [AdminDataController::class, 'repairEndOfDayStock'])->name('admin.data.repair.endOfDay.stock');
     Route::post('/admin/data/repair/historical-data', [AdminDataController::class, 'repairHistoricalData'])->name('admin.data.repair.historicalData');
     Route::post('/admin/data/repair/historical-data/{holding}', [AdminDataController::class, 'repairHistoricalDataStock'])->name('admin.data.repair.historicalData.stock');
+    Route::get('/admin/watchlist/holdings/historical-prices/coverage', [AdminStockHistoricalPriceController::class, 'coverage'])->name('admin.watchlist.holdings.historical-prices.coverage');
     Route::post('/admin/watchlist/holdings/historical-prices/ensure', [AdminStockHistoricalPriceController::class, 'ensure'])->name('admin.watchlist.holdings.historical-prices.ensure');
-    Route::get('/admin/watchlist/holdings/historical-prices/{refreshId}', [AdminStockHistoricalPriceController::class, 'status'])->name('admin.watchlist.holdings.historical-prices.status');
     Route::patch('/admin/watchlist/holdings/{holding}/flatex-price', [AdminDepotHoldingController::class, 'updateFlatexPrice'])->name('admin.watchlist.holdings.flatex-price');
     Route::delete('/admin/watchlist/holdings/{holding}', [AdminDepotHoldingController::class, 'destroy'])->name('admin.watchlist.holdings.destroy');
     Route::get('/admin/active-depot/holdings', [AdminDepotHoldingController::class, 'index'])->name('admin.active-depot.holdings.index');

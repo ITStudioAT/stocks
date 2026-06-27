@@ -5,7 +5,9 @@ namespace App\Http\Controllers;
 use App\Models\Depot;
 use App\Models\DepotTransaction;
 use App\Models\StockHolding;
+use App\Services\EndOfDayDataUpdateScheduler;
 use App\Services\EodhdApiUsage;
+use App\Services\IndexDataUpdateScheduler;
 use App\Services\IndexPriceRefreshSettings;
 use App\Services\PriceRefreshScheduler;
 use App\Services\UiPreferences;
@@ -36,19 +38,26 @@ class AdminDepotController extends Controller
         ]);
     }
 
-    public function active(Request $request, PriceRefreshScheduler $priceRefreshScheduler, IndexPriceRefreshSettings $indexPriceRefreshSettings, EodhdApiUsage $eodhdApiUsage, UiPreferences $uiPreferences): JsonResponse
-    {
+    public function active(
+        Request $request,
+        PriceRefreshScheduler $priceRefreshScheduler,
+        IndexPriceRefreshSettings $indexPriceRefreshSettings,
+        EndOfDayDataUpdateScheduler $endOfDayDataUpdateScheduler,
+        IndexDataUpdateScheduler $indexDataUpdateScheduler,
+        EodhdApiUsage $eodhdApiUsage,
+        UiPreferences $uiPreferences,
+    ): JsonResponse {
         $depot = Depot::query()
             ->where('is_active', true)
             ->first();
-
-        $indexPriceRefreshSettings->dispatchOverdueRefreshes();
 
         return response()->json([
             'depot' => $depot ? $this->depotPayload($depot) : null,
             'app_version' => config('stocks.version'),
             'price_refresh_settings' => $priceRefreshScheduler->payload(),
             'index_price_refresh_settings' => $indexPriceRefreshSettings->payload(),
+            'end_of_day_data_update_settings' => $endOfDayDataUpdateScheduler->payload(),
+            'index_data_update_settings' => $indexDataUpdateScheduler->payload(),
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
             'ui_preferences' => $uiPreferences->payload($request->user()),
         ]);

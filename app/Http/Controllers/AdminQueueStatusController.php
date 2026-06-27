@@ -2,12 +2,9 @@
 
 namespace App\Http\Controllers;
 
-use App\Jobs\FetchHistoricalSessionPrices;
-use App\Jobs\FetchStockHistoricalPrices;
 use App\Jobs\RefreshDepotHoldingPrices;
 use App\Jobs\ReloadEodhdExchanges;
 use App\Jobs\ReloadStockHoldingIntradayData;
-use App\Models\StockHistoricalPriceFetchRun;
 use App\Models\StockPriceRefreshRun;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Carbon;
@@ -96,21 +93,8 @@ class AdminQueueStatusController extends Controller
     {
         return max([
             (new RefreshDepotHoldingPrices('queue-status-check'))->timeout,
-            (new FetchStockHistoricalPrices('queue-status-check'))->timeout,
             (new ReloadEodhdExchanges('queue-status-check'))->timeout,
             (new ReloadStockHoldingIntradayData('queue-status-check'))->timeout,
-            (new FetchHistoricalSessionPrices('queue-status-check', [], [
-                'timezone' => 'UTC',
-                'today_date' => '2026-06-05',
-                'today_open' => '2026-06-05T08:00:00+00:00',
-                'today_close' => '2026-06-05T16:30:00+00:00',
-                'previous_date' => '2026-06-04',
-                'previous_open' => '2026-06-04T08:00:00+00:00',
-                'previous_close' => '2026-06-04T16:30:00+00:00',
-                'two_ago_date' => '2026-06-03',
-                'two_ago_open' => '2026-06-03T08:00:00+00:00',
-                'two_ago_close' => '2026-06-03T16:30:00+00:00',
-            ]))->timeout,
         ]);
     }
 
@@ -180,18 +164,6 @@ class AdminQueueStatusController extends Controller
                             ->where('created_at', '<', $staleBefore);
                     });
             })
-            ->count()
-            + StockHistoricalPriceFetchRun::query()
-                ->whereIn('status', ['queued', 'running'])
-                ->where(function ($query) use ($staleBefore): void {
-                    $query
-                        ->where('started_at', '<', $staleBefore)
-                        ->orWhere(function ($query) use ($staleBefore): void {
-                            $query
-                                ->whereNull('started_at')
-                                ->where('created_at', '<', $staleBefore);
-                        });
-                })
-                ->count();
+            ->count();
     }
 }

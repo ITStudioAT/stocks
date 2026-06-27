@@ -7,8 +7,15 @@ use App\Jobs\ReloadStockHoldingIntradayData;
 use App\Models\EodhdExchangeImportRun;
 use App\Models\StockHolding;
 use App\Models\StockHoldingIntradayReloadRun;
+use App\Services\CompletedTradingDay;
+use App\Services\EndOfDayDataUpdateScheduler;
 use App\Services\EodhdApiUsage;
+use App\Services\EodhdBatchRealtimePriceService;
+use App\Services\EodhdEndOfDayDataService;
 use App\Services\EodhdExchangeDataImporter;
+use App\Services\IndexDataUpdateScheduler;
+use App\Services\IntradayCandleBackfillScheduler;
+use App\Services\PriceRefreshScheduler;
 use App\Services\StockEndOfDayRepairService;
 use App\Services\StockHistoricalDataRepairService;
 use App\Services\StockHistoricalIntradayCandleRepairService;
@@ -18,14 +25,18 @@ use Illuminate\Http\Request;
 
 class AdminDataController extends Controller
 {
-    public function exchanges(EodhdExchangeDataImporter $importer, EodhdApiUsage $eodhdApiUsage): JsonResponse
-    {
+    public function exchanges(
+        EodhdExchangeDataImporter $importer,
+        EodhdApiUsage $eodhdApiUsage,
+        IndexDataUpdateScheduler $indexDataUpdateScheduler,
+    ): JsonResponse {
         $run = $importer->runningRun()
             ?? EodhdExchangeImportRun::query()->latest()->first();
 
         return response()->json([
             'exchanges' => $importer->exchangePayloads(),
             'refresh' => $run ? $importer->refreshPayload($run) : null,
+            'index_data_update_settings' => $indexDataUpdateScheduler->payload(),
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
     }
@@ -61,6 +72,74 @@ class AdminDataController extends Controller
         return response()->json([
             'exchanges' => $importer->exchangePayloads(),
             'refresh' => $importer->refreshPayload($run),
+            'eodhd_api_usage' => $eodhdApiUsage->payload(),
+        ]);
+    }
+
+    public function syncRealtime(
+        EodhdBatchRealtimePriceService $realtimePriceService,
+        PriceRefreshScheduler $priceRefreshScheduler,
+        EodhdApiUsage $eodhdApiUsage,
+    ): JsonResponse {
+        $result = $realtimePriceService->syncAll();
+        $priceRefreshScheduler->markRefreshed();
+
+        return response()->json([
+            ...$result,
+            'price_refresh_settings' => $priceRefreshScheduler->payload(),
+            'eodhd_api_usage' => $eodhdApiUsage->payload(),
+        ]);
+    }
+
+    public function syncHistorical(
+        StockHoldingIntradayDataReloader $intradayDataReloader,
+        IntradayCandleBackfillScheduler $intradayBackfillScheduler,
+        EodhdApiUsage $eodhdApiUsage,
+        CompletedTradingDay $completedTradingDay,
+    ): JsonResponse {
+        $run = $intradayDataReloader->createLatestMissingRun($completedTradingDay->date());
+        $intradayDataReloader->importLatestMissing($run->id);
+        $run->refresh();
+
+        return response()->json([
+            'message' => "EODHD historical intraday sync: {$run->stored_count} candle(s) loaded/updated.",
+            'requested_count' => $run->total_count,
+            'stored_count' => $run->stored_count,
+            'skipped_count' => max($run->total_count - $run->success_count - $run->failed_count, 0),
+            'failed_count' => $run->failed_count,
+            'date_from' => $run->date_from?->toDateString(),
+            'date_to' => $run->date_to?->toDateString(),
+            'refresh' => $intradayDataReloader->refreshPayload($run),
+            'intraday_backfill_settings' => $intradayBackfillScheduler->markRefreshed(),
+            'eodhd_api_usage' => $eodhdApiUsage->payload(),
+        ]);
+    }
+
+    public function syncEndOfDay(
+        EodhdEndOfDayDataService $endOfDayDataService,
+        EndOfDayDataUpdateScheduler $endOfDayDataUpdateScheduler,
+        EodhdApiUsage $eodhdApiUsage,
+    ): JsonResponse {
+        $result = $endOfDayDataService->syncLatestMissing();
+
+        return response()->json([
+            ...$result,
+            'message' => "EODHD end-of-day sync: {$result['stored_count']} record(s) created.",
+            'end_of_day_data_update_settings' => $endOfDayDataUpdateScheduler->markRefreshed(),
+            'eodhd_api_usage' => $eodhdApiUsage->payload(),
+        ]);
+    }
+
+    public function syncIndices(
+        IndexDataUpdateScheduler $indexDataUpdateScheduler,
+        EodhdApiUsage $eodhdApiUsage,
+    ): JsonResponse {
+        $result = $indexDataUpdateScheduler->dispatchNow();
+
+        return response()->json([
+            ...$result,
+            'message' => "EODHD indices sync: {$result['refreshed_count']} index(es) refreshed.",
+            'index_data_update_settings' => $indexDataUpdateScheduler->payload(),
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
     }
@@ -176,5 +255,4 @@ class AdminDataController extends Controller
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
     }
-
 }

@@ -252,12 +252,45 @@ function indexPriceRefreshSettings(overrides = {}) {
 function intradayBackfillSettings(overrides = {}) {
     return {
         daily_time: '18:30',
+        interval_minutes: 15,
         timezone: 'Europe/Vienna',
         last_dispatched_at: null,
         last_dispatched_on: null,
         next_refresh_at: '2026-06-12T18:30:00+02:00',
         status: 'waiting',
         status_label: 'waiting',
+        ...overrides,
+    };
+}
+
+function endOfDayDataUpdateSettings(overrides = {}) {
+    return {
+        daily_time: '17:45',
+        interval_minutes: 20,
+        timezone: 'Europe/Vienna',
+        last_dispatched_at: null,
+        last_dispatched_on: null,
+        next_refresh_at: '2026-06-12T17:45:00+02:00',
+        status: 'waiting',
+        status_label: 'waiting',
+        ...overrides,
+    };
+}
+
+function indexDataUpdateSettings(overrides = {}) {
+    return {
+        weekday: 1,
+        weekday_label: 'Monday',
+        daily_time: '02:00',
+        timezone: 'Europe/Vienna',
+        last_dispatched_at: null,
+        last_dispatched_on: null,
+        next_refresh_at: '2026-06-15T02:00:00+02:00',
+        status: 'waiting',
+        status_label: 'waiting',
+        table_name: 'index_watch_item_prices',
+        table_row_count: 3,
+        latest_table_update_at: null,
         ...overrides,
     };
 }
@@ -494,12 +527,7 @@ describe('App', () => {
         expect(dashboardHeading.text()).toContain('Watch-list');
         expect(dashboardHeading.find('.dashboard-actions').exists()).toBe(true);
         const actionLabels = dashboardHeading.findAll('.dashboard-action-button').map((button) => button.text());
-        expect(actionLabels).toEqual([
-            'Clear queue',
-            'Export PDF',
-            'Refresh prices',
-            'Add stock',
-        ]);
+        expect(actionLabels).toEqual(['Add stock', 'Reload']);
         const mobileCards = wrapper.findAll('.mobile-stock-card');
         expect(mobileCards).toHaveLength(2);
         expect(mobileCards[0].text()).toContain('Apple');
@@ -627,7 +655,8 @@ describe('App', () => {
         expect(headers).not.toContain('Symbol');
         expect(headers[0]).toBe('Name');
         expect(headers).toContain('Latest price');
-        expect(headers.some((header) => header.includes('End price'))).toBe(true);
+        expect(headers.some((header) => header.includes('Last day'))).toBe(true);
+        expect(headers.some((header) => header.includes('End price'))).toBe(false);
         expect(headers).not.toContain('Source time');
 
         const firstRowCells = watchListTable.find('.stock-holding-row').findAll('td');
@@ -652,8 +681,7 @@ describe('App', () => {
         expect(appleCells[1].text()).toContain('+2.28% · 299.50');
         expect(appleCells[1].find('[aria-label="Day indicator: Price increased"]').exists()).toBe(true);
         expect(appleCells[1].find('.recent-price-trend-dot--day').classes()).toContain('recent-price-trend-dot-up');
-        expect(microsoftCells[1].text()).toContain('429.95 USD');
-        expect(microsoftCells[1].text()).toContain('+2.37% · 420.00 USD');
+        expect(microsoftCells[1].text()).toBe('-');
     });
 
     it('renders the depots menu section with paginated depot data', async () => {
@@ -1343,7 +1371,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options?.method === 'POST') {
+            if (path === '/admin/watchlist/holdings/historical-prices/coverage') {
                 return Promise.resolve(jsonResponse({
                     message: 'Historical stock prices are available.',
                     coverage: {
@@ -1357,6 +1385,7 @@ describe('App', () => {
                         holdings: [],
                     },
                     refresh: null,
+                    index_data_update_settings: indexDataUpdateSettings(),
                 }));
             }
 
@@ -2407,7 +2436,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options?.method === 'POST') {
+            if (path === '/admin/watchlist/holdings/historical-prices/coverage') {
                 return Promise.resolve(jsonResponse({
                     message: 'Historical stock prices are available.',
                     coverage: null,
@@ -2903,7 +2932,7 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
             }
 
-            if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options?.method === 'POST') {
+            if (path === '/admin/watchlist/holdings/historical-prices/coverage') {
                 return Promise.resolve(jsonResponse({
                     message: 'Historical stock prices are available.',
                     coverage: null,
@@ -3023,7 +3052,7 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
             }
 
-            if (path === '/admin/watchlist/holdings/historical-prices/ensure' && options?.method === 'POST') {
+            if (path === '/admin/watchlist/holdings/historical-prices/coverage') {
                 return Promise.resolve(jsonResponse({
                     message: 'Historical stock prices are available.',
                     coverage: null,
@@ -3783,7 +3812,7 @@ describe('App', () => {
                     meta: {
                         current_page: 1,
                         last_page: 1,
-                        per_page: 10,
+                        per_page: 5,
                         total: 5,
                         from: 1,
                         to: 5,
@@ -3865,14 +3894,14 @@ describe('App', () => {
                     price_refresh_settings: currentPriceRefreshSettings,
                     refresh: {
                         refresh_id: 'settings-refresh-1',
-                        status: 'queued',
-                        processed: 0,
+                        status: 'finished',
+                        processed: 2,
                         total: 2,
-                        step: '0/2',
-                        message: '2 stock prices queued for refresh.',
+                        step: '2/2',
+                        message: 'EODHD sync: 2 record(s) created, 2 record(s) updated.',
                         current: null,
                         started_at: '2026-06-02T12:15:00+00:00',
-                        finished_at: null,
+                        finished_at: '2026-06-02T12:20:00+00:00',
                         error: null,
                     },
                 }));
@@ -3960,17 +3989,17 @@ describe('App', () => {
 
             if (path === '/admin/watchlist/holdings/refresh-prices') {
                 return Promise.resolve(jsonResponse({
-                    message: '2 stock prices queued for refresh.',
+                    message: 'EODHD sync: 2 record(s) created, 2 record(s) updated.',
                     refresh: {
                         refresh_id: 'refresh-1',
-                        status: 'queued',
-                        processed: 0,
+                        status: 'finished',
+                        processed: 2,
                         total: 2,
-                        step: '0/2',
-                        message: '2 stock prices queued for refresh.',
+                        step: '2/2',
+                        message: 'EODHD sync: 2 record(s) created, 2 record(s) updated.',
                         current: null,
                         started_at: '2026-06-02T12:15:00+00:00',
-                        finished_at: null,
+                        finished_at: '2026-06-02T12:20:00+00:00',
                         error: null,
                     },
                 }));
@@ -4122,27 +4151,25 @@ describe('App', () => {
         expect(dashboardHeaders[2]).toBe('Latest price');
         expect(dashboardHeaders[3]).toContain('Start price');
         expect(dashboardHeaders[3]).toContain('05.06.2026');
-        expect(dashboardHeaders[4]).toContain('End price');
-        expect(dashboardHeaders[4]).toContain('05.06.2026');
+        expect(dashboardHeaders[4]).toContain('Last day');
+        expect(dashboardHeaders[4]).toContain('04.06.2026');
         expect(dashboardHeaders[4]).not.toContain('Yesterday');
-        expect(dashboardHeaders[5]).toContain('End 24');
-        expect(dashboardHeaders[5]).toContain('04.06.2026');
-        expect(dashboardHeaders[5]).not.toContain('Yesterday');
-        expect(dashboardHeaders[6]).toContain('End 48');
-        expect(dashboardHeaders[6]).toContain('03.06.2026');
-        expect(dashboardHeaders[6]).not.toContain('Day before yesterday');
-        expect(dashboardHeaders[7]).toBe('Source time');
-        expect(dashboardHeaders[8]).toBe('Actions');
-        const dashboardStatusText = wrapper.get('.dashboard-status-card').text();
+        expect(dashboardHeaders[5]).toBe('Source time');
+        expect(dashboardHeaders[6]).toBe('Actions');
+        expect(wrapper.find('thead th.watch-list-content-cell').exists()).toBe(true);
+        expect(wrapper.find('thead th.watch-list-source-time-cell').exists()).toBe(true);
+        expect(wrapper.find('thead th.watch-list-actions-cell').exists()).toBe(true);
         expect(wrapper.get('.app-bar-row').text()).not.toContain('Stocks Last:');
-        expect(dashboardStatusText).toContain('Stocks Last:');
-        expect(dashboardStatusText).toContain('Indices Last:');
-        expect(dashboardStatusText).not.toContain('EODHD API');
-        expect(dashboardStatusText).not.toContain('Hour 988 / 1,000 Used 12');
-        expect(dashboardStatusText).not.toContain('Day 98,805 / 100,000 Used 1,195');
-        expect(dashboardStatusText).toContain('fetching historical data');
-        expect(dashboardStatusText.match(/waiting/g)).toHaveLength(2);
+        expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings?page=1&all=1', expect.any(Object));
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
         expect(wrapper.find('[aria-label="Minify dashboard menu"]').exists()).toBe(true);
+        const watchListSection = wrapper.get('.watch-list-section');
+        expect(watchListSection.text()).toContain('Stocks');
+        expect(watchListSection.text()).toContain('5');
+        expect(wrapper.find('.v-pagination').exists()).toBe(false);
         expect(wrapper.text()).toContain('Watch-list');
         expect(wrapper.text()).not.toContain('Free calls remaining');
         expect(wrapper.find('.dashboard-navigation-drawer').classes()).not.toContain('dashboard-navigation-drawer--compact');
@@ -4168,30 +4195,26 @@ describe('App', () => {
         expect(wrapper.text()).toContain('306.32');
         expect(wrapper.text()).not.toContain('306.32 EUR');
         expect(wrapper.text()).toContain('300.10');
-        expect(wrapper.text()).toContain('305.90');
         expect(wrapper.text()).toContain('299.50');
-        expect(wrapper.text()).toContain('298.75');
         expect(wrapper.text()).toContain('+2.28%');
-        expect(wrapper.text()).toContain('+2.14%');
         expect(wrapper.text()).toContain('DOWN');
-        expect(wrapper.text()).toContain('195');
         expect(wrapper.text()).toContain('FLAT');
         expect(wrapper.text()).toContain('100');
 
         const holdingRows = wrapper.findAll('tbody tr');
         const upPriceValue = holdingRows[0].findAll('td')[2].find('.latest-price-value');
         const downPriceValue = holdingRows[1].findAll('td')[2].find('.latest-price-value');
-        const upEndPriceCell = holdingRows[0].findAll('td')[4];
-        const downEndPriceCell = holdingRows[1].findAll('td')[4];
-        const upEndPriceValue = upEndPriceCell.find('.latest-price-value');
-        const downEndPriceValue = downEndPriceCell.find('.latest-price-value');
-        const upStartPriceTick = holdingRows[0].findAll('td')[3].find('[aria-label="Start price higher than End 24 price"]');
-        const downStartPriceTick = holdingRows[1].findAll('td')[3].find('[aria-label="Start price lower than End 24 price"]');
+        const upStartPriceTick = holdingRows[0].findAll('td')[3].find('[aria-label="Start price higher than last day price"]');
+        const downStartPriceTick = holdingRows[1].findAll('td')[3].find('[aria-label="Start price lower than last day price"]');
         expect(holdingRows[0].findAll('td')[0].text()).toContain('Exchange: NASDAQ');
         expect(holdingRows[0].findAll('td')[0].text()).toContain('Pieces: 0');
         expect(holdingRows[0].findAll('td')[1].text()).not.toContain('Exchange: NASDAQ');
         expect(holdingRows[0].findAll('td')[1].text()).not.toContain('Pieces: 0');
         expect(holdingRows[0].findAll('td')[1].text()).toContain('US0378331005 · WKN: 865985');
+        expect(holdingRows[0].findAll('td')[5].text()).toContain('03.06.2026, 17:35');
+        expect(holdingRows[0].findAll('td')[5].text()).not.toContain('Tradegate Exchange');
+        expect(holdingRows[0].findAll('td')[5].classes()).toContain('watch-list-source-time-cell');
+        expect(holdingRows[0].findAll('td')[6].classes()).toContain('watch-list-actions-cell');
         expect(holdingRows[0].findAll('td')[2].classes()).not.toContain('bg-success');
         expect(holdingRows[1].findAll('td')[2].classes()).not.toContain('bg-error');
         expect(upPriceValue.classes()).toContain('bg-success');
@@ -4200,15 +4223,8 @@ describe('App', () => {
         expect(downPriceValue.classes()).not.toContain('bg-error');
         expect(downPriceValue.text()).toBe('-');
         expect(upPriceValue.text()).toContain('+2.28%');
+        expect(upPriceValue.find('.latest-price-tick').exists()).toBe(false);
         expect(downPriceValue.text()).not.toContain('+5.98%');
-        expect(upEndPriceCell.text()).toContain('+2.14%');
-        expect(upEndPriceCell.classes()).not.toContain('bg-success');
-        expect(upEndPriceValue.classes()).toContain('bg-success');
-        expect(upEndPriceValue.classes()).toContain('text-white');
-        expect(downEndPriceCell.text()).toContain('+5.98%');
-        expect(downEndPriceCell.classes()).not.toContain('bg-success');
-        expect(downEndPriceValue.classes()).toContain('bg-success');
-        expect(downEndPriceValue.classes()).toContain('text-white');
         expect(upStartPriceTick.exists()).toBe(true);
         expect(upStartPriceTick.text()).toBe('↑');
         expect(upStartPriceTick.classes()).toContain('text-success');
@@ -4216,20 +4232,9 @@ describe('App', () => {
         expect(downStartPriceTick.text()).toBe('↓');
         expect(downStartPriceTick.classes()).toContain('text-error');
         expect(holdingRows[2].findAll('td')[3].find('.latest-price-tick').exists()).toBe(false);
-        const upEnd24Tick = holdingRows[0].findAll('td')[5].find('[aria-label="End 24 price higher than End 48 price"]');
-        const downEnd24Tick = holdingRows[1].findAll('td')[5].find('[aria-label="End 24 price lower than End 48 price"]');
-        expect(upEnd24Tick.exists()).toBe(true);
-        expect(upEnd24Tick.text()).toBe('↑');
-        expect(upEnd24Tick.classes()).toContain('text-success');
-        expect(downEnd24Tick.exists()).toBe(true);
-        expect(downEnd24Tick.text()).toBe('↓');
-        expect(downEnd24Tick.classes()).toContain('text-error');
-        expect(holdingRows[2].findAll('td')[5].find('.latest-price-tick').exists()).toBe(false);
-        expect(holdingRows[0].findAll('td')[5].text()).not.toContain('%');
-        expect(holdingRows[0].findAll('td')[6].text()).not.toContain('%');
+        expect(holdingRows[0].findAll('td')[4].text()).not.toContain('%');
         expect(wrapper.html()).toContain('latest-price-tick');
         expect(wrapper.text()).toContain('↑');
-        expect(wrapper.text()).toContain('=');
         const recentPriceTrendDots = holdingRows[0].findAll('.recent-price-trend-dot');
         expect(recentPriceTrendDots).toHaveLength(10);
         expect(recentPriceTrendDots[0].classes()).toContain('recent-price-trend-dot-flat');
@@ -4270,31 +4275,12 @@ describe('App', () => {
 
         expect(wrapper.text()).toContain('03.06.2026, 17:35');
         expect(wrapper.text()).not.toContain('Monday-Friday 08:00-22:00 Europe/Berlin');
-        expect(wrapper.text()).toContain('Exchange trading times');
-        expect(wrapper.text()).toContain('XETRA');
-        expect(wrapper.text()).toContain('XETRA Stock Exchange');
-        expect(wrapper.text()).toContain('09:00-17:30');
-        const exchangeDetailsTable = wrapper.findAll('table')[1];
-        expect(exchangeDetailsTable.findAll('thead th').map((header) => header.text())).toEqual([
-            'Exchange',
-            'Local time',
-            'Next trading',
-            'Next holidays',
-            'Days',
-        ]);
-        const exchangeDetailsCells = exchangeDetailsTable.find('tbody tr').findAll('td');
-        expect(exchangeDetailsCells).toHaveLength(5);
-        expect(exchangeDetailsCells[0].text()).toContain('XETRA');
-        expect(exchangeDetailsCells[0].text()).toContain('XETRA Stock Exchange');
-        expect(exchangeDetailsCells[0].text()).not.toContain('Europe/Berlin');
-        expect(exchangeDetailsTable.find('tbody tr').text()).not.toContain('Europe/Berlin');
-        expect(wrapper.text()).toContain('Next trading:');
-        expect(exchangeDetailsCells[3].text()).toContain(displayDateFromKey(currentBerlinDate));
-        expect(exchangeDetailsCells[3].text()).toContain(displayDateFromKey(nextHolidayDate));
-        expect(wrapper.text()).toContain('Mon,Tue,Wed,Thu,Fri');
-        expect(exchangeDetailsTable.find('tbody tr').text()).not.toContain('Closed');
+        expect(wrapper.text()).not.toContain('Exchange trading times');
+        expect(wrapper.text()).not.toContain('XETRA Stock Exchange');
+        expect(wrapper.text()).not.toContain('Next trading:');
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
         expect(wrapper.text()).not.toContain('07:00-15:30 UTC');
-        expect(wrapper.text()).toContain('Tradegate Exchange');
+        expect(wrapper.text()).not.toContain('Tradegate Exchange');
         expect(wrapper.text()).toContain('EXXX');
         expect(wrapper.text()).toContain('DE000A0D8Q23');
         expect(wrapper.text()).toContain('A0D8Q2');
@@ -4302,12 +4288,10 @@ describe('App', () => {
         expect(wrapper.text()).not.toContain('43.37 EUR');
         expect(wrapper.text()).not.toContain('Trading depot');
         expect(wrapper.text()).not.toContain('250.50');
-        expect(dashboardStatusText).not.toContain('Admin User');
-        expect(wrapper.text()).toContain('Stocks Last: 02.06.2026, 14:20');
-        expect(wrapper.text()).toContain('Next: 02.06.2026, 14:40');
-        expect(wrapper.text()).toContain('Indices Last: 02.06.2026, 15:00');
-        expect(wrapper.text()).toContain('Next: 02.06.2026, 15:30');
-        expect(wrapper.text()).toContain('fetching historical data');
+        expect(wrapper.text()).not.toContain('Admin User');
+        expect(wrapper.text()).not.toContain('Stocks Last: 02.06.2026, 14:20');
+        expect(wrapper.text()).not.toContain('Indices Last: 02.06.2026, 15:00');
+        expect(wrapper.text()).not.toContain('fetching historical data');
         expect(wrapper.text()).not.toContain('Automatic price refresh');
 
         wrapper.vm.navigateSection('updates');
@@ -4371,14 +4355,11 @@ describe('App', () => {
         await flushPromises();
 
         const refreshPricesButton = wrapper.findAll('button').find((button) => button.text().includes('Refresh prices'));
-        await refreshPricesButton.trigger('click');
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/refresh-prices', expect.objectContaining({
-            method: 'POST',
-        }));
-        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/refresh-prices/refresh-1', expect.any(Object));
-        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1')).toHaveLength(3);
+        expect(refreshPricesButton).toBeUndefined();
+        expect(fetchMock.mock.calls.some(([path, options]) => (
+            path === '/admin/watchlist/holdings/refresh-prices' && options?.method === 'POST'
+        ))).toBe(false);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1&all=1')).toHaveLength(1);
         expect(wrapper.text()).not.toContain('2 stock prices refreshed.');
         expect(wrapper.text()).not.toContain('Price refresh: 2/2');
 
@@ -4560,6 +4541,94 @@ describe('App', () => {
         }));
     });
 
+    it('reloads the dashboard info without starting update requests', async () => {
+        window.history.pushState({}, '', '/admin/dashboard');
+        const emptyPagination = {
+            current_page: 1,
+            last_page: 1,
+            per_page: 10,
+            total: 0,
+            from: null,
+            to: null,
+        };
+        const depot = {
+            id: 1,
+            name: 'Long term depot',
+            account_balance: '12345.67',
+            is_active: true,
+        };
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    app_version: '0.1.5',
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1&all=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [],
+                    meta: emptyPagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [depot],
+                    meta: {
+                        ...emptyPagination,
+                        per_page: 10,
+                        total: 1,
+                        from: 1,
+                        to: 1,
+                    },
+                }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({
+                    indexes: [],
+                }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const reloadButton = wrapper.findAll('.dashboard-action-button')
+            .find((button) => button.text().includes('Reload'));
+        await reloadButton.trigger('click');
+        await flushPromises();
+
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(2);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1&all=1')).toHaveLength(2);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(2);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(2);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
+        expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/sync'))).toBe(false);
+    });
+
     it('disables the delete button for holdings with position pieces', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 2, from: 1, to: 2 };
@@ -4612,7 +4681,7 @@ describe('App', () => {
         expect(deleteButtons[1].attributes('disabled')).toBeUndefined();
     });
 
-    it('shows the next Shanghai trading session during the lunch break', async () => {
+    it('does not load Shanghai exchange trading sessions on the dashboard', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-06-05T04:06:00Z'));
@@ -4681,13 +4750,10 @@ describe('App', () => {
             const wrapper = mountApp();
             await flushPromises();
 
-            const exchangeRow = wrapper.findAll('tbody tr')
-                .find((row) => row.text().includes('SHG'));
-
-            expect(exchangeRow.text()).toContain('Shanghai Stock Exchange');
-            expect(exchangeRow.text()).toContain('09:30-11:30, 13:00-15:00');
-            expect(exchangeRow.text()).toContain('Next trading: 05.06.2026, 13:00');
-            expect(exchangeRow.text()).not.toContain('Closed');
+            expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
+            expect(wrapper.text()).not.toContain('Shanghai Stock Exchange');
+            expect(wrapper.text()).not.toContain('09:30-11:30, 13:00-15:00');
+            expect(wrapper.text()).not.toContain('Next trading: 05.06.2026, 13:00');
         } finally {
             vi.useRealTimers();
         }
@@ -5037,6 +5103,7 @@ describe('App', () => {
     it('shows Data as a main dashboard item and Admin group with Users, Roles, Updates, and Cloudways submenu chips for super_admin', async () => {
         window.history.pushState({}, '', '/admin/menu/users');
         localStorage.removeItem('data_intraday_refresh_info_dismissed');
+        let mockedIndexDataUpdateSettings = indexDataUpdateSettings();
         const fetchMock = vi.fn((path, options = {}) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -5054,7 +5121,10 @@ describe('App', () => {
             }
 
             if (path === '/admin/depots/active') {
-                return Promise.resolve(jsonResponse({ depot: null }));
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    index_data_update_settings: mockedIndexDataUpdateSettings,
+                }));
             }
 
             if (path.startsWith('/admin/watchlist/holdings?page=1')) {
@@ -5063,6 +5133,7 @@ describe('App', () => {
                     holdings: [],
                     meta: { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null },
                     price_refresh_settings: priceRefreshSettings(),
+                    index_data_update_settings: mockedIndexDataUpdateSettings,
                 }));
             }
 
@@ -5098,6 +5169,7 @@ describe('App', () => {
                             trading_hours: {},
                             holidays: {},
                             synced_at: '2026-06-06T12:30:00+00:00',
+                            updated_at: '2026-06-07T13:45:00+00:00',
                         },
                     ],
                     refresh: {
@@ -5109,6 +5181,9 @@ describe('App', () => {
                         message: 'Exchange reload finished with missing details.',
                         current: null,
                     },
+                    index_data_update_settings: indexDataUpdateSettings({
+                        latest_table_update_at: '2026-06-17T02:01:00+02:00',
+                    }),
                 }));
             }
 
@@ -5179,6 +5254,328 @@ describe('App', () => {
                         stored_count: 1,
                         finished_at: '2026-06-06T12:40:00+00:00',
                     },
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/historical-prices/coverage') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Historical stock prices are available.',
+                    coverage: {
+                        date_from: '2025-06-05',
+                        date_to: '2026-06-05',
+                        required_to: '2026-06-04',
+                        is_complete: true,
+                        total_count: 1,
+                        available_count: 1,
+                        missing_count: 0,
+                        end_of_day_outdated_stocks: [
+                            {
+                                id: 10,
+                                label: 'EOD - End Of Day Lagging',
+                                db_last_date: '2026-06-04',
+                            },
+                        ],
+                        holdings: [
+                            {
+                                id: 7,
+                                symbol: 'AMES',
+                                name: 'Amundi IBEX 35 UCITS ETF',
+                                isin: 'LU1681043599',
+                                exchange: 'XETRA',
+                                currency: 'EUR',
+                                instrument_type: 'ETF',
+                                country: 'Germany',
+                                latest_realtime_date: '2026-06-05T12:00:00+00:00',
+                                latest_realtime_day_first_record_at: '2026-06-05T08:00:00+00:00',
+                                latest_realtime_day_last_record_at: '2026-06-05T12:00:00+00:00',
+                                latest_realtime_day_record_count: 3,
+                                latest_realtime_table_row_count: 5,
+                                previous_realtime_date: '2026-06-04T12:00:00+00:00',
+                                previous_realtime_day_first_record_at: '2026-06-04T08:00:00+00:00',
+                                previous_realtime_day_last_record_at: '2026-06-04T12:00:00+00:00',
+                                previous_realtime_day_record_count: 2,
+                                end_of_day_first_date: '2026-06-03',
+                                end_of_day_expected_last_date: '2026-06-12',
+                                end_of_day_last_date: '2026-06-04',
+                                end_of_day_row_count: 2,
+                                end_of_day_table_row_count: 2,
+                                is_available: true,
+                                stored_count: 2,
+                                stored_required_count: 2,
+                                expected_required_count: 2,
+                                first_date: '2025-06-05',
+                                latest_date: '2026-06-04',
+                            },
+                        ],
+                    },
+                    refresh: null,
+                    index_data_update_settings: mockedIndexDataUpdateSettings,
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/7/intraday-candles/coverage') {
+                return Promise.resolve(jsonResponse({
+                    coverage: {
+                        first_date: '2026-06-03',
+                        expected_last_date: '2026-06-12',
+                        last_date: '2026-06-05',
+                        oldest_last_date: '2026-06-04',
+                        outdated_stocks: [
+                            {
+                                id: 9,
+                                label: 'LAG - Lagging Holding',
+                                db_last_date: '2026-06-04',
+                            },
+                        ],
+                        row_count: 2,
+                        trading_day_count: 2,
+                        table_row_count: 2,
+                    },
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/7/intraday-candles/latest-days') {
+                return Promise.resolve(jsonResponse({
+                    holding: {
+                        id: 7,
+                        symbol: 'AMES',
+                        name: 'Amundi IBEX 35 UCITS ETF',
+                        currency: 'EUR',
+                    },
+                    dates: ['2026-06-03', '2026-06-04', '2026-06-05'],
+                    entries: [
+                        {
+                            id: 803,
+                            trading_date: '2026-06-05',
+                            price: '10.20000000',
+                            currency: 'EUR',
+                            as_of: '2026-06-05T08:00:00+00:00',
+                        },
+                        {
+                            id: 802,
+                            trading_date: '2026-06-04',
+                            price: '10.25000000',
+                            currency: 'EUR',
+                            as_of: '2026-06-04T08:00:00+00:00',
+                        },
+                        {
+                            id: 801,
+                            trading_date: '2026-06-03',
+                            price: '10.10000000',
+                            currency: 'EUR',
+                            as_of: '2026-06-03T08:00:00+00:00',
+                        },
+                    ],
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/7/realtime-prices/latest') {
+                return Promise.resolve(jsonResponse({
+                    holding: {
+                        id: 7,
+                        symbol: 'AMES',
+                        name: 'Amundi IBEX 35 UCITS ETF',
+                        currency: 'EUR',
+                    },
+                    date: '2026-06-05',
+                    entries: [
+                        {
+                            id: 701,
+                            price: '10.15000000',
+                            currency: 'EUR',
+                            as_of: '2026-06-05T08:00:00+00:00',
+                            source_name: 'EODHD real-time',
+                            price_type: 'last',
+                            venue: 'Tradegate',
+                        },
+                        {
+                            id: 702,
+                            price: '10.25000000',
+                            currency: 'EUR',
+                            as_of: '2026-06-05T12:00:00+00:00',
+                            source_name: 'EODHD real-time',
+                            price_type: 'last',
+                            venue: 'XETRA',
+                        },
+                        {
+                            id: 703,
+                            price: '10.20000000',
+                            currency: 'EUR',
+                            as_of: '2026-06-05T13:00:00+00:00',
+                            source_name: 'EODHD real-time',
+                            price_type: 'last',
+                            venue: 'XETRA',
+                        },
+                    ],
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/7/end-of-day-prices/latest-days') {
+                return Promise.resolve(jsonResponse({
+                    holding: {
+                        id: 7,
+                        symbol: 'AMES',
+                        name: 'Amundi IBEX 35 UCITS ETF',
+                        currency: 'EUR',
+                    },
+                    entries: [
+                        {
+                            id: 901,
+                            price: '10.30000000',
+                            currency: 'EUR',
+                            as_of: '2026-06-05T21:59:59+00:00',
+                        },
+                        {
+                            id: 902,
+                            price: '10.15000000',
+                            currency: 'EUR',
+                            as_of: '2026-06-04T21:59:59+00:00',
+                        },
+                        {
+                            id: 903,
+                            price: '10.20000000',
+                            currency: 'EUR',
+                            as_of: '2026-06-03T21:59:59+00:00',
+                        },
+                    ],
+                }));
+            }
+
+            if (path === '/admin/price-refresh-settings' && options?.method === 'PATCH') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Price refresh schedule updated.',
+                    price_refresh_settings: priceRefreshSettings({
+                        trading_interval_minutes: 15,
+                        trading_start_time: '09:15',
+                        trading_end_time: '17:30',
+                    }),
+                    refresh: null,
+                }));
+            }
+
+            if (path === '/admin/price-refresh-settings') {
+                return Promise.resolve(jsonResponse({
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                    intraday_backfill_settings: intradayBackfillSettings(),
+                    end_of_day_data_update_settings: endOfDayDataUpdateSettings(),
+                    index_data_update_settings: mockedIndexDataUpdateSettings,
+                    refresh: null,
+                    intraday_backfill_refresh: null,
+                }));
+            }
+
+            if (path === '/admin/intraday-backfill-settings' && options?.method === 'PATCH') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Intraday backfill schedule updated.',
+                    intraday_backfill_settings: intradayBackfillSettings({
+                        daily_time: '20:45',
+                        interval_minutes: 30,
+                        next_refresh_at: '2026-06-12T20:45:00+02:00',
+                    }),
+                }));
+            }
+
+            if (path === '/admin/end-of-day-data-update-settings' && options?.method === 'PATCH') {
+                return Promise.resolve(jsonResponse({
+                    message: 'End-of-day data update schedule updated.',
+                    end_of_day_data_update_settings: endOfDayDataUpdateSettings({
+                        daily_time: '19:20',
+                        interval_minutes: 45,
+                        next_refresh_at: '2026-06-12T19:20:00+02:00',
+                    }),
+                }));
+            }
+
+            if (path === '/admin/index-data-update-settings' && options?.method === 'PATCH') {
+                mockedIndexDataUpdateSettings = indexDataUpdateSettings({
+                    weekday: 3,
+                    weekday_label: 'Wednesday',
+                    next_refresh_at: '2026-06-17T02:00:00+02:00',
+                });
+
+                return Promise.resolve(jsonResponse({
+                    message: 'Indices data update schedule updated.',
+                    index_data_update_settings: mockedIndexDataUpdateSettings,
+                }));
+            }
+
+            if (path === '/admin/data/realtime/sync' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'EODHD sync: 1 record(s) created, 1 record(s) updated.',
+                    requested_count: 1,
+                    stored_count: 1,
+                    unchanged_count: 0,
+                    updated_count: 1,
+                    failed_count: 0,
+                    errors: [],
+                    price_refresh_settings: priceRefreshSettings({
+                        trading_interval_minutes: 15,
+                        trading_start_time: '09:15',
+                        trading_end_time: '17:30',
+                        last_refreshed_at: '2026-06-02T13:00:00+00:00',
+                        next_refresh_at: '2026-06-02T13:15:00+00:00',
+                        current_interval_minutes: 15,
+                    }),
+                }));
+            }
+
+            if (path === '/admin/data/historical/sync' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'EODHD historical sync: 1 record(s) created.',
+                    requested_count: 1,
+                    stored_count: 1,
+                    skipped_count: 0,
+                    failed_count: 0,
+                    target_date: '2026-06-12',
+                    errors: [],
+                    intraday_backfill_settings: intradayBackfillSettings({
+                        daily_time: '20:45',
+                        interval_minutes: 30,
+                        last_dispatched_at: '2026-06-12T18:31:00+02:00',
+                        last_dispatched_on: '2026-06-12',
+                        next_refresh_at: '2026-06-15T20:45:00+02:00',
+                    }),
+                }));
+            }
+
+            if (path === '/admin/data/end-of-day/sync' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'EODHD end-of-day sync: 1 record(s) created.',
+                    requested_count: 1,
+                    stored_count: 1,
+                    skipped_count: 0,
+                    failed_count: 0,
+                    date_from: '2025-06-12',
+                    date_to: '2026-06-12',
+                    errors: [],
+                    end_of_day_data_update_settings: endOfDayDataUpdateSettings({
+                        daily_time: '19:20',
+                        interval_minutes: 45,
+                        last_dispatched_at: '2026-06-12T19:21:00+02:00',
+                        last_dispatched_on: '2026-06-12',
+                        next_refresh_at: '2026-06-15T19:20:00+02:00',
+                    }),
+                }));
+            }
+
+            if (path === '/admin/data/indices/sync' && options?.method === 'POST') {
+                mockedIndexDataUpdateSettings = indexDataUpdateSettings({
+                    weekday: 3,
+                    weekday_label: 'Wednesday',
+                    last_dispatched_at: '2026-06-17T02:01:00+02:00',
+                    last_dispatched_on: '2026-06-17',
+                    next_refresh_at: '2026-06-24T02:00:00+02:00',
+                    table_row_count: 4,
+                    latest_table_update_at: '2026-06-17T02:01:00+02:00',
+                });
+
+                return Promise.resolve(jsonResponse({
+                    message: 'EODHD indices sync: 1 index(es) refreshed.',
+                    requested_count: 1,
+                    refreshed_count: 1,
+                    failed_count: 0,
+                    index_data_update_settings: mockedIndexDataUpdateSettings,
                 }));
             }
 
@@ -5296,64 +5693,667 @@ describe('App', () => {
         await dataMenuItem.trigger('click');
         await flushPromises();
 
+        const liveDataTab = wrapper.findAll('.v-tab').find((tab) => tab.text().includes('Live Data'));
+        expect(liveDataTab).toBeTruthy();
+        await liveDataTab.trigger('click');
+        await flushPromises();
+
+        const liveDataSection = wrapper.find('[aria-label="Live data"]');
+        expect(window.location.pathname).toBe('/admin/menu/data/live-data');
+        expect(liveDataSection.exists()).toBe(true);
+        expect(liveDataSection.find('[aria-label="Live Data stocks"]').text()).toContain('AMES');
+        expect(liveDataSection.text()).toContain('Amundi IBEX 35 UCITS ETF');
+        expect(liveDataSection.text()).toContain('Symbol: AMES');
+        expect(liveDataSection.text()).toContain('Exchange: XETRA');
+        expect(liveDataSection.text()).toContain('Currency: EUR');
+        expect(liveDataSection.text()).toContain('Latest entries');
+        expect(liveDataSection.text()).toContain('Same latest date: 05.06.2026');
+        expect(liveDataSection.text()).toContain('10.150 EUR');
+        const liveDataLatestEntriesTable = liveDataSection.find('.test-live-data-latest-entries-table');
+        expect(liveDataLatestEntriesTable.text()).toContain('10.250 EUR');
+        expect(liveDataLatestEntriesTable.text()).toContain('10.200 EUR');
+        expect(liveDataLatestEntriesTable.text()).not.toContain('Tradegate');
+        expect(liveDataLatestEntriesTable.text()).not.toContain('EODHD real-time');
+        expect(liveDataLatestEntriesTable.findAll('.test-live-data-latest-price-arrow--up')).toHaveLength(1);
+        expect(liveDataLatestEntriesTable.findAll('.test-live-data-latest-price-arrow--down')).toHaveLength(1);
+
+        const historicalDataTab = wrapper.findAll('.v-tab').find((tab) => tab.text().includes('Historical Data'));
+        expect(historicalDataTab).toBeTruthy();
+        await historicalDataTab.trigger('click');
+        await flushPromises();
+
+        const historicalDataSection = wrapper.find('[aria-label="Historical data"]');
+        expect(window.location.pathname).toBe('/admin/menu/data/historical-data');
+        expect(historicalDataSection.exists()).toBe(true);
+        expect(historicalDataSection.find('[aria-label="Historical Data stocks"]').text()).toContain('AMES');
+        expect(historicalDataSection.text()).toContain('Amundi IBEX 35 UCITS ETF');
+        expect(historicalDataSection.text()).toContain('Symbol: AMES');
+        expect(historicalDataSection.text()).toContain('Last seven days');
+        const historicalLatestEntriesTable = historicalDataSection.find('.test-historical-data-latest-entries-table');
+        const historicalLatestEntriesText = historicalLatestEntriesTable.text();
+        expect(historicalLatestEntriesText.indexOf('05.06.2026, 10:00')).toBeLessThan(
+            historicalLatestEntriesText.indexOf('04.06.2026, 10:00'),
+        );
+        expect(historicalLatestEntriesText.indexOf('04.06.2026, 10:00')).toBeLessThan(
+            historicalLatestEntriesText.indexOf('03.06.2026, 10:00'),
+        );
+        expect(historicalLatestEntriesTable.text()).toContain('10.100 EUR');
+        expect(historicalLatestEntriesTable.text()).toContain('10.250 EUR');
+        expect(historicalLatestEntriesTable.text()).toContain('10.200 EUR');
+        expect(historicalLatestEntriesTable.findAll('.test-live-data-latest-price-arrow--up')).toHaveLength(1);
+        expect(historicalLatestEntriesTable.findAll('.test-live-data-latest-price-arrow--down')).toHaveLength(1);
+
+        const eodDataTab = wrapper.findAll('.v-tab').find((tab) => tab.text().includes('EOD-Data'));
+        expect(eodDataTab).toBeTruthy();
+        await eodDataTab.trigger('click');
+        await flushPromises();
+
+        const eodDataSection = wrapper.find('[aria-label="EOD data"]');
+        expect(window.location.pathname).toBe('/admin/menu/data/eod-data');
+        expect(eodDataSection.exists()).toBe(true);
+        expect(eodDataSection.find('[aria-label="EOD-Data stocks"]').text()).toContain('AMES');
+        expect(eodDataSection.text()).toContain('Amundi IBEX 35 UCITS ETF');
+        expect(eodDataSection.text()).toContain('Symbol: AMES');
+        expect(eodDataSection.text()).toContain('Last 30 days');
+        const eodLatestEntriesTable = eodDataSection.find('.test-eod-data-latest-entries-table');
+        const eodLatestEntriesText = eodLatestEntriesTable.text();
+        expect(eodLatestEntriesText.indexOf('05.06.2026')).toBeLessThan(
+            eodLatestEntriesText.indexOf('04.06.2026'),
+        );
+        expect(eodLatestEntriesText.indexOf('04.06.2026')).toBeLessThan(
+            eodLatestEntriesText.indexOf('03.06.2026'),
+        );
+        expect(eodLatestEntriesTable.text()).toContain('10.300 EUR');
+        expect(eodLatestEntriesTable.text()).toContain('10.150 EUR');
+        expect(eodLatestEntriesTable.text()).toContain('10.200 EUR');
+        expect(eodLatestEntriesTable.findAll('.test-live-data-latest-price-arrow--up')).toHaveLength(1);
+        expect(eodLatestEntriesTable.findAll('.test-live-data-latest-price-arrow--down')).toHaveLength(1);
+
+        const overviewTab = wrapper.findAll('.v-tab').find((tab) => tab.text().includes('Overview'));
+        await overviewTab.trigger('click');
+        await flushPromises();
+
+        const dataOverview = wrapper.find('[aria-label="Data overview"]');
+        wrapper.vm.liveDataStatusNow = Date.parse('2026-06-02T12:30:00Z');
+        await wrapper.vm.$nextTick();
+
+        expect(window.location.pathname).toBe('/admin/menu/data/overview');
+        expect(dataOverview.text()).toContain('Live-Daten:');
+        expect(dataOverview.text()).toContain('Latest update');
+        expect(dataOverview.text()).toContain('Next update');
+        expect(dataOverview.text()).toContain('02.06.2026, 14:20');
+        expect(dataOverview.text()).toContain('02.06.2026, 14:40');
+        expect(dataOverview.text()).toContain('Mo-Fr start 5 min before trading until 10 min after trading · 20 min');
+        const liveDataCard = dataOverview.find('.test-selected-stock-card--live');
+        expect(liveDataCard.exists()).toBe(true);
+        expect(liveDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest update02.06.2026, 14:20',
+            'Next update02.06.2026, 14:40',
+        ]);
+        const liveDataWaitingStatusDot = dataOverview.find('[aria-label="Live data update status: waiting"]');
+        expect(liveDataWaitingStatusDot.exists()).toBe(true);
+        expect(liveDataWaitingStatusDot.classes()).toContain('test-live-data-update-status-dot--waiting');
+
+        wrapper.vm.liveDataStatusNow = Date.parse('2026-06-02T12:41:00Z');
+        await wrapper.vm.$nextTick();
+
+        const liveDataDueStatusDot = dataOverview.find('[aria-label="Live data update status: due"]');
+        expect(liveDataDueStatusDot.exists()).toBe(true);
+        expect(liveDataDueStatusDot.classes()).toContain('test-live-data-update-status-dot--due');
+        wrapper.vm.liveDataStatusNow = Date.parse('2026-06-02T12:30:00Z');
+        await wrapper.vm.$nextTick();
+
+        wrapper.vm.priceRefreshSettings.status = 'updating';
+        await wrapper.vm.$nextTick();
+
+        const liveDataSettingsUpdatingStatusDot = dataOverview.find('[aria-label="Live data update status: updating"]');
+        expect(liveDataSettingsUpdatingStatusDot.exists()).toBe(true);
+        expect(liveDataSettingsUpdatingStatusDot.classes()).toContain('test-live-data-update-status-dot--updating');
+        wrapper.vm.priceRefreshSettings.status = 'waiting';
+        await wrapper.vm.$nextTick();
+
+        wrapper.vm.priceRefresh = {
+            refresh_id: 'automatic-live-data-refresh',
+            status: 'queued',
+            processed: 0,
+            total: 1,
+            step: '0/1',
+            message: '1 stock realtime price sync queued.',
+            current: null,
+            started_at: '2026-06-02T12:42:00+00:00',
+            finished_at: null,
+            error: null,
+        };
+        await wrapper.vm.$nextTick();
+
+        const automaticLiveDataUpdatingStatusDot = dataOverview.find('[aria-label="Live data update status: updating"]');
+        expect(automaticLiveDataUpdatingStatusDot.exists()).toBe(true);
+        expect(automaticLiveDataUpdatingStatusDot.classes()).toContain('test-live-data-update-status-dot--updating');
+        await wrapper.vm.pollPriceRefreshSettings();
+        await flushPromises();
+
+        const automaticLiveDataWaitingStatusDot = dataOverview.find('[aria-label="Live data update status: waiting"]');
+        expect(automaticLiveDataWaitingStatusDot.exists()).toBe(true);
+        expect(automaticLiveDataWaitingStatusDot.classes()).toContain('test-live-data-update-status-dot--waiting');
+
+        const editLiveDataUpdatesButton = dataOverview.find('[aria-label="Edit live data updates"]');
+        expect(editLiveDataUpdatesButton.exists()).toBe(true);
+        await editLiveDataUpdatesButton.trigger('click');
+        await flushPromises();
+
+        expect(document.body.textContent).toContain('Edit live data updates');
+        expect(document.body.textContent).toContain('Mo-Fr');
+        expect(document.body.textContent).toContain('Start-time (Vienna)');
+        expect(document.body.textContent).toContain('End-time (Vienna)');
+        expect(document.body.textContent).toContain('Intervall');
+
+        const liveDataUpdateTimeInputs = Array.from(document.body.querySelectorAll('input[type="time"]'));
+        liveDataUpdateTimeInputs[0].value = '09:15';
+        liveDataUpdateTimeInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+        liveDataUpdateTimeInputs[1].value = '17:30';
+        liveDataUpdateTimeInputs[1].dispatchEvent(new Event('input', { bubbles: true }));
+
+        const liveDataUpdateIntervalInput = document.body.querySelector('input[type="number"]');
+        liveDataUpdateIntervalInput.value = '15';
+        liveDataUpdateIntervalInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+        const saveLiveDataUpdatesDialogButton = Array.from(document.body.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Save'));
+        saveLiveDataUpdatesDialogButton.click();
+        await flushPromises();
+
+        const priceRefreshSettingsCall = fetchMock.mock.calls.find(([path, options]) => (
+            path === '/admin/price-refresh-settings' && options?.method === 'PATCH'
+        ));
+        expect(JSON.parse(priceRefreshSettingsCall[1].body)).toEqual({
+            trading_interval_minutes: 15,
+            trading_starts_before_minutes: 5,
+            trading_ends_after_minutes: 10,
+            trading_start_time: '09:15',
+            trading_end_time: '17:30',
+            closed_refresh_enabled: true,
+            closed_interval_minutes: 60,
+        });
+        await wrapper.vm.$nextTick();
+
+        expect(dataOverview.text()).toContain('Mo-Fr 09:15-17:30 · 15 min');
+        const eodhdSyncButton = dataOverview.find('[aria-label="Sync EODHD realtime data"]');
+        expect(eodhdSyncButton.exists()).toBe(true);
+        await eodhdSyncButton.trigger('click');
+
+        const liveDataManualSyncStatusDot = dataOverview.find('[aria-label="Live data update status: updating"]');
+        expect(liveDataManualSyncStatusDot.exists()).toBe(true);
+        expect(liveDataManualSyncStatusDot.classes()).toContain('test-live-data-update-status-dot--updating');
+
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/data/realtime/sync', expect.objectContaining({
+            method: 'POST',
+        }));
+        const liveDataFinishedSyncStatusDot = dataOverview.find('[aria-label="Live data update status: waiting"]');
+        expect(liveDataFinishedSyncStatusDot.exists()).toBe(true);
+        expect(liveDataFinishedSyncStatusDot.classes()).toContain('test-live-data-update-status-dot--waiting');
+        expect(dataOverview.text()).toContain('EODHD sync: 1 record(s) created, 1 record(s) updated.');
+        const eodhdSyncAlertCloseButton = dataOverview.find('[aria-label="Close EODHD sync message"]');
+        expect(eodhdSyncAlertCloseButton.exists()).toBe(true);
+        await eodhdSyncAlertCloseButton.trigger('click');
+        await flushPromises();
+
+        expect(dataOverview.text()).not.toContain('EODHD sync: 1 record(s) created, 1 record(s) updated.');
+        expect(liveDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest update02.06.2026, 15:00',
+            'Next update02.06.2026, 15:15',
+        ]);
+        expect(liveDataCard.findAll('.test-intraday-summary-next-row').map((row) => row.text())).toEqual([
+            'Last date05.06.2026',
+            'Day before04.06.2026',
+        ]);
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/historical-prices/coverage', expect.any(Object));
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/holdings/historical-prices/ensure')).toBe(false);
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/7/intraday-candles/coverage', expect.any(Object));
+        const historicalDataCard = dataOverview.find('.test-selected-stock-card--historical');
+        expect(historicalDataCard.exists()).toBe(true);
+        expect(historicalDataCard.text()).toContain('Historical Data');
+        expect(historicalDataCard.text()).toContain('Mo-Fr 18:30 · 15 min');
+        expect(historicalDataCard.text()).toContain('Expected last date12.06.2026');
+        expect(historicalDataCard.text()).toContain('Last date04.06.2026');
+        expect(historicalDataCard.text()).toContain('Responsible stocks');
+        expect(historicalDataCard.text()).toContain('LAG - Lagging Holding');
+        expect(historicalDataCard.text()).toContain('DB last date 04.06.2026 · Expected 12.06.2026');
+        expect(historicalDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest updateNever',
+            'Next update12.06.2026, 18:30',
+        ]);
+        const endOfDayDataCard = dataOverview.find('.test-selected-stock-card--end-of-day');
+        expect(endOfDayDataCard.exists()).toBe(true);
+        expect(endOfDayDataCard.text()).toContain('End-Of-Day-Data');
+        expect(endOfDayDataCard.text()).toContain('Mo-Fr 17:45 · 20 min');
+        expect(endOfDayDataCard.text()).toContain('Affected table: stock_prices');
+        expect(endOfDayDataCard.text()).toContain('Expected last date12.06.2026');
+        expect(endOfDayDataCard.text()).toContain('Last date04.06.2026');
+        expect(endOfDayDataCard.text()).toContain('Responsible stocks');
+        expect(endOfDayDataCard.text()).toContain('EOD - End Of Day Lagging');
+        expect(endOfDayDataCard.text()).toContain('DB last date 04.06.2026 · Expected 12.06.2026');
+        expect(endOfDayDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest updateNever',
+            'Next update12.06.2026, 17:45',
+        ]);
+        expect(endOfDayDataCard.findAll('.test-intraday-summary-next-row').map((row) => row.text())).toEqual([
+            'First date03.06.2026',
+        ]);
+        expect(endOfDayDataCard.classes()).toContain('test-selected-stock-card--end-of-day');
+        const endOfDayDataWaitingStatusDot = endOfDayDataCard.find('[aria-label="End-of-day data update status: waiting"]');
+        expect(endOfDayDataWaitingStatusDot.exists()).toBe(true);
+        expect(endOfDayDataWaitingStatusDot.classes()).toContain('test-live-data-update-status-dot--waiting');
+        const editEndOfDayDataUpdatesButton = endOfDayDataCard.find('[aria-label="Edit end-of-day data updates"]');
+        expect(editEndOfDayDataUpdatesButton.exists()).toBe(true);
+        const eodhdEndOfDayDataButton = endOfDayDataCard.find('[aria-label="Sync EODHD end-of-day data"]');
+        expect(eodhdEndOfDayDataButton.exists()).toBe(true);
+        const indicesDataCard = dataOverview.find('.test-selected-stock-card--indices');
+        expect(indicesDataCard.exists()).toBe(true);
+        expect(indicesDataCard.text()).toContain('Indices-Date');
+        expect(indicesDataCard.text()).toContain('Affected table: index_watch_item_prices');
+        expect(indicesDataCard.text()).toContain('Total rows: 3');
+        expect(indicesDataCard.text()).toContain('Monday 02:00 · Vienna');
+        expect(indicesDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest updateNever',
+            'Next update15.06.2026, 02:00',
+        ]);
+        const indicesDataWaitingStatusDot = indicesDataCard.find('[aria-label="Indices data update status: waiting"]');
+        expect(indicesDataWaitingStatusDot.exists()).toBe(true);
+        expect(indicesDataWaitingStatusDot.classes()).toContain('test-live-data-update-status-dot--waiting');
+        const editIndicesDataUpdatesButton = indicesDataCard.find('[aria-label="Edit indices data updates"]');
+        expect(editIndicesDataUpdatesButton.exists()).toBe(true);
+        const eodhdIndicesDataButton = indicesDataCard.find('[aria-label="Sync EODHD indices data"]');
+        expect(eodhdIndicesDataButton.exists()).toBe(true);
+        const historicalDataWaitingStatusDot = historicalDataCard.find('[aria-label="Historical data update status: waiting"]');
+        expect(historicalDataWaitingStatusDot.exists()).toBe(true);
+        expect(historicalDataWaitingStatusDot.classes()).toContain('test-live-data-update-status-dot--waiting');
+
+        wrapper.vm.liveDataStatusNow = Date.parse('2026-06-12T16:31:00Z');
+        await wrapper.vm.$nextTick();
+
+        const historicalDataDueStatusDot = historicalDataCard.find('[aria-label="Historical data update status: due"]');
+        expect(historicalDataDueStatusDot.exists()).toBe(true);
+        expect(historicalDataDueStatusDot.classes()).toContain('test-live-data-update-status-dot--due');
+        const endOfDayDataDueStatusDot = endOfDayDataCard.find('[aria-label="End-of-day data update status: due"]');
+        expect(endOfDayDataDueStatusDot.exists()).toBe(true);
+        expect(endOfDayDataDueStatusDot.classes()).toContain('test-live-data-update-status-dot--due');
+        wrapper.vm.liveDataStatusNow = Date.parse('2026-06-02T12:30:00Z');
+        await wrapper.vm.$nextTick();
+
+        wrapper.vm.intradayBackfillSettings.status = 'updating';
+        await wrapper.vm.$nextTick();
+
+        const historicalDataSettingsUpdatingStatusDot = historicalDataCard.find('[aria-label="Historical data update status: updating"]');
+        expect(historicalDataSettingsUpdatingStatusDot.exists()).toBe(true);
+        expect(historicalDataSettingsUpdatingStatusDot.classes()).toContain('test-live-data-update-status-dot--updating');
+        const endOfDayDataSettingsWaitingStatusDot = endOfDayDataCard.find('[aria-label="End-of-day data update status: waiting"]');
+        expect(endOfDayDataSettingsWaitingStatusDot.exists()).toBe(true);
+        expect(endOfDayDataSettingsWaitingStatusDot.classes()).toContain('test-live-data-update-status-dot--waiting');
+        wrapper.vm.intradayBackfillSettings.status = 'waiting';
+        await wrapper.vm.$nextTick();
+
+        const syncHistoricalDataButton = historicalDataCard.find('[aria-label="Sync EODHD historical data"]');
+        expect(syncHistoricalDataButton.exists()).toBe(true);
+        expect(syncHistoricalDataButton.attributes('disabled')).toBeUndefined();
+        const editHistoricalDataUpdatesButton = historicalDataCard.find('[aria-label="Edit historical data updates"]');
+        expect(editHistoricalDataUpdatesButton.exists()).toBe(true);
+        await editHistoricalDataUpdatesButton.trigger('click');
+        await flushPromises();
+
+        expect(document.body.textContent).toContain('Edit historical data updates');
+        expect(document.body.textContent).toContain('Mo-Fr');
+        expect(document.body.textContent).toContain('Start-time');
+        expect(document.body.textContent).toContain('Intervall');
+        expect(document.body.textContent).toContain('For later: start at the start-time to get new data');
+        expect(document.body.textContent).toContain('retry every intervall minutes');
+        expect(Array.from(document.body.querySelectorAll('button'))
+            .some((button) => button.textContent.includes('Save'))).toBe(true);
+
+        const historicalDataUpdateDialog = document.body.querySelector('.test-historical-data-update-dialog');
+        expect(historicalDataUpdateDialog).not.toBeNull();
+
+        const historicalDataUpdateTimeInput = historicalDataUpdateDialog.querySelector('input[type="time"]');
+        historicalDataUpdateTimeInput.value = '20:45';
+        historicalDataUpdateTimeInput.dispatchEvent(new Event('input', { bubbles: true }));
+        const historicalDataUpdateIntervalInput = historicalDataUpdateDialog.querySelector('input[type="number"]');
+        historicalDataUpdateIntervalInput.value = '30';
+        historicalDataUpdateIntervalInput.dispatchEvent(new Event('input', { bubbles: true }));
+        const saveHistoricalDataUpdatesDialogButton = Array.from(historicalDataUpdateDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Save'));
+        saveHistoricalDataUpdatesDialogButton.click();
+        await flushPromises();
+
+        const historicalDataSettingsCall = fetchMock.mock.calls.find(([path, options]) => (
+            path === '/admin/intraday-backfill-settings' && options?.method === 'PATCH'
+        ));
+        expect(JSON.parse(historicalDataSettingsCall[1].body)).toEqual({
+            daily_time: '20:45',
+            interval_minutes: 30,
+        });
+        expect(historicalDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest updateNever',
+            'Next update12.06.2026, 20:45',
+        ]);
+        expect(endOfDayDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest updateNever',
+            'Next update12.06.2026, 17:45',
+        ]);
+
+        await editEndOfDayDataUpdatesButton.trigger('click');
+        await flushPromises();
+
+        expect(document.body.textContent).toContain('Edit end-of-day data updates');
+        const endOfDayDataUpdateDialog = document.body.querySelector('.test-end-of-day-data-update-dialog');
+        expect(endOfDayDataUpdateDialog).not.toBeNull();
+
+        const endOfDayDataUpdateTimeInput = endOfDayDataUpdateDialog.querySelector('input[type="time"]');
+        expect(endOfDayDataUpdateTimeInput.value).toBe('17:45');
+        endOfDayDataUpdateTimeInput.value = '19:20';
+        endOfDayDataUpdateTimeInput.dispatchEvent(new Event('input', { bubbles: true }));
+        const endOfDayDataUpdateIntervalInput = endOfDayDataUpdateDialog.querySelector('input[type="number"]');
+        expect(endOfDayDataUpdateIntervalInput.value).toBe('20');
+        endOfDayDataUpdateIntervalInput.value = '45';
+        endOfDayDataUpdateIntervalInput.dispatchEvent(new Event('input', { bubbles: true }));
+        const saveEndOfDayDataUpdatesDialogButton = Array.from(endOfDayDataUpdateDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Save'));
+        saveEndOfDayDataUpdatesDialogButton.click();
+        await flushPromises();
+
+        const endOfDayDataSettingsCall = fetchMock.mock.calls.find(([path, options]) => (
+            path === '/admin/end-of-day-data-update-settings' && options?.method === 'PATCH'
+        ));
+        expect(JSON.parse(endOfDayDataSettingsCall[1].body)).toEqual({
+            daily_time: '19:20',
+            interval_minutes: 45,
+        });
+        expect(endOfDayDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest updateNever',
+            'Next update12.06.2026, 19:20',
+        ]);
+        await editIndicesDataUpdatesButton.trigger('click');
+        await flushPromises();
+
+        expect(document.body.textContent).toContain('Edit indices data updates');
+        expect(document.body.textContent).toContain('Once per week at 02:00 Europe/Vienna');
+        const indexDataUpdateDialog = document.body.querySelector('.test-index-data-update-dialog');
+        expect(indexDataUpdateDialog).not.toBeNull();
+
+        wrapper.vm.indexDataUpdateScheduleForm.weekday = 3;
+        await wrapper.vm.$nextTick();
+        const saveIndexDataUpdatesDialogButton = Array.from(indexDataUpdateDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Save'));
+        saveIndexDataUpdatesDialogButton.click();
+        await flushPromises();
+
+        const indexDataSettingsCall = fetchMock.mock.calls.find(([path, options]) => (
+            path === '/admin/index-data-update-settings' && options?.method === 'PATCH'
+        ));
+        expect(JSON.parse(indexDataSettingsCall[1].body)).toEqual({
+            weekday: 3,
+        });
+        expect(indicesDataCard.text()).toContain('Wednesday 02:00 · Vienna');
+        expect(indicesDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest updateNever',
+            'Next update17.06.2026, 02:00',
+        ]);
+        await eodhdIndicesDataButton.trigger('click');
+
+        const indicesDataManualSyncStatusDot = indicesDataCard.find('[aria-label="Indices data update status: updating"]');
+        expect(indicesDataManualSyncStatusDot.exists()).toBe(true);
+        expect(indicesDataManualSyncStatusDot.classes()).toContain('test-live-data-update-status-dot--updating');
+
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/data/indices/sync', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(dataOverview.text()).toContain('EODHD indices sync: 1 index(es) refreshed.');
+        expect(indicesDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest update17.06.2026, 02:01',
+            'Next update24.06.2026, 02:00',
+        ]);
+        expect(indicesDataCard.text()).toContain('Total rows: 4');
+        const indicesDataSyncAlertCloseButton = dataOverview.find('[aria-label="Close indices data sync message"]');
+        expect(indicesDataSyncAlertCloseButton.exists()).toBe(true);
+        await indicesDataSyncAlertCloseButton.trigger('click');
+        await flushPromises();
+
+        expect(dataOverview.text()).not.toContain('EODHD indices sync: 1 index(es) refreshed.');
+        await eodhdEndOfDayDataButton.trigger('click');
+
+        const endOfDayDataManualSyncStatusDot = endOfDayDataCard.find('[aria-label="End-of-day data update status: updating"]');
+        expect(endOfDayDataManualSyncStatusDot.exists()).toBe(true);
+        expect(endOfDayDataManualSyncStatusDot.classes()).toContain('test-live-data-update-status-dot--updating');
+
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/data/end-of-day/sync', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(dataOverview.text()).toContain('EODHD end-of-day sync: 1 record(s) created.');
+        expect(endOfDayDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest update12.06.2026, 19:21',
+            'Next update15.06.2026, 19:20',
+        ]);
+        const endOfDayDataSyncAlertCloseButton = dataOverview.find('[aria-label="Close end-of-day data sync message"]');
+        expect(endOfDayDataSyncAlertCloseButton.exists()).toBe(true);
+        await endOfDayDataSyncAlertCloseButton.trigger('click');
+        await flushPromises();
+
+        expect(dataOverview.text()).not.toContain('EODHD end-of-day sync: 1 record(s) created.');
+        await syncHistoricalDataButton.trigger('click');
+
+        const historicalDataManualSyncStatusDot = historicalDataCard.find('[aria-label="Historical data update status: updating"]');
+        expect(historicalDataManualSyncStatusDot.exists()).toBe(true);
+        expect(historicalDataManualSyncStatusDot.classes()).toContain('test-live-data-update-status-dot--updating');
+
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/data/historical/sync', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(dataOverview.text()).toContain('EODHD historical sync: 1 record(s) created.');
+        expect(historicalDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest update12.06.2026, 18:31',
+            'Next update15.06.2026, 20:45',
+        ]);
+        expect(endOfDayDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest update12.06.2026, 19:21',
+            'Next update15.06.2026, 19:20',
+        ]);
+        const historicalDataFinishedSyncStatusDot = historicalDataCard.find('[aria-label="Historical data update status: waiting"]');
+        expect(historicalDataFinishedSyncStatusDot.exists()).toBe(true);
+        expect(historicalDataFinishedSyncStatusDot.classes()).toContain('test-live-data-update-status-dot--waiting');
+        const historicalSyncAlertCloseButton = dataOverview.find('[aria-label="Close historical data sync message"]');
+        expect(historicalSyncAlertCloseButton.exists()).toBe(true);
+        await historicalSyncAlertCloseButton.trigger('click');
+        await flushPromises();
+
+        expect(dataOverview.text()).not.toContain('EODHD historical sync: 1 record(s) created.');
+
+        const exchangesTab = wrapper.findAll('.v-tab').find((t) => t.text().includes('Exchanges'));
+        await exchangesTab.trigger('click');
+        await flushPromises();
+
         expect(window.location.pathname).toBe('/admin/menu/data/exchanges');
         expect(wrapper.find('[aria-label="Data exchanges"]').exists()).toBe(true);
         expect(wrapper.text()).toContain('Exchanges');
         expect(wrapper.text()).toContain('Last updated:');
-        expect(wrapper.text()).toContain('06.06.2026');
-        expect(wrapper.text()).toContain('14:30');
+        expect(wrapper.text()).toContain('17.06.2026');
+        expect(wrapper.text()).toContain('02:01');
         expect(wrapper.text()).toContain('Buenos Aires Exchange · BA');
+        expect(wrapper.text()).toContain('Reload Exchanges');
         expect(wrapper.text()).toContain('Exchange reload finished with missing details.');
         expect(fetchMock).toHaveBeenCalledWith('/admin/data/exchanges', expect.any(Object));
+
+        const reloadExchangesButton = wrapper.findAll('button').find((button) => button.text().includes('Reload Exchanges'));
+        await reloadExchangesButton.trigger('click');
+        await flushPromises();
+
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/data/exchanges')).toHaveLength(2);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/data/exchanges/reload')).toBe(false);
 
         wrapper.vm.dismissDataExchangeRefresh();
         await wrapper.vm.$nextTick();
 
         expect(sessionStorage.getItem('exchange_refresh_dismissed_id')).toBe('exchanges-test');
         expect(wrapper.text()).not.toContain('Exchange reload finished with missing details.');
-
-        const intradayTab = wrapper.findAll('.v-tab').find((t) => t.text().includes('Intraday'));
-        await intradayTab.trigger('click');
-        await flushPromises();
-
-        expect(window.location.pathname).toBe('/admin/menu/data/intraday');
-        expect(wrapper.find('[aria-label="Data intraday"]').exists()).toBe(true);
-        expect(wrapper.text()).toContain('Amundi IBEX 35 UCITS ETF');
-        expect(wrapper.text()).toContain('Intraday 05.06.2026');
-        expect(wrapper.text()).not.toContain('- 5m');
-        expect(wrapper.text()).not.toContain('10.15000000');
-        expect(wrapper.text()).toContain('1 intraday candles loaded/updated.');
-        expect(fetchMock).toHaveBeenCalledWith('/admin/data/intraday', expect.any(Object));
-
-        const intradayDayHeader = wrapper.find('.data-intraday-day-header');
-        expect(intradayDayHeader.attributes('aria-expanded')).toBe('false');
-        await intradayDayHeader.trigger('click');
-        await wrapper.vm.$nextTick();
-
-        expect(intradayDayHeader.attributes('aria-expanded')).toBe('true');
-        expect(wrapper.text()).toContain('10.15000000');
-
-        await intradayDayHeader.trigger('click');
-        await wrapper.vm.$nextTick();
-
-        expect(wrapper.text()).not.toContain('10.15000000');
-
-        wrapper.vm.dismissDataIntradayRefresh();
-        await wrapper.vm.$nextTick();
-
-        expect(localStorage.getItem('data_intraday_refresh_info_dismissed')).toBe('1');
-        expect(wrapper.text()).not.toContain('1 intraday candles loaded/updated.');
-
-        const reloadButton = wrapper.findAll('button').find((button) => button.text().includes('Reload Intraday'));
-        await reloadButton.trigger('click');
-        await flushPromises();
-
-        const reloadCall = fetchMock.mock.calls.find(([path]) => path === '/admin/data/intraday/reload');
-        expect(reloadCall[1].body).toBe(JSON.stringify({ selected_stock_id: 7 }));
         localStorage.removeItem('data_intraday_refresh_info_dismissed');
     });
 
-    it('opens the watch-list PDF export in a new tab', async () => {
+    it('refreshes Historical Data repair info after repairing from the data repair page', async () => {
+        window.history.pushState({}, '', '/admin/menu/data/repair');
+        const repairSummaries = [
+            {
+                end_of_day: {
+                    minimum_date: '2025-06-26',
+                    actual_date: '2025-06-26',
+                    total_stocks_count: 1,
+                    covered_stocks_count: 1,
+                    missing_stocks_count: 0,
+                    missing_stocks: [],
+                },
+                historical_data: {
+                    minimum_date: '2025-06-26',
+                    actual_minimum_date: null,
+                    last_trading_day: '2026-06-25',
+                    actual_last_trading_day: null,
+                    total_stocks_count: 1,
+                    covered_stocks_count: 0,
+                    missing_stocks_count: 1,
+                    missing_stocks: [
+                        {
+                            id: 7,
+                            label: 'AMES - Amundi IBEX 35',
+                            db_minimum_date: '2025-06-16',
+                            db_last_trading_day: '2026-06-24',
+                            missing_ranges: [{ from: '2026-06-25', to: '2026-06-25' }],
+                        },
+                    ],
+                },
+            },
+            {
+                end_of_day: {
+                    minimum_date: '2025-06-26',
+                    actual_date: '2025-06-26',
+                    total_stocks_count: 1,
+                    covered_stocks_count: 1,
+                    missing_stocks_count: 0,
+                    missing_stocks: [],
+                },
+                historical_data: {
+                    minimum_date: '2025-06-26',
+                    actual_minimum_date: '2025-06-26',
+                    last_trading_day: '2026-06-25',
+                    actual_last_trading_day: '2026-06-25',
+                    total_stocks_count: 1,
+                    covered_stocks_count: 1,
+                    missing_stocks_count: 0,
+                    missing_stocks: [],
+                },
+            },
+        ];
+        let repairSummaryRequestCount = 0;
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                    intraday_backfill_settings: intradayBackfillSettings(),
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null },
+                }));
+            }
+
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    holdings: [],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null },
+                    price_refresh_settings: priceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/queue/status') {
+                return Promise.resolve(jsonResponse(queueStatusResponse()));
+            }
+
+            if (path === '/admin/data/repair') {
+                const summary = repairSummaries[Math.min(repairSummaryRequestCount, repairSummaries.length - 1)];
+                repairSummaryRequestCount += 1;
+
+                return Promise.resolve(jsonResponse(summary));
+            }
+
+            if (path === '/admin/data/repair/historical-data/7' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    stock: { id: 7, label: 'AMES - Amundi IBEX 35' },
+                    stored_candles_count: 42,
+                }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/data/repair');
+        expect(wrapper.text()).toContain('Historical Data');
+        expect(wrapper.text()).toMatch(/Missing 1y\+\s*1/);
+        expect(wrapper.text()).toMatch(/Covered\s*0/);
+        expect(wrapper.text()).toMatch(/DB minimum date\s*-/);
+        expect(wrapper.text()).toContain('Missing data');
+        expect(wrapper.text()).toContain('AMES - Amundi IBEX 35');
+        expect(wrapper.text()).toContain('Required 2025-06-26 - 2026-06-25');
+        expect(wrapper.text()).toContain('DB 2025-06-16 - 2026-06-24');
+        expect(wrapper.text()).toContain('Missing 2026-06-25 - 2026-06-25');
+
+        const repairButtons = wrapper.findAll('button').filter((button) => button.text().includes('Repair'));
+        expect(repairButtons.length).toBeGreaterThanOrEqual(2);
+        await repairButtons.at(-1).trigger('click');
+        await flushPromises();
+
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/data/repair')).toHaveLength(2);
+        expect(fetchMock).toHaveBeenCalledWith('/admin/data/repair/historical-data/7', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(window.location.pathname).toBe('/admin/menu/data/repair');
+        expect(wrapper.text()).toMatch(/Missing 1y\+\s*0/);
+        expect(wrapper.text()).toMatch(/Covered\s*1/);
+        expect(wrapper.text()).toMatch(/DB minimum date\s*2025-06-26/);
+        expect(wrapper.text()).toMatch(/DB Last trading day\s*2026-06-25/);
+    });
+
+    it('does not show the watch-list PDF export on the dashboard', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
         const fetchMock = vi.fn((path) => {
             if (path === '/admin/me') {
@@ -5422,12 +6422,8 @@ describe('App', () => {
         await flushPromises();
 
         const exportButton = wrapper.findAll('button').find((button) => button.text().includes('Export PDF'));
-        expect(exportButton).toBeTruthy();
-
-        await exportButton.trigger('click');
-        await flushPromises();
-
-        expect(openMock).toHaveBeenCalledWith('/admin/watchlist/holdings/pdf', '_blank', 'noopener');
+        expect(exportButton).toBeUndefined();
+        expect(openMock).not.toHaveBeenCalled();
     });
 
     it('books depot cash transaction from the depot page', async () => {
@@ -6505,7 +7501,7 @@ describe('App', () => {
         expect(wrapper.text()).not.toContain('+1.24% · +1,035.15 EUR');
     });
 
-    it('clears the historical fetching dashboard status after the queued job finishes', async () => {
+    it('does not show historical fetching state in the empty dashboard update cards', async () => {
         vi.useFakeTimers();
         window.history.pushState({}, '', '/admin/dashboard');
 
@@ -6612,13 +7608,16 @@ describe('App', () => {
             const wrapper = mountApp();
             await flushPromises();
 
-            expect(wrapper.text()).toContain('fetching historical data');
+            expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
+            expect(wrapper.text()).not.toContain('fetching historical data');
 
             await vi.advanceTimersByTimeAsync(5000);
             await flushPromises();
 
-            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1')).toHaveLength(2);
-            expect(wrapper.get('.dashboard-status-card').text().match(/waiting/g)).toHaveLength(4);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1&all=1')).toHaveLength(1);
+            expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
+            expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
+            expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
             expect(wrapper.text()).not.toContain('fetching historical data');
 
             wrapper.unmount();
@@ -6627,7 +7626,7 @@ describe('App', () => {
         }
     });
 
-    it('updates the dashboard status when a scheduled queue refresh starts', async () => {
+    it('does not poll update status from the dashboard', async () => {
         vi.useFakeTimers();
         window.history.pushState({}, '', '/admin/dashboard');
 
@@ -6641,14 +7640,14 @@ describe('App', () => {
         };
         const scheduledRefresh = {
             refresh_id: 'scheduled-refresh-1',
-            status: 'queued',
-            processed: 0,
+            status: 'finished',
+            processed: 1,
             total: 1,
-            step: '0/1',
-            message: '1 stock price queued for refresh.',
+            step: '1/1',
+            message: 'EODHD sync: 1 record(s) created, 1 record(s) updated.',
             current: null,
             started_at: '2026-06-02T12:21:00+00:00',
-            finished_at: null,
+            finished_at: '2026-06-02T12:21:01+00:00',
             error: null,
         };
         const fetchMock = vi.fn((path) => {
@@ -6689,8 +7688,8 @@ describe('App', () => {
             if (path === '/admin/price-refresh-settings') {
                 return Promise.resolve(jsonResponse({
                     price_refresh_settings: priceRefreshSettings({
-                        status: 'updating',
-                        status_label: 'Updating prices',
+                        status: 'waiting',
+                        status_label: 'waiting',
                     }),
                     refresh: scheduledRefresh,
                 }));
@@ -6711,6 +7710,10 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ indexes: [] }));
             }
 
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
             if (path === '/admin/queue/status') {
                 return Promise.resolve(jsonResponse(queueStatusResponse()));
             }
@@ -6723,17 +7726,18 @@ describe('App', () => {
             const wrapper = mountApp();
             await flushPromises();
 
-            expect(wrapper.text()).toContain('waiting');
+            expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
 
             await vi.advanceTimersByTimeAsync(5000);
             await flushPromises();
 
-            expect(fetchMock).toHaveBeenCalledWith('/admin/price-refresh-settings', expect.any(Object));
-            expect(fetchMock).toHaveBeenCalledWith(
+            expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
+            expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
+            expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
+            expect(fetchMock).not.toHaveBeenCalledWith(
                 '/admin/watchlist/holdings/refresh-prices/scheduled-refresh-1',
                 expect.any(Object),
             );
-            expect(wrapper.text()).toContain('Updating prices');
 
             wrapper.unmount();
         } finally {
@@ -6741,7 +7745,7 @@ describe('App', () => {
         }
     });
 
-    it('loads the queue status even when the watch-list request fails', async () => {
+    it('does not load queue status when the watch-list request fails on the dashboard', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
 
         const fetchMock = vi.fn((path) => {
@@ -6768,7 +7772,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1') {
+            if (path === '/admin/watchlist/holdings?page=1&all=1') {
                 return Promise.resolve(failedJsonResponse({
                     message: 'The request failed.',
                 }));
@@ -6803,13 +7807,12 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
-        expect(fetchMock).toHaveBeenCalledWith('/admin/queue/status', expect.any(Object));
-        expect(wrapper.get('.dashboard-status-card').text()).toContain('Queue OK');
-        expect(wrapper.get('.dashboard-status-card').text()).not.toContain('Unknown');
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
+        expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
         expect(wrapper.text()).toContain('The request failed.');
     });
 
-    it('clears the queue from the dashboard action button', async () => {
+    it('does not show the clear queue action on the dashboard', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
 
         const emptyPagination = {
@@ -6888,26 +7891,17 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
-        expect(wrapper.get('.dashboard-status-card').text()).toContain('Queue check');
-        expect(wrapper.get('.dashboard-status-card').text()).toContain('R 1');
+        expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
 
         const clearQueueButton = wrapper.findAll('button')
             .find((button) => button.text().includes('Clear queue'));
-        expect(clearQueueButton).toBeTruthy();
-        await clearQueueButton.trigger('click');
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/queue/clear', expect.objectContaining({
-            method: 'POST',
-        }));
-        expect(wrapper.get('.dashboard-status-card').text()).toContain('Queue OK');
-        expect(wrapper.get('.dashboard-status-card').text()).toContain('R 0');
-        const disabledClearQueueButton = wrapper.findAll('button')
-            .find((button) => button.text().includes('Clear queue'));
-        expect(disabledClearQueueButton.attributes()).toHaveProperty('disabled');
+        expect(clearQueueButton).toBeUndefined();
+        expect(fetchMock.mock.calls.some(([path, options]) => (
+            path === '/admin/queue/clear' && options?.method === 'POST'
+        ))).toBe(false);
     });
 
-    it('shows the index dashboard status as waiting when the next index refresh is due but not running', async () => {
+    it('does not show index update status on the dashboard', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-06-02T12:41:00+00:00'));
         window.history.pushState({}, '', '/admin/dashboard');
@@ -6991,13 +7985,14 @@ describe('App', () => {
             const wrapper = mountApp();
             await flushPromises();
 
-            const dashboardStatusText = wrapper.get('.dashboard-status-card').text();
-
+            expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
             expect(wrapper.get('.app-bar-row').text()).not.toContain('Stocks Last:');
-            expect(dashboardStatusText).toContain('Stocks Last:');
-            expect(dashboardStatusText).toContain('waiting');
-            expect(dashboardStatusText).toContain('Indices Last:');
-            expect(dashboardStatusText).not.toContain('Updating prices');
+            expect(wrapper.text()).not.toContain('Stocks Last:');
+            expect(wrapper.text()).not.toContain('Indices Last:');
+            expect(wrapper.text()).not.toContain('Updating prices');
+            expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
+            expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
+            expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
 
             wrapper.unmount();
         } finally {

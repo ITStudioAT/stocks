@@ -5,8 +5,11 @@ namespace Tests\Feature;
 use App\Jobs\ReloadEodhdExchanges;
 use App\Models\EodhdExchange;
 use App\Models\EodhdExchangeImportRun;
+use App\Models\IndexWatchItem;
+use App\Models\IndexWatchItemPrice;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Queue;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
@@ -44,6 +47,14 @@ class AdminDataExchangeTest extends TestCase
             'timezone' => 'America/Argentina/Buenos_Aires',
             'synced_at' => now(),
         ]);
+        $index = IndexWatchItem::factory()->create();
+
+        $this->travelTo(Carbon::parse('2026-06-27 01:48:00', 'Europe/Vienna'));
+        IndexWatchItemPrice::query()->create([
+            'index_watch_item_id' => $index->id,
+            'trading_date' => '2026-06-26',
+            'actual_price' => '6116.52980000',
+        ]);
 
         $this->actingAs($admin)
             ->getJson('/admin/data/exchanges')
@@ -55,7 +66,9 @@ class AdminDataExchangeTest extends TestCase
             ->assertJsonPath('exchanges.1.country', 'Germany')
             ->assertJsonPath('exchanges.1.detail_code', 'XETR')
             ->assertJsonPath('exchanges.1.trading_hours.Open', '09:00:00')
-            ->assertJsonPath('exchanges.1.holidays.2026-01-01', 'New Year');
+            ->assertJsonPath('exchanges.1.holidays.2026-01-01', 'New Year')
+            ->assertJsonPath('exchanges.1.updated_at', EodhdExchange::query()->where('code', 'XETRA')->firstOrFail()->updated_at?->toIso8601String())
+            ->assertJsonPath('index_data_update_settings.latest_table_update_at', '2026-06-27T01:48:00+02:00');
     }
 
     public function test_admin_can_queue_exchange_reload(): void

@@ -18,6 +18,8 @@ export const useDepotStore = defineStore('depots', {
         priceRefreshSettings: null,
         indexPriceRefreshSettings: null,
         intradayBackfillSettings: null,
+        endOfDayDataUpdateSettings: null,
+        indexDataUpdateSettings: null,
         intradayBackfillRefresh: null,
         queueStatus: null,
         testOptions: {
@@ -38,7 +40,6 @@ export const useDepotStore = defineStore('depots', {
         dataIntradayRefresh: null,
         dataRepairSummary: null,
         stockHistoricalPriceCoverage: null,
-        stockHistoricalPriceRefresh: null,
         analyzeIntradayCandles: null,
         analyzeIntradayCandlesRequestedId: null,
         holdingIntradayCandles: {},
@@ -111,6 +112,8 @@ export const useDepotStore = defineStore('depots', {
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
                 this.intradayBackfillSettings = data.intraday_backfill_settings ?? this.intradayBackfillSettings;
+                this.endOfDayDataUpdateSettings = data.end_of_day_data_update_settings ?? this.endOfDayDataUpdateSettings;
+                this.indexDataUpdateSettings = data.index_data_update_settings ?? this.indexDataUpdateSettings;
                 this.intradayBackfillRefresh = data.intraday_backfill_refresh ?? this.intradayBackfillRefresh;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
                 this.uiPreferences = data.ui_preferences ?? this.uiPreferences;
@@ -151,6 +154,10 @@ export const useDepotStore = defineStore('depots', {
                 query.set('all_chart_holdings', '1');
             }
 
+            if (options.allHoldings === true) {
+                query.set('all', '1');
+            }
+
             if (Number.isInteger(options.chartStockId) && options.chartStockId > 0) {
                 query.set('chart_stock_id', String(options.chartStockId));
             }
@@ -171,6 +178,8 @@ export const useDepotStore = defineStore('depots', {
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
                 this.intradayBackfillSettings = data.intraday_backfill_settings ?? this.intradayBackfillSettings;
+                this.endOfDayDataUpdateSettings = data.end_of_day_data_update_settings ?? this.endOfDayDataUpdateSettings;
+                this.indexDataUpdateSettings = data.index_data_update_settings ?? this.indexDataUpdateSettings;
                 this.intradayBackfillRefresh = data.intraday_backfill_refresh ?? this.intradayBackfillRefresh;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
                 this.uiPreferences = data.ui_preferences ?? this.uiPreferences;
@@ -303,6 +312,7 @@ export const useDepotStore = defineStore('depots', {
                 const data = await request('/admin/data/exchanges');
                 this.dataExchanges = data.exchanges ?? [];
                 this.dataExchangeRefresh = data.refresh ?? this.dataExchangeRefresh;
+                this.indexDataUpdateSettings = data.index_data_update_settings ?? this.indexDataUpdateSettings;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
                 return data;
@@ -392,6 +402,38 @@ export const useDepotStore = defineStore('depots', {
                 this.dataIntradayReloadLoading = false;
             }
         },
+        async syncDataRealtime() {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/data/realtime/sync', {
+                    method: 'POST',
+                });
+                this.priceRefreshSettings = data.price_refresh_settings ?? this.priceRefreshSettings;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async syncDataHistorical() {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/data/historical/sync', {
+                    method: 'POST',
+                });
+                this.intradayBackfillSettings = data.intraday_backfill_settings ?? this.intradayBackfillSettings;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
         async loadDataIntradayRefresh(refreshId, stockId = null) {
             this.dataIntradayError = '';
 
@@ -434,7 +476,10 @@ export const useDepotStore = defineStore('depots', {
                 const data = await request('/admin/data/repair/end-of-day', {
                     method: 'POST',
                 });
-                this.dataRepairSummary = data.repair ?? this.dataRepairSummary;
+                this.dataRepairSummary = {
+                    ...(this.dataRepairSummary ?? {}),
+                    ...(data.repair ?? {}),
+                };
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
                 return data;
@@ -719,6 +764,21 @@ export const useDepotStore = defineStore('depots', {
         clearPriceRefresh() {
             this.priceRefresh = null;
         },
+        async loadStockHistoricalPriceCoverage() {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/watchlist/holdings/historical-prices/coverage');
+                this.stockHistoricalPriceCoverage = data.coverage;
+                this.indexDataUpdateSettings = data.index_data_update_settings ?? this.indexDataUpdateSettings;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
         async ensureStockHistoricalPrices() {
             this.holdingsError = '';
 
@@ -727,7 +787,6 @@ export const useDepotStore = defineStore('depots', {
                     method: 'POST',
                 });
                 this.stockHistoricalPriceCoverage = data.coverage;
-                this.stockHistoricalPriceRefresh = data.refresh;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
                 return data;
@@ -735,24 +794,6 @@ export const useDepotStore = defineStore('depots', {
                 this.holdingsError = error.message;
                 throw error;
             }
-        },
-        async loadStockHistoricalPriceRefresh(refreshId) {
-            this.holdingsError = '';
-
-            try {
-                const data = await request(`/admin/watchlist/holdings/historical-prices/${refreshId}`);
-                this.stockHistoricalPriceCoverage = data.coverage;
-                this.stockHistoricalPriceRefresh = data.refresh;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.holdingsError = error.message;
-                throw error;
-            }
-        },
-        clearStockHistoricalPriceRefresh() {
-            this.stockHistoricalPriceRefresh = null;
         },
         async loadHoldingIntradayCandles(id) {
             this.analyzeIntradayCandlesRequestedId = id;
@@ -830,6 +871,8 @@ export const useDepotStore = defineStore('depots', {
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
                 this.intradayBackfillSettings = data.intraday_backfill_settings ?? this.intradayBackfillSettings;
+                this.endOfDayDataUpdateSettings = data.end_of_day_data_update_settings ?? this.endOfDayDataUpdateSettings;
+                this.indexDataUpdateSettings = data.index_data_update_settings ?? this.indexDataUpdateSettings;
                 this.priceRefresh = data.refresh ?? this.priceRefresh;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
@@ -847,6 +890,8 @@ export const useDepotStore = defineStore('depots', {
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
                 this.intradayBackfillSettings = data.intraday_backfill_settings ?? this.intradayBackfillSettings;
+                this.endOfDayDataUpdateSettings = data.end_of_day_data_update_settings ?? this.endOfDayDataUpdateSettings;
+                this.indexDataUpdateSettings = data.index_data_update_settings ?? this.indexDataUpdateSettings;
                 this.intradayBackfillRefresh = data.intraday_backfill_refresh ?? this.intradayBackfillRefresh;
                 this.priceRefresh = data.refresh;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
@@ -883,6 +928,72 @@ export const useDepotStore = defineStore('depots', {
                     body: JSON.stringify(payload),
                 });
                 this.intradayBackfillSettings = data.intraday_backfill_settings;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async updateEndOfDayDataUpdateSettings(payload) {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/end-of-day-data-update-settings', {
+                    method: 'PATCH',
+                    body: JSON.stringify(payload),
+                });
+                this.endOfDayDataUpdateSettings = data.end_of_day_data_update_settings;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async updateIndexDataUpdateSettings(payload) {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/index-data-update-settings', {
+                    method: 'PATCH',
+                    body: JSON.stringify(payload),
+                });
+                this.indexDataUpdateSettings = data.index_data_update_settings;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async syncDataEndOfDay() {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/data/end-of-day/sync', {
+                    method: 'POST',
+                });
+                this.endOfDayDataUpdateSettings = data.end_of_day_data_update_settings ?? this.endOfDayDataUpdateSettings;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async syncDataIndices() {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/data/indices/sync', {
+                    method: 'POST',
+                });
+                this.indexDataUpdateSettings = data.index_data_update_settings ?? this.indexDataUpdateSettings;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
                 return data;

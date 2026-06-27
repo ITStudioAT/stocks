@@ -11,7 +11,6 @@ class TradingSessionPriceResolver
 
     public function __construct(
         private StockPriceCatalog $stockPriceCatalog,
-        private HistoricalSessionStartPriceFetchStatus $historicalSessionStartPriceFetchStatus,
     ) {}
 
     /**
@@ -55,15 +54,7 @@ class TradingSessionPriceResolver
             'end_price_is_fallback' => $endPriceIsFallback,
             'start_price_24' => $startPrice24,
             'start_price_48' => $startPrice48,
-            'historical_prices_fetching' => $this->isHistoricalPriceFetching(
-                $holding,
-                [
-                    [$todayOpenUtc, $todayCloseUtc, 'start'],
-                    [$previousOpenUtc, $previousCloseUtc, 'start'],
-                    [$twoTradingDaysAgoOpenUtc, $twoTradingDaysAgoCloseUtc, 'start'],
-                    [$previousCloseUtc, $todayOpenUtc, 'end'],
-                ],
-            ),
+            'historical_prices_fetching' => false,
         ];
     }
 
@@ -140,20 +131,6 @@ class TradingSessionPriceResolver
     private function storedHistoricalPriceBetween(StockHolding $holding, Carbon $from, Carbon $until, string $priceType): ?string
     {
         return $this->storedFirstPriceBetween($holding, $from, $until, $priceType);
-    }
-
-    /**
-     * @param  array<int, array{0: Carbon, 1: Carbon, 2: string}>  $windows
-     */
-    private function isHistoricalPriceFetching(StockHolding $holding, array $windows): bool
-    {
-        return collect($windows)
-            ->contains(fn (array $window): bool => $this->historicalSessionStartPriceFetchStatus->isFetching(
-                $holding->id,
-                $window[0],
-                $window[1],
-                $window[2],
-            ));
     }
 
     /**

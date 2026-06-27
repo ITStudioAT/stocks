@@ -29,6 +29,13 @@ const cashTransactionTypeOptions = [
     { title: 'Tax', value: 'tax' },
     { title: 'Broker bonus', value: 'broker_bonus' },
 ];
+const weekdayOptions = [
+    { title: 'Monday', value: 1 },
+    { title: 'Tuesday', value: 2 },
+    { title: 'Wednesday', value: 3 },
+    { title: 'Thursday', value: 4 },
+    { title: 'Friday', value: 5 },
+];
 
 const { lgAndDown, mdAndDown, smAndDown } = useDisplay();
 
@@ -47,15 +54,15 @@ const {
     depotValuations,
     depotPerformanceSeries,
     transactions,
-    exchangeTradingTimes,
     appVersion,
     eodhdApiUsage,
     priceRefresh,
     priceRefreshSettings,
     indexPriceRefreshSettings,
     intradayBackfillSettings,
+    endOfDayDataUpdateSettings,
+    indexDataUpdateSettings,
     intradayBackfillRefresh,
-    queueStatus,
     testOptions,
     testExchanges,
     testExchangeDetails,
@@ -80,8 +87,6 @@ const {
     loading: depotsLoading,
     holdingsLoading,
     transactionsLoading,
-    exchangeTradingTimesLoading,
-    queueStatusLoading,
     testOptionsLoading,
     testExchangesLoading,
     testIntradayLoading,
@@ -95,8 +100,6 @@ const {
     error: depotsError,
     holdingsError,
     transactionsError,
-    exchangeTradingTimesError,
-    queueStatusError,
     testOptionsError,
     testExchangesError,
     testIntradayError,
@@ -195,6 +198,7 @@ const holdingSearchInput = ref(null);
 const indexSearchInput = ref(null);
 const holdingMessage = ref('');
 const holdingError = ref('');
+const isDashboardInfoReloading = ref(false);
 const indexMessage = ref('');
 const indexError = ref('');
 const indexPriceDialogError = ref('');
@@ -202,19 +206,26 @@ const expandedHoldingIds = ref([]);
 const priceRefreshScheduleForm = ref(emptyPriceRefreshScheduleForm());
 const indexPriceRefreshScheduleForm = ref(emptyPriceRefreshScheduleForm());
 const intradayBackfillScheduleForm = ref(emptyIntradayBackfillScheduleForm());
+const historicalDataUpdateScheduleForm = ref(emptyHistoricalDataUpdateScheduleForm());
+const endOfDayDataUpdateScheduleForm = ref(emptyHistoricalDataUpdateScheduleForm());
+const indexDataUpdateScheduleForm = ref(emptyIndexDataUpdateScheduleForm());
+const liveDataUpdateScheduleForm = ref(emptyPriceRefreshScheduleForm());
 const priceRefreshScheduleMessage = ref('');
 const priceRefreshScheduleError = ref('');
 const isPriceRefreshScheduleEditing = ref(false);
 const isIndexPriceRefreshScheduleEditing = ref(false);
 const isIntradayBackfillScheduleEditing = ref(false);
+const isLiveDataUpdateScheduleSaving = ref(false);
+const isHistoricalDataUpdateScheduleSaving = ref(false);
+const isEndOfDayDataUpdateScheduleSaving = ref(false);
+const isIndexDataUpdateScheduleSaving = ref(false);
 const isIntradayBackfillRunningNow = ref(false);
 const priceRefreshTimer = ref(null);
 const intradayBackfillTimer = ref(null);
 const priceRefreshSettingsTimer = ref(null);
 const isPriceRefreshSettingsPolling = ref(false);
-const historicalPriceFetchTimer = ref(null);
-const isHistoricalPriceFetchPolling = ref(false);
-const endOfDayRepairTimer = ref(null);
+const liveDataStatusNow = ref(Date.now());
+const liveDataStatusTimer = ref(null);
 const endOfDayRepairLoading = ref(false);
 const endOfDayRepairCurrentStock = ref('');
 const endOfDayRepairProgress = ref('');
@@ -224,6 +235,27 @@ const historicalDataRepairProgress = ref('');
 const selectedDataHistoricCopiedIsin = ref(null);
 const dataHistoricIsinCopiedTimer = ref(null);
 const selectedDataHistoricIntradayCoverage = ref(null);
+const selectedDataLiveLatestEntries = ref(null);
+const selectedDataLiveLatestEntriesLoading = ref(false);
+const selectedDataLiveLatestEntriesError = ref('');
+const selectedDataHistoricalLatestEntries = ref(null);
+const selectedDataHistoricalLatestEntriesLoading = ref(false);
+const selectedDataHistoricalLatestEntriesError = ref('');
+const selectedDataEndOfDayLatestEntries = ref(null);
+const selectedDataEndOfDayLatestEntriesLoading = ref(false);
+const selectedDataEndOfDayLatestEntriesError = ref('');
+const isLiveDataUpdateDialogOpen = ref(false);
+const isHistoricalDataUpdateDialogOpen = ref(false);
+const isEndOfDayDataUpdateDialogOpen = ref(false);
+const isIndexDataUpdateDialogOpen = ref(false);
+const isLiveDataRealtimeSyncing = ref(false);
+const isHistoricalDataSyncing = ref(false);
+const isEndOfDayDataSyncing = ref(false);
+const isIndexDataSyncing = ref(false);
+const liveDataRealtimeSyncMessage = ref('');
+const historicalDataSyncMessage = ref('');
+const endOfDayDataSyncMessage = ref('');
+const indexDataSyncMessage = ref('');
 const dataHistoricalPriceLoading = ref(false);
 const dataHistoricalPriceError = ref('');
 const dataExchangeReloadTimer = ref(null);
@@ -244,6 +276,9 @@ const cloudwaysSyncError = ref('');
 const cloudwaysSyncProgressMessage = ref('');
 const cloudwaysSyncResult = ref(null);
 let selectedDataHistoricIntradayCoverageRequestId = 0;
+let selectedDataLiveLatestEntriesRequestId = 0;
+let selectedDataHistoricalLatestEntriesRequestId = 0;
+let selectedDataEndOfDayLatestEntriesRequestId = 0;
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
@@ -261,10 +296,10 @@ const isCompactDepotStocksTable = computed(() => isHandsetLandscape.value);
 const isCompactCashLedgerTable = computed(() => isHandsetLandscape.value);
 const watchListTableColumnCount = computed(() => {
     if (isHandsetLandscape.value) {
-        return 6;
+        return 5;
     }
 
-    return isCompactWatchListTable.value ? 7 : 9;
+    return isCompactWatchListTable.value ? 5 : 7;
 });
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
 const selectedTestStock = computed(() => testOptions.value.stocks
@@ -286,27 +321,6 @@ const isPriceRefreshRunning = computed(() => {
 });
 const isAutomaticPriceRefreshUpdating = computed(() => isPriceRefreshRunning.value
     || priceRefreshSettings.value?.status === 'updating');
-const isAutomaticIndexPriceRefreshUpdating = computed(() => indexPriceRefreshSettings.value?.status === 'updating');
-const isHistoricalPriceFetchRunning = computed(() => holdings.value.some((holding) => holding.historical_prices_fetching));
-const isHeaderStatusUpdating = computed(() => isAutomaticPriceRefreshUpdating.value || isHistoricalPriceFetchRunning.value);
-const priceRefreshHeaderStatusLabel = computed(() => {
-    if (isAutomaticPriceRefreshUpdating.value) {
-        return 'Updating prices';
-    }
-
-    if (isHistoricalPriceFetchRunning.value) {
-        return 'fetching historical data';
-    }
-
-    return 'waiting';
-});
-const indexPriceRefreshHeaderStatusLabel = computed(() => {
-    if (isAutomaticIndexPriceRefreshUpdating.value) {
-        return 'Updating prices';
-    }
-
-    return indexPriceRefreshSettings.value?.status_label ?? 'waiting';
-});
 const visibleHoldingMessage = computed(() => {
     if (priceRefresh.value && isFinishedPriceRefresh(priceRefresh.value)) {
         return '';
@@ -328,6 +342,8 @@ const isIntradayBackfillRunning = computed(() => {
 
     return ['queued', 'running'].includes(intradayBackfillRefresh.value.status);
 });
+const isAutomaticHistoricalDataUpdating = computed(() => isIntradayBackfillRunning.value
+    || intradayBackfillSettings.value?.status === 'updating');
 const intradayBackfillProgressValue = computed(() => {
     if (!intradayBackfillRefresh.value || intradayBackfillRefresh.value.total === 0) {
         return 0;
@@ -349,6 +365,31 @@ const selectedDataHistoricStock = computed(() => {
 
     return selectedStock ?? holdings[0] ?? null;
 });
+const selectedDataLiveLatestRows = computed(() => {
+    const entries = selectedDataLiveLatestEntries.value?.entries ?? [];
+
+    return entries.map((entry, index) => ({
+        ...entry,
+        priceTrend: dataLatestEntryPriceTrend(entry, entries[index - 1] ?? null),
+    }));
+});
+const selectedDataHistoricalLatestRows = computed(() => {
+    const entries = selectedDataHistoricalLatestEntries.value?.entries ?? [];
+
+    return entries.map((entry, index) => ({
+        ...entry,
+        priceTrend: dataLatestEntryPriceTrend(entry, entries[index + 1] ?? null),
+    }));
+});
+const selectedDataEndOfDayLatestRows = computed(() => {
+    const entries = selectedDataEndOfDayLatestEntries.value?.entries ?? [];
+
+    return entries.map((entry, index) => ({
+        ...entry,
+        priceTrend: dataLatestEntryPriceTrend(entry, entries[index + 1] ?? null),
+    }));
+});
+const selectedDataLiveLatestDate = computed(() => selectedDataLiveLatestEntries.value?.date ?? null);
 const selectedDataHistoricStockLiveSummary = computed(() => {
     const stock = selectedDataHistoricStock.value;
     const rawRecordCount = Number(stock?.latest_realtime_day_record_count ?? 0);
@@ -361,6 +402,10 @@ const selectedDataHistoricStockLiveSummary = computed(() => {
     return stock === null
         ? null
         : {
+            latestUpdate: formatScheduleDateTime(priceRefreshSettings.value?.last_refreshed_at),
+            nextUpdate: formatScheduleDateTime(priceRefreshSettings.value?.next_refresh_at),
+            updateStatus: liveDataUpdateStatus(priceRefreshSettings.value),
+            schedule: formatLiveDataUpdateSchedule(priceRefreshSettings.value),
             lastDate: formatRecentStoredPriceDate({ as_of: stock.latest_realtime_date ?? null }),
             firstTime: formatRecentStoredPriceTime({ as_of: stock.latest_realtime_day_first_record_at ?? null }),
             lastTime: formatRecentStoredPriceTime({ as_of: stock.latest_realtime_day_last_record_at ?? null }),
@@ -380,16 +425,31 @@ const selectedDataHistoricStockIntradayCoverageSummary = computed(() => {
     const tradingDayCount = Number.isFinite(rawTradingDayCount) ? rawTradingDayCount : 0;
     const rawTableRowCount = Number(coverage?.table_row_count ?? 0);
     const tableRowCount = Number.isFinite(rawTableRowCount) ? rawTableRowCount : 0;
+    const outdatedStocks = Array.isArray(coverage?.outdated_stocks)
+        ? coverage.outdated_stocks.map((stock) => ({
+            id: stock.id,
+            label: stock.label || `Stock ${stock.id}`,
+            dbLastDate: formatRecentStoredPriceDate({ as_of: stock.db_last_date ?? null }),
+        }))
+        : [];
 
     return coverage === null
         ? null
         : {
+            latestUpdate: intradayBackfillSettings.value?.last_dispatched_at
+                ? formatScheduleDateTime(intradayBackfillSettings.value.last_dispatched_at)
+                : 'Never',
+            nextUpdate: formatScheduleDateTime(intradayBackfillSettings.value?.next_refresh_at),
+            updateStatus: historicalDataUpdateStatus(intradayBackfillSettings.value),
+            schedule: formatHistoricalDataUpdateSchedule(intradayBackfillSettings.value),
             firstDate: formatRecentStoredPriceDate({ as_of: coverage.first_date ?? null }),
-            lastDate: formatRecentStoredPriceDate({ as_of: coverage.last_date ?? null }),
+            expectedLastDate: formatRecentStoredPriceDate({ as_of: coverage.expected_last_date ?? null }),
+            lastDate: formatRecentStoredPriceDate({ as_of: coverage.oldest_last_date ?? coverage.last_date ?? null }),
             rowCount,
             tradingDayCount,
             averageRowsPerDay: tradingDayCount === 0 ? 0 : rowCount / tradingDayCount,
             tableRowCount,
+            outdatedStocks,
         };
 });
 const selectedDataHistoricStockEndOfDaySummary = computed(() => {
@@ -398,13 +458,46 @@ const selectedDataHistoricStockEndOfDaySummary = computed(() => {
     const rowCount = Number.isFinite(rawRowCount) ? rawRowCount : 0;
     const rawTableRowCount = Number(stock?.end_of_day_table_row_count ?? 0);
     const tableRowCount = Number.isFinite(rawTableRowCount) ? rawTableRowCount : 0;
+    const outdatedStocks = Array.isArray(stockHistoricalPriceCoverage.value?.end_of_day_outdated_stocks)
+        ? stockHistoricalPriceCoverage.value.end_of_day_outdated_stocks.map((outdatedStock) => ({
+            id: outdatedStock.id,
+            label: outdatedStock.label || `Stock ${outdatedStock.id}`,
+            dbLastDate: formatRecentStoredPriceDate({ as_of: outdatedStock.db_last_date ?? null }),
+        }))
+        : [];
 
     return stock === null
         ? null
         : {
+            latestUpdate: endOfDayDataUpdateSettings.value?.last_dispatched_at
+                ? formatScheduleDateTime(endOfDayDataUpdateSettings.value.last_dispatched_at)
+                : 'Never',
+            nextUpdate: formatScheduleDateTime(endOfDayDataUpdateSettings.value?.next_refresh_at),
+            updateStatus: endOfDayDataUpdateStatus(endOfDayDataUpdateSettings.value),
+            schedule: formatHistoricalDataUpdateSchedule(endOfDayDataUpdateSettings.value),
             firstDate: formatRecentStoredPriceDate({ as_of: stock.end_of_day_first_date ?? null }),
+            expectedLastDate: formatRecentStoredPriceDate({ as_of: stock.end_of_day_expected_last_date ?? null }),
             lastDate: formatRecentStoredPriceDate({ as_of: stock.end_of_day_last_date ?? null }),
             rowCount,
+            tableRowCount,
+            outdatedStocks,
+        };
+});
+const selectedDataHistoricIndexDataSummary = computed(() => {
+    const settings = indexDataUpdateSettings.value;
+    const rawTableRowCount = Number(settings?.table_row_count ?? 0);
+    const tableRowCount = Number.isFinite(rawTableRowCount) ? rawTableRowCount : 0;
+
+    return settings === null
+        ? null
+        : {
+            latestUpdate: settings.latest_table_update_at
+                ? formatScheduleDateTime(settings.latest_table_update_at)
+                : 'Never',
+            nextUpdate: formatScheduleDateTime(settings.next_refresh_at),
+            updateStatus: indexDataUpdateStatus(settings),
+            schedule: formatIndexDataUpdateSchedule(settings),
+            tableName: settings.table_name ?? 'index_watch_item_prices',
             tableRowCount,
         };
 });
@@ -436,14 +529,18 @@ const dataExchangeReloadProgressValue = computed(() => {
     return Math.round((dataExchangeRefresh.value.processed / dataExchangeRefresh.value.total) * 100);
 });
 const dataExchangesLastUpdatedAt = computed(() => {
-    const exchangeSyncedTimes = dataExchanges.value
-        .map((exchange) => exchange.synced_at)
+    if (indexDataUpdateSettings.value?.latest_table_update_at) {
+        return indexDataUpdateSettings.value.latest_table_update_at;
+    }
+
+    const exchangeUpdatedTimes = dataExchanges.value
+        .map((exchange) => exchange.updated_at ?? exchange.synced_at)
         .filter(Boolean)
         .map((value) => new Date(value))
         .filter((date) => !Number.isNaN(date.getTime()));
 
-    if (exchangeSyncedTimes.length > 0) {
-        return new Date(Math.max(...exchangeSyncedTimes.map((date) => date.getTime()))).toISOString();
+    if (exchangeUpdatedTimes.length > 0) {
+        return new Date(Math.max(...exchangeUpdatedTimes.map((date) => date.getTime()))).toISOString();
     }
 
     return dataExchangeRefresh.value?.finished_at ?? null;
@@ -473,13 +570,11 @@ const dataIntradayReloadProgressValue = computed(() => {
     return Math.round((dataIntradayRefresh.value.processed / dataIntradayRefresh.value.total) * 100);
 });
 const sessionHeaderDates = computed(() => {
-    const datedHolding = holdings.value.find((holding) => holding.start_price_date || holding.end_price_date);
+    const datedHolding = holdings.value.find((holding) => holding.start_price_date || holding.end_price_24_date);
 
     return {
         start: formatSessionHeaderDateValue(datedHolding?.start_price_date) ?? formatSessionHeaderDate(0),
-        end: formatSessionHeaderDateValue(datedHolding?.end_price_date) ?? formatSessionHeaderDate(0),
-        end24: formatSessionHeaderDateValue(datedHolding?.end_price_24_date) ?? formatSessionHeaderDate(1),
-        end48: formatSessionHeaderDateValue(datedHolding?.end_price_48_date) ?? formatSessionHeaderDate(2),
+        lastDay: formatSessionHeaderDateValue(datedHolding?.end_price_24_date) ?? formatSessionHeaderDate(1),
     };
 });
 const selectedIndexRecentPrices = computed(() => selectedIndexWatchItem.value?.recent_prices ?? []);
@@ -1937,111 +2032,6 @@ const eodhdUsageItems = computed(() => {
         },
     ].filter(item => item.usage);
 });
-const queueStatusLabel = computed(() => {
-    if (queueStatusLoading.value) {
-        return 'Queue checking';
-    }
-
-    if (queueStatusError.value) {
-        return 'Queue unavailable';
-    }
-
-    if (!queueStatus.value) {
-        return 'Queue unknown';
-    }
-
-    const pending = Number(queueStatus.value.pending ?? 0);
-    const reserved = Number(queueStatus.value.reserved ?? 0);
-    const failed = Number(queueStatus.value.failed ?? 0);
-    const statusLabel = {
-        ok: 'Queue OK',
-        waiting: 'Queue waiting',
-        check: 'Queue check',
-    }[queueStatus.value.status] ?? 'Queue check';
-
-    return [
-        statusLabel,
-        `${queueStatus.value.connection}:${queueStatus.value.name}`,
-        `P ${formatInteger(pending)}`,
-        `R ${formatInteger(reserved)}`,
-        `F ${formatInteger(failed)}`,
-        `${formatInteger(queueStatus.value.retry_after)}s/${formatInteger(queueStatus.value.max_job_timeout)}s`,
-    ].join(' · ');
-});
-const queueStatusStateLabel = computed(() => {
-    if (queueStatusLoading.value) {
-        return 'Checking';
-    }
-
-    if (queueStatusError.value) {
-        return 'Unavailable';
-    }
-
-    if (!queueStatus.value) {
-        return 'Unknown';
-    }
-
-    return {
-        ok: 'OK',
-        waiting: 'Waiting',
-        check: 'Check',
-    }[queueStatus.value.status] ?? 'Check';
-});
-const queueStatusDetails = computed(() => {
-    if (!queueStatus.value) {
-        return {
-            connection: '-',
-            jobs: 'P - / R - / F -',
-            timeout: '-',
-        };
-    }
-
-    const pending = formatInteger(Number(queueStatus.value.pending ?? 0));
-    const reserved = formatInteger(Number(queueStatus.value.reserved ?? 0));
-    const failed = formatInteger(Number(queueStatus.value.failed ?? 0));
-
-    return {
-        connection: `${queueStatus.value.connection}:${queueStatus.value.name}`,
-        jobs: `P ${pending} / R ${reserved} / F ${failed}`,
-        timeout: `${formatInteger(queueStatus.value.retry_after)}s / ${formatInteger(queueStatus.value.max_job_timeout)}s`,
-    };
-});
-const queueStatusTitle = computed(() => {
-    if (queueStatusError.value) {
-        return queueStatusError.value;
-    }
-
-    if (!queueStatus.value) {
-        return 'Queue status has not been loaded yet.';
-    }
-
-    if (queueStatus.value.status === 'waiting') {
-        return 'Jobs are pending, but no worker currently has a job reserved. This is normal briefly with a cron worker; it should clear on the next run.';
-    }
-
-    if (!queueStatus.value.issues?.length) {
-        return 'Queue configuration looks appropriate.';
-    }
-
-    return queueStatus.value.issues.join(' ');
-});
-const queueStatusClass = computed(() => {
-    if (queueStatusError.value || queueStatus.value?.status === 'check') {
-        return 'text-error';
-    }
-
-    if (queueStatus.value?.status === 'waiting') {
-        return 'text-warning';
-    }
-
-    return 'text-medium-emphasis';
-});
-const canClearQueue = computed(() => queueStatus.value
-    && queueStatus.value.status !== 'ok'
-    && !queueStatusLoading.value);
-const queueClearButtonLabel = computed(() => (canClearQueue.value
-    ? `Clear queue: ${queueStatusTitle.value}`
-    : 'Queue is clean'));
 const analyzeSubmenuItems = [
     {
         key: 'overview',
@@ -2074,6 +2064,21 @@ const dataSubmenuItems = [
         key: 'overview',
         label: 'Overview',
         icon: 'mdi-view-dashboard-outline',
+    },
+    {
+        key: 'live-data',
+        label: 'Live Data',
+        icon: 'mdi-chart-timeline-variant',
+    },
+    {
+        key: 'historical-data',
+        label: 'Historical Data',
+        icon: 'mdi-history',
+    },
+    {
+        key: 'eod-data',
+        label: 'EOD-Data',
+        icon: 'mdi-calendar-end',
     },
     {
         key: 'exchanges',
@@ -2335,30 +2340,49 @@ watch(
                 .catch(() => {});
         }
 
-        if (section === 'data' && dataSubsection === 'overview') {
+        if (section === 'data' && ['overview', 'live-data', 'historical-data', 'eod-data'].includes(dataSubsection)) {
             loadDataHistoricalPriceCoverage().catch(() => {});
         }
 
         if (section === 'data' && dataSubsection === 'repair') {
             depotsStore.loadDataRepair().catch(() => {});
         }
+
+        syncUpdateStatusPolling();
     },
 );
 
 watch(
     [activeSection, activeDataSubsection, selectedDataHistoricStockId],
     ([section, dataSubsection, selectedStockId]) => {
-        if (section !== 'data' || dataSubsection !== 'overview') {
+        if (section !== 'data') {
             return;
         }
 
         if (selectedStockId === null || selectedStockId === undefined || Number.isNaN(Number(selectedStockId))) {
             selectedDataHistoricIntradayCoverage.value = null;
+            selectedDataLiveLatestEntries.value = null;
+            selectedDataHistoricalLatestEntries.value = null;
+            selectedDataEndOfDayLatestEntries.value = null;
 
             return;
         }
 
-        loadSelectedDataHistoricStockIntradayCoverage(selectedStockId).catch(() => {});
+        if (dataSubsection === 'overview') {
+            loadSelectedDataHistoricStockIntradayCoverage(selectedStockId).catch(() => {});
+        }
+
+        if (dataSubsection === 'live-data') {
+            loadSelectedDataLiveLatestEntries(selectedStockId).catch(() => {});
+        }
+
+        if (dataSubsection === 'historical-data') {
+            loadSelectedDataHistoricalLatestEntries(selectedStockId).catch(() => {});
+        }
+
+        if (dataSubsection === 'eod-data') {
+            loadSelectedDataEndOfDayLatestEntries(selectedStockId).catch(() => {});
+        }
     },
 );
 
@@ -2374,19 +2398,6 @@ watch(
     () => {
         loadSelectedAnalyzeChartData();
         ensureAnalyzeDetailIntradayCandles();
-    },
-);
-
-watch(
-    isHistoricalPriceFetchRunning,
-    (isRunning) => {
-        if (isRunning) {
-            startHistoricalPriceFetchPolling();
-
-            return;
-        }
-
-        stopHistoricalPriceFetchPolling();
     },
 );
 
@@ -2413,7 +2424,6 @@ onMounted(async () => {
 
     await auth.loadUser();
     applyRouteFromPath();
-    const queueStatusRequest = loadDashboardQueueStatus();
 
     await depotsStore.loadActiveDepot();
 
@@ -2424,13 +2434,10 @@ onMounted(async () => {
     await Promise.all([
         loadWatchlistHoldingsForActiveSection().catch(() => {}),
         depotsStore.loadIndexWatchItems().catch(() => {}),
-        depotsStore.loadWatchlistExchangeTradingTimes().catch(() => {}),
     ]);
 
-    await queueStatusRequest;
-
     ensureAnalyzeDetailIntradayCandles();
-    startPriceRefreshSettingsPolling();
+    syncUpdateStatusPolling();
 
     await depotsStore.loadDepots();
 
@@ -2448,7 +2455,7 @@ onBeforeUnmount(() => {
     stopPriceRefreshPolling();
     stopIntradayBackfillPolling();
     stopPriceRefreshSettingsPolling();
-    stopHistoricalPriceFetchPolling();
+    stopLiveDataStatusClock();
     stopDataExchangeReloadPolling();
     stopDataIntradayReloadPolling();
     stopHoldingDialogKeyboardShortcuts();
@@ -2521,10 +2528,6 @@ function navigateSection(section) {
         depotsStore.loadDepots(depotPagination.value.current_page);
     }
 
-    if (section === 'dashboard') {
-        loadDashboardQueueStatus();
-    }
-
     if (section === 'analyze') {
         loadWatchlistHoldingsForActiveSection();
     }
@@ -2532,27 +2535,60 @@ function navigateSection(section) {
     if (section === 'updates') {
         loadPriceRefreshSettings();
     }
+
+    syncUpdateStatusPolling();
 }
 
-function loadDashboardQueueStatus() {
-    if (activeSection.value !== 'dashboard') {
-        return Promise.resolve();
+function syncUpdateStatusPolling() {
+    const shouldPollUpdateStatus = activeSection.value === 'updates'
+        || (activeSection.value === 'data' && activeDataSubsection.value === 'overview');
+
+    if (shouldPollUpdateStatus) {
+        startLiveDataStatusClock();
+        startPriceRefreshSettingsPolling();
+
+        return;
     }
 
-    return depotsStore.loadQueueStatus().catch(() => {});
+    stopLiveDataStatusClock();
+    stopPriceRefreshSettingsPolling();
 }
 
 function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.current_page, options = {}) {
     const shouldIncludeCharts = activeSection.value === 'analyze' && selectedAnalyzeHoldingId.value !== null;
     const shouldIncludeAllChartHoldings = shouldIncludeCharts && activeAnalyzeSubsection.value === 'trend';
+    const shouldIncludeAllHoldings = activeSection.value === 'dashboard';
 
     return depotsStore.loadWatchlistHoldings(page, {
         ...options,
+        allHoldings: shouldIncludeAllHoldings,
         includeCharts: shouldIncludeCharts,
         allChartHoldings: shouldIncludeAllChartHoldings,
         chartStockId: shouldIncludeCharts && !shouldIncludeAllChartHoldings ? selectedAnalyzeHoldingId.value : null,
         chartRange: shouldIncludeCharts ? selectedAnalyzeHistoryRange.value : null,
     });
+}
+
+async function reloadDashboardInfo() {
+    if (isDashboardInfoReloading.value) {
+        return;
+    }
+
+    isDashboardInfoReloading.value = true;
+    holdingError.value = '';
+
+    try {
+        await Promise.all([
+            depotsStore.loadActiveDepot(),
+            loadWatchlistHoldingsForActiveSection(1),
+            depotsStore.loadDepots(depotPagination.value.current_page),
+            depotsStore.loadIndexWatchItems(),
+        ]);
+    } catch (error) {
+        holdingError.value = error.message;
+    } finally {
+        isDashboardInfoReloading.value = false;
+    }
 }
 
 function loadSelectedAnalyzeChartData() {
@@ -2723,6 +2759,26 @@ function navigateDataSubsection(subsection) {
     activeSection.value = 'data';
     clearSectionMessages();
     updateUrlPath();
+}
+
+function isStandaloneDataStockSubsection(subsection) {
+    return ['live-data', 'historical-data', 'eod-data'].includes(subsection);
+}
+
+function dataStandaloneStockPageTitle(subsection) {
+    return {
+        'live-data': 'Live Data',
+        'historical-data': 'Historical Data',
+        'eod-data': 'EOD-Data',
+    }[subsection] ?? 'Data';
+}
+
+function dataStandaloneStockPageAriaLabel(subsection) {
+    return {
+        'live-data': 'Live data',
+        'historical-data': 'Historical data',
+        'eod-data': 'EOD data',
+    }[subsection] ?? 'Data';
 }
 
 function selectAnalyzeHolding(holdingId) {
@@ -3497,10 +3553,7 @@ async function saveHolding(result) {
         holdingMessage.value = data.message;
         isHoldingDialogOpen.value = false;
         stopHoldingDialogKeyboardShortcuts();
-        await Promise.all([
-            loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page),
-            depotsStore.loadWatchlistExchangeTradingTimes(),
-        ]);
+        await loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page);
     } catch (err) {
         holdingError.value = err.message;
     }
@@ -3515,55 +3568,9 @@ async function saveIndexWatchItem(result) {
         indexMessage.value = data.message;
         holdingMessage.value = data.message;
         isIndexDialogOpen.value = false;
-        await depotsStore.loadWatchlistExchangeTradingTimes();
     } catch (err) {
         indexError.value = err.message;
     }
-}
-
-async function refreshHoldingPrices() {
-    holdingError.value = '';
-    holdingMessage.value = '';
-
-    try {
-        const data = await depotsStore.refreshWatchlistPrices();
-        holdingMessage.value = data.message;
-        await depotsStore.loadQueueStatus();
-
-        if (!data.refresh) {
-            await loadWatchlistHoldingsForActiveSection();
-            await loadPriceRefreshSettings();
-            holdingMessage.value = '';
-
-            return;
-        }
-
-        if (isFinishedPriceRefresh(data.refresh)) {
-            await finishPriceRefresh(data.refresh);
-
-            return;
-        }
-
-        startPriceRefreshPolling(data.refresh.refresh_id);
-    } catch (err) {
-        holdingError.value = err.message;
-    }
-}
-
-async function clearQueue() {
-    if (!canClearQueue.value) {
-        return;
-    }
-
-    try {
-        await depotsStore.clearQueue();
-    } catch (err) {
-        queueStatusError.value = err.message;
-    }
-}
-
-function exportHoldingsPdf() {
-    window.open('/admin/watchlist/holdings/pdf', '_blank', 'noopener');
 }
 
 function openCashTransactionDialog(type) {
@@ -3651,15 +3658,24 @@ async function bookStockTransaction() {
 async function savePriceRefreshSchedule() {
     priceRefreshScheduleError.value = '';
     priceRefreshScheduleMessage.value = '';
+    const payload = {
+        trading_interval_minutes: Number(priceRefreshScheduleForm.value.trading_interval_minutes),
+        trading_starts_before_minutes: Number(priceRefreshScheduleForm.value.trading_starts_before_minutes),
+        trading_ends_after_minutes: Number(priceRefreshScheduleForm.value.trading_ends_after_minutes),
+        closed_refresh_enabled: Boolean(priceRefreshScheduleForm.value.closed_refresh_enabled),
+        closed_interval_minutes: Number(priceRefreshScheduleForm.value.closed_interval_minutes),
+    };
+
+    if (priceRefreshScheduleForm.value.trading_start_time) {
+        payload.trading_start_time = priceRefreshScheduleForm.value.trading_start_time;
+    }
+
+    if (priceRefreshScheduleForm.value.trading_end_time) {
+        payload.trading_end_time = priceRefreshScheduleForm.value.trading_end_time;
+    }
 
     try {
-        const data = await depotsStore.updatePriceRefreshSettings({
-            trading_interval_minutes: Number(priceRefreshScheduleForm.value.trading_interval_minutes),
-            trading_starts_before_minutes: Number(priceRefreshScheduleForm.value.trading_starts_before_minutes),
-            trading_ends_after_minutes: Number(priceRefreshScheduleForm.value.trading_ends_after_minutes),
-            closed_refresh_enabled: Boolean(priceRefreshScheduleForm.value.closed_refresh_enabled),
-            closed_interval_minutes: Number(priceRefreshScheduleForm.value.closed_interval_minutes),
-        });
+        const data = await depotsStore.updatePriceRefreshSettings(payload);
 
         priceRefreshScheduleMessage.value = data.message;
         isPriceRefreshScheduleEditing.value = false;
@@ -3673,6 +3689,134 @@ async function savePriceRefreshSchedule() {
         }
     } catch (err) {
         priceRefreshScheduleError.value = err.message;
+    }
+}
+
+function openLiveDataUpdateDialog() {
+    liveDataUpdateScheduleForm.value = priceRefreshScheduleFormFromSettings(priceRefreshSettings.value);
+    priceRefreshScheduleError.value = '';
+    priceRefreshScheduleMessage.value = '';
+    isLiveDataUpdateDialogOpen.value = true;
+}
+
+function openHistoricalDataUpdateDialog() {
+    historicalDataUpdateScheduleForm.value = historicalDataUpdateScheduleFormFromSettings(intradayBackfillSettings.value);
+    priceRefreshScheduleError.value = '';
+    priceRefreshScheduleMessage.value = '';
+    isHistoricalDataUpdateDialogOpen.value = true;
+}
+
+function openEndOfDayDataUpdateDialog() {
+    endOfDayDataUpdateScheduleForm.value = historicalDataUpdateScheduleFormFromSettings(endOfDayDataUpdateSettings.value);
+    priceRefreshScheduleError.value = '';
+    priceRefreshScheduleMessage.value = '';
+    isEndOfDayDataUpdateDialogOpen.value = true;
+}
+
+function openIndexDataUpdateDialog() {
+    indexDataUpdateScheduleForm.value = indexDataUpdateScheduleFormFromSettings(indexDataUpdateSettings.value);
+    priceRefreshScheduleError.value = '';
+    priceRefreshScheduleMessage.value = '';
+    isIndexDataUpdateDialogOpen.value = true;
+}
+
+async function saveLiveDataUpdateSchedule() {
+    priceRefreshScheduleError.value = '';
+    priceRefreshScheduleMessage.value = '';
+    isLiveDataUpdateScheduleSaving.value = true;
+
+    try {
+        const data = await depotsStore.updatePriceRefreshSettings({
+            trading_interval_minutes: Number(liveDataUpdateScheduleForm.value.trading_interval_minutes),
+            trading_starts_before_minutes: Number(liveDataUpdateScheduleForm.value.trading_starts_before_minutes),
+            trading_ends_after_minutes: Number(liveDataUpdateScheduleForm.value.trading_ends_after_minutes),
+            trading_start_time: liveDataUpdateScheduleForm.value.trading_start_time || null,
+            trading_end_time: liveDataUpdateScheduleForm.value.trading_end_time || null,
+            closed_refresh_enabled: Boolean(liveDataUpdateScheduleForm.value.closed_refresh_enabled),
+            closed_interval_minutes: Number(liveDataUpdateScheduleForm.value.closed_interval_minutes),
+        });
+
+        priceRefreshScheduleMessage.value = data.message;
+        isLiveDataUpdateDialogOpen.value = false;
+        priceRefreshScheduleForm.value = priceRefreshScheduleFormFromSettings(
+            data.price_refresh_settings ?? priceRefreshSettings.value,
+        );
+        liveDataUpdateScheduleForm.value = priceRefreshScheduleFormFromSettings(
+            data.price_refresh_settings ?? priceRefreshSettings.value,
+        );
+
+        if (data.refresh) {
+            holdingMessage.value = data.refresh.message;
+            startPriceRefreshPolling(data.refresh.refresh_id);
+        }
+    } catch (err) {
+        priceRefreshScheduleError.value = err.message;
+    } finally {
+        isLiveDataUpdateScheduleSaving.value = false;
+    }
+}
+
+async function syncLiveDataRealtime() {
+    liveDataRealtimeSyncMessage.value = '';
+    dataHistoricalPriceError.value = '';
+    isLiveDataRealtimeSyncing.value = true;
+
+    try {
+        const data = await depotsStore.syncDataRealtime();
+        liveDataRealtimeSyncMessage.value = data.message ?? 'EODHD realtime sync finished.';
+        await loadDataHistoricalPriceCoverage();
+    } catch (err) {
+        dataHistoricalPriceError.value = err.message;
+    } finally {
+        isLiveDataRealtimeSyncing.value = false;
+    }
+}
+
+async function syncHistoricalData() {
+    historicalDataSyncMessage.value = '';
+    dataHistoricalPriceError.value = '';
+    isHistoricalDataSyncing.value = true;
+
+    try {
+        const data = await depotsStore.syncDataHistorical();
+        historicalDataSyncMessage.value = data.message ?? 'EODHD historical sync finished.';
+        await loadDataHistoricalPriceCoverage();
+    } catch (err) {
+        dataHistoricalPriceError.value = err.message;
+    } finally {
+        isHistoricalDataSyncing.value = false;
+    }
+}
+
+async function syncEndOfDayData() {
+    endOfDayDataSyncMessage.value = '';
+    dataHistoricalPriceError.value = '';
+    isEndOfDayDataSyncing.value = true;
+
+    try {
+        const data = await depotsStore.syncDataEndOfDay();
+        endOfDayDataSyncMessage.value = data.message ?? 'EODHD end-of-day sync finished.';
+        await loadDataHistoricalPriceCoverage();
+    } catch (err) {
+        dataHistoricalPriceError.value = err.message;
+    } finally {
+        isEndOfDayDataSyncing.value = false;
+    }
+}
+
+async function syncIndexData() {
+    indexDataSyncMessage.value = '';
+    dataHistoricalPriceError.value = '';
+    isIndexDataSyncing.value = true;
+
+    try {
+        const data = await depotsStore.syncDataIndices();
+        indexDataSyncMessage.value = data.message ?? 'EODHD indices sync finished.';
+        await loadDataHistoricalPriceCoverage();
+    } catch (err) {
+        dataHistoricalPriceError.value = err.message;
+    } finally {
+        isIndexDataSyncing.value = false;
     }
 }
 
@@ -3715,6 +3859,74 @@ async function saveIntradayBackfillSchedule() {
         );
     } catch (err) {
         priceRefreshScheduleError.value = err.message;
+    }
+}
+
+async function saveHistoricalDataUpdateSchedule() {
+    priceRefreshScheduleError.value = '';
+    priceRefreshScheduleMessage.value = '';
+    isHistoricalDataUpdateScheduleSaving.value = true;
+
+    try {
+        const data = await depotsStore.updateIntradayBackfillSettings({
+            daily_time: historicalDataUpdateScheduleForm.value.start_time,
+            interval_minutes: Number(historicalDataUpdateScheduleForm.value.interval_minutes),
+        });
+
+        priceRefreshScheduleMessage.value = data.message;
+        historicalDataUpdateScheduleForm.value = historicalDataUpdateScheduleFormFromSettings(
+            data.intraday_backfill_settings ?? intradayBackfillSettings.value,
+        );
+        isHistoricalDataUpdateDialogOpen.value = false;
+    } catch (err) {
+        priceRefreshScheduleError.value = err.message;
+    } finally {
+        isHistoricalDataUpdateScheduleSaving.value = false;
+    }
+}
+
+async function saveEndOfDayDataUpdateSchedule() {
+    priceRefreshScheduleError.value = '';
+    priceRefreshScheduleMessage.value = '';
+    isEndOfDayDataUpdateScheduleSaving.value = true;
+
+    try {
+        const data = await depotsStore.updateEndOfDayDataUpdateSettings({
+            daily_time: endOfDayDataUpdateScheduleForm.value.start_time,
+            interval_minutes: Number(endOfDayDataUpdateScheduleForm.value.interval_minutes),
+        });
+
+        priceRefreshScheduleMessage.value = data.message;
+        endOfDayDataUpdateScheduleForm.value = historicalDataUpdateScheduleFormFromSettings(
+            data.end_of_day_data_update_settings ?? endOfDayDataUpdateSettings.value,
+        );
+        isEndOfDayDataUpdateDialogOpen.value = false;
+    } catch (err) {
+        priceRefreshScheduleError.value = err.message;
+    } finally {
+        isEndOfDayDataUpdateScheduleSaving.value = false;
+    }
+}
+
+async function saveIndexDataUpdateSchedule() {
+    priceRefreshScheduleError.value = '';
+    priceRefreshScheduleMessage.value = '';
+    isIndexDataUpdateScheduleSaving.value = true;
+
+    try {
+        const data = await depotsStore.updateIndexDataUpdateSettings({
+            weekday: Number(indexDataUpdateScheduleForm.value.weekday),
+        });
+
+        priceRefreshScheduleMessage.value = data.message;
+        indexDataUpdateScheduleForm.value = indexDataUpdateScheduleFormFromSettings(
+            data.index_data_update_settings ?? indexDataUpdateSettings.value,
+        );
+        isIndexDataUpdateDialogOpen.value = false;
+    } catch (err) {
+        priceRefreshScheduleError.value = err.message;
+    } finally {
+        isIndexDataUpdateScheduleSaving.value = false;
     }
 }
 
@@ -3782,6 +3994,23 @@ function stopPriceRefreshSettingsPolling() {
     priceRefreshSettingsTimer.value = null;
 }
 
+function startLiveDataStatusClock() {
+    stopLiveDataStatusClock();
+    liveDataStatusNow.value = Date.now();
+    liveDataStatusTimer.value = window.setInterval(() => {
+        liveDataStatusNow.value = Date.now();
+    }, 5000);
+}
+
+function stopLiveDataStatusClock() {
+    if (!liveDataStatusTimer.value) {
+        return;
+    }
+
+    window.clearInterval(liveDataStatusTimer.value);
+    liveDataStatusTimer.value = null;
+}
+
 async function pollPriceRefreshSettings() {
     if (isPriceRefreshSettingsPolling.value) {
         return;
@@ -3807,6 +4036,8 @@ async function pollPriceRefreshSettings() {
             if (priceRefreshTimer.value) {
                 stopPriceRefreshPolling();
             }
+
+            depotsStore.clearPriceRefresh();
 
             return;
         }
@@ -3873,38 +4104,6 @@ function stopPriceRefreshPolling() {
     priceRefreshTimer.value = null;
 }
 
-function startHistoricalPriceFetchPolling() {
-    if (historicalPriceFetchTimer.value) {
-        return;
-    }
-
-    historicalPriceFetchTimer.value = window.setInterval(pollHistoricalPriceFetches, 5000);
-}
-
-function stopHistoricalPriceFetchPolling() {
-    if (!historicalPriceFetchTimer.value) {
-        return;
-    }
-
-    window.clearInterval(historicalPriceFetchTimer.value);
-    historicalPriceFetchTimer.value = null;
-}
-
-async function pollHistoricalPriceFetches() {
-    if (isHistoricalPriceFetchPolling.value) {
-        return;
-    }
-
-    isHistoricalPriceFetchPolling.value = true;
-
-    try {
-        await loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page, { silent: true });
-    } catch {
-    } finally {
-        isHistoricalPriceFetchPolling.value = false;
-    }
-}
-
 function setDataHistoricStockFromCoverage() {
     const holdings = dataHistoricalPriceHoldings.value;
     const selectedStockId = Number(selectedDataHistoricStockId.value);
@@ -3914,6 +4113,9 @@ function setDataHistoricStockFromCoverage() {
     if (holdings.length === 0) {
         selectedDataHistoricStockId.value = null;
         selectedDataHistoricIntradayCoverage.value = null;
+        selectedDataLiveLatestEntries.value = null;
+        selectedDataHistoricalLatestEntries.value = null;
+        selectedDataEndOfDayLatestEntries.value = null;
 
         return;
     }
@@ -3953,6 +4155,117 @@ async function loadSelectedDataHistoricStockIntradayCoverage(stockId = null) {
     return null;
 }
 
+async function loadSelectedDataLiveLatestEntries(stockId = null) {
+    const targetStockId = Number(stockId ?? selectedDataHistoricStockId.value);
+
+    if (Number.isNaN(targetStockId) || targetStockId <= 0) {
+        selectedDataLiveLatestEntries.value = null;
+
+        return null;
+    }
+
+    const requestId = ++selectedDataLiveLatestEntriesRequestId;
+    selectedDataLiveLatestEntriesLoading.value = true;
+    selectedDataLiveLatestEntriesError.value = '';
+
+    try {
+        const data = await request(`/admin/watchlist/holdings/${targetStockId}/realtime-prices/latest`);
+
+        if (requestId === selectedDataLiveLatestEntriesRequestId) {
+            selectedDataLiveLatestEntries.value = data;
+
+            return data;
+        }
+    } catch (error) {
+        if (requestId === selectedDataLiveLatestEntriesRequestId) {
+            selectedDataLiveLatestEntries.value = null;
+            selectedDataLiveLatestEntriesError.value = error.message;
+        }
+
+        throw error;
+    } finally {
+        if (requestId === selectedDataLiveLatestEntriesRequestId) {
+            selectedDataLiveLatestEntriesLoading.value = false;
+        }
+    }
+
+    return null;
+}
+
+async function loadSelectedDataHistoricalLatestEntries(stockId = null) {
+    const targetStockId = Number(stockId ?? selectedDataHistoricStockId.value);
+
+    if (Number.isNaN(targetStockId) || targetStockId <= 0) {
+        selectedDataHistoricalLatestEntries.value = null;
+
+        return null;
+    }
+
+    const requestId = ++selectedDataHistoricalLatestEntriesRequestId;
+    selectedDataHistoricalLatestEntriesLoading.value = true;
+    selectedDataHistoricalLatestEntriesError.value = '';
+
+    try {
+        const data = await request(`/admin/watchlist/holdings/${targetStockId}/intraday-candles/latest-days`);
+
+        if (requestId === selectedDataHistoricalLatestEntriesRequestId) {
+            selectedDataHistoricalLatestEntries.value = data;
+
+            return data;
+        }
+    } catch (error) {
+        if (requestId === selectedDataHistoricalLatestEntriesRequestId) {
+            selectedDataHistoricalLatestEntries.value = null;
+            selectedDataHistoricalLatestEntriesError.value = error.message;
+        }
+
+        throw error;
+    } finally {
+        if (requestId === selectedDataHistoricalLatestEntriesRequestId) {
+            selectedDataHistoricalLatestEntriesLoading.value = false;
+        }
+    }
+
+    return null;
+}
+
+async function loadSelectedDataEndOfDayLatestEntries(stockId = null) {
+    const targetStockId = Number(stockId ?? selectedDataHistoricStockId.value);
+
+    if (Number.isNaN(targetStockId) || targetStockId <= 0) {
+        selectedDataEndOfDayLatestEntries.value = null;
+
+        return null;
+    }
+
+    const requestId = ++selectedDataEndOfDayLatestEntriesRequestId;
+    selectedDataEndOfDayLatestEntriesLoading.value = true;
+    selectedDataEndOfDayLatestEntriesError.value = '';
+
+    try {
+        const data = await request(`/admin/watchlist/holdings/${targetStockId}/end-of-day-prices/latest-days`);
+
+        if (requestId === selectedDataEndOfDayLatestEntriesRequestId) {
+            selectedDataEndOfDayLatestEntries.value = data;
+
+            return data;
+        }
+    } catch (error) {
+        if (requestId === selectedDataEndOfDayLatestEntriesRequestId) {
+            selectedDataEndOfDayLatestEntries.value = null;
+            selectedDataEndOfDayLatestEntriesError.value = error.message;
+        }
+
+        throw error;
+    } finally {
+        if (requestId === selectedDataEndOfDayLatestEntriesRequestId) {
+            selectedDataEndOfDayLatestEntriesLoading.value = false;
+        }
+    }
+
+    return null;
+}
+
 async function loadDataHistoricalPriceCoverage() {
     if (dataHistoricalPriceLoading.value) {
         return null;
@@ -3962,9 +4275,12 @@ async function loadDataHistoricalPriceCoverage() {
     dataHistoricalPriceError.value = '';
 
     try {
-        const data = await depotsStore.ensureStockHistoricalPrices();
+        const data = await depotsStore.loadStockHistoricalPriceCoverage();
         setDataHistoricStockFromCoverage();
-        await loadSelectedDataHistoricStockIntradayCoverage().catch(() => {});
+        if (activeSection.value === 'data' && activeDataSubsection.value === 'overview') {
+            await loadSelectedDataHistoricStockIntradayCoverage().catch(() => {});
+        }
+
         return data;
     } catch (error) {
         dataHistoricalPriceError.value = error.message;
@@ -3999,9 +4315,10 @@ async function repairEndOfDayData() {
             (stock) => depotsStore.repairEndOfDayStock(stock.id),
         );
 
-        window.location.reload();
+        await depotsStore.loadDataRepair();
     } catch (error) {
         dataRepairError.value = error.message;
+    } finally {
         endOfDayRepairLoading.value = false;
         endOfDayRepairCurrentStock.value = '';
         endOfDayRepairProgress.value = '';
@@ -4032,9 +4349,10 @@ async function repairHistoricalData() {
             (stock) => depotsStore.repairHistoricalDataStock(stock.id),
         );
 
-        window.location.reload();
+        await depotsStore.loadDataRepair();
     } catch (error) {
         dataRepairError.value = error.message;
+    } finally {
         historicalDataRepairLoading.value = false;
         historicalDataRepairCurrentStock.value = '';
         historicalDataRepairProgress.value = '';
@@ -4058,38 +4376,6 @@ async function repairStocksSequentially(stocks, currentStockRef, progressRef, re
         currentStockRef.value = stock.label || `Stock ${stock.id}`;
 
         await repairStock(stock);
-    }
-}
-
-function startEndOfDayRepairPolling(refreshId) {
-    stopEndOfDayRepairPolling();
-    endOfDayRepairTimer.value = window.setInterval(() => pollEndOfDayRepair(refreshId), 3000);
-    pollEndOfDayRepair(refreshId).catch(() => {});
-}
-
-function stopEndOfDayRepairPolling() {
-    if (!endOfDayRepairTimer.value) {
-        return;
-    }
-
-    window.clearInterval(endOfDayRepairTimer.value);
-    endOfDayRepairTimer.value = null;
-}
-
-async function pollEndOfDayRepair(refreshId) {
-    try {
-        const data = await depotsStore.loadStockHistoricalPriceRefresh(refreshId);
-
-        if (['queued', 'running'].includes(data.refresh?.status)) {
-            return;
-        }
-
-        stopEndOfDayRepairPolling();
-        window.location.reload();
-    } catch (error) {
-        stopEndOfDayRepairPolling();
-        dataHistoricalPriceError.value = error.message;
-        endOfDayRepairLoading.value = false;
     }
 }
 
@@ -4138,6 +4424,13 @@ async function reloadDataExchanges() {
         }
 
         stopDataExchangeReloadPolling();
+    } catch {
+    }
+}
+
+async function reloadDataExchangePageInfo() {
+    try {
+        await depotsStore.loadDataExchanges();
     } catch {
     }
 }
@@ -4299,10 +4592,7 @@ async function deleteHolding() {
         const data = await depotsStore.deleteWatchlistHolding(selectedHolding.value.id);
         holdingMessage.value = data.message;
         abortDeleteHoldingDialog();
-        await Promise.all([
-            loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page),
-            depotsStore.loadWatchlistExchangeTradingTimes(),
-        ]);
+        await loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page);
     } catch (err) {
         holdingError.value = err.message;
     }
@@ -4991,23 +5281,15 @@ function mobileHoldingPriceSource(holding) {
         return 'latest';
     }
 
-    if (holding.end_price !== null && holding.end_price !== undefined && holding.end_price !== '') {
-        return 'end';
-    }
-
     return null;
 }
 
 function formatMobileHoldingPrice(holding) {
-    return mobileHoldingPriceSource(holding) === 'latest'
-        ? formatLatestPrice(holding)
-        : formatSessionPrice(holding.end_price, holding);
+    return formatLatestPrice(holding);
 }
 
 function mobileHoldingPriceClass(holding) {
-    return mobileHoldingPriceSource(holding) === 'latest'
-        ? latestPriceClass(holding)
-        : endPriceValueClass(holding);
+    return latestPriceClass(holding);
 }
 
 function mobileHoldingPriceChangePercent(holding) {
@@ -5015,7 +5297,7 @@ function mobileHoldingPriceChangePercent(holding) {
         return formatLatestPriceChangePercent(holding);
     }
 
-    return formatEndPriceChangePercent(holding);
+    return '';
 }
 
 function mobileHoldingPriceReference(holding) {
@@ -7156,31 +7438,6 @@ function indexChangeClass(indexItem) {
     return 'is-flat';
 }
 
-function formatEndPriceChangePercent(holding) {
-    if (
-        holding.end_price === null
-        || holding.end_price === undefined
-        || holding.end_price === ''
-        || holding.end_price_24 === null
-        || holding.end_price_24 === undefined
-        || holding.end_price_24 === ''
-    ) {
-        return '';
-    }
-
-    const referencePrice = Number(holding.end_price_24);
-    const endPrice = Number(holding.end_price);
-
-    if (Number.isNaN(referencePrice) || Number.isNaN(endPrice) || referencePrice === 0) {
-        return '';
-    }
-
-    const amount = ((endPrice - referencePrice) / referencePrice) * 100;
-    const sign = amount > 0 ? '+' : '';
-
-    return `${sign}${amount.toFixed(2)}%`;
-}
-
 function yearStartChangePercent(holding) {
     if (
         holding.year_start_price === null
@@ -7318,20 +7575,6 @@ function depotHoldingRowClass(holding) {
         'depot-holding-row--positive': amount !== null && amount > 0,
         'depot-holding-row--negative': amount !== null && amount < 0,
     };
-}
-
-function endPriceValueClass(holding) {
-    const formattedChange = formatEndPriceChangePercent(holding);
-
-    if (formattedChange.startsWith('+')) {
-        return 'bg-success text-white';
-    }
-
-    if (formattedChange.startsWith('-')) {
-        return 'bg-error text-white';
-    }
-
-    return '';
 }
 
 async function toggleHoldingDetails(holding) {
@@ -7694,26 +7937,6 @@ function latestPriceClass(holding) {
     };
 }
 
-function latestPriceTickSymbol(holding) {
-    const symbols = {
-        up: '\u2191',
-        down: '\u2193',
-        flat: '=',
-    };
-
-    return symbols[holding.latest_price_tick_trend] ?? null;
-}
-
-function latestPriceTickLabel(holding) {
-    const labels = {
-        up: 'Price increased from previous quote',
-        down: 'Price decreased from previous quote',
-        flat: 'Price unchanged from previous quote',
-    };
-
-    return labels[holding.latest_price_tick_trend] ?? null;
-}
-
 function startPriceTrend(holding) {
     if (
         holding.start_price === null
@@ -7747,8 +7970,8 @@ function startPriceTickSymbol(holding) {
 
 function startPriceTickLabel(holding) {
     const labels = {
-        up: 'Start price higher than End 24 price',
-        down: 'Start price lower than End 24 price',
+        up: 'Start price higher than last day price',
+        down: 'Start price lower than last day price',
     };
 
     return labels[startPriceTrend(holding)] ?? null;
@@ -7761,59 +7984,42 @@ function startPriceTickClass(holding) {
     };
 }
 
-function end24PriceTrend(holding) {
-    if (
-        holding.end_price_24 === null
-        || holding.end_price_24 === undefined
-        || holding.end_price_24 === ''
-        || holding.end_price_48 === null
-        || holding.end_price_48 === undefined
-        || holding.end_price_48 === ''
-    ) {
-        return null;
-    }
-
-    const end24Price = Number(holding.end_price_24);
-    const end48Price = Number(holding.end_price_48);
-
-    if (Number.isNaN(end24Price) || Number.isNaN(end48Price) || end24Price === end48Price) {
-        return null;
-    }
-
-    return end24Price > end48Price ? 'up' : 'down';
-}
-
-function end24PriceTickSymbol(holding) {
-    const symbols = {
-        up: '\u2191',
-        down: '\u2193',
-    };
-
-    return symbols[end24PriceTrend(holding)] ?? null;
-}
-
-function end24PriceTickLabel(holding) {
-    const labels = {
-        up: 'End 24 price higher than End 48 price',
-        down: 'End 24 price lower than End 48 price',
-    };
-
-    return labels[end24PriceTrend(holding)] ?? null;
-}
-
-function end24PriceTickClass(holding) {
-    return {
-        'text-success': end24PriceTrend(holding) === 'up',
-        'text-error': end24PriceTrend(holding) === 'down',
-    };
-}
-
 function formatSessionPrice(value, holding) {
     return formatPriceValue(value, holding.currency);
 }
 
 function formatRecentStoredPrice(recentPrice, holding) {
     return formatPriceValue(recentPrice.price, recentPrice.currency ?? holding.currency);
+}
+
+function formatDataLiveLatestEntryPrice(entry) {
+    return formatPriceValue(entry.price, entry.currency ?? selectedDataHistoricStock.value?.currency, { showCurrency: true });
+}
+
+function formatDataLiveLatestDate(value) {
+    return value ? formatAnalyzeTrendDate(value) : '-';
+}
+
+function formatDataHistoricalLatestEntryDateTime(entry) {
+    const date = formatRecentStoredPriceDate(entry);
+    const time = formatRecentStoredPriceTime(entry);
+
+    if (date === '-' && time === '-') {
+        return '-';
+    }
+
+    return `${date}, ${time}`;
+}
+
+function dataLatestEntryPriceTrend(entry, previousEntry) {
+    const price = Number(entry?.price);
+    const previousPrice = Number(previousEntry?.price);
+
+    if (!Number.isFinite(price) || !Number.isFinite(previousPrice) || price === previousPrice) {
+        return null;
+    }
+
+    return price > previousPrice ? 'up' : 'down';
 }
 
 function formatPriceChangePercent(changePercent) {
@@ -8601,6 +8807,84 @@ function formatScheduleDateTime(value) {
     return formatDateTime(value);
 }
 
+function formatLiveDataUpdateSchedule(settings) {
+    const interval = settings?.trading_interval_minutes ?? 20;
+    const startTime = settings?.trading_start_time;
+    const endTime = settings?.trading_end_time;
+
+    if (startTime && endTime) {
+        return `Mo-Fr ${startTime}-${endTime} · ${interval} min`;
+    }
+
+    const startOffset = settings?.trading_starts_before_minutes ?? 0;
+    const endOffset = settings?.trading_ends_after_minutes ?? 0;
+
+    return `Mo-Fr start ${startOffset} min before trading until ${endOffset} min after trading · ${interval} min`;
+}
+
+function formatHistoricalDataUpdateSchedule(settings) {
+    const startTime = settings?.daily_time ?? '18:30';
+    const interval = settings?.interval_minutes ?? 15;
+
+    return `Mo-Fr ${startTime} · ${interval} min`;
+}
+
+function liveDataUpdateStatus(settings) {
+    if (isLiveDataRealtimeSyncing.value || isAutomaticPriceRefreshUpdating.value) {
+        return 'updating';
+    }
+
+    const nextRefreshAt = Date.parse(settings?.next_refresh_at ?? '');
+
+    if (Number.isFinite(nextRefreshAt) && nextRefreshAt <= liveDataStatusNow.value) {
+        return 'due';
+    }
+
+    return 'waiting';
+}
+
+function historicalDataUpdateStatus(settings) {
+    if (isHistoricalDataSyncing.value || isAutomaticHistoricalDataUpdating.value) {
+        return 'updating';
+    }
+
+    const nextRefreshAt = Date.parse(settings?.next_refresh_at ?? '');
+
+    if (Number.isFinite(nextRefreshAt) && nextRefreshAt <= liveDataStatusNow.value) {
+        return 'due';
+    }
+
+    return 'waiting';
+}
+
+function endOfDayDataUpdateStatus(settings) {
+    if (isEndOfDayDataSyncing.value || isEndOfDayDataUpdateScheduleSaving.value) {
+        return 'updating';
+    }
+
+    const nextRefreshAt = Date.parse(settings?.next_refresh_at ?? '');
+
+    if (Number.isFinite(nextRefreshAt) && nextRefreshAt <= liveDataStatusNow.value) {
+        return 'due';
+    }
+
+    return 'waiting';
+}
+
+function indexDataUpdateStatus(settings) {
+    if (isIndexDataSyncing.value || isIndexDataUpdateScheduleSaving.value) {
+        return 'updating';
+    }
+
+    const nextRefreshAt = Date.parse(settings?.next_refresh_at ?? '');
+
+    if (Number.isFinite(nextRefreshAt) && nextRefreshAt <= liveDataStatusNow.value) {
+        return 'due';
+    }
+
+    return 'waiting';
+}
+
 function formatPriceStatus(holding) {
     const labels = {
         realtime: 'Realtime',
@@ -8725,6 +9009,8 @@ function emptyPriceRefreshScheduleForm() {
         trading_interval_minutes: 20,
         trading_starts_before_minutes: 0,
         trading_ends_after_minutes: 0,
+        trading_start_time: null,
+        trading_end_time: null,
         closed_refresh_enabled: true,
         closed_interval_minutes: 60,
     };
@@ -8735,6 +9021,8 @@ function priceRefreshScheduleFormFromSettings(settings) {
         trading_interval_minutes: settings?.trading_interval_minutes ?? 20,
         trading_starts_before_minutes: settings?.trading_starts_before_minutes ?? 0,
         trading_ends_after_minutes: settings?.trading_ends_after_minutes ?? 0,
+        trading_start_time: settings?.trading_start_time ?? null,
+        trading_end_time: settings?.trading_end_time ?? null,
         closed_refresh_enabled: settings?.closed_refresh_enabled ?? true,
         closed_interval_minutes: settings?.closed_interval_minutes ?? 60,
     };
@@ -8750,6 +9038,41 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     return {
         daily_time: settings?.daily_time ?? '18:30',
     };
+}
+
+function emptyHistoricalDataUpdateScheduleForm() {
+    return {
+        start_time: '18:30',
+        interval_minutes: 15,
+    };
+}
+
+function historicalDataUpdateScheduleFormFromSettings(settings) {
+    return {
+        start_time: settings?.daily_time ?? '18:30',
+        interval_minutes: settings?.interval_minutes ?? 15,
+    };
+}
+
+function emptyIndexDataUpdateScheduleForm() {
+    return {
+        weekday: 1,
+    };
+}
+
+function indexDataUpdateScheduleFormFromSettings(settings) {
+    return {
+        weekday: Number(settings?.weekday ?? 1),
+    };
+}
+
+function formatIndexDataUpdateSchedule(settings) {
+    const selectedWeekday = Number(settings?.weekday ?? 1);
+    const weekday = settings?.weekday_label
+        ?? weekdayOptions.find((option) => option.value === selectedWeekday)?.title
+        ?? 'Monday';
+
+    return `${weekday} 02:00 · Vienna`;
 }
 </script>
 
@@ -8911,128 +9234,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
             <v-main>
                 <v-container class="py-8" :fluid="lgAndDown">
                     <section v-if="activeSection === 'dashboard'">
-                        <v-card v-if="!smAndDown" border flat class="dashboard-status-card mb-6">
-                            <v-card-text class="dashboard-status-card-content">
-                                <div v-if="priceRefreshSettings" class="dashboard-status-row">
-                                    <div class="dashboard-status-row-heading">
-                                        <v-icon icon="mdi-chart-line" size="20" />
-                                        <span>Stocks</span>
-                                    </div>
-                                    <div class="dashboard-status-values">
-                                        <div class="dashboard-status-value">
-                                            <span>Last</span>
-                                            <strong>{{ formatScheduleDateTime(priceRefreshSettings.last_refreshed_at) }}</strong>
-                                        </div>
-                                        <div class="dashboard-status-value">
-                                            <span>Next</span>
-                                            <strong>{{ formatScheduleDateTime(priceRefreshSettings.next_refresh_at) }}</strong>
-                                        </div>
-                                    </div>
-                                    <div
-                                        class="dashboard-status-state"
-                                        :class="isHeaderStatusUpdating ? 'dashboard-status-state--updating' : 'dashboard-status-state--waiting'"
-                                    >
-                                        <span
-                                            class="price-refresh-status-dot"
-                                            :class="isHeaderStatusUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
-                                        />
-                                        {{ priceRefreshHeaderStatusLabel }}
-                                    </div>
-                                </div>
-                                <div v-if="indexPriceRefreshSettings" class="dashboard-status-row">
-                                    <div class="dashboard-status-row-heading">
-                                        <v-icon icon="mdi-finance" size="20" />
-                                        <span>Indices</span>
-                                    </div>
-                                    <div class="dashboard-status-values">
-                                        <div class="dashboard-status-value">
-                                            <span>Last</span>
-                                            <strong>{{ formatScheduleDateTime(indexPriceRefreshSettings.last_refreshed_at) }}</strong>
-                                        </div>
-                                        <div class="dashboard-status-value">
-                                            <span>Next</span>
-                                            <strong>{{ formatScheduleDateTime(indexPriceRefreshSettings.next_refresh_at) }}</strong>
-                                        </div>
-                                    </div>
-                                    <div
-                                        class="dashboard-status-state"
-                                        :class="isAutomaticIndexPriceRefreshUpdating ? 'dashboard-status-state--updating' : 'dashboard-status-state--waiting'"
-                                    >
-                                        <span
-                                            class="price-refresh-status-dot"
-                                            :class="isAutomaticIndexPriceRefreshUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
-                                        />
-                                        {{ indexPriceRefreshHeaderStatusLabel }}
-                                    </div>
-                                </div>
-                                <div class="dashboard-status-row" :title="queueStatusTitle">
-                                    <div class="dashboard-status-row-heading">
-                                        <v-icon icon="mdi-tray-full" size="20" />
-                                        <span>Queue</span>
-                                    </div>
-                                    <div class="dashboard-status-values dashboard-status-values--queue">
-                                        <div class="dashboard-status-value">
-                                            <span>Connection</span>
-                                            <strong>{{ queueStatusDetails.connection }}</strong>
-                                        </div>
-                                        <div class="dashboard-status-value">
-                                            <span>Jobs</span>
-                                            <strong>{{ queueStatusDetails.jobs }}</strong>
-                                        </div>
-                                        <div class="dashboard-status-value">
-                                            <span>Retry / Timeout</span>
-                                            <strong>{{ queueStatusDetails.timeout }}</strong>
-                                        </div>
-                                    </div>
-                                    <div class="dashboard-status-state" :class="queueStatusClass">
-                                        <span
-                                            class="price-refresh-status-dot"
-                                            :class="queueStatus?.status === 'ok' && !queueStatusError ? 'price-refresh-status-dot--waiting' : 'price-refresh-status-dot--updating'"
-                                        />
-                                        {{ queueStatusStateLabel }}
-                                    </div>
-                                </div>
-                                <span v-if="priceRefreshSettings" class="dashboard-status-item text-caption text-medium-emphasis">
-                                    Stocks Last: {{ formatScheduleDateTime(priceRefreshSettings.last_refreshed_at) }}
-                                    · Next: {{ formatScheduleDateTime(priceRefreshSettings.next_refresh_at) }}
-                                    <span
-                                        class="d-inline-flex align-center ga-1 ml-1"
-                                        :class="isHeaderStatusUpdating ? 'text-error' : 'text-medium-emphasis'"
-                                    >
-                                        <span
-                                            class="price-refresh-status-dot"
-                                            :class="isHeaderStatusUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
-                                        />
-                                        {{ priceRefreshHeaderStatusLabel }}
-                                    </span>
-                                </span>
-                                <span v-if="indexPriceRefreshSettings" class="dashboard-status-item text-caption text-medium-emphasis">
-                                    Indices Last: {{ formatScheduleDateTime(indexPriceRefreshSettings.last_refreshed_at) }}
-                                    · Next: {{ formatScheduleDateTime(indexPriceRefreshSettings.next_refresh_at) }}
-                                    <span
-                                        class="d-inline-flex align-center ga-1 ml-1"
-                                        :class="isAutomaticIndexPriceRefreshUpdating ? 'text-error' : 'text-medium-emphasis'"
-                                    >
-                                        <span
-                                            class="price-refresh-status-dot"
-                                            :class="isAutomaticIndexPriceRefreshUpdating ? 'price-refresh-status-dot--updating' : 'price-refresh-status-dot--waiting'"
-                                        />
-                                        {{ indexPriceRefreshHeaderStatusLabel }}
-                                    </span>
-                                </span>
-                                <span
-                                    class="dashboard-status-item text-caption queue-header-status"
-                                    :class="queueStatusClass"
-                                    :title="queueStatusTitle"
-                                >
-                                    <span
-                                        class="price-refresh-status-dot"
-                                        :class="queueStatus?.status === 'ok' && !queueStatusError ? 'price-refresh-status-dot--waiting' : 'price-refresh-status-dot--updating'"
-                                    />
-                                    {{ queueStatusLabel }}
-                                </span>
-                            </v-card-text>
-                        </v-card>
                         <div class="dashboard-heading mb-6">
                             <div>
                                 <p class="text-overline text-primary mb-1">Dashboard</p>
@@ -9041,45 +9242,22 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             <div class="dashboard-actions">
                                 <v-btn
                                     class="dashboard-action-button"
-                                    color="error"
-                                    prepend-icon="mdi-delete-sweep-outline"
-                                    variant="tonal"
-                                    :disabled="!canClearQueue"
-                                    :loading="queueStatusLoading"
-                                    :title="queueClearButtonLabel"
-                                    @click="clearQueue"
-                                >
-                                    Clear queue
-                                </v-btn>
-                                <v-btn
-                                    class="dashboard-action-button"
-                                    color="primary"
-                                    prepend-icon="mdi-file-pdf-box"
-                                    variant="outlined"
-                                    :disabled="holdings.length === 0"
-                                    @click="exportHoldingsPdf"
-                                >
-                                    Export PDF
-                                </v-btn>
-                                <v-btn
-                                    class="dashboard-action-button"
-                                    color="primary"
-                                    prepend-icon="mdi-refresh"
-                                    variant="tonal"
-                                    :disabled="isAutomaticPriceRefreshUpdating"
-                                    :loading="holdingsLoading && !isPriceRefreshRunning"
-                                    @click="refreshHoldingPrices"
-                                >
-                                    {{ isPriceRefreshRunning ? `Refreshing ${priceRefresh.step}` : 'Refresh prices' }}
-                                </v-btn>
-                                <v-btn
-                                    class="dashboard-action-button"
                                     color="primary"
                                     prepend-icon="mdi-plus"
                                     variant="flat"
                                     @click="openHoldingDialog"
                                 >
                                     Add stock
+                                </v-btn>
+                                <v-btn
+                                    class="dashboard-action-button"
+                                    prepend-icon="mdi-refresh"
+                                    variant="tonal"
+                                    :disabled="isDashboardInfoReloading"
+                                    :loading="isDashboardInfoReloading"
+                                    @click="reloadDashboardInfo"
+                                >
+                                    Reload
                                 </v-btn>
                             </div>
                         </div>
@@ -9135,71 +9313,82 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                         <v-alert v-if="holdingError || holdingsError" type="error" variant="tonal" density="compact" class="mb-4">
                             {{ holdingError || holdingsError }}
                         </v-alert>
-                        <div class="mobile-watch-list">
-                            <div v-if="!holdingsLoading && holdings.length === 0" class="mobile-stock-card">
-                                No stocks in the watch-list.
+                        <section class="watch-list-section mb-4" aria-label="Stocks">
+                            <div class="watch-list-section-header">
+                                <div>
+                                    <div class="watch-list-section-eyebrow">Watch-list</div>
+                                    <h2 class="watch-list-section-title">Stocks</h2>
+                                </div>
+                                <span class="watch-list-section-count">
+                                    {{ formatInteger(holdingsPagination.total || holdings.length) }}
+                                </span>
                             </div>
-                            <article
-                                v-for="holding in holdings"
-                                :key="`mobile-holding-${holding.id}`"
-                                class="mobile-stock-card"
-                            >
-                                <div class="mobile-stock-name">
-                                    {{ holding.name || holding.symbol || '-' }}
+
+                            <div class="mobile-watch-list">
+                                <div v-if="!holdingsLoading && holdings.length === 0" class="mobile-stock-card">
+                                    No stocks in the watch-list.
                                 </div>
-                                <div class="mobile-stock-price-row">
-                                    <span
-                                        class="latest-price-value mobile-stock-price"
-                                        :class="mobileHoldingPriceClass(holding)"
-                                    >
-                                        <span>{{ formatMobileHoldingPrice(holding) }}</span>
+                                <article
+                                    v-for="holding in holdings"
+                                    :key="`mobile-holding-${holding.id}`"
+                                    class="mobile-stock-card"
+                                >
+                                    <div class="mobile-stock-name">
+                                        {{ holding.name || holding.symbol || '-' }}
+                                    </div>
+                                    <div class="mobile-stock-price-row">
                                         <span
-                                            v-if="mobileHoldingPriceChangeText(holding)"
-                                            class="mobile-stock-price-change"
+                                            class="latest-price-value mobile-stock-price"
+                                            :class="mobileHoldingPriceClass(holding)"
                                         >
-                                            {{ mobileHoldingPriceChangeText(holding) }}
+                                            <span>{{ formatMobileHoldingPrice(holding) }}</span>
+                                            <span
+                                                v-if="mobileHoldingPriceChangeText(holding)"
+                                                class="mobile-stock-price-change"
+                                            >
+                                                {{ mobileHoldingPriceChangeText(holding) }}
+                                            </span>
                                         </span>
-                                    </span>
-                                </div>
-                                <div class="mobile-stock-actions">
-                                    <v-btn
-                                        aria-label="Add"
-                                        color="success"
-                                        icon="mdi-cart-plus"
-                                        size="small"
-                                        variant="tonal"
-                                        :disabled="!activeDepot || holdingsLoading"
-                                        @click="openStockTransactionDialog(holding, 'buy')"
-                                    />
-                                    <v-btn
-                                        aria-label="Withdraw"
-                                        color="warning"
-                                        icon="mdi-cart-minus"
-                                        size="small"
-                                        variant="tonal"
-                                        :disabled="!activeDepot || holdingsLoading || !hasPositionPieces(holding)"
-                                        @click="openStockTransactionDialog(holding, 'sell')"
-                                    />
-                                    <v-btn
-                                        aria-label="Delete"
-                                        color="error"
-                                        icon="mdi-delete-outline"
-                                        size="small"
-                                        variant="tonal"
-                                        :disabled="holdingsLoading || hasPositionPieces(holding)"
-                                        @click="openDeleteHoldingDialog(holding)"
-                                    />
-                                </div>
-                            </article>
-                        </div>
-                        <v-table class="desktop-watch-list-table">
+                                    </div>
+                                    <div class="mobile-stock-actions">
+                                        <v-btn
+                                            aria-label="Add"
+                                            color="success"
+                                            icon="mdi-cart-plus"
+                                            size="small"
+                                            variant="tonal"
+                                            :disabled="!activeDepot || holdingsLoading"
+                                            @click="openStockTransactionDialog(holding, 'buy')"
+                                        />
+                                        <v-btn
+                                            aria-label="Withdraw"
+                                            color="warning"
+                                            icon="mdi-cart-minus"
+                                            size="small"
+                                            variant="tonal"
+                                            :disabled="!activeDepot || holdingsLoading || !hasPositionPieces(holding)"
+                                            @click="openStockTransactionDialog(holding, 'sell')"
+                                        />
+                                        <v-btn
+                                            aria-label="Delete"
+                                            color="error"
+                                            icon="mdi-delete-outline"
+                                            size="small"
+                                            variant="tonal"
+                                            :disabled="holdingsLoading || hasPositionPieces(holding)"
+                                            @click="openDeleteHoldingDialog(holding)"
+                                        />
+                                    </div>
+                                </article>
+                            </div>
+                            <v-table class="desktop-watch-list-table">
                             <thead>
                                 <tr>
-                                    <th v-if="!isCompactWatchListTable">Symbol</th>
-                                    <th>Name</th>
-                                    <th v-if="isHandsetLandscape">Price</th>
-                                    <th v-else>Latest price</th>
-                                    <th>
+                                    <th v-if="!isCompactWatchListTable" class="watch-list-content-cell">Symbol</th>
+                                    <th class="watch-list-content-cell">Name</th>
+                                    <th v-if="isHandsetLandscape" class="watch-list-content-cell">Price</th>
+                                    <th v-else class="watch-list-content-cell">Latest price</th>
+                                    <th class="watch-list-content-cell">
                                         <span class="d-inline-flex flex-column">
                                             <span>Start price</span>
                                             <span class="text-caption text-medium-emphasis">
@@ -9207,32 +9396,16 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             </span>
                                         </span>
                                     </th>
-                                    <th v-if="!isHandsetLandscape">
+                                    <th class="watch-list-content-cell">
                                         <span class="d-inline-flex flex-column">
-                                            <span>End price</span>
+                                            <span>Last day</span>
                                             <span class="text-caption text-medium-emphasis">
-                                                {{ sessionHeaderDates.end }}
+                                                {{ sessionHeaderDates.lastDay }}
                                             </span>
                                         </span>
                                     </th>
-                                    <th>
-                                        <span class="d-inline-flex flex-column">
-                                            <span>End 24</span>
-                                            <span class="text-caption text-medium-emphasis">
-                                                {{ sessionHeaderDates.end24 }}
-                                            </span>
-                                        </span>
-                                    </th>
-                                    <th>
-                                        <span class="d-inline-flex flex-column">
-                                            <span>End 48</span>
-                                            <span class="text-caption text-medium-emphasis">
-                                                {{ sessionHeaderDates.end48 }}
-                                            </span>
-                                        </span>
-                                    </th>
-                                    <th v-if="!isCompactWatchListTable">Source time</th>
-                                    <th class="text-right">Actions</th>
+                                    <th v-if="!isCompactWatchListTable" class="watch-list-source-time-cell">Source time</th>
+                                    <th class="text-right watch-list-actions-cell">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -9248,7 +9421,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         @keydown.enter.prevent="toggleHoldingDetails(holding)"
                                         @keydown.space.prevent="toggleHoldingDetails(holding)"
                                     >
-                                        <td v-if="!isCompactWatchListTable">
+                                        <td v-if="!isCompactWatchListTable" class="watch-list-content-cell">
                                             <div>{{ holding.symbol || '-' }}</div>
                                             <div class="text-caption text-medium-emphasis">
                                                 Exchange: {{ holding.exchange || '-' }}
@@ -9257,7 +9430,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 Pieces: {{ formatPositionPieces(holding) }}
                                             </div>
                                         </td>
-                                        <td>
+                                        <td class="watch-list-content-cell">
                                             <div>{{ holding.name || '-' }}</div>
                                             <div
                                                 v-if="isCompactWatchListTable"
@@ -9282,7 +9455,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 />
                                             </div>
                                         </td>
-                                        <td v-if="isHandsetLandscape">
+                                        <td v-if="isHandsetLandscape" class="watch-list-content-cell">
                                             <span class="handset-landscape-price">
                                                 <span
                                                     v-if="holdingDayTrend(holding)"
@@ -9302,18 +9475,10 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 </span>
                                             </span>
                                         </td>
-                                        <td v-else>
+                                        <td v-else class="watch-list-content-cell">
                                             <span class="latest-price-value d-inline-flex flex-column" :class="latestPriceClass(holding)">
                                                 <span class="d-inline-flex align-center ga-1">
                                                     <span>{{ formatLatestPrice(holding) }}</span>
-                                                    <span
-                                                        v-if="latestPriceTickSymbol(holding)"
-                                                        class="latest-price-tick"
-                                                        :aria-label="latestPriceTickLabel(holding)"
-                                                        :title="latestPriceTickLabel(holding)"
-                                                    >
-                                                        {{ latestPriceTickSymbol(holding) }}
-                                                    </span>
                                                 </span>
                                                 <span
                                                     v-if="formatLatestPriceChangePercent(holding)"
@@ -9323,7 +9488,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 </span>
                                             </span>
                                         </td>
-                                        <td>
+                                        <td class="watch-list-content-cell">
                                             <span class="d-inline-flex align-center ga-1">
                                                 <span>{{ formatSessionPrice(holding.start_price, holding) }}</span>
                                                 <span
@@ -9337,54 +9502,17 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 </span>
                                             </span>
                                         </td>
-                                        <td v-if="!isHandsetLandscape">
-                                            <span class="latest-price-value d-inline-flex flex-column" :class="endPriceValueClass(holding)">
-                                                <span>{{ formatSessionPrice(holding.end_price, holding) }}</span>
-                                                <span
-                                                    v-if="formatEndPriceChangePercent(holding)"
-                                                    class="session-price-change"
-                                                >
-                                                    {{ formatEndPriceChangePercent(holding) }}
-                                                </span>
-                                            </span>
-                                        </td>
-                                        <td>
+                                        <td class="watch-list-content-cell">
                                             <span class="d-inline-flex flex-column">
                                                 <span class="d-inline-flex align-center ga-1">
                                                     <span>{{ formatSessionPrice(holding.end_price_24, holding) }}</span>
-                                                    <span
-                                                        v-if="end24PriceTickSymbol(holding)"
-                                                        class="latest-price-tick"
-                                                        :class="end24PriceTickClass(holding)"
-                                                        :aria-label="end24PriceTickLabel(holding)"
-                                                        :title="end24PriceTickLabel(holding)"
-                                                    >
-                                                        {{ end24PriceTickSymbol(holding) }}
-                                                    </span>
                                                 </span>
                                             </span>
                                         </td>
-                                        <td>
-                                            <span class="d-inline-flex flex-column">
-                                                <span>{{ formatSessionPrice(holding.end_price_48, holding) }}</span>
-                                            </span>
-                                        </td>
-                                        <td v-if="!isCompactWatchListTable">
+                                        <td v-if="!isCompactWatchListTable" class="watch-list-source-time-cell">
                                             <div>{{ formatSourceDateTime(holding.latest_price_as_of) }}</div>
-                                            <div class="text-caption text-medium-emphasis">
-                                                <a
-                                                    v-if="holding.latest_price_source_url"
-                                                    :href="holding.latest_price_source_url"
-                                                    rel="noopener noreferrer"
-                                                    target="_blank"
-                                                    @click.stop
-                                                >
-                                                    {{ formatLatestPriceSource(holding) }}
-                                                </a>
-                                                <span v-else>{{ formatLatestPriceSource(holding) }}</span>
-                                            </div>
                                         </td>
-                                        <td class="text-right">
+                                        <td class="text-right watch-list-actions-cell">
                                             <v-btn
                                                 icon
                                                 variant="text"
@@ -9611,70 +9739,13 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </tr>
                                 </template>
                             </tbody>
-                        </v-table>
-
-                        <v-sheet
-                            v-if="
-                                !smAndDown &&
-                                (exchangeTradingTimes.length || exchangeTradingTimesLoading || exchangeTradingTimesError)
-                            "
-                            border
-                            rounded
-                            class="pa-4 mt-4"
-                        >
-                            <div class="d-flex align-center justify-space-between ga-4 mb-3">
-                                <div>
-                                    <div class="text-caption text-medium-emphasis">EODHD exchange details</div>
-                                    <div class="text-body-2 font-weight-medium">Exchange trading times</div>
-                                </div>
-                                <v-progress-circular
-                                    v-if="exchangeTradingTimesLoading"
-                                    color="primary"
-                                    indeterminate
-                                    size="20"
-                                    width="2"
-                                />
-                            </div>
-                            <v-alert
-                                v-if="exchangeTradingTimesError"
-                                type="warning"
-                                variant="tonal"
-                                density="compact"
-                                class="mb-3"
-                            >
-                                {{ exchangeTradingTimesError }}
-                            </v-alert>
-                            <v-table v-if="exchangeTradingTimes.length" density="compact">
-                                <thead>
-                                    <tr>
-                                        <th>Exchange</th>
-                                        <th>Local time</th>
-                                        <th>Next trading</th>
-                                        <th>Next holidays</th>
-                                        <th>Days</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <tr v-for="exchange in exchangeTradingTimes" :key="exchange.code">
-                                        <td>
-                                            <div>{{ exchange.code }}</div>
-                                            <div class="text-caption text-medium-emphasis">
-                                                {{ exchange.name || '-' }}
-                                            </div>
-                                        </td>
-                                        <td>{{ formatExchangeTradingTime(exchange) }}</td>
-                                        <td>{{ formatExchangeNextTradingText(exchange) }}</td>
-                                        <td>{{ formatExchangeNextHolidays(exchange) }}</td>
-                                        <td>{{ exchange.working_days || '-' }}</td>
-                                    </tr>
-                                </tbody>
                             </v-table>
-                        </v-sheet>
+                        </section>
 
                         <v-progress-linear v-if="holdingsLoading" indeterminate color="primary" class="mt-4" />
 
                         <v-pagination
-                            v-if="holdingsPagination.last_page > 1"
+                            v-if="activeSection !== 'dashboard' && holdingsPagination.last_page > 1"
                             v-model="holdingsPagination.current_page"
                             class="mt-6"
                             :length="holdingsPagination.last_page"
@@ -11508,9 +11579,9 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     prepend-icon="mdi-refresh"
                                     type="button"
                                     variant="flat"
-                                    :disabled="isDataExchangeReloadRunning"
-                                    :loading="dataExchangeReloadLoading"
-                                    @click="reloadDataExchanges"
+                                    :disabled="dataExchangesLoading"
+                                    :loading="dataExchangesLoading"
+                                    @click="reloadDataExchangePageInfo"
                                 >
                                     Reload Exchanges
                                 </v-btn>
@@ -11718,7 +11789,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </div>
                                 </div>
                             </section>
-                            <section v-if="selectedDataHistoricStockLiveSummary" class="test-selected-stock-card mt-4">
+                            <section v-if="selectedDataHistoricStockLiveSummary" class="test-selected-stock-card test-selected-stock-card--live mt-4">
                                 <div class="test-selected-stock-card-header">
                                     <div class="test-selected-stock-summary">
                                         <h3 class="test-selected-stock-title">Live-Daten:</h3>
@@ -11726,8 +11797,69 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             Affected table: stock_realtime_prices · Total rows:
                                             {{ formatInteger(selectedDataHistoricStockLiveSummary.tableRowCount) }}
                                         </p>
+                                        <p class="test-live-data-schedule text-medium-emphasis">
+                                            {{ selectedDataHistoricStockLiveSummary.schedule }}
+                                        </p>
+                                        <v-alert
+                                            v-if="liveDataRealtimeSyncMessage"
+                                            class="test-live-data-sync-alert mt-3"
+                                            closable
+                                            close-label="Close EODHD sync message"
+                                            density="compact"
+                                            type="success"
+                                            variant="tonal"
+                                            @click:close="liveDataRealtimeSyncMessage = ''"
+                                        >
+                                            {{ liveDataRealtimeSyncMessage }}
+                                        </v-alert>
                                         <div class="test-intraday-summary test-intraday-summary--live">
-                                            <div>
+                                            <div class="test-intraday-summary-card--update">
+                                                <span class="test-intraday-label">Latest update</span>
+                                                <strong>{{ selectedDataHistoricStockLiveSummary.latestUpdate }}</strong>
+                                            </div>
+                                            <div class="test-intraday-summary-card--update test-intraday-summary-card--next-update">
+                                                <span class="test-intraday-label">Next update</span>
+                                                <span class="test-live-data-next-update">
+                                                    <strong>{{ selectedDataHistoricStockLiveSummary.nextUpdate }}</strong>
+                                                </span>
+                                                <span
+                                                    class="test-live-data-update-status-dot"
+                                                    :class="{
+                                                        'test-live-data-update-status-dot--waiting': selectedDataHistoricStockLiveSummary.updateStatus === 'waiting',
+                                                        'test-live-data-update-status-dot--due': selectedDataHistoricStockLiveSummary.updateStatus === 'due',
+                                                        'test-live-data-update-status-dot--updating': selectedDataHistoricStockLiveSummary.updateStatus === 'updating',
+                                                    }"
+                                                    :aria-label="`Live data update status: ${selectedDataHistoricStockLiveSummary.updateStatus}`"
+                                                    role="status"
+                                                />
+                                            </div>
+                                            <div class="test-intraday-summary-card--edit">
+                                                <div class="d-flex flex-wrap ga-2">
+                                                    <v-btn
+                                                        class="test-live-data-action-button"
+                                                        aria-label="Edit live data updates"
+                                                        prepend-icon="mdi-pencil"
+                                                        type="button"
+                                                        variant="tonal"
+                                                        @click="openLiveDataUpdateDialog"
+                                                    >
+                                                        Edit
+                                                    </v-btn>
+                                                    <v-btn
+                                                        class="test-live-data-action-button"
+                                                        aria-label="Sync EODHD realtime data"
+                                                        prepend-icon="mdi-cloud-sync-outline"
+                                                        type="button"
+                                                        variant="tonal"
+                                                        :loading="isLiveDataRealtimeSyncing"
+                                                        :disabled="isLiveDataRealtimeSyncing"
+                                                        @click="syncLiveDataRealtime"
+                                                    >
+                                                        EODHD-Sync
+                                                    </v-btn>
+                                                </div>
+                                            </div>
+                                            <div class="test-intraday-summary-next-row">
                                                 <span class="test-intraday-label">Last date</span>
                                                 <strong>{{ selectedDataHistoricStockLiveSummary.lastDate }}</strong>
                                             </div>
@@ -11763,7 +11895,66 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </div>
                                 </div>
                             </section>
-                            <section v-if="selectedDataHistoricStockIntradayCoverageSummary" class="test-selected-stock-card mt-4">
+                            <v-dialog v-model="isLiveDataUpdateDialogOpen" persistent max-width="480">
+                                <v-card>
+                                    <form @submit.prevent="saveLiveDataUpdateSchedule">
+                                        <v-card-title>Edit live data updates</v-card-title>
+                                        <v-card-subtitle>Mo-Fr</v-card-subtitle>
+                                        <v-card-text class="d-flex flex-column ga-3">
+                                            <v-text-field
+                                                v-model="liveDataUpdateScheduleForm.trading_start_time"
+                                                density="compact"
+                                                label="Start-time (Vienna)"
+                                                type="time"
+                                            />
+                                            <v-text-field
+                                                v-model="liveDataUpdateScheduleForm.trading_end_time"
+                                                density="compact"
+                                                label="End-time (Vienna)"
+                                                type="time"
+                                            />
+                                            <v-text-field
+                                                v-model="liveDataUpdateScheduleForm.trading_interval_minutes"
+                                                density="compact"
+                                                label="Intervall"
+                                                min="1"
+                                                max="1440"
+                                                suffix="min"
+                                                type="number"
+                                            />
+                                            <v-alert
+                                                v-if="priceRefreshScheduleError"
+                                                density="compact"
+                                                type="error"
+                                                variant="tonal"
+                                            >
+                                                {{ priceRefreshScheduleError }}
+                                            </v-alert>
+                                        </v-card-text>
+                                        <v-card-actions>
+                                            <v-spacer />
+                                            <v-btn
+                                                type="button"
+                                                variant="text"
+                                                :disabled="isLiveDataUpdateScheduleSaving"
+                                                @click="isLiveDataUpdateDialogOpen = false"
+                                            >
+                                                Cancel
+                                            </v-btn>
+                                            <v-btn
+                                                color="primary"
+                                                type="submit"
+                                                variant="flat"
+                                                :loading="isLiveDataUpdateScheduleSaving"
+                                            >
+                                                Save
+                                            </v-btn>
+                                        </v-card-actions>
+                                    </form>
+                                </v-card>
+                            </v-dialog>
+
+                            <section v-if="selectedDataHistoricStockIntradayCoverageSummary" class="test-selected-stock-card test-selected-stock-card--historical mt-4">
                                 <div class="test-selected-stock-card-header">
                                     <div class="test-selected-stock-summary">
                                         <h3 class="test-selected-stock-title">Historical Data</h3>
@@ -11771,10 +11962,75 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             Affected table: stock_holding_intraday_candles · Total rows:
                                             {{ formatInteger(selectedDataHistoricStockIntradayCoverageSummary.tableRowCount) }}
                                         </p>
-                                        <div class="test-intraday-summary">
-                                            <div>
+                                        <p class="test-live-data-schedule text-medium-emphasis">
+                                            {{ selectedDataHistoricStockIntradayCoverageSummary.schedule }}
+                                        </p>
+                                        <v-alert
+                                            v-if="historicalDataSyncMessage"
+                                            class="test-historical-data-sync-alert mt-3"
+                                            closable
+                                            close-label="Close historical data sync message"
+                                            density="compact"
+                                            type="success"
+                                            variant="tonal"
+                                            @click:close="historicalDataSyncMessage = ''"
+                                        >
+                                            {{ historicalDataSyncMessage }}
+                                        </v-alert>
+                                        <div class="test-intraday-summary test-intraday-summary--historical">
+                                            <div class="test-intraday-summary-card--update">
+                                                <span class="test-intraday-label">Latest update</span>
+                                                <strong>{{ selectedDataHistoricStockIntradayCoverageSummary.latestUpdate }}</strong>
+                                            </div>
+                                            <div class="test-intraday-summary-card--update test-intraday-summary-card--next-update">
+                                                <span class="test-intraday-label">Next update</span>
+                                                <span class="test-live-data-next-update">
+                                                    <strong>{{ selectedDataHistoricStockIntradayCoverageSummary.nextUpdate }}</strong>
+                                                </span>
+                                                <span
+                                                    class="test-live-data-update-status-dot"
+                                                    :class="{
+                                                        'test-live-data-update-status-dot--waiting': selectedDataHistoricStockIntradayCoverageSummary.updateStatus === 'waiting',
+                                                        'test-live-data-update-status-dot--due': selectedDataHistoricStockIntradayCoverageSummary.updateStatus === 'due',
+                                                        'test-live-data-update-status-dot--updating': selectedDataHistoricStockIntradayCoverageSummary.updateStatus === 'updating',
+                                                    }"
+                                                    :aria-label="`Historical data update status: ${selectedDataHistoricStockIntradayCoverageSummary.updateStatus}`"
+                                                    role="status"
+                                                />
+                                            </div>
+                                            <div class="test-intraday-summary-card--edit">
+                                                <div class="d-flex flex-wrap ga-2">
+                                                    <v-btn
+                                                        class="test-live-data-action-button"
+                                                        aria-label="Edit historical data updates"
+                                                        prepend-icon="mdi-pencil"
+                                                        type="button"
+                                                        variant="tonal"
+                                                        @click="openHistoricalDataUpdateDialog"
+                                                    >
+                                                        Edit
+                                                    </v-btn>
+                                                    <v-btn
+                                                        class="test-live-data-action-button"
+                                                        aria-label="Sync EODHD historical data"
+                                                        prepend-icon="mdi-cloud-sync-outline"
+                                                        type="button"
+                                                        variant="tonal"
+                                                        :loading="isHistoricalDataSyncing"
+                                                        :disabled="isHistoricalDataSyncing"
+                                                        @click="syncHistoricalData"
+                                                    >
+                                                        EODHD-Sync
+                                                    </v-btn>
+                                                </div>
+                                            </div>
+                                            <div class="test-intraday-summary-next-row">
                                                 <span class="test-intraday-label">First date</span>
                                                 <strong>{{ selectedDataHistoricStockIntradayCoverageSummary.firstDate }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">Expected last date</span>
+                                                <strong>{{ selectedDataHistoricStockIntradayCoverageSummary.expectedLastDate }}</strong>
                                             </div>
                                             <div>
                                                 <span class="test-intraday-label">Last date</span>
@@ -11793,10 +12049,86 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 <strong>{{ formatAveragePerDay(selectedDataHistoricStockIntradayCoverageSummary.averageRowsPerDay) }}</strong>
                                             </div>
                                         </div>
+                                        <div
+                                            v-if="selectedDataHistoricStockIntradayCoverageSummary.outdatedStocks.length"
+                                            class="data-repair-missing-data mt-4"
+                                        >
+                                            <span class="test-intraday-label">Responsible stocks</span>
+                                            <div
+                                                v-for="stock in selectedDataHistoricStockIntradayCoverageSummary.outdatedStocks"
+                                                :key="stock.id"
+                                                class="data-repair-missing-data-row"
+                                            >
+                                                <strong>{{ stock.label }}</strong>
+                                                <span class="data-repair-missing-count test-historical-outdated-stock-date">
+                                                    DB last date {{ stock.dbLastDate }} · Expected {{ selectedDataHistoricStockIntradayCoverageSummary.expectedLastDate }}
+                                                </span>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </section>
-                            <section v-if="selectedDataHistoricStockEndOfDaySummary" class="test-selected-stock-card mt-4">
+                            <v-dialog v-model="isHistoricalDataUpdateDialogOpen" persistent max-width="480">
+                                <v-card>
+                                    <form class="test-historical-data-update-dialog" @submit.prevent="saveHistoricalDataUpdateSchedule">
+                                        <v-card-title>Edit historical data updates</v-card-title>
+                                        <v-card-subtitle>Mo-Fr</v-card-subtitle>
+                                        <v-card-text class="d-flex flex-column ga-3">
+                                            <v-text-field
+                                                v-model="historicalDataUpdateScheduleForm.start_time"
+                                                density="compact"
+                                                label="Start-time"
+                                                type="time"
+                                            />
+                                            <v-text-field
+                                                v-model="historicalDataUpdateScheduleForm.interval_minutes"
+                                                density="compact"
+                                                label="Intervall"
+                                                min="1"
+                                                max="1440"
+                                                suffix="min"
+                                                type="number"
+                                            />
+                                            <v-alert
+                                                density="compact"
+                                                type="info"
+                                                variant="tonal"
+                                            >
+                                                For later: start at the start-time to get new data, then retry every intervall minutes until the data is retrieved successfully.
+                                            </v-alert>
+                                            <v-alert
+                                                v-if="priceRefreshScheduleError"
+                                                density="compact"
+                                                type="error"
+                                                variant="tonal"
+                                            >
+                                                {{ priceRefreshScheduleError }}
+                                            </v-alert>
+                                        </v-card-text>
+                                        <v-card-actions>
+                                            <v-spacer />
+                                            <v-btn
+                                                type="button"
+                                                variant="text"
+                                                :disabled="isHistoricalDataUpdateScheduleSaving"
+                                                @click="isHistoricalDataUpdateDialogOpen = false"
+                                            >
+                                                Close
+                                            </v-btn>
+                                            <v-btn
+                                                color="primary"
+                                                type="submit"
+                                                variant="flat"
+                                                :loading="isHistoricalDataUpdateScheduleSaving"
+                                                :disabled="isHistoricalDataUpdateScheduleSaving"
+                                            >
+                                                Save
+                                            </v-btn>
+                                        </v-card-actions>
+                                    </form>
+                                </v-card>
+                            </v-dialog>
+                            <section v-if="selectedDataHistoricStockEndOfDaySummary" class="test-selected-stock-card test-selected-stock-card--end-of-day mt-4">
                                 <div class="test-selected-stock-card-header">
                                     <div class="test-selected-stock-summary">
                                         <h3 class="test-selected-stock-title">End-Of-Day-Data</h3>
@@ -11804,10 +12136,75 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             Affected table: stock_prices · Total rows:
                                             {{ formatInteger(selectedDataHistoricStockEndOfDaySummary.tableRowCount) }}
                                         </p>
-                                        <div class="test-intraday-summary">
-                                            <div>
+                                        <p class="test-live-data-schedule text-medium-emphasis">
+                                            {{ selectedDataHistoricStockEndOfDaySummary.schedule }}
+                                        </p>
+                                        <v-alert
+                                            v-if="endOfDayDataSyncMessage"
+                                            class="test-end-of-day-data-sync-alert mt-3"
+                                            closable
+                                            close-label="Close end-of-day data sync message"
+                                            density="compact"
+                                            type="success"
+                                            variant="tonal"
+                                            @click:close="endOfDayDataSyncMessage = ''"
+                                        >
+                                            {{ endOfDayDataSyncMessage }}
+                                        </v-alert>
+                                        <div class="test-intraday-summary test-intraday-summary--end-of-day">
+                                            <div class="test-intraday-summary-card--update">
+                                                <span class="test-intraday-label">Latest update</span>
+                                                <strong>{{ selectedDataHistoricStockEndOfDaySummary.latestUpdate }}</strong>
+                                            </div>
+                                            <div class="test-intraday-summary-card--update test-intraday-summary-card--next-update">
+                                                <span class="test-intraday-label">Next update</span>
+                                                <span class="test-live-data-next-update">
+                                                    <strong>{{ selectedDataHistoricStockEndOfDaySummary.nextUpdate }}</strong>
+                                                </span>
+                                                <span
+                                                    class="test-live-data-update-status-dot"
+                                                    :class="{
+                                                        'test-live-data-update-status-dot--waiting': selectedDataHistoricStockEndOfDaySummary.updateStatus === 'waiting',
+                                                        'test-live-data-update-status-dot--due': selectedDataHistoricStockEndOfDaySummary.updateStatus === 'due',
+                                                        'test-live-data-update-status-dot--updating': selectedDataHistoricStockEndOfDaySummary.updateStatus === 'updating',
+                                                    }"
+                                                    :aria-label="`End-of-day data update status: ${selectedDataHistoricStockEndOfDaySummary.updateStatus}`"
+                                                    role="status"
+                                                />
+                                            </div>
+                                            <div class="test-intraday-summary-card--edit">
+                                                <div class="d-flex flex-wrap ga-2">
+                                                    <v-btn
+                                                        class="test-live-data-action-button"
+                                                        aria-label="Edit end-of-day data updates"
+                                                        prepend-icon="mdi-pencil"
+                                                        type="button"
+                                                        variant="tonal"
+                                                        @click="openEndOfDayDataUpdateDialog"
+                                                    >
+                                                        Edit
+                                                    </v-btn>
+                                                    <v-btn
+                                                        class="test-live-data-action-button"
+                                                        aria-label="Sync EODHD end-of-day data"
+                                                        prepend-icon="mdi-cloud-sync-outline"
+                                                        type="button"
+                                                        variant="tonal"
+                                                        :loading="isEndOfDayDataSyncing"
+                                                        :disabled="isEndOfDayDataSyncing"
+                                                        @click="syncEndOfDayData"
+                                                    >
+                                                        EODHD-Sync
+                                                    </v-btn>
+                                                </div>
+                                            </div>
+                                            <div class="test-intraday-summary-next-row">
                                                 <span class="test-intraday-label">First date</span>
                                                 <strong>{{ selectedDataHistoricStockEndOfDaySummary.firstDate }}</strong>
+                                            </div>
+                                            <div>
+                                                <span class="test-intraday-label">Expected last date</span>
+                                                <strong>{{ selectedDataHistoricStockEndOfDaySummary.expectedLastDate }}</strong>
                                             </div>
                                             <div>
                                                 <span class="test-intraday-label">Last date</span>
@@ -11818,10 +12215,523 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 <strong>{{ formatInteger(selectedDataHistoricStockEndOfDaySummary.rowCount) }}</strong>
                                             </div>
                                         </div>
+                                        <div
+                                            v-if="selectedDataHistoricStockEndOfDaySummary.outdatedStocks.length"
+                                            class="data-repair-missing-data mt-4"
+                                        >
+                                            <span class="test-intraday-label">Responsible stocks</span>
+                                            <div
+                                                v-for="stock in selectedDataHistoricStockEndOfDaySummary.outdatedStocks"
+                                                :key="stock.id"
+                                                class="data-repair-missing-data-row"
+                                            >
+                                                <strong>{{ stock.label }}</strong>
+                                                <span class="data-repair-missing-count test-historical-outdated-stock-date">
+                                                    DB last date {{ stock.dbLastDate }} · Expected {{ selectedDataHistoricStockEndOfDaySummary.expectedLastDate }}
+                                                </span>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </section>
+                            <v-dialog v-model="isEndOfDayDataUpdateDialogOpen" persistent max-width="480">
+                                <v-card>
+                                    <form class="test-end-of-day-data-update-dialog" @submit.prevent="saveEndOfDayDataUpdateSchedule">
+                                        <v-card-title>Edit end-of-day data updates</v-card-title>
+                                        <v-card-subtitle>Mo-Fr</v-card-subtitle>
+                                        <v-card-text class="d-flex flex-column ga-3">
+                                            <v-text-field
+                                                v-model="endOfDayDataUpdateScheduleForm.start_time"
+                                                density="compact"
+                                                label="Start-time"
+                                                type="time"
+                                            />
+                                            <v-text-field
+                                                v-model="endOfDayDataUpdateScheduleForm.interval_minutes"
+                                                density="compact"
+                                                label="Intervall"
+                                                min="1"
+                                                max="1440"
+                                                suffix="min"
+                                                type="number"
+                                            />
+                                            <v-alert
+                                                density="compact"
+                                                type="info"
+                                                variant="tonal"
+                                            >
+                                                For later: start at the start-time to get new data, then retry every intervall minutes until the data is retrieved successfully.
+                                            </v-alert>
+                                            <v-alert
+                                                v-if="priceRefreshScheduleError"
+                                                density="compact"
+                                                type="error"
+                                                variant="tonal"
+                                            >
+                                                {{ priceRefreshScheduleError }}
+                                            </v-alert>
+                                        </v-card-text>
+                                        <v-card-actions>
+                                            <v-spacer />
+                                            <v-btn
+                                                type="button"
+                                                variant="text"
+                                                :disabled="isEndOfDayDataUpdateScheduleSaving"
+                                                @click="isEndOfDayDataUpdateDialogOpen = false"
+                                            >
+                                                Close
+                                            </v-btn>
+                                            <v-btn
+                                                color="primary"
+                                                type="submit"
+                                                variant="flat"
+                                                :loading="isEndOfDayDataUpdateScheduleSaving"
+                                                :disabled="isEndOfDayDataUpdateScheduleSaving"
+                                            >
+                                                Save
+                                            </v-btn>
+                                        </v-card-actions>
+                                    </form>
+                                </v-card>
+                            </v-dialog>
+                            <section v-if="selectedDataHistoricIndexDataSummary" class="test-selected-stock-card test-selected-stock-card--indices mt-4">
+                                <div class="test-selected-stock-card-header">
+                                    <div class="test-selected-stock-summary">
+                                        <h3 class="test-selected-stock-title">Indices-Date</h3>
+                                        <p class="test-affected-table-caption text-medium-emphasis">
+                                            Affected table: {{ selectedDataHistoricIndexDataSummary.tableName }} · Total rows:
+                                            {{ formatInteger(selectedDataHistoricIndexDataSummary.tableRowCount) }}
+                                        </p>
+                                        <p class="test-live-data-schedule text-medium-emphasis">
+                                            {{ selectedDataHistoricIndexDataSummary.schedule }}
+                                        </p>
+                                        <v-alert
+                                            v-if="indexDataSyncMessage"
+                                            class="test-index-data-sync-alert mt-3"
+                                            closable
+                                            close-label="Close indices data sync message"
+                                            density="compact"
+                                            type="success"
+                                            variant="tonal"
+                                            @click:close="indexDataSyncMessage = ''"
+                                        >
+                                            {{ indexDataSyncMessage }}
+                                        </v-alert>
+                                        <div class="test-intraday-summary test-intraday-summary--indices">
+                                            <div class="test-intraday-summary-card--update">
+                                                <span class="test-intraday-label">Latest update</span>
+                                                <strong>{{ selectedDataHistoricIndexDataSummary.latestUpdate }}</strong>
+                                            </div>
+                                            <div class="test-intraday-summary-card--update test-intraday-summary-card--next-update">
+                                                <span class="test-intraday-label">Next update</span>
+                                                <span class="test-live-data-next-update">
+                                                    <strong>{{ selectedDataHistoricIndexDataSummary.nextUpdate }}</strong>
+                                                </span>
+                                                <span
+                                                    class="test-live-data-update-status-dot"
+                                                    :class="{
+                                                        'test-live-data-update-status-dot--waiting': selectedDataHistoricIndexDataSummary.updateStatus === 'waiting',
+                                                        'test-live-data-update-status-dot--due': selectedDataHistoricIndexDataSummary.updateStatus === 'due',
+                                                        'test-live-data-update-status-dot--updating': selectedDataHistoricIndexDataSummary.updateStatus === 'updating',
+                                                    }"
+                                                    :aria-label="`Indices data update status: ${selectedDataHistoricIndexDataSummary.updateStatus}`"
+                                                    role="status"
+                                                />
+                                            </div>
+                                            <div class="test-intraday-summary-card--edit">
+                                                <div class="d-flex flex-wrap ga-2">
+                                                    <v-btn
+                                                        class="test-live-data-action-button"
+                                                        aria-label="Edit indices data updates"
+                                                        prepend-icon="mdi-pencil"
+                                                        type="button"
+                                                        variant="tonal"
+                                                        @click="openIndexDataUpdateDialog"
+                                                    >
+                                                        Edit
+                                                    </v-btn>
+                                                    <v-btn
+                                                        class="test-live-data-action-button"
+                                                        aria-label="Sync EODHD indices data"
+                                                        prepend-icon="mdi-cloud-sync-outline"
+                                                        type="button"
+                                                        variant="tonal"
+                                                        :loading="isIndexDataSyncing"
+                                                        :disabled="isIndexDataSyncing"
+                                                        @click="syncIndexData"
+                                                    >
+                                                        EODHD-Sync
+                                                    </v-btn>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+                            <v-dialog v-model="isIndexDataUpdateDialogOpen" persistent max-width="480">
+                                <v-card>
+                                    <form class="test-index-data-update-dialog" @submit.prevent="saveIndexDataUpdateSchedule">
+                                        <v-card-title>Edit indices data updates</v-card-title>
+                                        <v-card-subtitle>Once per week at 02:00 Europe/Vienna</v-card-subtitle>
+                                        <v-card-text class="d-flex flex-column ga-3">
+                                            <v-select
+                                                v-model="indexDataUpdateScheduleForm.weekday"
+                                                :items="weekdayOptions"
+                                                density="compact"
+                                                label="Weekday"
+                                            />
+                                            <v-alert
+                                                density="compact"
+                                                type="info"
+                                                variant="tonal"
+                                            >
+                                                Runs once per week at 02:00 Europe/Vienna.
+                                            </v-alert>
+                                            <v-alert
+                                                v-if="priceRefreshScheduleError"
+                                                density="compact"
+                                                type="error"
+                                                variant="tonal"
+                                            >
+                                                {{ priceRefreshScheduleError }}
+                                            </v-alert>
+                                        </v-card-text>
+                                        <v-card-actions>
+                                            <v-spacer />
+                                            <v-btn
+                                                type="button"
+                                                variant="text"
+                                                :disabled="isIndexDataUpdateScheduleSaving"
+                                                @click="isIndexDataUpdateDialogOpen = false"
+                                            >
+                                                Close
+                                            </v-btn>
+                                            <v-btn
+                                                color="primary"
+                                                type="submit"
+                                                variant="flat"
+                                                :loading="isIndexDataUpdateScheduleSaving"
+                                                :disabled="isIndexDataUpdateScheduleSaving"
+                                            >
+                                                Save
+                                            </v-btn>
+                                        </v-card-actions>
+                                    </form>
+                                </v-card>
+                            </v-dialog>
                         </section>
+
+                            <section
+                                v-if="isStandaloneDataStockSubsection(activeDataSubsection)"
+                                :aria-label="dataStandaloneStockPageAriaLabel(activeDataSubsection)"
+                            >
+                                <div class="data-exchange-actions mb-4">
+                                    <div>
+                                        <h2 class="text-h5">{{ dataStandaloneStockPageTitle(activeDataSubsection) }}</h2>
+                                    </div>
+                                </div>
+
+                                <v-alert
+                                    v-if="dataHistoricalPriceError"
+                                    class="mb-4"
+                                    density="compact"
+                                    type="error"
+                                    variant="tonal"
+                                >
+                                    {{ dataHistoricalPriceError }}
+                                </v-alert>
+
+                                <v-progress-linear v-if="dataHistoricalPriceLoading" indeterminate color="primary" class="mb-4" />
+
+                                <div class="tests-chip-group mb-4">
+                                    <h2 class="tests-chip-heading">Stocks</h2>
+                                    <div class="tests-chip-list" :aria-label="`${dataStandaloneStockPageTitle(activeDataSubsection)} stocks`">
+                                        <button
+                                            v-for="stock in dataHistoricalPriceHoldings"
+                                            :key="`data-${activeDataSubsection}-stock-${stock.id}`"
+                                            type="button"
+                                            class="tests-chip"
+                                            :class="{ 'tests-chip--active': selectedDataHistoricStock?.id === stock.id }"
+                                            :aria-pressed="selectedDataHistoricStock?.id === stock.id"
+                                            @click="selectDataHistoricStock(stock.id)"
+                                        >
+                                            <span class="tests-chip-symbol">{{ stock.symbol || '-' }}</span>
+                                            <span class="tests-chip-name">{{ stock.name || stock.symbol || `Stock ${stock.id}` }}</span>
+                                        </button>
+                                        <span v-if="!dataHistoricalPriceLoading && dataHistoricalPriceHoldings.length === 0" class="tests-chip-empty">
+                                            No stocks stored for {{ dataStandaloneStockPageTitle(activeDataSubsection) }}.
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <section v-if="selectedDataHistoricStock" class="test-selected-stock-card">
+                                    <div class="test-selected-stock-card-header">
+                                        <div class="test-selected-stock-summary">
+                                            <h3 class="test-selected-stock-title">{{ selectedDataHistoricStock.name || selectedDataHistoricStock.symbol || `Stock ${selectedDataHistoricStock.id}` }}</h3>
+                                            <div class="test-selected-stock-meta">
+                                                <span>Symbol: {{ selectedDataHistoricStock.symbol || '-' }}</span>
+                                                <span>Exchange: {{ selectedDataHistoricStock.exchange || '-' }}</span>
+                                                <span>Currency: {{ selectedDataHistoricStock.currency || '-' }}</span>
+                                                <span>Instrument: {{ selectedDataHistoricStock.instrument_type || '-' }}</span>
+                                                <span>Country: {{ selectedDataHistoricStock.country || '-' }}</span>
+                                            </div>
+                                            <div class="mt-2">
+                                                <button
+                                                    v-if="selectedDataHistoricStock?.isin"
+                                                    type="button"
+                                                    class="analyze-selected-stock-isin-copy"
+                                                    :class="{ 'analyze-selected-stock-isin-copy--copied': selectedDataHistoricCopiedIsin === selectedDataHistoricStock.isin }"
+                                                    :aria-label="`Copy ISIN ${selectedDataHistoricStock.isin}`"
+                                                    @click="copySelectedDataHistoricIsin"
+                                                >
+                                                    <span>{{ selectedDataHistoricStock.isin }}</span>
+                                                    <v-icon
+                                                        :icon="selectedDataHistoricCopiedIsin === selectedDataHistoricStock.isin ? 'mdi-check-circle-outline' : 'mdi-content-copy'"
+                                                        size="15"
+                                                    />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </section>
+
+                                <section
+                                    v-if="activeDataSubsection === 'historical-data'"
+                                    class="test-live-data-latest-entries test-historical-data-latest-entries"
+                                    aria-label="Latest historical data entries"
+                                >
+                                    <div class="test-live-data-latest-entries-header">
+                                        <div>
+                                            <h3 class="test-live-data-latest-entries-title">Last seven days</h3>
+                                            <p class="test-live-data-latest-entries-caption">
+                                                Stored entries from stock_holding_intraday_candles
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <v-alert
+                                        v-if="selectedDataHistoricalLatestEntriesError"
+                                        class="mb-3"
+                                        density="compact"
+                                        type="error"
+                                        variant="tonal"
+                                    >
+                                        {{ selectedDataHistoricalLatestEntriesError }}
+                                    </v-alert>
+
+                                    <v-progress-linear
+                                        v-if="selectedDataHistoricalLatestEntriesLoading"
+                                        class="mb-3"
+                                        color="primary"
+                                        indeterminate
+                                    />
+
+                                    <v-table
+                                        v-if="selectedDataHistoricalLatestRows.length"
+                                        class="test-live-data-latest-entries-table test-historical-data-latest-entries-table"
+                                        density="compact"
+                                    >
+                                        <thead>
+                                            <tr>
+                                                <th>Date / Time</th>
+                                                <th>Price</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr
+                                                v-for="entry in selectedDataHistoricalLatestRows"
+                                                :key="entry.id ?? `${entry.trading_date}-${entry.as_of}`"
+                                            >
+                                                <td>{{ formatDataHistoricalLatestEntryDateTime(entry) }}</td>
+                                                <td class="test-live-data-latest-price-cell">
+                                                    <span class="test-live-data-latest-price-value">
+                                                        <span>{{ formatDataLiveLatestEntryPrice(entry) }}</span>
+                                                        <v-icon
+                                                            v-if="entry.priceTrend === 'up'"
+                                                            class="test-live-data-latest-price-arrow test-live-data-latest-price-arrow--up"
+                                                            icon="mdi-arrow-up"
+                                                            size="14"
+                                                            aria-label="Price up"
+                                                        />
+                                                        <v-icon
+                                                            v-else-if="entry.priceTrend === 'down'"
+                                                            class="test-live-data-latest-price-arrow test-live-data-latest-price-arrow--down"
+                                                            icon="mdi-arrow-down"
+                                                            size="14"
+                                                            aria-label="Price down"
+                                                        />
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </v-table>
+
+                                    <div
+                                        v-else-if="!selectedDataHistoricalLatestEntriesLoading"
+                                        class="test-live-data-latest-entries-empty"
+                                    >
+                                        No historical data entries stored for the last seven days.
+                                    </div>
+                                </section>
+
+                                <section
+                                    v-if="activeDataSubsection === 'eod-data'"
+                                    class="test-live-data-latest-entries test-eod-data-latest-entries"
+                                    aria-label="Latest EOD data entries"
+                                >
+                                    <div class="test-live-data-latest-entries-header">
+                                        <div>
+                                            <h3 class="test-live-data-latest-entries-title">Last 30 days</h3>
+                                            <p class="test-live-data-latest-entries-caption">
+                                                Stored entries from stock_prices
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <v-alert
+                                        v-if="selectedDataEndOfDayLatestEntriesError"
+                                        class="mb-3"
+                                        density="compact"
+                                        type="error"
+                                        variant="tonal"
+                                    >
+                                        {{ selectedDataEndOfDayLatestEntriesError }}
+                                    </v-alert>
+
+                                    <v-progress-linear
+                                        v-if="selectedDataEndOfDayLatestEntriesLoading"
+                                        class="mb-3"
+                                        color="primary"
+                                        indeterminate
+                                    />
+
+                                    <v-table
+                                        v-if="selectedDataEndOfDayLatestRows.length"
+                                        class="test-live-data-latest-entries-table test-eod-data-latest-entries-table"
+                                        density="compact"
+                                    >
+                                        <thead>
+                                            <tr>
+                                                <th>Date</th>
+                                                <th>Price</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr
+                                                v-for="entry in selectedDataEndOfDayLatestRows"
+                                                :key="entry.id ?? entry.as_of"
+                                            >
+                                                <td>{{ formatRecentStoredPriceDate(entry) }}</td>
+                                                <td class="test-live-data-latest-price-cell">
+                                                    <span class="test-live-data-latest-price-value">
+                                                        <span>{{ formatDataLiveLatestEntryPrice(entry) }}</span>
+                                                        <v-icon
+                                                            v-if="entry.priceTrend === 'up'"
+                                                            class="test-live-data-latest-price-arrow test-live-data-latest-price-arrow--up"
+                                                            icon="mdi-arrow-up"
+                                                            size="14"
+                                                            aria-label="Price up"
+                                                        />
+                                                        <v-icon
+                                                            v-else-if="entry.priceTrend === 'down'"
+                                                            class="test-live-data-latest-price-arrow test-live-data-latest-price-arrow--down"
+                                                            icon="mdi-arrow-down"
+                                                            size="14"
+                                                            aria-label="Price down"
+                                                        />
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </v-table>
+
+                                    <div
+                                        v-else-if="!selectedDataEndOfDayLatestEntriesLoading"
+                                        class="test-live-data-latest-entries-empty"
+                                    >
+                                        No EOD data entries stored for the last 30 days.
+                                    </div>
+                                </section>
+
+                                <section
+                                    v-if="activeDataSubsection === 'live-data'"
+                                    class="test-live-data-latest-entries"
+                                    aria-label="Latest live data entries"
+                                >
+                                    <div class="test-live-data-latest-entries-header">
+                                        <div>
+                                            <h3 class="test-live-data-latest-entries-title">Latest entries</h3>
+                                            <p class="test-live-data-latest-entries-caption">
+                                                Same latest date: {{ formatDataLiveLatestDate(selectedDataLiveLatestDate) }}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <v-alert
+                                        v-if="selectedDataLiveLatestEntriesError"
+                                        class="mb-3"
+                                        density="compact"
+                                        type="error"
+                                        variant="tonal"
+                                    >
+                                        {{ selectedDataLiveLatestEntriesError }}
+                                    </v-alert>
+
+                                    <v-progress-linear
+                                        v-if="selectedDataLiveLatestEntriesLoading"
+                                        class="mb-3"
+                                        color="primary"
+                                        indeterminate
+                                    />
+
+                                    <v-table
+                                        v-if="selectedDataLiveLatestRows.length"
+                                        class="test-live-data-latest-entries-table"
+                                        density="compact"
+                                    >
+                                        <thead>
+                                            <tr>
+                                                <th>Time</th>
+                                                <th>Price</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr
+                                                v-for="entry in selectedDataLiveLatestRows"
+                                                :key="entry.id ?? entry.as_of"
+                                            >
+                                                <td>{{ formatRecentStoredPriceTime(entry) }}</td>
+                                                <td class="test-live-data-latest-price-cell">
+                                                    <span class="test-live-data-latest-price-value">
+                                                        <span>{{ formatDataLiveLatestEntryPrice(entry) }}</span>
+                                                        <v-icon
+                                                            v-if="entry.priceTrend === 'up'"
+                                                            class="test-live-data-latest-price-arrow test-live-data-latest-price-arrow--up"
+                                                            icon="mdi-arrow-up"
+                                                            size="14"
+                                                            aria-label="Price up"
+                                                        />
+                                                        <v-icon
+                                                            v-else-if="entry.priceTrend === 'down'"
+                                                            class="test-live-data-latest-price-arrow test-live-data-latest-price-arrow--down"
+                                                            icon="mdi-arrow-down"
+                                                            size="14"
+                                                            aria-label="Price down"
+                                                        />
+                                                    </span>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </v-table>
+
+                                    <div
+                                        v-else-if="!selectedDataLiveLatestEntriesLoading"
+                                        class="test-live-data-latest-entries-empty"
+                                    >
+                                        No live data entries stored for the latest date.
+                                    </div>
+                                </section>
+                            </section>
 
                         <section
                             v-if="activeDataSubsection === 'repair'"
@@ -11883,7 +12793,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 class="test-intraday-label"
                                                 :class="endOfDayRepairSummary.actual_date && endOfDayRepairSummary.actual_date <= endOfDayRepairSummary.minimum_date ? 'data-repair-covered-count' : 'data-repair-missing-count'"
                                             >
-                                                Actual minimum date
+                                                DB minimum date
                                             </span>
                                             <strong
                                                 :class="endOfDayRepairSummary.actual_date && endOfDayRepairSummary.actual_date <= endOfDayRepairSummary.minimum_date ? 'data-repair-covered-count' : 'data-repair-missing-count'"
@@ -11949,7 +12859,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 class="test-intraday-label"
                                                 :class="historicalDataRepairSummary.actual_minimum_date && historicalDataRepairSummary.actual_minimum_date <= historicalDataRepairSummary.minimum_date ? 'data-repair-covered-count' : 'data-repair-missing-count'"
                                             >
-                                                Actual minimum date
+                                                DB minimum date
                                             </span>
                                             <strong
                                                 :class="historicalDataRepairSummary.actual_minimum_date && historicalDataRepairSummary.actual_minimum_date <= historicalDataRepairSummary.minimum_date ? 'data-repair-covered-count' : 'data-repair-missing-count'"
@@ -11966,13 +12876,39 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 class="test-intraday-label"
                                                 :class="historicalDataRepairSummary.actual_last_trading_day && historicalDataRepairSummary.actual_last_trading_day >= historicalDataRepairSummary.last_trading_day ? 'data-repair-covered-count' : 'data-repair-missing-count'"
                                             >
-                                                Actual Last trading day
+                                                DB Last trading day
                                             </span>
                                             <strong
                                                 :class="historicalDataRepairSummary.actual_last_trading_day && historicalDataRepairSummary.actual_last_trading_day >= historicalDataRepairSummary.last_trading_day ? 'data-repair-covered-count' : 'data-repair-missing-count'"
                                             >
                                                 {{ historicalDataRepairSummary.actual_last_trading_day || '-' }}
                                             </strong>
+                                        </div>
+                                    </div>
+                                    <div
+                                        v-if="historicalDataRepairSummary?.missing_stocks?.length"
+                                        class="data-repair-missing-data mt-4"
+                                    >
+                                        <span class="test-intraday-label">Missing data</span>
+                                        <div
+                                            v-for="stock in historicalDataRepairSummary.missing_stocks"
+                                            :key="stock.id"
+                                            class="data-repair-missing-data-row"
+                                        >
+                                            <strong>{{ stock.label }}</strong>
+                                            <span>
+                                                Required {{ historicalDataRepairSummary.minimum_date }} - {{ historicalDataRepairSummary.last_trading_day }}
+                                            </span>
+                                            <span>
+                                                DB {{ stock.db_minimum_date || '-' }} - {{ stock.db_last_trading_day || '-' }}
+                                            </span>
+                                            <span
+                                                v-for="range in stock.missing_ranges"
+                                                :key="`${stock.id}-${range.from}-${range.to}`"
+                                                class="data-repair-missing-count"
+                                            >
+                                                Missing {{ range.from }} - {{ range.to }}
+                                            </span>
                                         </div>
                                     </div>
                                     <div v-if="historicalDataRepairCurrentStock" class="text-caption text-medium-emphasis mt-4">
@@ -13495,113 +14431,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     width: 100%;
 }
 
-.dashboard-status-card-content {
-    display: grid;
-    gap: 8px;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    padding: 10px;
-}
-
-.dashboard-status-item {
-    display: none;
-}
-
-.dashboard-status-row {
-    align-content: start;
-    background: rgba(var(--v-theme-primary), 0.018);
-    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-    border-radius: 6px;
-    display: grid;
-    gap: 8px;
-    grid-template-columns: minmax(0, 1fr) auto;
-    min-height: 0;
-    padding: 9px 10px;
-}
-
-.dashboard-status-row-heading {
-    align-items: center;
-    color: rgba(var(--v-theme-on-surface), 0.86);
-    display: inline-flex;
-    font-size: 0.78rem;
-    font-weight: 650;
-    gap: 6px;
-    min-width: 0;
-}
-
-.dashboard-status-row-heading :deep(.v-icon) {
-    color: rgb(var(--v-theme-primary));
-}
-
-.dashboard-status-values {
-    display: grid;
-    gap: 7px;
-    grid-column: 1 / -1;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    min-width: 0;
-}
-
-.dashboard-status-values--queue {
-    grid-template-columns: minmax(120px, 1.15fr) minmax(96px, 0.85fr) minmax(110px, 1fr);
-}
-
-.dashboard-status-value {
-    min-width: 0;
-}
-
-.dashboard-status-value span {
-    color: rgba(var(--v-theme-on-surface), 0.54);
-    display: block;
-    font-size: 0.62rem;
-    font-weight: 600;
-    letter-spacing: 0;
-    line-height: 1.1;
-    text-transform: uppercase;
-}
-
-.dashboard-status-value strong {
-    color: rgba(var(--v-theme-on-surface), 0.88);
-    display: block;
-    font-size: 0.76rem;
-    font-weight: 550;
-    line-height: 1.25;
-    margin-top: 3px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.dashboard-status-state {
-    align-items: center;
-    display: inline-flex;
-    font-size: 0.72rem;
-    font-weight: 650;
-    gap: 5px;
-    justify-content: flex-end;
-    min-width: 0;
-    text-transform: capitalize;
-    white-space: nowrap;
-}
-
-.dashboard-status-state--waiting {
-    color: rgb(var(--v-theme-success));
-}
-
-.dashboard-status-state--updating {
-    color: rgb(var(--v-theme-error));
-}
-
-@media (max-width: 1180px) {
-    .dashboard-status-card-content {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-}
-
-@media (max-width: 900px) {
-    .dashboard-status-card-content {
-        grid-template-columns: minmax(0, 1fr);
-    }
-}
-
 .dashboard-menu-toggle {
     flex: 0 0 auto;
 }
@@ -13645,6 +14474,88 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 
 .dashboard-navigation-drawer--compact .dashboard-navigation-header {
     padding-inline: 12px !important;
+}
+
+.watch-list-section {
+    background: rgb(var(--v-theme-surface));
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.watch-list-section-header {
+    align-items: center;
+    border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+    padding: 12px 14px;
+}
+
+.watch-list-section-eyebrow {
+    color: rgba(var(--v-theme-on-surface), 0.58);
+    font-size: 0.68rem;
+    font-weight: 650;
+    line-height: 1.1;
+    text-transform: uppercase;
+}
+
+.watch-list-section-title {
+    color: rgba(var(--v-theme-on-surface), 0.9);
+    font-size: 1rem;
+    font-weight: 650;
+    line-height: 1.25;
+    margin: 2px 0 0;
+}
+
+.watch-list-section-count {
+    align-items: center;
+    background: rgba(var(--v-theme-primary), 0.08);
+    border-radius: 999px;
+    color: rgb(var(--v-theme-primary));
+    display: inline-flex;
+    font-size: 0.78rem;
+    font-weight: 700;
+    justify-content: center;
+    min-width: 34px;
+    padding: 4px 10px;
+}
+
+.desktop-watch-list-table :deep(th),
+.desktop-watch-list-table :deep(td) {
+    padding-inline: 6px !important;
+}
+
+.desktop-watch-list-table :deep(th:first-child),
+.desktop-watch-list-table :deep(td:first-child) {
+    padding-left: 12px !important;
+}
+
+.desktop-watch-list-table :deep(th:last-child),
+.desktop-watch-list-table :deep(td:last-child) {
+    padding-right: 12px !important;
+}
+
+.desktop-watch-list-table :deep(table) {
+    table-layout: auto;
+    width: 100%;
+}
+
+.watch-list-content-cell {
+    white-space: nowrap;
+    width: 1%;
+}
+
+.watch-list-source-time-cell {
+    white-space: nowrap;
+    width: 100%;
+}
+
+.watch-list-actions-cell {
+    min-width: 132px;
+    text-align: right;
+    white-space: nowrap;
+    width: 132px;
 }
 
 .dashboard-compact-menu {
@@ -13877,6 +14788,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
         display: flex;
         flex-direction: column;
         gap: 10px;
+        padding: 12px;
     }
 
     .mobile-stock-card {
@@ -14510,6 +15422,13 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     padding: 18px;
 }
 
+.test-selected-stock-card--live,
+.test-selected-stock-card--historical,
+.test-selected-stock-card--end-of-day,
+.test-selected-stock-card--indices {
+    background: #f4fbf8;
+}
+
 .test-selected-stock-card-header {
     align-items: flex-start;
     display: flex;
@@ -14547,6 +15466,13 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     margin: 3px 0 0;
 }
 
+.test-live-data-schedule {
+    font-size: 0.78rem;
+    font-weight: 800;
+    line-height: 1.25;
+    margin: 7px 0 0;
+}
+
 .test-intraday-summary {
     display: grid;
     gap: 10px;
@@ -14569,6 +15495,168 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     border-radius: 5px;
     min-width: 0;
     padding: 10px 12px;
+}
+
+.test-intraday-summary > .test-intraday-summary-card--update {
+    background: #f4fbf8;
+    border-color: rgba(var(--v-theme-primary), 0.2);
+}
+
+.test-intraday-summary-card--next-update {
+    position: relative;
+}
+
+.test-intraday-summary > .test-intraday-summary-card--edit {
+    align-items: center;
+    background: transparent;
+    border-color: transparent;
+    display: flex;
+    padding: 0;
+}
+
+.test-live-data-action-button {
+    inline-size: 138px;
+}
+
+.test-live-data-latest-entries {
+    border: 1px solid rgba(var(--v-theme-primary), 0.2);
+    border-radius: 6px;
+    margin-top: 18px;
+    padding: 18px;
+}
+
+.test-live-data-latest-entries-header {
+    align-items: flex-start;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.test-live-data-latest-entries-title {
+    color: #102731;
+    font-size: 1rem;
+    font-weight: 850;
+    line-height: 1.25;
+    margin: 0;
+}
+
+.test-live-data-latest-entries-caption {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.25;
+    margin: 4px 0 0;
+}
+
+.test-live-data-latest-entries-table {
+    border: 1px solid #d9e5e8;
+    border-radius: 5px;
+    max-width: 320px;
+}
+
+.test-historical-data-latest-entries-table {
+    max-width: 420px;
+}
+
+.test-eod-data-latest-entries-table {
+    max-width: 360px;
+}
+
+.test-live-data-latest-entries-empty {
+    background: #ffffff;
+    border: 1px solid #d9e5e8;
+    border-radius: 5px;
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    font-size: 0.84rem;
+    padding: 12px;
+}
+
+.test-live-data-latest-price-cell {
+    white-space: nowrap;
+}
+
+.test-live-data-latest-price-value {
+    align-items: center;
+    display: inline-flex;
+    gap: 4px;
+}
+
+.test-live-data-latest-price-arrow {
+    flex: 0 0 auto;
+}
+
+.test-live-data-latest-price-arrow--up {
+    color: rgb(var(--v-theme-success));
+}
+
+.test-live-data-latest-price-arrow--down {
+    color: rgb(var(--v-theme-error));
+}
+
+.test-live-data-next-update {
+    align-items: center;
+    display: inline-flex;
+}
+
+.test-live-data-update-status-dot {
+    block-size: 10px;
+    border-radius: 999px;
+    display: inline-block;
+    flex: 0 0 auto;
+    inline-size: 10px;
+    position: absolute;
+    right: 10px;
+    top: 10px;
+}
+
+.test-live-data-update-status-dot--waiting {
+    background: rgb(var(--v-theme-success));
+}
+
+.test-live-data-update-status-dot--due {
+    background: #f59e0b;
+}
+
+.test-live-data-update-status-dot--updating {
+    animation: live-data-updating-dot-pulse 1s ease-in-out infinite;
+    background: rgb(var(--v-theme-error));
+    box-shadow: 0 0 0 0 rgba(var(--v-theme-error), 0.55);
+    transform-origin: center;
+}
+
+.test-live-data-update-status-dot--updating::after {
+    animation: live-data-updating-ring-pulse 1.15s ease-out infinite;
+    border: 2px solid rgba(var(--v-theme-error), 0.4);
+    border-radius: inherit;
+    content: "";
+    inset: -2px;
+    position: absolute;
+}
+
+@keyframes live-data-updating-dot-pulse {
+    0%,
+    100% {
+        box-shadow: 0 0 0 0 rgba(var(--v-theme-error), 0.55);
+        transform: scale(1);
+    }
+
+    50% {
+        box-shadow: 0 0 0 4px rgba(var(--v-theme-error), 0.2);
+        transform: scale(1.28);
+    }
+}
+
+@keyframes live-data-updating-ring-pulse {
+    0% {
+        opacity: 0.8;
+        transform: scale(1);
+    }
+
+    100% {
+        opacity: 0;
+        transform: scale(2.7);
+    }
 }
 
 .test-intraday-label {
@@ -14596,6 +15684,44 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 
 .test-intraday-summary .data-repair-covered-count {
     color: rgb(var(--v-theme-success));
+}
+
+.data-repair-missing-data {
+    border: 1px solid rgba(var(--v-theme-error), 0.24);
+    border-radius: 5px;
+    padding: 12px;
+}
+
+.data-repair-missing-data-row {
+    display: grid;
+    gap: 4px;
+}
+
+.data-repair-missing-data-row + .data-repair-missing-data-row {
+    border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    margin-top: 10px;
+    padding-top: 10px;
+}
+
+.data-repair-missing-data-row strong {
+    color: #0f2630;
+    font-size: 0.86rem;
+    line-height: 1.25;
+}
+
+.data-repair-missing-data-row span {
+    color: rgba(var(--v-theme-on-surface), 0.68);
+    font-size: 0.76rem;
+    line-height: 1.25;
+}
+
+.data-repair-missing-data-row .data-repair-missing-count {
+    color: rgb(var(--v-theme-error));
+    font-weight: 800;
+}
+
+.data-repair-missing-data-row .test-historical-outdated-stock-date {
+    font-weight: 400;
 }
 
 .test-intraday-table-wrap {
