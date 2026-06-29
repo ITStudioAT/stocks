@@ -3,6 +3,8 @@
 namespace Tests\Feature;
 
 use App\Jobs\RefreshDepotHoldingPrices;
+use App\Models\Depot;
+use App\Models\DepotTransaction;
 use App\Models\EodhdExchange;
 use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
@@ -84,6 +86,7 @@ class AdminDepotHoldingTest extends TestCase
                         'intraday_prices',
                         'intraday_candles',
                         'daily_prices',
+                        'depot_transactions',
                         'validation_errors',
                         'created_at',
                     ],
@@ -106,6 +109,56 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('meta.total', 12)
             ->assertJsonPath('meta.from', 1)
             ->assertJsonPath('meta.to', 12);
+    }
+
+    public function test_admin_listing_includes_active_depot_stock_transactions(): void
+    {
+        $admin = $this->adminUser();
+        $activeDepot = Depot::factory()->create(['is_active' => true]);
+        $otherDepot = Depot::factory()->create(['is_active' => false]);
+        $holding = StockHolding::factory()->create([
+            'name' => 'Apple Inc.',
+        ]);
+
+        DepotTransaction::factory()->create([
+            'depot_id' => $activeDepot->id,
+            'stock_holding_id' => $holding->id,
+            'type' => 'buy',
+            'pieces' => '1.00000000',
+            'total_amount' => '125.00',
+            'booked_at' => Carbon::parse('2026-06-02 00:00:00'),
+        ]);
+
+        DepotTransaction::factory()->create([
+            'depot_id' => $activeDepot->id,
+            'stock_holding_id' => $holding->id,
+            'type' => 'sell',
+            'pieces' => '0.50000000',
+            'total_amount' => '75.00',
+            'booked_at' => Carbon::parse('2026-06-04 00:00:00'),
+        ]);
+
+        DepotTransaction::factory()->create([
+            'depot_id' => $otherDepot->id,
+            'stock_holding_id' => $holding->id,
+            'type' => 'buy',
+            'pieces' => '1.00000000',
+            'total_amount' => '120.00',
+            'booked_at' => Carbon::parse('2026-06-03 00:00:00'),
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings?all=1')
+            ->assertOk()
+            ->assertJsonCount(2, 'holdings.0.depot_transactions')
+            ->assertJsonPath('holdings.0.depot_transactions.0.type', 'buy')
+            ->assertJsonPath('holdings.0.depot_transactions.0.pieces', '1.00000000')
+            ->assertJsonPath('holdings.0.depot_transactions.0.total_amount', '125.00')
+            ->assertJsonPath('holdings.0.depot_transactions.0.booked_at', '2026-06-02T00:00:00+02:00')
+            ->assertJsonPath('holdings.0.depot_transactions.1.type', 'sell')
+            ->assertJsonPath('holdings.0.depot_transactions.1.pieces', '0.50000000')
+            ->assertJsonPath('holdings.0.depot_transactions.1.total_amount', '75.00')
+            ->assertJsonPath('holdings.0.depot_transactions.1.booked_at', '2026-06-04T00:00:00+02:00');
     }
 
     public function test_admin_listing_omits_chart_history_by_default(): void

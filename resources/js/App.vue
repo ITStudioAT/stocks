@@ -790,6 +790,7 @@ function buildAnalyzeTrendRows(
     tradeAmounts = defaultAnalyzeTrendTradeAmounts,
 ) {
     const prices = analyzeTrendDailyPrices(holding);
+    const depotStateByDate = analyzeTrendDepotStateByDate(holding, prices);
     const patternStats = {};
     const rows = [];
 
@@ -823,6 +824,7 @@ function buildAnalyzeTrendRows(
             streakCapitalAmount: null,
             streakPortfolioCapitalAmount: null,
             streakTotalWin: null,
+            depot: depotStateByDate.get(price.trading_date) ?? { actions: [], changeAmount: null },
             recommendation,
             result,
             nextDayChangePercent,
@@ -840,6 +842,112 @@ function buildAnalyzeTrendRows(
     addAnalyzeTrendPortfolioCapital(visibleRows, portfolioCapitalByDate);
 
     return visibleRows.reverse();
+}
+
+function analyzeTrendDepotStateByDate(holding, prices) {
+    const transactionsByDate = analyzeTrendDepotTransactionsByDate(holding);
+    const stateByDate = new Map();
+    let openPieces = 0;
+    let openCost = 0;
+
+    prices.forEach((price) => {
+        const transactions = transactionsByDate.get(price.trading_date) ?? [];
+        const actions = analyzeTrendDepotActions(transactions);
+        const currentPrice = Number(price.price);
+        let realizedChangeAmount = null;
+        const openChangeAmount = actions.length === 0 && openPieces > 0 && Number.isFinite(currentPrice)
+            ? (openPieces * currentPrice) - openCost
+            : null;
+
+        transactions.forEach((transaction) => {
+            const transactionPieces = Math.max(0, Number(transaction.pieces));
+            const transactionTotalAmount = Math.max(0, Number(transaction.total_amount));
+
+            if (!Number.isFinite(transactionPieces) || transactionPieces === 0) {
+                return;
+            }
+
+            if (transaction.type === 'buy') {
+                openPieces += transactionPieces;
+                openCost += Number.isFinite(transactionTotalAmount) ? transactionTotalAmount : 0;
+
+                return;
+            }
+
+            if (transaction.type === 'sell' && openPieces > 0) {
+                const closedPieces = Math.min(openPieces, transactionPieces);
+                const averageCost = openCost / openPieces;
+                const soldAmount = Number.isFinite(transactionTotalAmount) ? transactionTotalAmount : 0;
+                const soldRatio = transactionPieces === 0 ? 0 : closedPieces / transactionPieces;
+                const realizedAmount = soldAmount * soldRatio - averageCost * closedPieces;
+
+                openPieces -= closedPieces;
+                openCost -= averageCost * closedPieces;
+                realizedChangeAmount = (realizedChangeAmount ?? 0) + realizedAmount;
+
+                if (openPieces <= 0.00000001) {
+                    openPieces = 0;
+                    openCost = 0;
+                }
+            }
+        });
+
+        const changeAmount = realizedChangeAmount ?? openChangeAmount;
+
+        stateByDate.set(price.trading_date, {
+            actions,
+            changeAmount: normalizeCurrencyAmount(changeAmount),
+        });
+    });
+
+    return stateByDate;
+}
+
+function normalizeCurrencyAmount(value) {
+    if (value === null || value === undefined || !Number.isFinite(value)) {
+        return null;
+    }
+
+    return Math.abs(value) < 0.005 ? 0 : value;
+}
+
+function analyzeTrendDepotTransactionsByDate(holding) {
+    const transactions = Array.isArray(holding?.depot_transactions) ? holding.depot_transactions : [];
+
+    return transactions
+        .filter((transaction) => ['buy', 'sell'].includes(transaction?.type))
+        .map((transaction) => ({
+            ...transaction,
+            transactionDate: transactionDateInputValue(transaction.booked_at),
+        }))
+        .filter((transaction) => transaction.transactionDate)
+        .sort((firstTransaction, secondTransaction) => (
+            firstTransaction.transactionDate.localeCompare(secondTransaction.transactionDate)
+                || Number(firstTransaction.id ?? 0) - Number(secondTransaction.id ?? 0)
+        ))
+        .reduce((transactionsByDate, transaction) => {
+            transactionsByDate.set(transaction.transactionDate, [
+                ...(transactionsByDate.get(transaction.transactionDate) ?? []),
+                transaction,
+            ]);
+
+            return transactionsByDate;
+        }, new Map());
+}
+
+function analyzeTrendDepotActions(transactions) {
+    return transactions.reduce((actions, transaction) => {
+        if (actions.some((action) => action.type === transaction.type)) {
+            return actions;
+        }
+
+        actions.push({
+            type: transaction.type,
+            label: transaction.type.toUpperCase(),
+        });
+
+        return actions;
+    }, []);
 }
 
 function buildAnalyzeTrendHoldingRows(
@@ -11198,6 +11306,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 <th class="text-right">Day %</th>
                                                 <th class="text-right">-Streak</th>
                                                 <th>Rec</th>
+                                                <th>DEP</th>
                                                 <th class="text-right">Evoluation</th>
                                                 <th class="text-right">Next %</th>
                                                 <th class="text-right">Wins</th>
@@ -11231,6 +11340,26 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         {{ recommendationItem.label }}
                                                     </span>
                                                 </td>
+                                                <td>
+                                                    <span
+                                                        v-for="depotAction in trendRow.depot.actions"
+                                                        :key="depotAction.type"
+                                                        class="analyze-trend-rec"
+                                                        :class="{
+                                                            'analyze-trend-rec--buy': depotAction.type === 'buy',
+                                                            'analyze-trend-rec--sell': depotAction.type === 'sell',
+                                                        }"
+                                                    >
+                                                        {{ depotAction.label }}
+                                                    </span>
+                                                    <span
+                                                        v-if="trendRow.depot.changeAmount !== null"
+                                                        class="analyze-trend-dep-change"
+                                                        :class="priceChangePercentClass(trendRow.depot.changeAmount)"
+                                                    >
+                                                        {{ formatAnalyzeTrendSignedWin(trendRow.depot.changeAmount) }}
+                                                    </span>
+                                                </td>
                                                 <td class="text-right">
                                                     <span
                                                         v-for="evolutionItem in formatAnalyzeTrendStreakEvolutionItems(trendRow.streakEvolution)"
@@ -11253,12 +11382,6 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         class="analyze-trend-cap-amount"
                                                     >
                                                         {{ formatAnalyzeTrendWin(trendRow.streakCapitalAmount) }}
-                                                    </span>
-                                                    <span
-                                                        v-if="trendRow.streakPortfolioCapitalAmount > 0"
-                                                        class="analyze-trend-cap-amount analyze-trend-cap-amount--portfolio"
-                                                    >
-                                                        All: {{ formatAnalyzeTrendWin(trendRow.streakPortfolioCapitalAmount) }}
                                                     </span>
                                                 </td>
                                                 <td class="text-right">{{ formatAnalyzeTrendWin(trendRow.streakTotalWin) }}</td>
@@ -15173,6 +15296,14 @@ function formatIndexDataUpdateSchedule(settings) {
     color: rgb(var(--v-theme-error));
 }
 
+.analyze-trend-dep-change {
+    display: block;
+    font-size: 0.68rem;
+    font-weight: 400;
+    line-height: 1.15;
+    white-space: nowrap;
+}
+
 .analyze-trend-evolution-item {
     display: block;
 }
@@ -15184,10 +15315,6 @@ function formatIndexDataUpdateSchedule(settings) {
     line-height: 1.2;
     margin-left: auto;
     text-align: right;
-}
-
-.analyze-trend-cap-amount--portfolio {
-    color: #3f4d59;
 }
 
 .analyze-trend-badge,

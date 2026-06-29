@@ -1160,6 +1160,22 @@ describe('App', () => {
                             isin: 'IE00BUY00008',
                             currency: 'EUR',
                             latest_price: '95.000000',
+                            depot_transactions: [
+                                {
+                                    id: 801,
+                                    type: 'buy',
+                                    pieces: '70.00000000',
+                                    total_amount: '6792.64',
+                                    booked_at: '2026-06-11T00:00:00+00:00',
+                                },
+                                {
+                                    id: 802,
+                                    type: 'sell',
+                                    pieces: '70.00000000',
+                                    total_amount: '7001.12',
+                                    booked_at: '2026-06-15T00:00:00+00:00',
+                                },
+                            ],
                             daily_prices: streakRecommendationDailyPrices(),
                         },
                         {
@@ -1476,6 +1492,7 @@ describe('App', () => {
             'Day %',
             '-Streak',
             'Rec',
+            'DEP',
             'Evoluation',
             'Next %',
             'Wins',
@@ -1489,14 +1506,14 @@ describe('App', () => {
         expect(analyzeTrend.text()).not.toContain('Day +/-');
         expect(analyzeTrend.text()).not.toContain('Right?');
         const firstTrendRowCells = analyzeTrend.find('.analyze-trend-table tbody tr').findAll('td');
-        expect(firstTrendRowCells).toHaveLength(10);
+        expect(firstTrendRowCells).toHaveLength(11);
         expect(firstTrendRowCells[3].text()).toBe('');
         expect(firstTrendRowCells[4].text()).toBe('');
         expect(firstTrendRowCells[5].text()).toBe('');
-        expect(firstTrendRowCells[7].text()).toBe('');
-        expect(firstTrendRowCells[8].text()).toBe('All: 14,000.00 EUR');
-        expect(firstTrendRowCells[8].find('.analyze-trend-cap-amount--portfolio').text()).toBe('All: 14,000.00 EUR');
+        expect(firstTrendRowCells[6].text()).toBe('');
+        expect(firstTrendRowCells[8].text()).toBe('');
         expect(firstTrendRowCells[9].text()).toBe('');
+        expect(firstTrendRowCells[10].text()).toBe('');
         expect(analyzeTrend.text()).toContain('04.06.2026');
         expect(analyzeTrend.text()).toContain('+1.60%');
         expect(analyzeTrend.text()).not.toContain('Sell');
@@ -1530,10 +1547,14 @@ describe('App', () => {
         expect(buyStreakRows).toHaveLength(14);
         expect(buyStreakRows[0].findAll('td')[3].text()).toBe('');
         expect(buyStreakRows[0].findAll('td')[4].text()).toBe('SELL 1');
-        expect(buyStreakRows[0].findAll('td')[5].text()).toBe('1: +3.10%');
-        expect(buyStreakRows[0].findAll('td')[7].text()).toBe('217.00 EUR');
-        expect(buyStreakRows[0].findAll('td')[8].text()).toBe('All: 7,000.00 EUR');
-        expect(buyStreakRows[0].findAll('td')[9].text()).toBe('434.00 EUR');
+        expect(buyStreakRows[0].findAll('td')[5].text()).toBe('SELL+208.48 EUR');
+        expect(buyStreakRows[0].findAll('td')[5].find('.analyze-trend-rec--sell').exists()).toBe(true);
+        expect(buyStreakRows[0].findAll('td')[5].find('.analyze-trend-dep-change').text()).toBe('+208.48 EUR');
+        expect(buyStreakRows[0].findAll('td')[5].find('.analyze-trend-dep-change').classes()).toContain('text-success');
+        expect(buyStreakRows[0].findAll('td')[6].text()).toBe('1: +3.10%');
+        expect(buyStreakRows[0].findAll('td')[8].text()).toBe('217.00 EUR');
+        expect(buyStreakRows[0].findAll('td')[9].text()).toBe('');
+        expect(buyStreakRows[0].findAll('td')[10].text()).toBe('434.00 EUR');
         const totalTrendSummaryCard = analyzeTrend.findAll('.analyze-trend-summary-item')[1];
         expect(totalTrendSummaryCard.text()).toContain('894.00 EUR');
         expect(totalTrendSummaryCard.text()).not.toContain('%');
@@ -1578,10 +1599,11 @@ describe('App', () => {
         expect(analyzeTrend.findAll('.analyze-trend-summary-item')[1].text()).toContain('894.00 EUR');
         expect(buyStreakRows[1].findAll('td')[3].text()).toBe('');
         expect(buyStreakRows[1].findAll('td')[4].text()).toBe('');
-        expect(buyStreakRows[1].findAll('td')[5].text()).toBe('1: 0.00%');
-        expect(buyStreakRows[1].findAll('td')[8].text()).toContain('0.00 EUR');
-        expect(buyStreakRows[1].findAll('td')[8].find('.analyze-trend-cap-amount').text()).toBe('7,000.00 EUR');
-        expect(buyStreakRows[1].findAll('td')[8].find('.analyze-trend-cap-amount--portfolio').text()).toBe('All: 14,000.00 EUR');
+        expect(buyStreakRows[1].findAll('td')[5].text()).toBe('-2.03 EUR');
+        expect(buyStreakRows[1].findAll('td')[5].find('.analyze-trend-dep-change').classes()).toContain('text-error');
+        expect(buyStreakRows[1].findAll('td')[6].text()).toBe('1: 0.00%');
+        expect(buyStreakRows[1].findAll('td')[9].text()).toContain('0.00 EUR');
+        expect(buyStreakRows[1].findAll('td')[9].find('.analyze-trend-cap-amount').text()).toBe('7,000.00 EUR');
         const openStreakIncludeToggle = trendStockMenu.find('[aria-label="Exclude Open Streak Fund from All amount"]');
         expect(openStreakIncludeToggle.exists()).toBe(true);
 
@@ -1596,9 +1618,7 @@ describe('App', () => {
         }));
         expect(window.location.search).toBe('?stock=8');
         const buyStreakRowsAfterExclude = analyzeTrend.findAll('.analyze-trend-table tbody tr');
-        expect(
-            buyStreakRowsAfterExclude[1].findAll('td')[8].find('.analyze-trend-cap-amount--portfolio').text(),
-        ).toBe('All: 7,000.00 EUR');
+        expect(buyStreakRowsAfterExclude[1].findAll('td')[5].text()).toBe('-2.03 EUR');
         const openStreakIncludeAgainToggle = trendStockMenu.find('[aria-label="Include Open Streak Fund in All amount"]');
         expect(openStreakIncludeAgainToggle.exists()).toBe(true);
 
@@ -1611,25 +1631,26 @@ describe('App', () => {
                 analyze_trend_excluded_holding_ids: [],
             }),
         }));
-        expect(
-            analyzeTrend.findAll('.analyze-trend-table tbody tr')[1].findAll('td')[8].find('.analyze-trend-cap-amount--portfolio').text(),
-        ).toBe('All: 14,000.00 EUR');
+        expect(analyzeTrend.findAll('.analyze-trend-table tbody tr')[1].findAll('td')[5].text()).toBe('-2.03 EUR');
         expect(buyStreakRows[2].findAll('td')[3].text()).toBe('5 (-5.00%)');
         expect(buyStreakRows[2].findAll('td')[4].text()).toBe('');
-        expect(buyStreakRows[2].findAll('td')[5].text()).toBe('1: -2.00%');
-        expect(buyStreakRows[2].findAll('td')[8].text()).toContain('-140.00 EUR');
-        expect(buyStreakRows[2].findAll('td')[8].find('.analyze-trend-cap-amount').text()).toBe('7,000.00 EUR');
-        expect(buyStreakRows[2].findAll('td')[8].find('.analyze-trend-cap-amount--portfolio').text()).toBe('All: 14,000.00 EUR');
+        expect(buyStreakRows[2].findAll('td')[5].text()).toBe('-135.18 EUR');
+        expect(buyStreakRows[2].findAll('td')[6].text()).toBe('1: -2.00%');
+        expect(buyStreakRows[2].findAll('td')[9].text()).toContain('-140.00 EUR');
+        expect(buyStreakRows[2].findAll('td')[9].find('.analyze-trend-cap-amount').text()).toBe('7,000.00 EUR');
         expect(buyStreakRows[3].findAll('td')[3].text()).toBe('4 (-4.00%)');
         expect(buyStreakRows[3].findAll('td')[4].text()).toBe('');
-        expect(buyStreakRows[3].findAll('td')[5].text()).toBe('1: -1.00%');
-        expect(buyStreakRows[3].findAll('td')[8].text()).toContain('-70.00 EUR');
-        expect(buyStreakRows[3].findAll('td')[8].find('.analyze-trend-cap-amount').text()).toBe('7,000.00 EUR');
+        expect(buyStreakRows[3].findAll('td')[5].text()).toBe('-67.93 EUR');
+        expect(buyStreakRows[3].findAll('td')[6].text()).toBe('1: -1.00%');
+        expect(buyStreakRows[3].findAll('td')[9].text()).toContain('-70.00 EUR');
+        expect(buyStreakRows[3].findAll('td')[9].find('.analyze-trend-cap-amount').text()).toBe('7,000.00 EUR');
         expect(buyStreakRows[4].findAll('td')[3].text()).toBe('3 (-3.00%)');
         expect(buyStreakRows[4].findAll('td')[4].text()).toBe('BUY 1');
-        expect(buyStreakRows[4].findAll('td')[5].text()).toBe('');
-        expect(buyStreakRows[4].findAll('td')[8].text()).toContain('0.00 EUR');
-        expect(buyStreakRows[4].findAll('td')[8].find('.analyze-trend-cap-amount').text()).toBe('7,000.00 EUR');
+        expect(buyStreakRows[4].findAll('td')[5].text()).toBe('BUY');
+        expect(buyStreakRows[4].findAll('td')[5].find('.analyze-trend-rec--buy').exists()).toBe(true);
+        expect(buyStreakRows[4].findAll('td')[6].text()).toBe('');
+        expect(buyStreakRows[4].findAll('td')[9].text()).toContain('0.00 EUR');
+        expect(buyStreakRows[4].findAll('td')[9].find('.analyze-trend-cap-amount').text()).toBe('7,000.00 EUR');
         expect(buyStreakRows[4].find('.analyze-trend-rec--buy').exists()).toBe(true);
         expect(buyStreakRows[4].text()).not.toContain('BUY 2');
         expect(buyStreakRows[5].findAll('td')[3].text()).toBe('2 (-2.00%)');
@@ -1637,10 +1658,11 @@ describe('App', () => {
         expect(buyStreakRows[6].findAll('td')[3].text()).toBe('1 (-1.00%)');
         expect(buyStreakRows[6].findAll('td')[4].text()).toBe('');
         expect(buyStreakRows[7].findAll('td')[4].text()).toBe('SELL 1');
-        expect(buyStreakRows[7].findAll('td')[5].text()).toBe('1: +3.10%');
-        expect(buyStreakRows[7].findAll('td')[7].text()).toBe('217.00 EUR');
-        expect(buyStreakRows[7].findAll('td')[8].text()).toBe('All: 7,000.00 EUR');
-        expect(buyStreakRows[7].findAll('td')[9].text()).toBe('217.00 EUR');
+        expect(buyStreakRows[7].findAll('td')[5].text()).toBe('');
+        expect(buyStreakRows[7].findAll('td')[6].text()).toBe('1: +3.10%');
+        expect(buyStreakRows[7].findAll('td')[8].text()).toBe('217.00 EUR');
+        expect(buyStreakRows[7].findAll('td')[9].text()).toBe('');
+        expect(buyStreakRows[7].findAll('td')[10].text()).toBe('217.00 EUR');
         expect(buyStreakRows[11].findAll('td')[3].text()).toBe('3 (-3.00%)');
         expect(buyStreakRows[11].findAll('td')[4].text()).toBe('BUY 1');
         expect(buyStreakRows[11].text()).not.toContain('BUY 2');
@@ -1656,15 +1678,16 @@ describe('App', () => {
         const overlapRows = analyzeTrend.findAll('.analyze-trend-table tbody tr');
         expect(overlapRows).toHaveLength(8);
         expect(overlapRows[1].findAll('td')[4].text()).toBe('BUY 2');
-        expect(overlapRows[1].findAll('td')[5].text()).toBe('1: -2.00%');
-        expect(overlapRows[1].findAll('td')[8].text()).toContain('-140.00 EUR');
-        expect(overlapRows[1].findAll('td')[8].find('.analyze-trend-cap-amount').text()).toBe('12,000.00 EUR');
-        expect(overlapRows[1].findAll('td')[8].find('.analyze-trend-cap-amount--portfolio').text()).toBe('All: 19,000.00 EUR');
+        expect(overlapRows[1].findAll('td')[5].text()).toBe('');
+        expect(overlapRows[1].findAll('td')[6].text()).toBe('1: -2.00%');
+        expect(overlapRows[1].findAll('td')[9].text()).toContain('-140.00 EUR');
+        expect(overlapRows[1].findAll('td')[9].find('.analyze-trend-cap-amount').text()).toBe('12,000.00 EUR');
         expect(overlapRows[0].findAll('td')[4].text()).toContain('SELL 1');
         expect(overlapRows[0].findAll('td')[4].text()).toContain('SELL 2');
-        expect(overlapRows[0].findAll('td')[7].text()).toBe('460.00 EUR');
-        expect(overlapRows[0].findAll('td')[8].text()).toBe('All: 7,000.00 EUR');
-        expect(overlapRows[0].findAll('td')[9].text()).toBe('460.00 EUR');
+        expect(overlapRows[0].findAll('td')[5].text()).toBe('');
+        expect(overlapRows[0].findAll('td')[8].text()).toBe('460.00 EUR');
+        expect(overlapRows[0].findAll('td')[9].text()).toBe('');
+        expect(overlapRows[0].findAll('td')[10].text()).toBe('460.00 EUR');
 
         const tripleStreakCard = trendStockMenu.findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Triple Streak Fund'));
@@ -1676,7 +1699,7 @@ describe('App', () => {
         expect(tripleStreakCard.attributes('aria-pressed')).toBe('true');
         const tripleRows = analyzeTrend.findAll('.analyze-trend-table tbody tr');
         expect(tripleRows[0].findAll('td')[4].text()).toBe('BUY 3');
-        expect(tripleRows[0].findAll('td')[8].find('.analyze-trend-cap-amount').text()).toBe('15,000.00 EUR');
+        expect(tripleRows[0].findAll('td')[9].find('.analyze-trend-cap-amount').text()).toBe('15,000.00 EUR');
 
         const hiddenPreAnalysisCard = trendStockMenu.findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Hidden Pre Analysis Fund'));
@@ -1691,7 +1714,8 @@ describe('App', () => {
         const hiddenPreAnalysisFirstRowCells = hiddenPreAnalysisRows[199].findAll('td');
         expect(hiddenPreAnalysisFirstRowCells[4].text()).toBe('');
         expect(hiddenPreAnalysisFirstRowCells[5].text()).toBe('');
-        expect(hiddenPreAnalysisFirstRowCells[8].text()).toBe('');
+        expect(hiddenPreAnalysisFirstRowCells[6].text()).toBe('');
+        expect(hiddenPreAnalysisFirstRowCells[9].text()).toBe('');
 
         await analyzeTrend.find('.analyze-trend-summary-item--button').trigger('click');
         await flushPromises();

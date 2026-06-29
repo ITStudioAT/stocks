@@ -66,6 +66,14 @@ class StockHolding extends Model
     }
 
     /**
+     * @return HasMany<DepotTransaction, $this>
+     */
+    public function depotTransactions(): HasMany
+    {
+        return $this->hasMany(DepotTransaction::class);
+    }
+
+    /**
      * @return HasMany<StockHoldingIntradayPrice, $this>
      */
     public function intradayPrices(): HasMany
