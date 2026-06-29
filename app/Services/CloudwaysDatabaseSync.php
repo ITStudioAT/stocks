@@ -6,6 +6,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use PDO;
 use RuntimeException;
 
 class CloudwaysDatabaseSync
@@ -20,6 +21,7 @@ class CloudwaysDatabaseSync
      *     target_connection: string,
      *     tables: array<int, array{name: string, rows: int, columns: int, status: string, message: string}>,
      *     skipped_tables: array<int, string>,
+     *     skipped_table_details: array<int, array{name: string, status: string, reason: string, message: string, missing_required_columns: array<int, string>}>,
      *     synced_tables: int,
      *     total_tables: int,
      *     rows: int,
@@ -36,16 +38,10 @@ class CloudwaysDatabaseSync
 
         $sourceTables = $this->tableNames($sourceConnectionName);
         $targetTables = $this->tableNames($targetConnectionName);
-        $matchingTables = array_values(array_intersect($sourceTables, $targetTables));
-        $syncTables = array_values(array_filter(
-            $matchingTables,
-            fn (string $table): bool => $this->missingRequiredTargetColumns(
-                $sourceConnectionName,
-                $targetConnectionName,
-                $table,
-            ) === [],
-        ));
-        $skippedTables = array_values(array_diff($sourceTables, $syncTables));
+        $syncPlan = $this->syncPlan($sourceConnectionName, $targetConnectionName, $sourceTables, $targetTables);
+        $syncTables = $syncPlan['tables'];
+        $skippedTableDetails = $syncPlan['skipped'];
+        $skippedTables = array_column($skippedTableDetails, 'name');
         $syncedTables = [];
 
         Schema::connection($targetConnectionName)->disableForeignKeyConstraints();
@@ -82,6 +78,7 @@ class CloudwaysDatabaseSync
             'target_connection' => $targetConnectionName,
             'tables' => $syncedTables,
             'skipped_tables' => $skippedTables,
+            'skipped_table_details' => $skippedTableDetails,
             'synced_tables' => count($syncedTables),
             'total_tables' => count($sourceTables),
             'rows' => array_sum(array_column($syncedTables, 'rows')),
@@ -115,6 +112,10 @@ class CloudwaysDatabaseSync
                     'database' => $database,
                     'username' => $username,
                     'password' => $password,
+                    'options' => array_replace(
+                        config('database.connections.mysql.options', []),
+                        [PDO::ATTR_TIMEOUT => (int) config('services.cloudways.connect_timeout', 5)],
+                    ),
                 ],
             ),
         ]);
@@ -169,9 +170,7 @@ class CloudwaysDatabaseSync
      */
     private function syncTable(string $sourceConnectionName, string $targetConnectionName, string $table): array
     {
-        $sourceColumns = Schema::connection($sourceConnectionName)->getColumnListing($table);
-        $targetColumns = Schema::connection($targetConnectionName)->getColumnListing($table);
-        $columns = array_values(array_intersect($sourceColumns, $targetColumns));
+        $columns = $this->matchingColumns($sourceConnectionName, $targetConnectionName, $table);
         $rows = 0;
         $batch = [];
 
@@ -208,6 +207,100 @@ class CloudwaysDatabaseSync
             'columns' => count($columns),
             'status' => 'imported',
             'message' => "Imported {$table}: {$rows} row(s), ".count($columns).' column(s).',
+        ];
+    }
+
+    /**
+     * @param  array<int, string>  $sourceTables
+     * @param  array<int, string>  $targetTables
+     * @return array{
+     *     tables: array<int, string>,
+     *     skipped: array<int, array{name: string, status: string, reason: string, message: string, missing_required_columns: array<int, string>}>,
+     * }
+     */
+    private function syncPlan(
+        string $sourceConnectionName,
+        string $targetConnectionName,
+        array $sourceTables,
+        array $targetTables,
+    ): array {
+        $syncTables = [];
+        $skippedTables = [];
+
+        foreach ($sourceTables as $table) {
+            if (! in_array($table, $targetTables, true)) {
+                $skippedTables[] = $this->skippedTable(
+                    table: $table,
+                    reason: 'missing_local_table',
+                    message: "Skipped {$table}: no matching local table.",
+                );
+
+                continue;
+            }
+
+            $missingRequiredColumns = $this->missingRequiredTargetColumns(
+                $sourceConnectionName,
+                $targetConnectionName,
+                $table,
+            );
+
+            if ($missingRequiredColumns !== []) {
+                $skippedTables[] = $this->skippedTable(
+                    table: $table,
+                    reason: 'missing_required_columns',
+                    message: "Skipped {$table}: Cloudways is missing required local column(s): ".implode(', ', $missingRequiredColumns).'.',
+                    missingRequiredColumns: $missingRequiredColumns,
+                );
+
+                continue;
+            }
+
+            if ($this->matchingColumns($sourceConnectionName, $targetConnectionName, $table) === []) {
+                $skippedTables[] = $this->skippedTable(
+                    table: $table,
+                    reason: 'no_matching_columns',
+                    message: "Skipped {$table}: no matching columns.",
+                );
+
+                continue;
+            }
+
+            $syncTables[] = $table;
+        }
+
+        return [
+            'tables' => $syncTables,
+            'skipped' => $skippedTables,
+        ];
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function matchingColumns(string $sourceConnectionName, string $targetConnectionName, string $table): array
+    {
+        $sourceColumns = Schema::connection($sourceConnectionName)->getColumnListing($table);
+        $targetColumns = Schema::connection($targetConnectionName)->getColumnListing($table);
+
+        return array_values(array_intersect($sourceColumns, $targetColumns));
+    }
+
+    /**
+     * @param  array<int, string>  $missingRequiredColumns
+     * @return array{name: string, status: string, reason: string, message: string, missing_required_columns: array<int, string>}
+     */
+    private function skippedTable(
+        string $table,
+        string $reason,
+        string $message,
+        array $missingRequiredColumns = [],
+    ): array {
+        return [
+            'name' => $table,
+            'status' => 'skipped',
+            'reason' => $reason,
+            'message' => $message,
+            'missing_required_columns' => $missingRequiredColumns,
         ];
     }
 

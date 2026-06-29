@@ -244,6 +244,15 @@ class AdminDepotTest extends TestCase
             ->assertOk();
     }
 
+    public function test_admin_cannot_open_updates_menu_page(): void
+    {
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->get('/admin/menu/updates')
+            ->assertNotFound();
+    }
+
     public function test_admin_can_open_nested_analyze_menu_page(): void
     {
         $admin = $this->adminUser();

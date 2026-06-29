@@ -29,6 +29,7 @@ return [
         'database' => env('CLOUDWAYS_DATABASE'),
         'username' => env('CLOUDWAYS_USERNAME'),
         'password' => env('CLOUDWAYS_PASSWORD'),
+        'connect_timeout' => env('CLOUDWAYS_CONNECT_TIMEOUT', 5),
     ],
 
     'resend' => [

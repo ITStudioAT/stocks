@@ -599,6 +599,7 @@ describe('App', () => {
                             latest_price_trend: 'up',
                             latest_price_change_pct: '2.28',
                             latest_price_status: 'fresh',
+                            latest_price_as_of: '2026-06-03T15:35:00+00:00',
                             recent_prices: [],
                             position_pieces: '2.00000000',
                         },
@@ -664,6 +665,9 @@ describe('App', () => {
         expect(firstRowCells[0].text()).toContain('Pieces: 2');
         expect(firstRowCells[0].text()).not.toContain('US0378331005');
         expect(firstRowCells[0].text()).not.toContain('WKN: 865985');
+        expect(firstRowCells[1].text()).toContain('306.32');
+        expect(firstRowCells[1].text()).toContain('03.06. 17:35');
+        expect(wrapper.get('.mobile-stock-price-row').text()).toContain('03.06. 17:35');
 
         setViewportSize(852, 393);
         await flushPromises();
@@ -678,6 +682,7 @@ describe('App', () => {
         const appleCells = landscapeRows[0].findAll('td');
         const microsoftCells = landscapeRows[1].findAll('td');
         expect(appleCells[1].text()).toContain('306.32');
+        expect(appleCells[1].text()).toContain('03.06. 17:35');
         expect(appleCells[1].text()).toContain('+2.28% · 299.50');
         expect(appleCells[1].find('[aria-label="Day indicator: Price increased"]').exists()).toBe(true);
         expect(appleCells[1].find('.recent-price-trend-dot--day').classes()).toContain('recent-price-trend-dot-up');
@@ -4305,59 +4310,11 @@ describe('App', () => {
         wrapper.vm.navigateSection('updates');
         await flushPromises();
 
-        expect(window.location.pathname).toBe('/admin/menu/updates');
+        expect(window.location.pathname).toBe('/admin/dashboard');
         expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
-        expect(wrapper.text()).toContain('Updates');
-        expect(wrapper.text()).toContain('Automatic price refresh');
-        expect(wrapper.text()).toContain('Automatic index price refresh');
-        expect(wrapper.text()).toContain('Current interval: 20 min');
-        expect(wrapper.text()).toContain('Edit');
-        expect(wrapper.text()).toContain('During trading');
-        expect(wrapper.text()).toContain('Start before trading');
-        expect(wrapper.text()).toContain('End after trading');
-        expect(wrapper.text()).toContain('Outside trading');
-        expect(wrapper.text()).toContain('Outside trading interval');
-
-        expect(wrapper.find('#price-refresh-schedule-form').findAll('input')).toHaveLength(0);
-        expect(wrapper.find('#index-price-refresh-schedule-form').findAll('input')).toHaveLength(0);
-
-        const editScheduleButton = wrapper.find('#price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
-        const editIndexScheduleButton = wrapper.find('#index-price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
-        expect(editScheduleButton.attributes('disabled')).toBeUndefined();
-        expect(editIndexScheduleButton.attributes('disabled')).toBeUndefined();
-        await editScheduleButton.trigger('click');
-        await flushPromises();
-
-        const scheduleInputs = wrapper.find('#price-refresh-schedule-form').findAll('input[type="number"]');
-        expect(scheduleInputs).toHaveLength(4);
-        expect(wrapper.find('#index-price-refresh-schedule-form').findAll('input[type="number"]')).toHaveLength(0);
-        expect(editIndexScheduleButton.attributes('disabled')).toBeDefined();
-        expect(wrapper.text()).toContain('Save');
-
-        await scheduleInputs[0].setValue('15');
-        await scheduleInputs[1].setValue('8');
-        await scheduleInputs[2].setValue('12');
-        await scheduleInputs[3].setValue('45');
-        wrapper.vm.priceRefreshScheduleForm.closed_refresh_enabled = false;
-        await wrapper.vm.$nextTick();
-        await wrapper.find('#price-refresh-schedule-form').trigger('submit');
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/price-refresh-settings', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({
-                trading_interval_minutes: 15,
-                trading_starts_before_minutes: 8,
-                trading_ends_after_minutes: 12,
-                closed_refresh_enabled: false,
-                closed_interval_minutes: 45,
-            }),
-        }));
-        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/refresh-prices/settings-refresh-1', expect.any(Object));
-        expect(wrapper.text()).toContain('Price refresh schedule updated.');
-        expect(wrapper.text()).toContain('Current interval: 15 min');
-        expect(wrapper.find('#price-refresh-schedule-form').text()).toContain('Off');
-        expect(wrapper.text()).toContain('Edit');
+        expect(wrapper.text()).not.toContain('Automatic price refresh');
+        expect(wrapper.find('#price-refresh-schedule-form').exists()).toBe(false);
+        expect(wrapper.find('#index-price-refresh-schedule-form').exists()).toBe(false);
 
         wrapper.vm.navigateSection('dashboard');
         await flushPromises();
@@ -4864,94 +4821,39 @@ describe('App', () => {
         }
     });
 
-    it('allows editing the index price refresh schedule via the index card Edit button', async () => {
+    it('does not render legacy update schedule forms on the removed updates page', async () => {
         window.history.pushState({}, '', '/admin/menu/updates');
-        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
-        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
-        const fetchMock = vi.fn((path, options = {}) => {
+        const fetchMock = vi.fn((path) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({ user: { id: 1, name: 'Admin', email: 'a@b.com', roles: ['admin'] } }));
             }
             if (path === '/admin/depots/active') {
                 return Promise.resolve(jsonResponse({
-                    depot,
+                    depot: null,
                     price_refresh_settings: priceRefreshSettings(),
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
             if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
-                    depot,
+                    depot: null,
                     holdings: [],
-                    meta: pagination,
+                    meta: emptyPagination,
                     price_refresh_settings: priceRefreshSettings(),
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
-            if (path === '/admin/watchlist/exchange-trading-times') {
-                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
-            }
-            if (path === '/admin/depots?page=1') {
-                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
-            }
-            if (path === '/admin/price-refresh-settings' && options?.method === 'PATCH') {
-                return Promise.resolve(jsonResponse({
-                    message: 'Price refresh schedule updated.',
-                    price_refresh_settings: priceRefreshSettings({ trading_interval_minutes: 30 }),
-                }));
-            }
-            if (path === '/admin/index-price-refresh-settings' && options?.method === 'PATCH') {
-                return Promise.resolve(jsonResponse({
-                    message: 'Index price refresh schedule updated.',
-                    index_price_refresh_settings: indexPriceRefreshSettings({ trading_interval_minutes: 35 }),
-                }));
-            }
-            if (path === '/admin/price-refresh-settings') {
-                return Promise.resolve(jsonResponse({
-                    price_refresh_settings: priceRefreshSettings(),
-                    index_price_refresh_settings: indexPriceRefreshSettings(),
-                }));
-            }
+
             return Promise.resolve(jsonResponse({}));
         });
         global.fetch = fetchMock;
         const wrapper = mountApp();
         await flushPromises();
 
-        expect(wrapper.find('#price-refresh-schedule-form').text()).toContain('20 min');
-        expect(wrapper.find('#index-price-refresh-schedule-form').text()).toContain('30 min');
-        expect(wrapper.find('#index-price-refresh-schedule-form').text()).toContain('15 min');
-        expect(wrapper.find('#index-price-refresh-schedule-form').text()).toContain('20 min');
-        expect(wrapper.find('#index-price-refresh-schedule-form').text()).toContain('Off');
-        expect(wrapper.find('#index-price-refresh-schedule-form').text()).toContain('90 min');
-        expect(wrapper.find('#index-price-refresh-schedule-form').findAll('input')).toHaveLength(0);
-
-        const stockEditButton = wrapper.find('#price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
-        const indexEditButton = wrapper.find('#index-price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
-        expect(stockEditButton.attributes('disabled')).toBeUndefined();
-        expect(indexEditButton.attributes('disabled')).toBeUndefined();
-        await indexEditButton.trigger('click');
-        await flushPromises();
-
-        expect(wrapper.find('#index-price-refresh-schedule-form').findAll('input[type="number"]')).toHaveLength(4);
-        expect(stockEditButton.attributes('disabled')).toBeDefined();
-
-        await wrapper.find('#index-price-refresh-schedule-form').trigger('submit');
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/index-price-refresh-settings', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({
-                trading_interval_minutes: 30,
-                trading_starts_before_minutes: 15,
-                trading_ends_after_minutes: 20,
-                closed_refresh_enabled: false,
-                closed_interval_minutes: 90,
-            }),
-        }));
-        expect(fetchMock).not.toHaveBeenCalledWith('/admin/price-refresh-settings', expect.objectContaining({ method: 'PATCH' }));
-        expect(wrapper.text()).toContain('Index price refresh schedule updated.');
-        expect(wrapper.find('#index-price-refresh-schedule-form').findAll('input')).toHaveLength(0);
+        expect(window.location.pathname).toBe('/admin/dashboard');
+        expect(wrapper.text()).not.toContain('Updates');
+        expect(wrapper.find('#price-refresh-schedule-form').exists()).toBe(false);
+        expect(wrapper.find('#index-price-refresh-schedule-form').exists()).toBe(false);
     });
 
     it('allows scheduling and immediately queuing the intraday 5m missing backfill', async () => {
@@ -5049,40 +4951,13 @@ describe('App', () => {
             const wrapper = mountApp();
             await flushPromises();
 
-            expect(wrapper.find('#intraday-backfill-schedule-form').text()).toContain('18:30');
-            expect(wrapper.find('#intraday-backfill-schedule-form').text()).toContain('Europe/Vienna');
-
-            const editButton = wrapper.find('#intraday-backfill-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
-            await editButton.trigger('click');
-            await flushPromises();
-
-            await wrapper.find('#intraday-backfill-schedule-form input[type="time"]').setValue('21:15');
-            await wrapper.find('#intraday-backfill-schedule-form').trigger('submit');
-            await flushPromises();
-
-            expect(fetchMock).toHaveBeenCalledWith('/admin/intraday-backfill-settings', expect.objectContaining({
-                method: 'PATCH',
-                body: JSON.stringify({ daily_time: '21:15' }),
-            }));
-            expect(wrapper.text()).toContain('Intraday backfill schedule updated.');
-            expect(wrapper.find('#intraday-backfill-schedule-form').text()).toContain('21:15');
-
-            const runButton = wrapper.find('#intraday-backfill-schedule-form').findAll('button').find((button) => button.text().includes('Fetch missing now'));
-            await runButton.trigger('click');
-            await flushPromises();
-
-            expect(fetchMock).toHaveBeenCalledWith('/admin/intraday-backfill/run', expect.objectContaining({
-                method: 'POST',
-            }));
-            expect(wrapper.text()).toContain('Missing intraday backfill queued.');
-            expect(wrapper.text()).toContain('Backfill: 5/5');
-            expect(wrapper.text()).toContain('25 candles loaded/updated');
+            expect(wrapper.find('#intraday-backfill-schedule-form').exists()).toBe(false);
         } finally {
             vi.useRealTimers();
         }
     });
 
-    it('does not reset schedule draft values while settings polling refreshes', async () => {
+    it('does not show the removed stock price schedule form on the legacy updates path', async () => {
         window.history.pushState({}, '', '/admin/menu/updates');
         const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
@@ -5125,21 +5000,10 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
-        const stockEditButton = wrapper.find('#price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
-        await stockEditButton.trigger('click');
-        await flushPromises();
-
-        const stockScheduleInputs = wrapper.find('#price-refresh-schedule-form').findAll('input[type="number"]');
-        await stockScheduleInputs[0].setValue('10');
-
-        await wrapper.vm.pollPriceRefreshSettings();
-        await flushPromises();
-
-        expect(wrapper.find('#price-refresh-schedule-form').findAll('input[type="number"]')[0].element.value).toBe('10');
-        expect(wrapper.vm.priceRefreshSettings.trading_interval_minutes).toBe(55);
+        expect(wrapper.find('#price-refresh-schedule-form').exists()).toBe(false);
     });
 
-    it('keeps outside trading off after saving the stock price refresh schedule', async () => {
+    it('does not submit the removed stock price schedule form on the legacy updates path', async () => {
         window.history.pushState({}, '', '/admin/menu/updates');
         const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
@@ -5183,29 +5047,13 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
-        const stockEditButton = wrapper.find('#price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
-        await stockEditButton.trigger('click');
-        await flushPromises();
-
-        wrapper.vm.priceRefreshScheduleForm.closed_refresh_enabled = false;
-        await wrapper.vm.$nextTick();
-        await wrapper.find('#price-refresh-schedule-form').trigger('submit');
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/price-refresh-settings', expect.objectContaining({
+        expect(wrapper.find('#price-refresh-schedule-form').exists()).toBe(false);
+        expect(fetchMock).not.toHaveBeenCalledWith('/admin/price-refresh-settings', expect.objectContaining({
             method: 'PATCH',
-            body: expect.stringContaining('"closed_refresh_enabled":false'),
         }));
-        expect(wrapper.find('#price-refresh-schedule-form').text()).toContain('Off');
-
-        const editAgainButton = wrapper.find('#price-refresh-schedule-form').findAll('button').find((button) => button.text().includes('Edit'));
-        await editAgainButton.trigger('click');
-        await flushPromises();
-
-        expect(wrapper.vm.priceRefreshScheduleForm.closed_refresh_enabled).toBe(false);
     });
 
-    it('shows Data as a main dashboard item and Admin group with Users, Roles, Updates, and Cloudways submenu chips for super_admin', async () => {
+    it('shows Data as a main dashboard item and Admin group with Users, Roles, and Cloudways submenu chips for super_admin', async () => {
         window.history.pushState({}, '', '/admin/menu/users');
         localStorage.removeItem('data_intraday_refresh_info_dismissed');
         let mockedIndexDataUpdateSettings = indexDataUpdateSettings();
@@ -5515,6 +5363,102 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/data/realtime/latest?stock=7') {
+                return Promise.resolve(jsonResponse({
+                    date: '2026-06-05',
+                    row_count: 3,
+                    entries: [
+                        {
+                            id: 701,
+                            stock_holding_id: 7,
+                            holding_symbol: 'AMES',
+                            holding_name: 'Amundi IBEX 35 UCITS ETF',
+                            holding_exchange: 'XETRA',
+                            instrument_key: 'isin:LU1681043599',
+                            quote_hash: 'hash-701',
+                            source_key: 'eodhd_realtime',
+                            source_name: 'EODHD real-time',
+                            source_quality: 'market_data_vendor',
+                            venue: 'Tradegate',
+                            mic: 'TGAT',
+                            isin: 'LU1681043599',
+                            wkn: 'A2H58J',
+                            symbol: 'AMES',
+                            currency: 'EUR',
+                            bid: '10.10000000',
+                            ask: '10.20000000',
+                            last: '10.15000000',
+                            close: null,
+                            price: '10.15000000',
+                            price_type: 'last',
+                            spread_pct: '0.980000',
+                            as_of: '2026-06-05T08:00:00+00:00',
+                            fetched_at: '2026-06-05T08:00:02+00:00',
+                            freshness_status: 'fresh',
+                            validation_status: 'valid',
+                        },
+                        {
+                            id: 702,
+                            stock_holding_id: 7,
+                            holding_symbol: 'AMES',
+                            holding_name: 'Amundi IBEX 35 UCITS ETF',
+                            holding_exchange: 'XETRA',
+                            instrument_key: 'isin:LU1681043599',
+                            quote_hash: 'hash-702',
+                            source_key: 'eodhd_realtime',
+                            source_name: 'EODHD real-time',
+                            source_quality: 'market_data_vendor',
+                            venue: 'XETRA',
+                            mic: 'XETR',
+                            isin: 'LU1681043599',
+                            wkn: 'A2H58J',
+                            symbol: 'AMES',
+                            currency: 'EUR',
+                            bid: '10.20000000',
+                            ask: '10.30000000',
+                            last: '10.25000000',
+                            close: null,
+                            price: '10.25000000',
+                            price_type: 'last',
+                            spread_pct: '0.970000',
+                            as_of: '2026-06-05T12:00:00+00:00',
+                            fetched_at: '2026-06-05T12:00:03+00:00',
+                            freshness_status: 'fresh',
+                            validation_status: 'valid',
+                        },
+                        {
+                            id: 703,
+                            stock_holding_id: 7,
+                            holding_symbol: 'AMES',
+                            holding_name: 'Amundi IBEX 35 UCITS ETF',
+                            holding_exchange: 'XETRA',
+                            instrument_key: 'isin:LU1681043599',
+                            quote_hash: 'hash-703',
+                            source_key: 'eodhd_realtime',
+                            source_name: 'EODHD real-time',
+                            source_quality: 'market_data_vendor',
+                            venue: 'XETRA',
+                            mic: 'XETR',
+                            isin: 'LU1681043599',
+                            wkn: 'A2H58J',
+                            symbol: 'AMES',
+                            currency: 'EUR',
+                            bid: '10.15000000',
+                            ask: '10.25000000',
+                            last: '10.20000000',
+                            close: null,
+                            price: '10.20000000',
+                            price_type: 'last',
+                            spread_pct: '0.980000',
+                            as_of: '2026-06-05T13:00:00+00:00',
+                            fetched_at: '2026-06-05T13:00:04+00:00',
+                            freshness_status: 'fresh',
+                            validation_status: 'valid',
+                        },
+                    ],
+                }));
+            }
+
             if (path === '/admin/watchlist/holdings/7/end-of-day-prices/latest-days') {
                 return Promise.resolve(jsonResponse({
                     holding: {
@@ -5715,6 +5659,15 @@ describe('App', () => {
                             rows: 15,
                             synced_at: '2026-06-13T12:00:00+00:00',
                             skipped_tables: ['remote_only_items'],
+                            skipped_table_details: [
+                                {
+                                    name: 'remote_only_items',
+                                    status: 'skipped',
+                                    reason: 'missing_local_table',
+                                    message: 'Skipped remote_only_items: no matching local table.',
+                                    missing_required_columns: [],
+                                },
+                            ],
                             tables: [
                                 {
                                     name: 'users',
@@ -5747,7 +5700,7 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Users');
         expect(wrapper.text()).toContain('Roles');
         expect(wrapper.text()).toContain('Data');
-        expect(wrapper.text()).toContain('Updates');
+        expect(wrapper.text()).not.toContain('Updates');
         expect(wrapper.text()).toContain('Cloudways');
         expect(wrapper.find('.dashboard-navigation-drawer').text()).toContain('Data');
 
@@ -5756,7 +5709,7 @@ describe('App', () => {
         expect(tabLabels.some((l) => l.includes('Users'))).toBe(true);
         expect(tabLabels.some((l) => l.includes('Roles'))).toBe(true);
         expect(tabLabels.some((l) => l.includes('Data'))).toBe(false);
-        expect(tabLabels.some((l) => l.includes('Updates'))).toBe(true);
+        expect(tabLabels.some((l) => l.includes('Updates'))).toBe(false);
         expect(tabLabels.some((l) => l.includes('Cloudways'))).toBe(true);
 
         const rolesTab = wrapper.findAll('.v-tab').find((t) => t.text().includes('Roles'));
@@ -5790,7 +5743,7 @@ describe('App', () => {
         expect(wrapper.text()).toContain('depots');
         expect(wrapper.text()).toContain('Imported users: 1 row(s), 9 column(s).');
         expect(wrapper.text()).toContain('Imported depots: 14 row(s), 6 column(s).');
-        expect(wrapper.text()).toContain('Skipped: remote_only_items');
+        expect(wrapper.text()).toContain('Skipped remote_only_items: no matching local table.');
 
         const dataMenuItem = wrapper.find('.dashboard-navigation-drawer')
             .findAll('.v-list-item')
@@ -5812,13 +5765,24 @@ describe('App', () => {
         expect(liveDataSection.text()).toContain('Exchange: XETRA');
         expect(liveDataSection.text()).toContain('Currency: EUR');
         expect(liveDataSection.text()).toContain('Latest entries');
-        expect(liveDataSection.text()).toContain('Same latest date: 05.06.2026');
+        expect(liveDataSection.text()).toContain('Selected stock_realtime_prices rows from last date: 05.06.2026');
+        expect(liveDataSection.text()).toContain('3 row(s)');
         expect(liveDataSection.text()).toContain('10.150 EUR');
         const liveDataLatestEntriesTable = liveDataSection.find('.test-live-data-latest-entries-table');
+        expect(liveDataLatestEntriesTable.findAll('thead th').map((header) => header.text())).toEqual([
+            'Time',
+            'Price',
+        ]);
         expect(liveDataLatestEntriesTable.text()).toContain('10.250 EUR');
         expect(liveDataLatestEntriesTable.text()).toContain('10.200 EUR');
+        expect(liveDataLatestEntriesTable.text()).not.toContain('Amundi IBEX 35 UCITS ETF');
+        expect(liveDataLatestEntriesTable.text()).not.toContain('Leerink');
+        expect(liveDataLatestEntriesTable.text()).not.toContain('20.750 EUR');
         expect(liveDataLatestEntriesTable.text()).not.toContain('Tradegate');
         expect(liveDataLatestEntriesTable.text()).not.toContain('EODHD real-time');
+        expect(liveDataLatestEntriesTable.text()).not.toContain('fresh / valid');
+        expect(liveDataLatestEntriesTable.text()).not.toContain('last');
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/data/realtime/latest?stock=7')).toBe(true);
         expect(liveDataLatestEntriesTable.findAll('.test-live-data-latest-price-arrow--up')).toHaveLength(1);
         expect(liveDataLatestEntriesTable.findAll('.test-live-data-latest-price-arrow--down')).toHaveLength(1);
 

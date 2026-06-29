@@ -240,6 +240,9 @@ const selectedDataHistoricIntradayCoverage = ref(null);
 const selectedDataLiveLatestEntries = ref(null);
 const selectedDataLiveLatestEntriesLoading = ref(false);
 const selectedDataLiveLatestEntriesError = ref('');
+const dataRealtimeLatestPrices = ref(null);
+const dataRealtimeLatestPricesLoading = ref(false);
+const dataRealtimeLatestPricesError = ref('');
 const selectedDataHistoricalLatestEntries = ref(null);
 const selectedDataHistoricalLatestEntriesLoading = ref(false);
 const selectedDataHistoricalLatestEntriesError = ref('');
@@ -279,6 +282,7 @@ const cloudwaysSyncProgressMessage = ref('');
 const cloudwaysSyncResult = ref(null);
 let selectedDataHistoricIntradayCoverageRequestId = 0;
 let selectedDataLiveLatestEntriesRequestId = 0;
+let dataRealtimeLatestPricesRequestId = 0;
 let selectedDataHistoricalLatestEntriesRequestId = 0;
 let selectedDataEndOfDayLatestEntriesRequestId = 0;
 
@@ -375,6 +379,14 @@ const selectedDataLiveLatestRows = computed(() => {
         priceTrend: dataLatestEntryPriceTrend(entry, entries[index - 1] ?? null),
     }));
 });
+const dataRealtimeLatestRows = computed(() => {
+    const entries = dataRealtimeLatestPrices.value?.entries ?? [];
+
+    return entries.map((entry, index) => ({
+        ...entry,
+        priceTrend: dataLatestEntryPriceTrend(entry, entries[index - 1] ?? null),
+    }));
+});
 const selectedDataHistoricalLatestRows = computed(() => {
     const entries = selectedDataHistoricalLatestEntries.value?.entries ?? [];
 
@@ -392,6 +404,8 @@ const selectedDataEndOfDayLatestRows = computed(() => {
     }));
 });
 const selectedDataLiveLatestDate = computed(() => selectedDataLiveLatestEntries.value?.date ?? null);
+const dataRealtimeLatestDate = computed(() => dataRealtimeLatestPrices.value?.date ?? null);
+const dataRealtimeLatestRowCount = computed(() => dataRealtimeLatestPrices.value?.row_count ?? dataRealtimeLatestRows.value.length);
 const selectedDataHistoricStockLiveSummary = computed(() => {
     const stock = selectedDataHistoricStock.value;
     const rawRecordCount = Number(stock?.latest_realtime_day_record_count ?? 0);
@@ -2187,11 +2201,6 @@ const menuItems = computed(() => [
                         icon: 'mdi-shield-account-outline',
                     },
                 ] : []),
-                {
-                    key: 'updates',
-                    label: 'Updates',
-                    icon: 'mdi-update',
-                },
                 ...(canManageUsers.value ? [
                     {
                         key: 'cloudways',
@@ -2365,6 +2374,7 @@ watch(
         if (selectedStockId === null || selectedStockId === undefined || Number.isNaN(Number(selectedStockId))) {
             selectedDataHistoricIntradayCoverage.value = null;
             selectedDataLiveLatestEntries.value = null;
+            dataRealtimeLatestPrices.value = null;
             selectedDataHistoricalLatestEntries.value = null;
             selectedDataEndOfDayLatestEntries.value = null;
 
@@ -2377,6 +2387,7 @@ watch(
 
         if (dataSubsection === 'live-data') {
             loadSelectedDataLiveLatestEntries(selectedStockId).catch(() => {});
+            loadDataRealtimeLatestPrices(selectedStockId).catch(() => {});
         }
 
         if (dataSubsection === 'historical-data') {
@@ -2503,6 +2514,18 @@ async function loadSelectedTestIntraday() {
 }
 
 function navigateSection(section) {
+    const knownSections = ['dashboard', 'profile', 'analyze', 'data', 'depot', 'depots', 'users', 'roles', 'cloudways'];
+
+    if (!knownSections.includes(section)) {
+        activeSection.value = 'dashboard';
+        clearSectionMessages();
+        updateUrlPath();
+        syncUpdateStatusPolling();
+        syncDashboardAutoReload();
+
+        return;
+    }
+
     activeSection.value = section;
 
     if (section === 'analyze' && !isAnalyzeSubsection(activeAnalyzeSubsection.value)) {
@@ -2537,17 +2560,12 @@ function navigateSection(section) {
         loadWatchlistHoldingsForActiveSection();
     }
 
-    if (section === 'updates') {
-        loadPriceRefreshSettings();
-    }
-
     syncUpdateStatusPolling();
     syncDashboardAutoReload();
 }
 
 function syncUpdateStatusPolling() {
-    const shouldPollUpdateStatus = activeSection.value === 'updates'
-        || (activeSection.value === 'data' && activeDataSubsection.value === 'overview');
+    const shouldPollUpdateStatus = activeSection.value === 'data' && activeDataSubsection.value === 'overview';
 
     if (shouldPollUpdateStatus) {
         startLiveDataStatusClock();
@@ -2681,6 +2699,7 @@ function emptyCloudwaysSyncResult() {
         rows: 0,
         synced_at: null,
         skipped_tables: [],
+        skipped_table_details: [],
         tables: [],
     };
 }
@@ -3079,8 +3098,7 @@ function applyRouteFromPath() {
             .replace('/admin/menu/', '')
             .split('/')
             .map((segment) => decodeURIComponent(segment));
-        const section = sectionSegment ?? '';
-        const normalizedSection = section === 'dashboard-admin' ? 'updates' : section;
+        const normalizedSection = sectionSegment ?? '';
 
         if (normalizedSection === 'analyze') {
             activeSection.value = 'analyze';
@@ -3110,11 +3128,13 @@ function applyRouteFromPath() {
         const isTopLevel = menuItems.value.some((item) => item.key === normalizedSection);
         const isChild = menuItems.value.flatMap((item) => item.children ?? []).some((child) => child.key === normalizedSection);
         activeSection.value = (isTopLevel || isChild) ? normalizedSection : 'dashboard';
+        updateUrlPath({ replace: true });
 
         return;
     }
 
     activeSection.value = 'dashboard';
+    updateUrlPath({ replace: true });
 }
 
 function updateUrlPath(options = {}) {
@@ -4108,9 +4128,6 @@ async function pollPriceRefreshSettings() {
             startPriceRefreshPolling(refresh.refresh_id);
         }
     } catch (err) {
-        if (activeSection.value === 'updates') {
-            priceRefreshScheduleError.value = err.message;
-        }
     } finally {
         isPriceRefreshSettingsPolling.value = false;
     }
@@ -4148,9 +4165,6 @@ async function pollIntradayBackfillStatus(refreshId) {
     } catch (err) {
         stopIntradayBackfillPolling();
 
-        if (activeSection.value === 'updates') {
-            priceRefreshScheduleError.value = err.message;
-        }
     }
 }
 
@@ -4253,6 +4267,43 @@ async function loadSelectedDataLiveLatestEntries(stockId = null) {
     } finally {
         if (requestId === selectedDataLiveLatestEntriesRequestId) {
             selectedDataLiveLatestEntriesLoading.value = false;
+        }
+    }
+
+    return null;
+}
+
+async function loadDataRealtimeLatestPrices(stockId = null) {
+    const targetStockId = Number(stockId ?? selectedDataHistoricStockId.value);
+
+    if (Number.isNaN(targetStockId) || targetStockId <= 0) {
+        dataRealtimeLatestPrices.value = null;
+
+        return null;
+    }
+
+    const requestId = ++dataRealtimeLatestPricesRequestId;
+    dataRealtimeLatestPricesLoading.value = true;
+    dataRealtimeLatestPricesError.value = '';
+
+    try {
+        const data = await request(`/admin/data/realtime/latest?stock=${encodeURIComponent(targetStockId)}`);
+
+        if (requestId === dataRealtimeLatestPricesRequestId) {
+            dataRealtimeLatestPrices.value = data;
+
+            return data;
+        }
+    } catch (error) {
+        if (requestId === dataRealtimeLatestPricesRequestId) {
+            dataRealtimeLatestPrices.value = null;
+            dataRealtimeLatestPricesError.value = error.message;
+        }
+
+        throw error;
+    } finally {
+        if (requestId === dataRealtimeLatestPricesRequestId) {
+            dataRealtimeLatestPricesLoading.value = false;
         }
     }
 
@@ -5354,6 +5405,22 @@ function mobileHoldingPriceSource(holding) {
 
 function formatMobileHoldingPrice(holding) {
     return formatLatestPrice(holding);
+}
+
+function formatMobileHoldingPriceLoadedAt(holding) {
+    if (holding.latest_price === null || holding.latest_price === undefined || holding.latest_price === '') {
+        return '';
+    }
+
+    const loadedAt = holding.latest_price_as_of || holding.latest_price_fetched_at;
+
+    if (!loadedAt) {
+        return '';
+    }
+
+    const formattedLoadedAt = formatCompactSourceDateTime(loadedAt);
+
+    return formattedLoadedAt === '-' ? '' : formattedLoadedAt;
 }
 
 function mobileHoldingPriceClass(holding) {
@@ -8080,6 +8147,10 @@ function formatDataLiveLatestEntryPrice(entry) {
     return formatPriceValue(entry.price, entry.currency ?? selectedDataHistoricStock.value?.currency, { showCurrency: true });
 }
 
+function formatDataRealtimeLatestEntryPrice(entry) {
+    return formatPriceValue(entry.price, entry.currency, { showCurrency: true });
+}
+
 function formatDataLiveLatestDate(value) {
     return value ? formatAnalyzeTrendDate(value) : '-';
 }
@@ -8456,6 +8527,14 @@ function formatSourceDateTime(value) {
     }
 
     return formatDateTime(value);
+}
+
+function formatCompactSourceDateTime(value) {
+    const formattedDateTime = formatSourceDateTime(value);
+
+    return formattedDateTime
+        .replace(/^(\d{2}\.\d{2}\.)\d{4},\s*/, '$1 ')
+        .replace(/^(\d{2}\.\d{2}\.)\d{4}$/, '$1');
 }
 
 function formatSessionHeaderDate(daysAgo) {
@@ -9427,7 +9506,15 @@ function formatIndexDataUpdateSchedule(settings) {
                                             class="latest-price-value mobile-stock-price"
                                             :class="mobileHoldingPriceClass(holding)"
                                         >
-                                            <span>{{ formatMobileHoldingPrice(holding) }}</span>
+                                            <span class="mobile-stock-price-main">
+                                                <span>{{ formatMobileHoldingPrice(holding) }}</span>
+                                                <span
+                                                    v-if="formatMobileHoldingPriceLoadedAt(holding)"
+                                                    class="mobile-price-loaded-at"
+                                                >
+                                                    {{ formatMobileHoldingPriceLoadedAt(holding) }}
+                                                </span>
+                                            </span>
                                             <span
                                                 v-if="mobileHoldingPriceChangeText(holding)"
                                                 class="mobile-stock-price-change"
@@ -9561,6 +9648,12 @@ function formatIndexDataUpdateSchedule(settings) {
                                                             <span class="watch-list-live-dot" aria-hidden="true" />
                                                             LIVE
                                                         </span>
+                                                        <span
+                                                            v-if="formatMobileHoldingPriceLoadedAt(holding)"
+                                                            class="mobile-price-loaded-at"
+                                                        >
+                                                            {{ formatMobileHoldingPriceLoadedAt(holding) }}
+                                                        </span>
                                                     </span>
                                                     <span
                                                         v-if="mobileHoldingPriceChangeText(holding)"
@@ -9582,6 +9675,12 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     >
                                                         <span class="watch-list-live-dot" aria-hidden="true" />
                                                         LIVE
+                                                    </span>
+                                                    <span
+                                                        v-if="isCompactWatchListTable && formatMobileHoldingPriceLoadedAt(holding)"
+                                                        class="mobile-price-loaded-at"
+                                                    >
+                                                        {{ formatMobileHoldingPriceLoadedAt(holding) }}
                                                     </span>
                                                 </span>
                                                 <span
@@ -11636,7 +11735,7 @@ function formatIndexDataUpdateSchedule(settings) {
                     </v-dialog>
 
                     <v-tabs
-                        v-if="(activeSection === 'depots' || activeSection === 'users' || activeSection === 'roles' || activeSection === 'updates' || activeSection === 'cloudways') && canManageDashboardAdmin"
+                        v-if="(activeSection === 'depots' || activeSection === 'users' || activeSection === 'roles' || activeSection === 'cloudways') && canManageDashboardAdmin"
                         :model-value="activeSection"
                         color="primary"
                         class="mb-6"
@@ -11645,7 +11744,6 @@ function formatIndexDataUpdateSchedule(settings) {
                         <v-tab value="depots" prepend-icon="mdi-briefcase-outline">Depots</v-tab>
                         <v-tab v-if="canManageUsers" value="users" prepend-icon="mdi-account-group-outline">Users</v-tab>
                         <v-tab v-if="canManageUsers" value="roles" prepend-icon="mdi-shield-account-outline">Roles</v-tab>
-                        <v-tab value="updates" prepend-icon="mdi-update">Updates</v-tab>
                         <v-tab v-if="canManageUsers" value="cloudways" prepend-icon="mdi-cloud-outline">Cloudways</v-tab>
                     </v-tabs>
 
@@ -12766,31 +12864,33 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <div>
                                             <h3 class="test-live-data-latest-entries-title">Latest entries</h3>
                                             <p class="test-live-data-latest-entries-caption">
-                                                Same latest date: {{ formatDataLiveLatestDate(selectedDataLiveLatestDate) }}
+                                                Selected stock_realtime_prices rows from last date:
+                                                {{ formatDataLiveLatestDate(dataRealtimeLatestDate) }}
+                                                · {{ dataRealtimeLatestRowCount }} row(s)
                                             </p>
                                         </div>
                                     </div>
 
                                     <v-alert
-                                        v-if="selectedDataLiveLatestEntriesError"
+                                        v-if="dataRealtimeLatestPricesError"
                                         class="mb-3"
                                         density="compact"
                                         type="error"
                                         variant="tonal"
                                     >
-                                        {{ selectedDataLiveLatestEntriesError }}
+                                        {{ dataRealtimeLatestPricesError }}
                                     </v-alert>
 
                                     <v-progress-linear
-                                        v-if="selectedDataLiveLatestEntriesLoading"
+                                        v-if="dataRealtimeLatestPricesLoading"
                                         class="mb-3"
                                         color="primary"
                                         indeterminate
                                     />
 
                                     <v-table
-                                        v-if="selectedDataLiveLatestRows.length"
-                                        class="test-live-data-latest-entries-table"
+                                        v-if="dataRealtimeLatestRows.length"
+                                        class="test-live-data-latest-entries-table test-realtime-data-latest-entries-table"
                                         density="compact"
                                     >
                                         <thead>
@@ -12801,13 +12901,13 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </thead>
                                         <tbody>
                                             <tr
-                                                v-for="entry in selectedDataLiveLatestRows"
+                                                v-for="entry in dataRealtimeLatestRows"
                                                 :key="entry.id ?? entry.as_of"
                                             >
                                                 <td>{{ formatRecentStoredPriceTime(entry) }}</td>
                                                 <td class="test-live-data-latest-price-cell">
                                                     <span class="test-live-data-latest-price-value">
-                                                        <span>{{ formatDataLiveLatestEntryPrice(entry) }}</span>
+                                                        <span>{{ formatDataRealtimeLatestEntryPrice(entry) }}</span>
                                                         <v-icon
                                                             v-if="entry.priceTrend === 'up'"
                                                             class="test-live-data-latest-price-arrow test-live-data-latest-price-arrow--up"
@@ -12829,10 +12929,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </v-table>
 
                                     <div
-                                        v-else-if="!selectedDataLiveLatestEntriesLoading"
+                                        v-else-if="!dataRealtimeLatestPricesLoading"
                                         class="test-live-data-latest-entries-empty"
                                     >
-                                        No live data entries stored for the latest date.
+                                        No live data entries stored for the selected stock on its latest date.
                                     </div>
                                 </section>
                             </section>
@@ -13033,358 +13133,6 @@ function formatIndexDataUpdateSchedule(settings) {
                                 </v-card-text>
                             </v-card>
                         </section>
-                    </section>
-
-                    <section v-if="activeSection === 'updates' && canManageDashboardAdmin">
-                        <div class="mb-6">
-                            <p class="text-overline text-primary mb-1">Admin</p>
-                            <h1 class="text-h4">Updates</h1>
-                        </div>
-
-                        <v-sheet border rounded class="pa-4 mb-4">
-                            <form
-                                id="price-refresh-schedule-form"
-                                class="d-flex align-center flex-wrap ga-3"
-                                @submit.prevent="savePriceRefreshSchedule"
-                            >
-                                <div class="text-subtitle-2 mr-2">Automatic price refresh</div>
-                                <template v-if="!isPriceRefreshScheduleEditing">
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">During trading</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ priceRefreshScheduleForm.trading_interval_minutes }} min
-                                        </div>
-                                    </div>
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">Start before trading</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ priceRefreshScheduleForm.trading_starts_before_minutes }} min
-                                        </div>
-                                    </div>
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">End after trading</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ priceRefreshScheduleForm.trading_ends_after_minutes }} min
-                                        </div>
-                                    </div>
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">Outside trading</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ priceRefreshScheduleForm.closed_refresh_enabled ? 'On' : 'Off' }}
-                                        </div>
-                                    </div>
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">Outside trading interval</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ priceRefreshScheduleForm.closed_interval_minutes }} min
-                                        </div>
-                                    </div>
-                                </template>
-                                <template v-else>
-                                    <v-text-field
-                                        v-model="priceRefreshScheduleForm.trading_interval_minutes"
-                                        density="compact"
-                                        hide-details
-                                        label="During trading"
-                                        min="1"
-                                        max="1440"
-                                        suffix="min"
-                                        type="number"
-                                        style="max-width: 180px"
-                                    />
-                                    <v-text-field
-                                        v-model="priceRefreshScheduleForm.trading_starts_before_minutes"
-                                        density="compact"
-                                        hide-details
-                                        label="Start before trading"
-                                        min="0"
-                                        max="1440"
-                                        suffix="min"
-                                        type="number"
-                                        style="max-width: 210px"
-                                    />
-                                    <v-text-field
-                                        v-model="priceRefreshScheduleForm.trading_ends_after_minutes"
-                                        density="compact"
-                                        hide-details
-                                        label="End after trading"
-                                        min="0"
-                                        max="1440"
-                                        suffix="min"
-                                        type="number"
-                                        style="max-width: 200px"
-                                    />
-                                    <v-switch
-                                        v-model="priceRefreshScheduleForm.closed_refresh_enabled"
-                                        color="primary"
-                                        density="compact"
-                                        hide-details
-                                        label="Outside trading"
-                                    />
-                                    <v-text-field
-                                        v-model="priceRefreshScheduleForm.closed_interval_minutes"
-                                        density="compact"
-                                        hide-details
-                                        label="Outside trading interval"
-                                        min="1"
-                                        max="1440"
-                                        :disabled="!priceRefreshScheduleForm.closed_refresh_enabled"
-                                        suffix="min"
-                                        type="number"
-                                        style="max-width: 220px"
-                                    />
-                                </template>
-                                <v-btn
-                                    v-if="!isPriceRefreshScheduleEditing"
-                                    type="button"
-                                    color="primary"
-                                    prepend-icon="mdi-pencil-outline"
-                                    variant="tonal"
-                                    :disabled="isIndexPriceRefreshScheduleEditing"
-                                    @click="editPriceRefreshSchedule"
-                                >
-                                    Edit
-                                </v-btn>
-                                <v-btn
-                                    v-else
-                                    type="submit"
-                                    color="primary"
-                                    prepend-icon="mdi-content-save-outline"
-                                    variant="tonal"
-                                    :loading="holdingsLoading"
-                                >
-                                    Save
-                                </v-btn>
-                                <span class="text-caption text-medium-emphasis">
-                                    Current interval: {{ priceRefreshSettings?.current_interval_minutes ?? '-' }} min
-                                </span>
-                            </form>
-                        </v-sheet>
-                        <v-sheet border rounded class="pa-4 mb-4">
-                            <form
-                                id="index-price-refresh-schedule-form"
-                                class="d-flex align-center flex-wrap ga-3"
-                                @submit.prevent="saveIndexPriceRefreshSchedule"
-                            >
-                                <div class="text-subtitle-2 mr-2">Automatic index price refresh</div>
-                                <template v-if="!isIndexPriceRefreshScheduleEditing">
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">During trading</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ indexPriceRefreshScheduleForm.trading_interval_minutes }} min
-                                        </div>
-                                    </div>
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">Start before trading</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ indexPriceRefreshScheduleForm.trading_starts_before_minutes }} min
-                                        </div>
-                                    </div>
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">End after trading</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ indexPriceRefreshScheduleForm.trading_ends_after_minutes }} min
-                                        </div>
-                                    </div>
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">Outside trading</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ indexPriceRefreshScheduleForm.closed_refresh_enabled ? 'On' : 'Off' }}
-                                        </div>
-                                    </div>
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">Outside trading interval</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ indexPriceRefreshScheduleForm.closed_interval_minutes }} min
-                                        </div>
-                                    </div>
-                                </template>
-                                <template v-else>
-                                    <v-text-field
-                                        v-model="indexPriceRefreshScheduleForm.trading_interval_minutes"
-                                        density="compact"
-                                        hide-details
-                                        label="During trading"
-                                        min="1"
-                                        max="1440"
-                                        suffix="min"
-                                        type="number"
-                                        style="max-width: 180px"
-                                    />
-                                    <v-text-field
-                                        v-model="indexPriceRefreshScheduleForm.trading_starts_before_minutes"
-                                        density="compact"
-                                        hide-details
-                                        label="Start before trading"
-                                        min="0"
-                                        max="1440"
-                                        suffix="min"
-                                        type="number"
-                                        style="max-width: 210px"
-                                    />
-                                    <v-text-field
-                                        v-model="indexPriceRefreshScheduleForm.trading_ends_after_minutes"
-                                        density="compact"
-                                        hide-details
-                                        label="End after trading"
-                                        min="0"
-                                        max="1440"
-                                        suffix="min"
-                                        type="number"
-                                        style="max-width: 200px"
-                                    />
-                                    <v-switch
-                                        v-model="indexPriceRefreshScheduleForm.closed_refresh_enabled"
-                                        color="primary"
-                                        density="compact"
-                                        hide-details
-                                        label="Outside trading"
-                                    />
-                                    <v-text-field
-                                        v-model="indexPriceRefreshScheduleForm.closed_interval_minutes"
-                                        density="compact"
-                                        hide-details
-                                        label="Outside trading interval"
-                                        min="1"
-                                        max="1440"
-                                        :disabled="!indexPriceRefreshScheduleForm.closed_refresh_enabled"
-                                        suffix="min"
-                                        type="number"
-                                        style="max-width: 220px"
-                                    />
-                                </template>
-                                <v-btn
-                                    v-if="!isIndexPriceRefreshScheduleEditing"
-                                    type="button"
-                                    color="primary"
-                                    prepend-icon="mdi-pencil-outline"
-                                    variant="tonal"
-                                    :disabled="isPriceRefreshScheduleEditing"
-                                    @click="editIndexPriceRefreshSchedule"
-                                >
-                                    Edit
-                                </v-btn>
-                                <v-btn
-                                    v-else
-                                    type="submit"
-                                    color="primary"
-                                    prepend-icon="mdi-content-save-outline"
-                                    variant="tonal"
-                                    :loading="holdingsLoading"
-                                >
-                                    Save
-                                </v-btn>
-                                <span class="text-caption text-medium-emphasis">
-                                    Current interval: {{ indexPriceRefreshSettings?.current_interval_minutes ?? '-' }} min
-                                </span>
-                            </form>
-                        </v-sheet>
-                        <v-sheet border rounded class="pa-4 mb-4">
-                            <form
-                                id="intraday-backfill-schedule-form"
-                                class="d-flex align-center flex-wrap ga-3"
-                                @submit.prevent="saveIntradayBackfillSchedule"
-                            >
-                                <div class="text-subtitle-2 mr-2">Daily intraday 5m backfill</div>
-                                <template v-if="!isIntradayBackfillScheduleEditing">
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">Local time</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ intradayBackfillScheduleForm.daily_time }}
-                                        </div>
-                                    </div>
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">Timezone</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ intradayBackfillSettings?.timezone ?? 'Europe/Vienna' }}
-                                        </div>
-                                    </div>
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">Last queued</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ intradayBackfillSettings?.last_dispatched_at ? formatDateTime(intradayBackfillSettings.last_dispatched_at) : 'Never' }}
-                                        </div>
-                                    </div>
-                                    <div class="px-3 py-2 rounded border">
-                                        <div class="text-caption text-medium-emphasis">Next</div>
-                                        <div class="text-body-2 font-weight-medium">
-                                            {{ intradayBackfillSettings?.next_refresh_at ? formatDateTime(intradayBackfillSettings.next_refresh_at) : '-' }}
-                                        </div>
-                                    </div>
-                                </template>
-                                <template v-else>
-                                    <v-text-field
-                                        v-model="intradayBackfillScheduleForm.daily_time"
-                                        density="compact"
-                                        hide-details
-                                        label="Local time"
-                                        type="time"
-                                        style="max-width: 180px"
-                                    />
-                                </template>
-                                <v-btn
-                                    v-if="!isIntradayBackfillScheduleEditing"
-                                    type="button"
-                                    color="primary"
-                                    prepend-icon="mdi-pencil-outline"
-                                    variant="tonal"
-                                    :disabled="isPriceRefreshScheduleEditing || isIndexPriceRefreshScheduleEditing"
-                                    @click="editIntradayBackfillSchedule"
-                                >
-                                    Edit
-                                </v-btn>
-                                <v-btn
-                                    v-else
-                                    type="submit"
-                                    color="primary"
-                                    prepend-icon="mdi-content-save-outline"
-                                    variant="tonal"
-                                    :loading="holdingsLoading"
-                                >
-                                    Save
-                                </v-btn>
-                                <v-btn
-                                    type="button"
-                                    color="primary"
-                                    prepend-icon="mdi-database-sync-outline"
-                                    variant="flat"
-                                    :loading="isIntradayBackfillRunningNow"
-                                    :disabled="isIntradayBackfillRunning"
-                                    @click="runIntradayBackfillNow"
-                                >
-                                    Fetch missing now
-                                </v-btn>
-                                <span class="text-caption text-medium-emphasis">
-                                    {{ intradayBackfillSettings?.status_label ?? 'waiting' }}
-                                </span>
-                            </form>
-                            <div v-if="intradayBackfillRefresh" class="mt-4">
-                                <div v-if="intradayBackfillRefresh.message" class="text-body-2 font-weight-medium mb-2">
-                                    {{ intradayBackfillRefresh.message }}
-                                </div>
-                                <div class="d-flex align-center flex-wrap ga-2 text-caption text-medium-emphasis mb-2">
-                                    <span>Backfill: {{ intradayBackfillRefresh.step }}</span>
-                                    <span v-if="intradayBackfillRefresh.current">{{ intradayBackfillRefresh.current }}</span>
-                                    <span>{{ formatInteger(intradayBackfillRefresh.stored_count ?? 0) }} candles loaded/updated</span>
-                                    <span v-if="intradayBackfillRefresh.date_from && intradayBackfillRefresh.date_to">
-                                        {{ intradayBackfillRefresh.date_from }} to {{ intradayBackfillRefresh.date_to }}
-                                    </span>
-                                </div>
-                                <v-progress-linear
-                                    height="6"
-                                    color="primary"
-                                    rounded
-                                    :indeterminate="intradayBackfillRefresh.status === 'queued'"
-                                    :model-value="intradayBackfillProgressValue"
-                                />
-                            </div>
-                        </v-sheet>
-                        <v-alert v-if="priceRefreshScheduleMessage" type="success" variant="tonal" density="compact" class="mb-4">
-                            {{ priceRefreshScheduleMessage }}
-                        </v-alert>
-                        <v-alert v-if="priceRefreshScheduleError" type="error" variant="tonal" density="compact" class="mb-4">
-                            {{ priceRefreshScheduleError }}
-                        </v-alert>
                     </section>
 
                     <section v-if="activeSection === 'depot'">
@@ -14214,7 +13962,18 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </tbody>
                                 </v-table>
 
-                                <div v-if="cloudwaysSyncResult.skipped_tables.length > 0" class="text-caption text-medium-emphasis mt-3">
+                                <div
+                                    v-if="cloudwaysSyncResult.skipped_table_details?.length > 0"
+                                    class="text-caption text-medium-emphasis mt-3"
+                                >
+                                    <div v-for="table in cloudwaysSyncResult.skipped_table_details" :key="table.name">
+                                        {{ table.message }}
+                                    </div>
+                                </div>
+                                <div
+                                    v-else-if="cloudwaysSyncResult.skipped_tables.length > 0"
+                                    class="text-caption text-medium-emphasis mt-3"
+                                >
                                     Skipped: {{ cloudwaysSyncResult.skipped_tables.join(', ') }}
                                 </div>
                             </div>
@@ -14983,6 +14742,13 @@ function formatIndexDataUpdateSchedule(settings) {
         padding: 3px 6px;
     }
 
+    .mobile-stock-price-main {
+        align-items: baseline;
+        display: inline-flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+
     .mobile-stock-price-change {
         font-size: 0.78rem;
         font-weight: 700;
@@ -15714,6 +15480,15 @@ function formatIndexDataUpdateSchedule(settings) {
     border: 1px solid #d9e5e8;
     border-radius: 5px;
     max-width: 320px;
+}
+
+.test-realtime-data-latest-entries-table {
+    max-width: 320px;
+}
+
+.test-realtime-data-latest-entries-table th,
+.test-realtime-data-latest-entries-table td {
+    white-space: nowrap;
 }
 
 .test-historical-data-latest-entries-table {
@@ -17168,6 +16943,17 @@ function formatIndexDataUpdateSchedule(settings) {
     align-items: center;
     display: inline-flex;
     gap: 8px;
+}
+
+.mobile-price-loaded-at {
+    color: rgba(var(--v-theme-on-surface), 0.58);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    line-height: 1;
+}
+
+.latest-price-value.text-white .mobile-price-loaded-at {
+    color: rgba(255, 255, 255, 0.82);
 }
 
 .recent-price-trend-dots {

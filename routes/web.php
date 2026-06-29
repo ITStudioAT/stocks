@@ -136,7 +136,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::view('/admin/menu/depots', 'app')->name('admin.menu.depots');
     Route::view('/admin/menu/{adminSection}/{adminSubSection?}', 'app')
         ->where([
-            'adminSection' => '[A-Za-z0-9_-]+',
+            'adminSection' => '(?!updates$)[A-Za-z0-9_-]+',
             'adminSubSection' => '[A-Za-z0-9_-]+',
         ])
         ->name('admin.menu');
@@ -183,6 +183,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::get('/admin/data/exchanges', [AdminDataController::class, 'exchanges'])->name('admin.data.exchanges');
     Route::post('/admin/data/exchanges/reload', [AdminDataController::class, 'reload'])->name('admin.data.exchanges.reload');
     Route::get('/admin/data/exchanges/reload/{refreshId}', [AdminDataController::class, 'reloadStatus'])->name('admin.data.exchanges.reload.status');
+    Route::get('/admin/data/realtime/latest', [AdminDataController::class, 'latestRealtimePrices'])->name('admin.data.realtime.latest');
     Route::post('/admin/data/realtime/sync', [AdminDataController::class, 'syncRealtime'])->name('admin.data.realtime.sync');
     Route::post('/admin/data/end-of-day/sync', [AdminDataController::class, 'syncEndOfDay'])->name('admin.data.endOfDay.sync');
     Route::post('/admin/data/indices/sync', [AdminDataController::class, 'syncIndices'])->name('admin.data.indices.sync');

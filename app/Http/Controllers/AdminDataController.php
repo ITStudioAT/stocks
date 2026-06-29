@@ -7,6 +7,7 @@ use App\Jobs\ReloadStockHoldingIntradayData;
 use App\Models\EodhdExchangeImportRun;
 use App\Models\StockHolding;
 use App\Models\StockHoldingIntradayReloadRun;
+use App\Models\StockRealtimePrice;
 use App\Services\CompletedTradingDay;
 use App\Services\EndOfDayDataUpdateScheduler;
 use App\Services\EodhdApiUsage;
@@ -22,6 +23,7 @@ use App\Services\StockHistoricalIntradayCandleRepairService;
 use App\Services\StockHoldingIntradayDataReloader;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 
 class AdminDataController extends Controller
 {
@@ -76,6 +78,121 @@ class AdminDataController extends Controller
         ]);
     }
 
+    public function latestRealtimePrices(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'stock' => ['nullable', 'integer', 'exists:stock_holdings,id'],
+        ]);
+        $stockId = $validated['stock'] ?? null;
+
+        $latestRealtimePrice = StockRealtimePrice::query()
+            ->when($stockId !== null, fn ($query) => $query->where('stock_holding_id', $stockId))
+            ->whereNotNull('as_of')
+            ->orderByDesc('as_of')
+            ->orderByDesc('id')
+            ->first(['id', 'as_of']);
+
+        if ($latestRealtimePrice === null) {
+            return response()->json([
+                'date' => null,
+                'row_count' => 0,
+                'entries' => [],
+            ]);
+        }
+
+        $latestDate = $this->storedRealtimePriceDateTime($latestRealtimePrice, 'as_of')
+            ?->setTimezone(config('app.timezone'))
+            ->toDateString();
+
+        if ($latestDate === null) {
+            return response()->json([
+                'date' => null,
+                'row_count' => 0,
+                'entries' => [],
+            ]);
+        }
+
+        $dayStart = Carbon::parse($latestDate, config('app.timezone'))->startOfDay()->utc();
+        $dayEnd = Carbon::parse($latestDate, config('app.timezone'))->endOfDay()->utc();
+        $entries = StockRealtimePrice::query()
+            ->with('stockHolding:id,symbol,name,exchange,currency')
+            ->when($stockId !== null, fn ($query) => $query->where('stock_holding_id', $stockId))
+            ->whereNotNull('as_of')
+            ->whereBetween('as_of', [$dayStart, $dayEnd])
+            ->orderBy('as_of')
+            ->orderBy('id')
+            ->get([
+                'id',
+                'stock_holding_id',
+                'instrument_key',
+                'quote_hash',
+                'source_key',
+                'source_name',
+                'source_url',
+                'source_quality',
+                'venue',
+                'mic',
+                'isin',
+                'wkn',
+                'symbol',
+                'currency',
+                'bid',
+                'ask',
+                'last',
+                'close',
+                'nav',
+                'price',
+                'price_type',
+                'spread_abs',
+                'spread_pct',
+                'as_of',
+                'fetched_at',
+                'freshness_status',
+                'validation_status',
+                'trading_times',
+            ])
+            ->map(fn (StockRealtimePrice $stockPrice): array => [
+                'id' => $stockPrice->id,
+                'stock_holding_id' => $stockPrice->stock_holding_id,
+                'holding_symbol' => $stockPrice->stockHolding?->symbol,
+                'holding_name' => $stockPrice->stockHolding?->name,
+                'holding_exchange' => $stockPrice->stockHolding?->exchange,
+                'instrument_key' => $stockPrice->instrument_key,
+                'quote_hash' => $stockPrice->quote_hash,
+                'source_key' => $stockPrice->source_key,
+                'source_name' => $stockPrice->source_name,
+                'source_url' => $stockPrice->source_url,
+                'source_quality' => $stockPrice->source_quality,
+                'venue' => $stockPrice->venue,
+                'mic' => $stockPrice->mic,
+                'isin' => $stockPrice->isin,
+                'wkn' => $stockPrice->wkn,
+                'symbol' => $stockPrice->symbol,
+                'currency' => $stockPrice->currency ?? $stockPrice->stockHolding?->currency,
+                'bid' => $stockPrice->bid,
+                'ask' => $stockPrice->ask,
+                'last' => $stockPrice->last,
+                'close' => $stockPrice->close,
+                'nav' => $stockPrice->nav,
+                'price' => $stockPrice->price,
+                'price_type' => $stockPrice->price_type,
+                'spread_abs' => $stockPrice->spread_abs,
+                'spread_pct' => $stockPrice->spread_pct,
+                'as_of' => $this->storedRealtimePriceTimestamp($stockPrice, 'as_of'),
+                'fetched_at' => $this->storedRealtimePriceTimestamp($stockPrice, 'fetched_at'),
+                'freshness_status' => $stockPrice->freshness_status,
+                'validation_status' => $stockPrice->validation_status,
+                'trading_times' => $stockPrice->trading_times,
+            ])
+            ->all();
+
+        return response()->json([
+            'date' => $latestDate,
+            'row_count' => count($entries),
+            'entries' => $entries,
+        ]);
+    }
+
     public function syncRealtime(
         EodhdBatchRealtimePriceService $realtimePriceService,
         PriceRefreshScheduler $priceRefreshScheduler,
@@ -89,6 +206,22 @@ class AdminDataController extends Controller
             'price_refresh_settings' => $priceRefreshScheduler->payload(),
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
+    }
+
+    private function storedRealtimePriceTimestamp(StockRealtimePrice $stockPrice, string $column): ?string
+    {
+        return $this->storedRealtimePriceDateTime($stockPrice, $column)?->toIso8601String();
+    }
+
+    private function storedRealtimePriceDateTime(StockRealtimePrice $stockPrice, string $column): ?Carbon
+    {
+        $value = $stockPrice->getRawOriginal($column);
+
+        if ($value === null || trim((string) $value) === '') {
+            return null;
+        }
+
+        return Carbon::parse((string) $value, 'UTC');
     }
 
     public function syncHistorical(

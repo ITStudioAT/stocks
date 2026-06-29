@@ -3,12 +3,15 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use App\Services\CloudwaysDatabaseSync;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use PDO;
+use ReflectionMethod;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -68,7 +71,10 @@ class AdminCloudwaysSyncTest extends TestCase
             ->assertJsonPath('sync.tables.0.rows', 2)
             ->assertJsonPath('sync.tables.0.status', 'imported')
             ->assertJsonPath('sync.tables.0.message', 'Imported cloud_items: 2 row(s), 3 column(s).')
-            ->assertJsonPath('sync.skipped_tables.0', 'remote_only_items');
+            ->assertJsonPath('sync.skipped_tables.0', 'remote_only_items')
+            ->assertJsonPath('sync.skipped_table_details.0.name', 'remote_only_items')
+            ->assertJsonPath('sync.skipped_table_details.0.reason', 'missing_local_table')
+            ->assertJsonPath('sync.skipped_table_details.0.message', 'Skipped remote_only_items: no matching local table.');
 
         $this->assertDatabaseMissing('cloud_items', [
             'id' => 99,
@@ -147,7 +153,9 @@ class AdminCloudwaysSyncTest extends TestCase
             ->assertJsonPath('sync.synced_tables', 1)
             ->assertJsonPath('sync.rows', 1)
             ->assertJsonPath('sync.tables.0.name', 'compatible_items')
-            ->assertJsonPath('sync.skipped_tables.0', 'cloud_items');
+            ->assertJsonPath('sync.skipped_tables.0', 'cloud_items')
+            ->assertJsonPath('sync.skipped_table_details.0.reason', 'missing_required_columns')
+            ->assertJsonPath('sync.skipped_table_details.0.missing_required_columns.0', 'company_id');
 
         $this->assertDatabaseHas('cloud_items', [
             'id' => 99,
@@ -158,6 +166,38 @@ class AdminCloudwaysSyncTest extends TestCase
         $this->assertDatabaseHas('compatible_items', [
             'id' => 1,
             'name' => 'Remote compatible item',
+        ]);
+    }
+
+    public function test_cloudways_sync_skips_same_named_tables_with_no_matching_columns_without_deleting_local_rows(): void
+    {
+        $this->configureCloudwaysTestingConnection();
+
+        Schema::create('schema_mismatch_items', function (Blueprint $table): void {
+            $table->string('local_note')->nullable();
+        });
+        Schema::connection('cloudways_testing')->create('schema_mismatch_items', function (Blueprint $table): void {
+            $table->string('remote_note')->nullable();
+        });
+
+        DB::table('schema_mismatch_items')->insert([
+            'local_note' => 'Keep this local row',
+        ]);
+        DB::connection('cloudways_testing')->table('schema_mismatch_items')->insert([
+            'remote_note' => 'Remote row',
+        ]);
+
+        $this->actingAs($this->superAdminUser())
+            ->postJson('/admin/cloudways/sync')
+            ->assertOk()
+            ->assertJsonPath('message', 'Synced 0 table(s) and 0 row(s) from Cloudways.')
+            ->assertJsonPath('sync.synced_tables', 0)
+            ->assertJsonPath('sync.skipped_tables.0', 'schema_mismatch_items')
+            ->assertJsonPath('sync.skipped_table_details.0.reason', 'no_matching_columns')
+            ->assertJsonPath('sync.skipped_table_details.0.message', 'Skipped schema_mismatch_items: no matching columns.');
+
+        $this->assertDatabaseHas('schema_mismatch_items', [
+            'local_note' => 'Keep this local row',
         ]);
     }
 
@@ -216,6 +256,25 @@ class AdminCloudwaysSyncTest extends TestCase
     public function test_guest_cannot_sync_cloudways_tables(): void
     {
         $this->postJson('/admin/cloudways/sync')->assertUnauthorized();
+    }
+
+    public function test_cloudways_dynamic_connection_uses_a_short_connect_timeout(): void
+    {
+        Config::set('services.cloudways.connection', null);
+        Config::set('services.cloudways.host', 'cloudways.example.test');
+        Config::set('services.cloudways.port', 3306);
+        Config::set('services.cloudways.database', 'stocks');
+        Config::set('services.cloudways.username', 'stocks');
+        Config::set('services.cloudways.password', 'secret');
+        Config::set('services.cloudways.connect_timeout', 3);
+
+        $sourceConnectionName = new ReflectionMethod(CloudwaysDatabaseSync::class, 'sourceConnectionName');
+        $sourceConnectionName->setAccessible(true);
+
+        $this->assertSame('cloudways', $sourceConnectionName->invoke(app(CloudwaysDatabaseSync::class)));
+        $this->assertSame(3, config('database.connections.cloudways.options')[PDO::ATTR_TIMEOUT]);
+
+        DB::purge('cloudways');
     }
 
     private function configureCloudwaysTestingConnection(): void

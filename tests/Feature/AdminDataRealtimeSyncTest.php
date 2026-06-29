@@ -96,6 +96,69 @@ class AdminDataRealtimeSyncTest extends TestCase
             && $request['s'] === 'LEER.XETRA');
     }
 
+    public function test_admin_can_list_selected_stock_realtime_prices_from_its_latest_vienna_date(): void
+    {
+        $admin = $this->adminUser();
+        $ames = StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'name' => 'Amundi IBEX 35 UCITS ETF',
+            'exchange' => 'XETRA',
+            'currency' => 'EUR',
+        ]);
+        $leer = StockHolding::factory()->create([
+            'symbol' => 'LEER',
+            'name' => 'Leerink',
+            'exchange' => 'XETRA',
+            'currency' => 'EUR',
+        ]);
+
+        StockRealtimePrice::factory()->for($ames)->create([
+            'symbol' => 'AMES',
+            'price' => '9.95000000',
+            'as_of' => Carbon::parse('2026-06-04 20:30:00', 'UTC'),
+            'fetched_at' => Carbon::parse('2026-06-04 20:30:01', 'UTC'),
+        ]);
+        StockRealtimePrice::factory()->for($ames)->create([
+            'symbol' => 'AMES',
+            'venue' => 'Tradegate',
+            'bid' => '10.10000000',
+            'ask' => '10.20000000',
+            'last' => '10.15000000',
+            'price' => '10.15000000',
+            'as_of' => Carbon::parse('2026-06-04 22:30:00', 'UTC'),
+            'fetched_at' => Carbon::parse('2026-06-04 22:30:01', 'UTC'),
+        ]);
+        StockRealtimePrice::factory()->for($ames)->create([
+            'symbol' => 'AMES',
+            'venue' => 'XETRA',
+            'price' => '10.25000000',
+            'as_of' => Carbon::parse('2026-06-05 15:00:00', 'UTC'),
+            'fetched_at' => Carbon::parse('2026-06-05 15:00:02', 'UTC'),
+        ]);
+        StockRealtimePrice::factory()->for($leer)->create([
+            'symbol' => 'LEER',
+            'price' => '20.75000000',
+            'as_of' => Carbon::parse('2026-06-05 15:30:00', 'UTC'),
+            'fetched_at' => Carbon::parse('2026-06-05 15:30:02', 'UTC'),
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson("/admin/data/realtime/latest?stock={$ames->id}")
+            ->assertOk()
+            ->assertJsonPath('date', '2026-06-05')
+            ->assertJsonPath('row_count', 2)
+            ->assertJsonPath('entries.0.symbol', 'AMES')
+            ->assertJsonPath('entries.0.holding_name', 'Amundi IBEX 35 UCITS ETF')
+            ->assertJsonPath('entries.0.venue', 'Tradegate')
+            ->assertJsonPath('entries.0.bid', '10.10000000')
+            ->assertJsonPath('entries.0.ask', '10.20000000')
+            ->assertJsonPath('entries.0.last', '10.15000000')
+            ->assertJsonPath('entries.0.as_of', '2026-06-04T22:30:00+00:00')
+            ->assertJsonPath('entries.1.symbol', 'AMES')
+            ->assertJsonPath('entries.1.price', '10.25000000')
+            ->assertJsonMissingPath('entries.2');
+    }
+
     public function test_guest_cannot_sync_eodhd_realtime_quotes(): void
     {
         $this->postJson('/admin/data/realtime/sync')->assertUnauthorized();
