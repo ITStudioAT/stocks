@@ -3744,24 +3744,24 @@ describe('App', () => {
                             wkn: 'FLAT01',
                             exchange: 'XETR',
                             currency: 'EUR',
-                            latest_price: '100.000000',
+                            latest_price: '101.000000',
                             start_price: '100.000000',
                             end_price: '100.000000',
                             end_price_24: '100.000000',
                             end_price_48: '100.000000',
-                            latest_price_trend: 'flat',
-                            latest_price_change_pct: '0.00',
-                            latest_price_tick_trend: 'flat',
+                            latest_price_trend: 'up',
+                            latest_price_change_pct: '1.00',
+                            latest_price_tick_trend: 'up',
                             latest_price_status: 'fresh',
                             price_status: 'fresh',
-                            latest_price_fetched_at: '2026-06-03T12:10:00+00:00',
-                            latest_price_source: 'Tradegate Exchange',
+                            latest_price_fetched_at: null,
+                            latest_price_source: 'EODHD intraday',
                             latest_price_source_url: 'https://example.com/flat',
                             latest_price_as_of: '2026-06-03T12:00:00+00:00',
                             trading_times: 'Monday-Friday 09:00-17:30 Europe/Berlin',
-                            venue: 'Tradegate',
-                            price_type: 'last',
-                            price_spread_pct: '0.020000',
+                            venue: null,
+                            price_type: 'intraday',
+                            price_spread_pct: null,
                             recent_prices: [],
                             validation_errors: [],
                         },
@@ -4168,6 +4168,7 @@ describe('App', () => {
         expect(wrapper.find('[aria-label="Minify dashboard menu"]').exists()).toBe(true);
         const watchListSection = wrapper.get('.watch-list-section');
         expect(watchListSection.text()).toContain('Stocks');
+        expect(watchListSection.find('.watch-list-section-title-row .watch-list-live-badge').exists()).toBe(false);
         expect(watchListSection.text()).toContain('5');
         expect(wrapper.find('.v-pagination').exists()).toBe(false);
         expect(wrapper.text()).toContain('Watch-list');
@@ -4204,6 +4205,7 @@ describe('App', () => {
         const holdingRows = wrapper.findAll('tbody tr');
         const upPriceValue = holdingRows[0].findAll('td')[2].find('.latest-price-value');
         const downPriceValue = holdingRows[1].findAll('td')[2].find('.latest-price-value');
+        const intradayPriceValue = holdingRows[2].findAll('td')[2].find('.latest-price-value');
         const upStartPriceTick = holdingRows[0].findAll('td')[3].find('[aria-label="Start price higher than last day price"]');
         const downStartPriceTick = holdingRows[1].findAll('td')[3].find('[aria-label="Start price lower than last day price"]');
         expect(holdingRows[0].findAll('td')[0].text()).toContain('Exchange: NASDAQ');
@@ -4219,9 +4221,15 @@ describe('App', () => {
         expect(holdingRows[1].findAll('td')[2].classes()).not.toContain('bg-error');
         expect(upPriceValue.classes()).toContain('bg-success');
         expect(upPriceValue.classes()).toContain('text-white');
+        expect(upPriceValue.get('.watch-list-live-badge').text()).toBe('LIVE');
         expect(downPriceValue.classes()).not.toContain('bg-success');
         expect(downPriceValue.classes()).not.toContain('bg-error');
         expect(downPriceValue.text()).toBe('-');
+        expect(downPriceValue.find('.watch-list-live-badge').exists()).toBe(false);
+        expect(intradayPriceValue.classes()).toContain('text-success');
+        expect(intradayPriceValue.classes()).not.toContain('bg-success');
+        expect(intradayPriceValue.classes()).not.toContain('text-white');
+        expect(intradayPriceValue.find('.watch-list-live-badge').exists()).toBe(false);
         expect(upPriceValue.text()).toContain('+2.28%');
         expect(upPriceValue.find('.latest-price-tick').exists()).toBe(false);
         expect(downPriceValue.text()).not.toContain('+5.98%');
@@ -4627,6 +4635,103 @@ describe('App', () => {
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/sync'))).toBe(false);
+    });
+
+    it('automatically reloads the dashboard info every minute without starting update requests', async () => {
+        vi.useFakeTimers();
+        window.history.pushState({}, '', '/admin/dashboard');
+        const emptyPagination = {
+            current_page: 1,
+            last_page: 1,
+            per_page: 10,
+            total: 0,
+            from: null,
+            to: null,
+        };
+        const depot = {
+            id: 1,
+            name: 'Long term depot',
+            account_balance: '12345.67',
+            is_active: true,
+        };
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    app_version: '0.1.5',
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings?page=1&all=1') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [],
+                    meta: emptyPagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [depot],
+                    meta: {
+                        ...emptyPagination,
+                        per_page: 10,
+                        total: 1,
+                        from: 1,
+                        to: 1,
+                    },
+                }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({
+                    indexes: [],
+                }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        try {
+            const wrapper = mountApp();
+            await flushPromises();
+
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1&all=1')).toHaveLength(1);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(1);
+
+            await vi.advanceTimersByTimeAsync(60000);
+            await flushPromises();
+
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(2);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1&all=1')).toHaveLength(2);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(2);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(2);
+            expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
+            expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
+            expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/sync'))).toBe(false);
+
+            wrapper.unmount();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('disables the delete button for holdings with position pieces', async () => {
@@ -5829,12 +5934,24 @@ describe('App', () => {
         const automaticLiveDataUpdatingStatusDot = dataOverview.find('[aria-label="Live data update status: updating"]');
         expect(automaticLiveDataUpdatingStatusDot.exists()).toBe(true);
         expect(automaticLiveDataUpdatingStatusDot.classes()).toContain('test-live-data-update-status-dot--updating');
+        const coverageRequestsBeforeAutomaticRefresh = fetchMock.mock.calls
+            .filter(([path]) => path === '/admin/watchlist/holdings/historical-prices/coverage').length;
+        const intradayCoverageRequestsBeforeAutomaticRefresh = fetchMock.mock.calls
+            .filter(([path]) => path === '/admin/watchlist/holdings/7/intraday-candles/coverage').length;
         await wrapper.vm.pollPriceRefreshSettings();
         await flushPromises();
 
         const automaticLiveDataWaitingStatusDot = dataOverview.find('[aria-label="Live data update status: waiting"]');
         expect(automaticLiveDataWaitingStatusDot.exists()).toBe(true);
         expect(automaticLiveDataWaitingStatusDot.classes()).toContain('test-live-data-update-status-dot--waiting');
+        expect(fetchMock.mock.calls
+            .filter(([path]) => path === '/admin/watchlist/holdings/historical-prices/coverage')).toHaveLength(
+            coverageRequestsBeforeAutomaticRefresh + 1,
+        );
+        expect(fetchMock.mock.calls
+            .filter(([path]) => path === '/admin/watchlist/holdings/7/intraday-candles/coverage')).toHaveLength(
+            intradayCoverageRequestsBeforeAutomaticRefresh + 1,
+        );
 
         const editLiveDataUpdatesButton = dataOverview.find('[aria-label="Edit live data updates"]');
         expect(editLiveDataUpdatesButton.exists()).toBe(true);

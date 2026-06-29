@@ -199,6 +199,7 @@ const indexSearchInput = ref(null);
 const holdingMessage = ref('');
 const holdingError = ref('');
 const isDashboardInfoReloading = ref(false);
+const isDashboardAutoReloading = ref(false);
 const indexMessage = ref('');
 const indexError = ref('');
 const indexPriceDialogError = ref('');
@@ -223,6 +224,7 @@ const isIntradayBackfillRunningNow = ref(false);
 const priceRefreshTimer = ref(null);
 const intradayBackfillTimer = ref(null);
 const priceRefreshSettingsTimer = ref(null);
+const dashboardAutoReloadTimer = ref(null);
 const isPriceRefreshSettingsPolling = ref(false);
 const liveDataStatusNow = ref(Date.now());
 const liveDataStatusTimer = ref(null);
@@ -2349,6 +2351,7 @@ watch(
         }
 
         syncUpdateStatusPolling();
+        syncDashboardAutoReload();
     },
 );
 
@@ -2438,6 +2441,7 @@ onMounted(async () => {
 
     ensureAnalyzeDetailIntradayCandles();
     syncUpdateStatusPolling();
+    syncDashboardAutoReload();
 
     await depotsStore.loadDepots();
 
@@ -2456,6 +2460,7 @@ onBeforeUnmount(() => {
     stopIntradayBackfillPolling();
     stopPriceRefreshSettingsPolling();
     stopLiveDataStatusClock();
+    stopDashboardAutoReload();
     stopDataExchangeReloadPolling();
     stopDataIntradayReloadPolling();
     stopHoldingDialogKeyboardShortcuts();
@@ -2537,6 +2542,7 @@ function navigateSection(section) {
     }
 
     syncUpdateStatusPolling();
+    syncDashboardAutoReload();
 }
 
 function syncUpdateStatusPolling() {
@@ -2569,26 +2575,74 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
     });
 }
 
-async function reloadDashboardInfo() {
-    if (isDashboardInfoReloading.value) {
+async function reloadDashboardInfo(options = {}) {
+    if (isDashboardInfoReloading.value || isDashboardAutoReloading.value) {
         return;
     }
 
-    isDashboardInfoReloading.value = true;
-    holdingError.value = '';
+    const isSilent = options.silent === true;
+
+    if (!isSilent) {
+        isDashboardInfoReloading.value = true;
+    }
+
+    if (isSilent) {
+        isDashboardAutoReloading.value = true;
+    }
+
+    if (!isSilent) {
+        holdingError.value = '';
+    }
 
     try {
         await Promise.all([
             depotsStore.loadActiveDepot(),
-            loadWatchlistHoldingsForActiveSection(1),
+            loadWatchlistHoldingsForActiveSection(1, { silent: isSilent }),
             depotsStore.loadDepots(depotPagination.value.current_page),
             depotsStore.loadIndexWatchItems(),
         ]);
     } catch (error) {
-        holdingError.value = error.message;
+        if (!isSilent) {
+            holdingError.value = error.message;
+        }
     } finally {
-        isDashboardInfoReloading.value = false;
+        if (!isSilent) {
+            isDashboardInfoReloading.value = false;
+        }
+
+        if (isSilent) {
+            isDashboardAutoReloading.value = false;
+        }
     }
+}
+
+function syncDashboardAutoReload() {
+    if (activeSection.value === 'dashboard') {
+        startDashboardAutoReload();
+
+        return;
+    }
+
+    stopDashboardAutoReload();
+}
+
+function startDashboardAutoReload() {
+    if (dashboardAutoReloadTimer.value) {
+        return;
+    }
+
+    dashboardAutoReloadTimer.value = window.setInterval(() => {
+        reloadDashboardInfo({ silent: true });
+    }, 60000);
+}
+
+function stopDashboardAutoReload() {
+    if (!dashboardAutoReloadTimer.value) {
+        return;
+    }
+
+    window.clearInterval(dashboardAutoReloadTimer.value);
+    dashboardAutoReloadTimer.value = null;
 }
 
 function loadSelectedAnalyzeChartData() {
@@ -4017,11 +4071,15 @@ async function pollPriceRefreshSettings() {
     }
 
     isPriceRefreshSettingsPolling.value = true;
+    const wasTrackingPriceRefresh = Boolean(priceRefresh.value);
+    const previousLastRefreshedAt = priceRefreshSettings.value?.last_refreshed_at ?? null;
 
     try {
         const data = await depotsStore.loadPriceRefreshSettings();
         const refresh = data.refresh;
         const intradayRefresh = data.intraday_backfill_refresh;
+        const didRefreshTimestampChange = previousLastRefreshedAt
+            !== (data.price_refresh_settings?.last_refreshed_at ?? null);
 
         if (intradayRefresh && !isFinishedPriceRefresh(intradayRefresh) && intradayRefresh.refresh_id) {
             const isPollingCurrentIntradayRefresh = intradayBackfillTimer.value
@@ -4038,6 +4096,7 @@ async function pollPriceRefreshSettings() {
             }
 
             depotsStore.clearPriceRefresh();
+            await reloadDataOverviewPageData(wasTrackingPriceRefresh || didRefreshTimestampChange);
 
             return;
         }
@@ -4102,6 +4161,14 @@ function stopPriceRefreshPolling() {
 
     window.clearInterval(priceRefreshTimer.value);
     priceRefreshTimer.value = null;
+}
+
+async function reloadDataOverviewPageData(shouldReload = true) {
+    if (!shouldReload || activeSection.value !== 'data' || activeDataSubsection.value !== 'overview') {
+        return;
+    }
+
+    await loadDataHistoricalPriceCoverage().catch(() => {});
 }
 
 function setDataHistoricStockFromCoverage() {
@@ -4552,6 +4619,7 @@ async function finishPriceRefresh(refresh) {
     await Promise.all([
         loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page),
         depotsStore.loadQueueStatus(),
+        reloadDataOverviewPageData(),
     ]);
 
     if (refresh.status === 'failed') {
@@ -7931,10 +7999,26 @@ function holdingDayTrendLabel(holding) {
 }
 
 function latestPriceClass(holding) {
+    if (holding.price_type === 'intraday') {
+        return {
+            'text-success': holding.latest_price_trend === 'up',
+            'text-error': holding.latest_price_trend === 'down',
+        };
+    }
+
     return {
         'bg-success text-white': holding.latest_price_trend === 'up',
         'bg-error text-white': holding.latest_price_trend === 'down',
     };
+}
+
+function latestPriceIsLive(holding) {
+    return holding.latest_price !== null
+        && holding.latest_price !== undefined
+        && holding.latest_price !== ''
+        && holding.price_type !== null
+        && holding.price_type !== undefined
+        && holding.price_type !== 'intraday';
 }
 
 function startPriceTrend(holding) {
@@ -9317,7 +9401,9 @@ function formatIndexDataUpdateSchedule(settings) {
                             <div class="watch-list-section-header">
                                 <div>
                                     <div class="watch-list-section-eyebrow">Watch-list</div>
-                                    <h2 class="watch-list-section-title">Stocks</h2>
+                                    <div class="watch-list-section-title-row">
+                                        <h2 class="watch-list-section-title">Stocks</h2>
+                                    </div>
                                 </div>
                                 <span class="watch-list-section-count">
                                     {{ formatInteger(holdingsPagination.total || holdings.length) }}
@@ -9465,7 +9551,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     :title="holdingDayTrendLabel(holding)"
                                                 />
                                                 <span class="latest-price-value d-inline-flex flex-column" :class="mobileHoldingPriceClass(holding)">
-                                                    <span>{{ formatMobileHoldingPrice(holding) }}</span>
+                                                    <span class="d-inline-flex align-center ga-1">
+                                                        <span>{{ formatMobileHoldingPrice(holding) }}</span>
+                                                        <span
+                                                            v-if="latestPriceIsLive(holding)"
+                                                            class="watch-list-live-badge latest-price-live-badge"
+                                                            aria-label="Latest price live"
+                                                        >
+                                                            <span class="watch-list-live-dot" aria-hidden="true" />
+                                                            LIVE
+                                                        </span>
+                                                    </span>
                                                     <span
                                                         v-if="mobileHoldingPriceChangeText(holding)"
                                                         class="latest-price-change"
@@ -9479,6 +9575,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <span class="latest-price-value d-inline-flex flex-column" :class="latestPriceClass(holding)">
                                                 <span class="d-inline-flex align-center ga-1">
                                                     <span>{{ formatLatestPrice(holding) }}</span>
+                                                    <span
+                                                        v-if="latestPriceIsLive(holding)"
+                                                        class="watch-list-live-badge latest-price-live-badge"
+                                                        aria-label="Latest price live"
+                                                    >
+                                                        <span class="watch-list-live-dot" aria-hidden="true" />
+                                                        LIVE
+                                                    </span>
                                                 </span>
                                                 <span
                                                     v-if="formatLatestPriceChangePercent(holding)"
@@ -14505,7 +14609,64 @@ function formatIndexDataUpdateSchedule(settings) {
     font-size: 1rem;
     font-weight: 650;
     line-height: 1.25;
-    margin: 2px 0 0;
+    margin: 0;
+}
+
+.watch-list-section-title-row {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 2px;
+}
+
+.watch-list-live-badge {
+    align-items: center;
+    background: linear-gradient(180deg, #ff2d2d 0%, #b80000 100%);
+    border: 1px solid rgba(255, 255, 255, 0.38);
+    border-radius: 4px;
+    box-shadow: 0 0 0 1px rgba(184, 0, 0, 0.3), 0 6px 14px rgba(184, 0, 0, 0.26);
+    color: #fff;
+    display: inline-flex;
+    font-size: 0.66rem;
+    font-weight: 900;
+    gap: 5px;
+    letter-spacing: 0;
+    line-height: 1;
+    padding: 4px 7px;
+    text-transform: uppercase;
+}
+
+.watch-list-live-dot {
+    animation: watch-list-live-pulse 1.2s ease-in-out infinite;
+    background: #fff;
+    border-radius: 999px;
+    box-shadow: 0 0 8px rgba(255, 255, 255, 0.9);
+    height: 6px;
+    width: 6px;
+}
+
+.latest-price-live-badge {
+    font-size: 0.58rem;
+    padding: 3px 5px;
+}
+
+.latest-price-live-badge .watch-list-live-dot {
+    height: 5px;
+    width: 5px;
+}
+
+@keyframes watch-list-live-pulse {
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.48;
+        transform: scale(0.72);
+    }
 }
 
 .watch-list-section-count {

@@ -864,6 +864,57 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.end_price_date', '2026-06-04');
     }
 
+    public function test_admin_listing_uses_intraday_candles_for_dashboard_prices_when_realtime_is_on_same_date(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-04 10:00:00', 'Europe/Berlin'));
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'LYXIB',
+            'currency' => 'EUR',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+        $this->createRealtimeQuote($holding, '2026-06-04 07:00:00', '100.00');
+        $this->createRealtimeQuote($holding, '2026-06-04 08:00:00', '101.00');
+        $this->createIntradayCandle($holding, '2026-06-04', '2026-06-04 07:05:00', '200.00');
+        $this->createIntradayCandle($holding, '2026-06-04', '2026-06-04 08:10:00', '201.25');
+        $this->createEndOfDayPrice($holding, '2026-06-03', '90.00');
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.latest_price', '201.250000')
+            ->assertJsonPath('holdings.0.start_price', '200.000000')
+            ->assertJsonPath('holdings.0.end_price_24', '90.000000')
+            ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-04T08:10:00+02:00')
+            ->assertJsonPath('holdings.0.latest_price_source', 'EODHD intraday')
+            ->assertJsonPath('holdings.0.price_type', 'intraday');
+    }
+
+    public function test_admin_listing_uses_realtime_prices_for_dashboard_prices_when_realtime_date_is_newer_than_intraday(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-05 10:00:00', 'Europe/Berlin'));
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'LYXIB',
+            'currency' => 'EUR',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+        $this->createIntradayCandle($holding, '2026-06-04', '2026-06-04 08:10:00', '201.25');
+        $this->createRealtimeQuote($holding, '2026-06-05 07:00:00', '102.50');
+        $this->createRealtimeQuote($holding, '2026-06-05 08:15:00', '103.75');
+        $this->createEndOfDayPrice($holding, '2026-06-04', '95.00');
+
+        $this->actingAs($admin)
+            ->getJson('/admin/watchlist/holdings')
+            ->assertOk()
+            ->assertJsonPath('holdings.0.latest_price', '103.750000')
+            ->assertJsonPath('holdings.0.start_price', '102.500000')
+            ->assertJsonPath('holdings.0.end_price_24', '95.000000')
+            ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-05T08:15:00+00:00')
+            ->assertJsonPath('holdings.0.latest_price_source', 'EODHD real-time')
+            ->assertJsonPath('holdings.0.price_type', 'last');
+    }
+
     public function test_admin_listing_does_not_queue_missing_historical_session_prices(): void
     {
         Queue::fake();
