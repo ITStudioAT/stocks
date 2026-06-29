@@ -1151,6 +1151,16 @@ describe('App', () => {
                             name: 'Trend Signal Fund',
                             currency: 'EUR',
                             latest_price: '146.000000',
+                            depot_transactions: [
+                                {
+                                    id: 701,
+                                    type: 'buy',
+                                    pieces: '10.00000000',
+                                    total_amount: '900.00',
+                                    currency: 'USD',
+                                    booked_at: '2026-03-15T00:00:00+00:00',
+                                },
+                            ],
                             daily_prices: trendSignalDailyPrices(),
                         },
                         {
@@ -1166,6 +1176,7 @@ describe('App', () => {
                                     type: 'buy',
                                     pieces: '70.00000000',
                                     total_amount: '6792.64',
+                                    currency: 'EUR',
                                     booked_at: '2026-06-11T00:00:00+00:00',
                                 },
                                 {
@@ -1173,6 +1184,7 @@ describe('App', () => {
                                     type: 'sell',
                                     pieces: '70.00000000',
                                     total_amount: '7001.12',
+                                    currency: 'EUR',
                                     booked_at: '2026-06-15T00:00:00+00:00',
                                 },
                             ],
@@ -1532,6 +1544,10 @@ describe('App', () => {
         expect(trendSignalCard.attributes('aria-pressed')).toBe('true');
         expect(analyzeTrend.text()).toMatch(/1 \(-0\.\d{2}%\)/);
         expect(analyzeTrend.text()).not.toContain('Sell');
+        const trendSignalDepotChange = analyzeTrend.find('.analyze-trend-dep-change');
+        expect(trendSignalDepotChange.exists()).toBe(true);
+        expect(trendSignalDepotChange.text()).toContain('USD');
+        expect(trendSignalDepotChange.text()).not.toContain('EUR');
 
         const buyStreakCard = trendStockMenu.findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Buy Streak Fund'));

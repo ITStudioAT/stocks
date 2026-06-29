@@ -104,7 +104,7 @@ class AdminDepotHoldingController extends Controller
                 ->whereIn('type', DepotTransaction::StockTypes)
                 ->orderBy('booked_at')
                 ->orderBy('id')
-                ->select(['id', 'stock_holding_id', 'type', 'pieces', 'total_amount', 'booked_at']);
+                ->select(['id', 'stock_holding_id', 'type', 'pieces', 'total_amount', 'currency', 'booked_at']);
         }
 
         $holdingsQuery = StockHolding::query()
@@ -557,7 +557,7 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, end_price_24: ?string, end_price_48: ?string, start_price_date: ?string, end_price_date: ?string, end_price_24_date: ?string, end_price_48_date: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, recent_prices_are_fallback: bool, intraday_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, intraday_candles: array<int, array{id: int, trading_date: string, price: string, currency: ?string, as_of: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, volume: ?int, currency: ?string}>, depot_transactions: array<int, array{id: int, type: string, pieces: ?string, total_amount: string, booked_at: ?string}>, validation_errors: array<int, string>, created_at: ?string}
+     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, end_price_24: ?string, end_price_48: ?string, start_price_date: ?string, end_price_date: ?string, end_price_24_date: ?string, end_price_48_date: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, recent_prices_are_fallback: bool, intraday_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, intraday_candles: array<int, array{id: int, trading_date: string, price: string, currency: ?string, as_of: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, volume: ?int, currency: ?string}>, depot_transactions: array<int, array{id: int, type: string, pieces: ?string, total_amount: string, currency: ?string, booked_at: ?string}>, validation_errors: array<int, string>, created_at: ?string}
      */
     private function holdingPayload(
         StockHolding $holding,
@@ -639,7 +639,7 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array<int, array{id: int, type: string, pieces: ?string, total_amount: string, booked_at: ?string}>
+     * @return array<int, array{id: int, type: string, pieces: ?string, total_amount: string, currency: ?string, booked_at: ?string}>
      */
     private function depotTransactionPayload(StockHolding $holding): array
     {
@@ -653,6 +653,7 @@ class AdminDepotHoldingController extends Controller
                 'type' => $transaction->type,
                 'pieces' => $transaction->pieces,
                 'total_amount' => $transaction->total_amount,
+                'currency' => $transaction->currency,
                 'booked_at' => $transaction->booked_at?->toIso8601String(),
             ])
             ->values()

@@ -845,62 +845,126 @@ function buildAnalyzeTrendRows(
 }
 
 function analyzeTrendDepotStateByDate(holding, prices) {
-    const transactionsByDate = analyzeTrendDepotTransactionsByDate(holding);
+    const transactions = analyzeTrendDepotTransactions(holding);
     const stateByDate = new Map();
     let openPieces = 0;
     let openCost = 0;
+    let openCurrency = null;
+    let transactionIndex = 0;
 
     prices.forEach((price) => {
-        const transactions = transactionsByDate.get(price.trading_date) ?? [];
-        const actions = analyzeTrendDepotActions(transactions);
+        while (
+            transactionIndex < transactions.length
+            && transactions[transactionIndex].transactionDate < price.trading_date
+        ) {
+            ({ openPieces, openCost, openCurrency } = applyAnalyzeTrendDepotTransaction(
+                transactions[transactionIndex],
+                openPieces,
+                openCost,
+                openCurrency,
+            ));
+            transactionIndex += 1;
+        }
+
+        const currentDateTransactions = [];
+
+        while (
+            transactionIndex < transactions.length
+            && transactions[transactionIndex].transactionDate === price.trading_date
+        ) {
+            currentDateTransactions.push(transactions[transactionIndex]);
+            transactionIndex += 1;
+        }
+
+        const actions = analyzeTrendDepotActions(currentDateTransactions);
         const currentPrice = Number(price.price);
         let realizedChangeAmount = null;
+        let realizedChangeCurrency = null;
         const openChangeAmount = actions.length === 0 && openPieces > 0 && Number.isFinite(currentPrice)
             ? (openPieces * currentPrice) - openCost
             : null;
+        const openChangeCurrency = openChangeAmount === null ? null : openCurrency;
 
-        transactions.forEach((transaction) => {
-            const transactionPieces = Math.max(0, Number(transaction.pieces));
-            const transactionTotalAmount = Math.max(0, Number(transaction.total_amount));
+        currentDateTransactions.forEach((transaction) => {
+            const previousOpenPieces = openPieces;
+            const transactionResult = applyAnalyzeTrendDepotTransaction(transaction, openPieces, openCost, openCurrency);
+            openPieces = transactionResult.openPieces;
+            openCost = transactionResult.openCost;
+            openCurrency = transactionResult.openCurrency;
 
-            if (!Number.isFinite(transactionPieces) || transactionPieces === 0) {
-                return;
+            if (transactionResult.realizedAmount !== null) {
+                realizedChangeAmount = (realizedChangeAmount ?? 0) + transactionResult.realizedAmount;
+                realizedChangeCurrency = transactionResult.currency ?? realizedChangeCurrency ?? openCurrency;
             }
 
-            if (transaction.type === 'buy') {
-                openPieces += transactionPieces;
-                openCost += Number.isFinite(transactionTotalAmount) ? transactionTotalAmount : 0;
-
-                return;
-            }
-
-            if (transaction.type === 'sell' && openPieces > 0) {
-                const closedPieces = Math.min(openPieces, transactionPieces);
-                const averageCost = openCost / openPieces;
-                const soldAmount = Number.isFinite(transactionTotalAmount) ? transactionTotalAmount : 0;
-                const soldRatio = transactionPieces === 0 ? 0 : closedPieces / transactionPieces;
-                const realizedAmount = soldAmount * soldRatio - averageCost * closedPieces;
-
-                openPieces -= closedPieces;
-                openCost -= averageCost * closedPieces;
-                realizedChangeAmount = (realizedChangeAmount ?? 0) + realizedAmount;
-
-                if (openPieces <= 0.00000001) {
-                    openPieces = 0;
-                    openCost = 0;
-                }
+            if (previousOpenPieces > 0 && openPieces === 0) {
+                openCurrency = null;
             }
         });
 
         const changeAmount = realizedChangeAmount ?? openChangeAmount;
+        const changeCurrency = realizedChangeAmount === null ? openChangeCurrency : realizedChangeCurrency;
 
         stateByDate.set(price.trading_date, {
             actions,
             changeAmount: normalizeCurrencyAmount(changeAmount),
+            currency: changeCurrency,
         });
     });
 
     return stateByDate;
+}
+
+function applyAnalyzeTrendDepotTransaction(transaction, openPieces, openCost, openCurrency) {
+    const transactionPieces = Math.max(0, Number(transaction.pieces));
+    const transactionTotalAmount = Math.max(0, Number(transaction.total_amount));
+    const transactionCurrency = transaction.currency ?? openCurrency;
+
+    if (!Number.isFinite(transactionPieces) || transactionPieces === 0) {
+        return {
+            openPieces,
+            openCost,
+            openCurrency,
+            realizedAmount: null,
+            currency: transactionCurrency,
+        };
+    }
+
+    if (transaction.type === 'buy') {
+        return {
+            openPieces: openPieces + transactionPieces,
+            openCost: openCost + (Number.isFinite(transactionTotalAmount) ? transactionTotalAmount : 0),
+            openCurrency: openCurrency ?? transactionCurrency,
+            realizedAmount: null,
+            currency: transactionCurrency,
+        };
+    }
+
+    if (transaction.type !== 'sell' || openPieces <= 0) {
+        return {
+            openPieces,
+            openCost,
+            openCurrency,
+            realizedAmount: null,
+            currency: transactionCurrency,
+        };
+    }
+
+    const closedPieces = Math.min(openPieces, transactionPieces);
+    const averageCost = openCost / openPieces;
+    const soldAmount = Number.isFinite(transactionTotalAmount) ? transactionTotalAmount : 0;
+    const soldRatio = transactionPieces === 0 ? 0 : closedPieces / transactionPieces;
+    const realizedAmount = soldAmount * soldRatio - averageCost * closedPieces;
+    const remainingPieces = openPieces - closedPieces;
+    const normalizedOpenPieces = remainingPieces <= 0.00000001 ? 0 : remainingPieces;
+
+    return {
+        openPieces: normalizedOpenPieces,
+        openCost: normalizedOpenPieces === 0 ? 0 : openCost - averageCost * closedPieces,
+        openCurrency: normalizedOpenPieces === 0 ? null : openCurrency,
+        realizedAmount,
+        currency: transactionCurrency,
+    };
 }
 
 function normalizeCurrencyAmount(value) {
@@ -911,7 +975,7 @@ function normalizeCurrencyAmount(value) {
     return Math.abs(value) < 0.005 ? 0 : value;
 }
 
-function analyzeTrendDepotTransactionsByDate(holding) {
+function analyzeTrendDepotTransactions(holding) {
     const transactions = Array.isArray(holding?.depot_transactions) ? holding.depot_transactions : [];
 
     return transactions
@@ -924,15 +988,7 @@ function analyzeTrendDepotTransactionsByDate(holding) {
         .sort((firstTransaction, secondTransaction) => (
             firstTransaction.transactionDate.localeCompare(secondTransaction.transactionDate)
                 || Number(firstTransaction.id ?? 0) - Number(secondTransaction.id ?? 0)
-        ))
-        .reduce((transactionsByDate, transaction) => {
-            transactionsByDate.set(transaction.transactionDate, [
-                ...(transactionsByDate.get(transaction.transactionDate) ?? []),
-                transaction,
-            ]);
-
-            return transactionsByDate;
-        }, new Map());
+        ));
 }
 
 function analyzeTrendDepotActions(transactions) {
@@ -8448,22 +8504,22 @@ function formatAnalyzeTrendStreakEvolutionItems(evolutionItems) {
         });
 }
 
-function formatAnalyzeTrendWin(value) {
+function formatAnalyzeTrendWin(value, currency = 'EUR') {
     if (value === null || value === undefined) {
         return '';
     }
 
-    return `${formatAccountBalance(value)} EUR`;
+    return `${formatAccountBalance(value)} ${currency ?? 'EUR'}`;
 }
 
-function formatAnalyzeTrendSignedWin(value) {
+function formatAnalyzeTrendSignedWin(value, currency = 'EUR') {
     if (value === null || value === undefined) {
         return '';
     }
 
     const sign = Number(value) > 0 ? '+' : '';
 
-    return `${sign}${formatAccountBalance(value)} EUR`;
+    return `${sign}${formatAccountBalance(value)} ${currency ?? 'EUR'}`;
 }
 
 function analyzeTrendTradeAmountLabel(tradeAmounts) {
@@ -11357,7 +11413,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         class="analyze-trend-dep-change"
                                                         :class="priceChangePercentClass(trendRow.depot.changeAmount)"
                                                     >
-                                                        {{ formatAnalyzeTrendSignedWin(trendRow.depot.changeAmount) }}
+                                                        {{ formatAnalyzeTrendSignedWin(trendRow.depot.changeAmount, trendRow.depot.currency) }}
                                                     </span>
                                                 </td>
                                                 <td class="text-right">

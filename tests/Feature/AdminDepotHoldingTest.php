@@ -154,10 +154,12 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.depot_transactions.0.type', 'buy')
             ->assertJsonPath('holdings.0.depot_transactions.0.pieces', '1.00000000')
             ->assertJsonPath('holdings.0.depot_transactions.0.total_amount', '125.00')
+            ->assertJsonPath('holdings.0.depot_transactions.0.currency', 'EUR')
             ->assertJsonPath('holdings.0.depot_transactions.0.booked_at', '2026-06-02T00:00:00+02:00')
             ->assertJsonPath('holdings.0.depot_transactions.1.type', 'sell')
             ->assertJsonPath('holdings.0.depot_transactions.1.pieces', '0.50000000')
             ->assertJsonPath('holdings.0.depot_transactions.1.total_amount', '75.00')
+            ->assertJsonPath('holdings.0.depot_transactions.1.currency', 'EUR')
             ->assertJsonPath('holdings.0.depot_transactions.1.booked_at', '2026-06-04T00:00:00+02:00');
     }
 
