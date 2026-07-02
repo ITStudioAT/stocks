@@ -271,11 +271,6 @@ class EodhdMarketData
     public function exchangeCodeForIndexWatchItem(IndexWatchItem $item): string
     {
         $exchange = Str::upper((string) $item->exchange);
-        $country = Str::lower((string) $item->country);
-
-        if ($exchange === 'INDX' && in_array($country, ['austria', 'at'], true)) {
-            return 'VI';
-        }
 
         if ($exchange !== '') {
             return $exchange;

@@ -26,7 +26,7 @@ class IndexWatchItemPriceRefresher
         }
 
         $this->refresh($item);
-        $this->storeHistoricalDailyPrices($item, $limit);
+        $this->storeHistoricalDailyPrices($item, $limit, fillLatest: false);
         $item->refresh();
 
         return $this->hasRecentPrices($item, $limit);
@@ -84,7 +84,7 @@ class IndexWatchItemPriceRefresher
         $item->update([
             'currency' => $this->stringOrNull(Arr::get($payload, 'currency')) ?? $item->currency,
             'start_price' => $startPrice,
-            'latest_price' => $actualPrice,
+            'latest_price' => $actualPrice ?? $lastPrice,
             'last_price' => $lastPrice,
             'latest_price_change_pct' => $changePercent ?? $this->changePercent($actualPrice ?? $lastPrice, $referencePrice),
             'latest_price_as_of' => $asOf,
@@ -94,6 +94,48 @@ class IndexWatchItemPriceRefresher
         ]);
 
         return true;
+    }
+
+    /**
+     * @return array{requested_count: int, refreshed_count: int, failed_count: int}
+     */
+    public function refreshAll(): array
+    {
+        $requestedCount = 0;
+        $refreshedCount = 0;
+
+        foreach (IndexWatchItem::query()->orderBy('id')->cursor() as $item) {
+            $requestedCount++;
+
+            if ($this->refresh($item)) {
+                $refreshedCount++;
+            }
+        }
+
+        return [
+            'requested_count' => $requestedCount,
+            'refreshed_count' => $refreshedCount,
+            'failed_count' => $requestedCount - $refreshedCount,
+        ];
+    }
+
+    /**
+     * @return array{requested_count: int, stored_count: int}
+     */
+    public function syncHistoricalDailyPricesForAll(int $limit = self::RecentPriceLimit): array
+    {
+        $requestedCount = 0;
+        $storedCount = 0;
+
+        foreach (IndexWatchItem::query()->orderBy('id')->cursor() as $item) {
+            $requestedCount++;
+            $storedCount += $this->storeHistoricalDailyPrices($item, $limit);
+        }
+
+        return [
+            'requested_count' => $requestedCount,
+            'stored_count' => $storedCount,
+        ];
     }
 
     private function hasRecentPrices(IndexWatchItem $item, int $limit): bool
@@ -111,7 +153,7 @@ class IndexWatchItemPriceRefresher
             ->count() >= $limit;
     }
 
-    private function storeHistoricalDailyPrices(IndexWatchItem $item, int $limit): int
+    private function storeHistoricalDailyPrices(IndexWatchItem $item, int $limit, bool $fillLatest = true): int
     {
         if (! $this->apiClient->configured()) {
             return 0;
@@ -165,7 +207,7 @@ class IndexWatchItemPriceRefresher
             $stored++;
         }
 
-        if ($stored > 0) {
+        if ($stored > 0 && $fillLatest) {
             $this->fillLatestPriceFromStoredHistory($item);
         }
 
@@ -223,10 +265,6 @@ class IndexWatchItemPriceRefresher
 
     private function fillLatestPriceFromStoredHistory(IndexWatchItem $item): void
     {
-        if ($item->latest_price !== null) {
-            return;
-        }
-
         $latestPrice = $item->prices()
             ->orderByDesc('trading_date')
             ->first();
@@ -235,16 +273,30 @@ class IndexWatchItemPriceRefresher
             return;
         }
 
+        $latestPriceAsOf = $latestPrice->actual_price_as_of ?? $latestPrice->last_price_as_of;
+
+        if ($item->latest_price_as_of !== null && $latestPriceAsOf !== null && $item->latest_price_as_of->greaterThanOrEqualTo($latestPriceAsOf)) {
+            return;
+        }
+
         $actualPrice = $this->decimal($latestPrice->actual_price);
         $startPrice = $this->decimal($latestPrice->start_price);
         $lastPrice = $this->decimal($latestPrice->last_price);
+        $previousPrice = $item->prices()
+            ->whereDate('trading_date', '<', $latestPrice->trading_date)
+            ->orderByDesc('trading_date')
+            ->first();
+        $referencePrice = $this->decimal($previousPrice?->actual_price)
+            ?? $this->decimal($previousPrice?->last_price)
+            ?? $lastPrice
+            ?? $startPrice;
 
         $item->update([
             'start_price' => $startPrice,
             'latest_price' => $actualPrice ?? $lastPrice,
             'last_price' => $lastPrice,
-            'latest_price_change_pct' => $this->changePercent($actualPrice ?? $lastPrice, $startPrice ?? $lastPrice),
-            'latest_price_as_of' => $latestPrice->actual_price_as_of ?? $latestPrice->last_price_as_of,
+            'latest_price_change_pct' => $this->changePercent($actualPrice ?? $lastPrice, $referencePrice),
+            'latest_price_as_of' => $latestPriceAsOf,
             'latest_price_source' => 'EODHD EOD',
             'trading_times' => $this->tradingTimes($item),
         ]);

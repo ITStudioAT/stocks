@@ -515,6 +515,150 @@ class DepotTransactionTest extends TestCase
         }
     }
 
+    public function test_month_start_balance_uses_realtime_price_when_daily_price_is_stale(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-07-03 12:00:00', 'Europe/Vienna'));
+
+        try {
+            $admin = $this->adminUser();
+            $depot = Depot::factory()->create([
+                'account_balance' => '800.00',
+                'is_active' => true,
+            ]);
+            $holding = StockHolding::factory()->create([
+                'latest_price' => null,
+                'flatex_price' => '120.000000',
+            ]);
+            $latestRealtimePrice = StockRealtimePrice::factory()->for($holding)->create([
+                'price' => '120.00000000',
+                'as_of' => '2026-07-03 10:00:00',
+                'fetched_at' => '2026-07-03 10:00:00',
+            ]);
+
+            $holding->update(['latest_realtime_price_id' => $latestRealtimePrice->id]);
+
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-06-17',
+                'close' => '200.00000000',
+                'adjusted_close' => '200.00000000',
+            ]);
+            StockRealtimePrice::factory()->for($holding)->create([
+                'price' => '110.00000000',
+                'as_of' => '2026-07-01 15:36:00',
+                'fetched_at' => '2026-07-02 07:12:08',
+                'freshness_status' => 'stale',
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => null,
+                'type' => 'opening_balance',
+                'pieces' => null,
+                'total_amount' => '1000.00',
+                'unit_price' => null,
+                'cash_delta' => '1000.00',
+                'balance_after' => '1000.00',
+                'booked_at' => '2026-01-01 00:00:00',
+                'is_external_cashflow' => true,
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $holding->id,
+                'type' => 'buy',
+                'pieces' => '2.00000000',
+                'total_amount' => '200.00',
+                'unit_price' => '100.00000000',
+                'cash_delta' => '-200.00',
+                'balance_after' => '800.00',
+                'booked_at' => '2026-06-20 00:00:00',
+            ]);
+
+            $this->actingAs($admin)
+                ->getJson('/admin/depot-transactions')
+                ->assertOk()
+                ->assertJsonPath('depot_valuations.latest.current_balance', '1040.00')
+                ->assertJsonPath('depot_valuations.latest.month_start_balance', '1020.00')
+                ->assertJsonPath('depot_valuations.latest.month_change_amount', '20.00')
+                ->assertJsonPath('depot_valuations.latest.month_change_percent', '1.96');
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_one_week_balance_uses_previous_calendar_week_end(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-07-03 12:00:00', 'Europe/Vienna'));
+
+        try {
+            $admin = $this->adminUser();
+            $depot = Depot::factory()->create([
+                'account_balance' => '700.00',
+                'is_active' => true,
+            ]);
+            $holding = StockHolding::factory()->create([
+                'latest_price' => '120.000000',
+                'flatex_price' => '120.000000',
+            ]);
+
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-06-26',
+                'close' => '90.00000000',
+                'adjusted_close' => '90.00000000',
+            ]);
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-06-29',
+                'close' => '110.00000000',
+                'adjusted_close' => '110.00000000',
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => null,
+                'type' => 'opening_balance',
+                'pieces' => null,
+                'total_amount' => '1000.00',
+                'unit_price' => null,
+                'cash_delta' => '1000.00',
+                'balance_after' => '1000.00',
+                'booked_at' => '2026-01-01 00:00:00',
+                'is_external_cashflow' => true,
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $holding->id,
+                'type' => 'buy',
+                'pieces' => '2.00000000',
+                'total_amount' => '200.00',
+                'unit_price' => '100.00000000',
+                'cash_delta' => '-200.00',
+                'balance_after' => '800.00',
+                'booked_at' => '2026-06-20 00:00:00',
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $holding->id,
+                'type' => 'buy',
+                'pieces' => '1.00000000',
+                'total_amount' => '100.00',
+                'unit_price' => '100.00000000',
+                'cash_delta' => '-100.00',
+                'balance_after' => '700.00',
+                'booked_at' => '2026-06-28 00:00:00',
+            ]);
+
+            $this->actingAs($admin)
+                ->getJson('/admin/depot-transactions')
+                ->assertOk()
+                ->assertJsonPath('depot_valuations.latest.current_balance', '1060.00')
+                ->assertJsonPath('depot_valuations.latest.one_week_start_balance', '970.00')
+                ->assertJsonPath('depot_valuations.latest.one_week_change_amount', '90.00')
+                ->assertJsonPath('depot_valuations.latest.one_week_change_percent', '9.28');
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
     public function test_admin_can_list_depot_performance_series_from_year_start_to_now(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-13 12:00:00', 'UTC'));
@@ -591,6 +735,97 @@ class DepotTransactionTest extends TestCase
             $this->assertSame('2026-06-13', $latestPoint['date']);
             $this->assertSame('300.00', $latestPoint['stock_balance']);
             $this->assertSame('1255.00', $latestPoint['account_balance']);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_depot_performance_series_uses_each_past_days_latest_realtime_price(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-07-03 12:00:00', 'Europe/Vienna'));
+
+        try {
+            $admin = $this->adminUser();
+            $depot = Depot::factory()->create([
+                'account_balance' => '800.00',
+                'is_active' => true,
+            ]);
+            $holding = StockHolding::factory()->create([
+                'latest_price' => null,
+                'flatex_price' => '130.000000',
+            ]);
+            $latestRealtimePrice = StockRealtimePrice::factory()->for($holding)->create([
+                'price' => '130.00000000',
+                'as_of' => '2026-07-03 10:00:00',
+                'fetched_at' => '2026-07-03 10:00:00',
+            ]);
+
+            $holding->update(['latest_realtime_price_id' => $latestRealtimePrice->id]);
+
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-06-17',
+                'close' => '50.00000000',
+                'adjusted_close' => '50.00000000',
+            ]);
+            StockRealtimePrice::factory()->for($holding)->create([
+                'price' => '100.00000000',
+                'as_of' => '2026-06-30 17:35:00',
+                'fetched_at' => '2026-06-30 17:36:00',
+            ]);
+            StockRealtimePrice::factory()->for($holding)->create([
+                'price' => '110.00000000',
+                'as_of' => '2026-07-01 17:35:00',
+                'fetched_at' => '2026-07-01 17:36:00',
+            ]);
+            StockRealtimePrice::factory()->for($holding)->create([
+                'price' => '120.00000000',
+                'as_of' => '2026-07-02 17:35:00',
+                'fetched_at' => '2026-07-02 17:36:00',
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => null,
+                'type' => 'opening_balance',
+                'pieces' => null,
+                'total_amount' => '1000.00',
+                'unit_price' => null,
+                'cash_delta' => '1000.00',
+                'balance_after' => '1000.00',
+                'booked_at' => '2026-01-01 00:00:00',
+                'is_external_cashflow' => true,
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $holding->id,
+                'type' => 'buy',
+                'pieces' => '2.00000000',
+                'total_amount' => '200.00',
+                'unit_price' => '100.00000000',
+                'cash_delta' => '-200.00',
+                'balance_after' => '800.00',
+                'booked_at' => '2026-06-20 00:00:00',
+            ]);
+
+            $series = collect($this->actingAs($admin)
+                ->getJson('/admin/depot-transactions')
+                ->assertOk()
+                ->json('depot_performance_series'));
+
+            $juneThirtiethPoint = $series->firstWhere('date', '2026-06-30');
+            $julyFirstPoint = $series->firstWhere('date', '2026-07-01');
+            $julySecondPoint = $series->firstWhere('date', '2026-07-02');
+            $latestPoint = $series->last();
+
+            $this->assertSame('200.00', $juneThirtiethPoint['stock_balance']);
+            $this->assertSame('1000.00', $juneThirtiethPoint['account_balance']);
+            $this->assertSame('220.00', $julyFirstPoint['stock_balance']);
+            $this->assertSame('1020.00', $julyFirstPoint['account_balance']);
+            $this->assertSame('240.00', $julySecondPoint['stock_balance']);
+            $this->assertSame('1040.00', $julySecondPoint['account_balance']);
+            $this->assertSame('2026-07-03', $latestPoint['date']);
+            $this->assertSame('260.00', $latestPoint['stock_balance']);
+            $this->assertSame('1060.00', $latestPoint['account_balance']);
         } finally {
             Carbon::setTestNow();
         }
@@ -712,6 +947,66 @@ class DepotTransactionTest extends TestCase
 
         $this->assertSame(['AAPL'], collect($response->json('depot_holdings'))->pluck('symbol')->all());
         $this->assertSame('710.00', $depot->refresh()->account_balance);
+    }
+
+    public function test_depot_taxable_stock_gain_uses_net_open_holding_gain(): void
+    {
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create([
+            'account_balance' => '800.00',
+            'is_active' => true,
+        ]);
+        $winningHolding = StockHolding::factory()->create([
+            'latest_price' => '150.000000',
+            'flatex_price' => '150.000000',
+        ]);
+        $losingHolding = StockHolding::factory()->create([
+            'latest_price' => '50.000000',
+            'flatex_price' => '50.000000',
+        ]);
+
+        DepotTransaction::factory()->create([
+            'depot_id' => $depot->id,
+            'stock_holding_id' => null,
+            'type' => 'opening_balance',
+            'pieces' => null,
+            'total_amount' => '1000.00',
+            'unit_price' => null,
+            'cash_delta' => '1000.00',
+            'balance_after' => '1000.00',
+            'booked_at' => '2026-01-01 00:00:00',
+            'is_external_cashflow' => true,
+        ]);
+        DepotTransaction::factory()->create([
+            'depot_id' => $depot->id,
+            'stock_holding_id' => $winningHolding->id,
+            'type' => 'buy',
+            'pieces' => '1.00000000',
+            'total_amount' => '100.00',
+            'unit_price' => '100.00000000',
+            'cash_delta' => '-100.00',
+            'balance_after' => '900.00',
+            'booked_at' => '2026-06-10 00:00:00',
+        ]);
+        DepotTransaction::factory()->create([
+            'depot_id' => $depot->id,
+            'stock_holding_id' => $losingHolding->id,
+            'type' => 'buy',
+            'pieces' => '1.00000000',
+            'total_amount' => '100.00',
+            'unit_price' => '100.00000000',
+            'cash_delta' => '-100.00',
+            'balance_after' => '800.00',
+            'booked_at' => '2026-06-10 00:00:00',
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/depot-transactions')
+            ->assertOk()
+            ->assertJsonPath('depot_valuations.latest.stock_balance', '200.00')
+            ->assertJsonPath('depot_valuations.latest.current_balance', '1000.00')
+            ->assertJsonPath('depot_valuations.latest.balance_change_amount', '0.00')
+            ->assertJsonPath('depot_valuations.latest.taxable_stock_gain_amount', '0.00');
     }
 
     public function test_depot_profit_infers_opening_cash_when_no_opening_balance_transaction_exists(): void

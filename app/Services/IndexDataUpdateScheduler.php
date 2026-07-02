@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Models\AppConfig;
-use App\Models\IndexWatchItem;
 use App\Models\IndexWatchItemPrice;
 use Illuminate\Support\Carbon;
 
@@ -86,28 +85,14 @@ class IndexDataUpdateScheduler
     }
 
     /**
-     * @return array{requested_count: int, refreshed_count: int, failed_count: int}
+     * @return array{requested_count: int, stored_count: int}
      */
     public function dispatchNow(): array
     {
-        $requestedCount = 0;
-        $refreshedCount = 0;
-
-        foreach (IndexWatchItem::query()->orderBy('id')->cursor() as $item) {
-            $requestedCount++;
-
-            if ($this->priceRefresher->refresh($item)) {
-                $refreshedCount++;
-            }
-        }
-
+        $result = $this->priceRefresher->syncHistoricalDailyPricesForAll();
         $this->markRefreshed();
 
-        return [
-            'requested_count' => $requestedCount,
-            'refreshed_count' => $refreshedCount,
-            'failed_count' => $requestedCount - $refreshedCount,
-        ];
+        return $result;
     }
 
     public function markRefreshed(?Carbon $refreshedAt = null): array

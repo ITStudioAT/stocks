@@ -788,14 +788,14 @@ class PriceRefreshSettingsTest extends TestCase
         $this->actingAs($admin)
             ->postJson('/admin/data/indices/sync')
             ->assertOk()
-            ->assertJsonPath('message', 'EODHD indices sync: 1 index(es) refreshed.')
+            ->assertJsonPath('message', 'EODHD index live sync: 1 index(es) refreshed.')
             ->assertJsonPath('requested_count', 1)
             ->assertJsonPath('refreshed_count', 1)
             ->assertJsonPath('failed_count', 0)
-            ->assertJsonPath('index_data_update_settings.last_dispatched_at', '2026-06-17T02:00:00+02:00')
-            ->assertJsonPath('index_data_update_settings.table_name', 'index_watch_item_prices')
-            ->assertJsonPath('index_data_update_settings.table_row_count', 1)
-            ->assertJsonPath('index_data_update_settings.latest_table_update_at', '2026-06-17T02:00:00+02:00');
+            ->assertJsonPath('index_price_refresh_settings.last_refreshed_at', '2026-06-17T02:00:00+02:00')
+            ->assertJsonPath('index_price_refresh_settings.table_name', 'index_watch_items')
+            ->assertJsonPath('index_price_refresh_settings.table_row_count', 1)
+            ->assertJsonPath('index_price_refresh_settings.latest_table_update_at', '2026-06-17T02:00:00+02:00');
 
         $storedPrice = IndexWatchItemPrice::query()
             ->where('index_watch_item_id', $index->id)
@@ -804,6 +804,79 @@ class PriceRefreshSettingsTest extends TestCase
 
         $this->assertSame('6116.53000000', (string) $storedPrice->actual_price);
         $this->assertSame('6095.00000000', (string) $storedPrice->last_price);
+    }
+
+    public function test_admin_can_run_historical_index_data_sync(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-17 02:00:00', 'Europe/Vienna'));
+        $index = IndexWatchItem::factory()->create([
+            'symbol' => 'ATX',
+            'exchange' => 'XETRA',
+            'mic_code' => 'XETR',
+            'currency' => 'EUR',
+            'latest_price' => '5999.00000000',
+            'last_price' => '5980.00000000',
+            'latest_price_change_pct' => '9.990000',
+            'latest_price_as_of' => '2026-06-13 12:00:00',
+            'latest_price_source' => 'EODHD real-time',
+        ]);
+        Http::fake([
+            'eodhd.com/api/eod/ATX.XETRA*' => Http::response([
+                [
+                    'date' => '2026-06-16',
+                    'open' => 6088.12,
+                    'close' => 6116.53,
+                    'adjusted_close' => 6116.53,
+                ],
+                [
+                    'date' => '2026-06-15',
+                    'open' => 6050.00,
+                    'close' => 6095.00,
+                    'adjusted_close' => 6095.00,
+                ],
+            ]),
+            'eodhd.com/api/exchange-details/XETRA*' => Http::response([
+                'Name' => 'XETRA Stock Exchange',
+                'Code' => 'XETRA',
+                'OperatingMIC' => 'XETR',
+                'Country' => 'Germany',
+                'Currency' => 'EUR',
+                'Timezone' => 'Europe/Berlin',
+                'TradingHours' => [
+                    'Open' => '09:00:00',
+                    'Close' => '17:30:00',
+                    'WorkingDays' => 'Mon,Tue,Wed,Thu,Fri',
+                ],
+            ]),
+        ]);
+
+        $this->actingAs($admin)
+            ->postJson('/admin/data/indices/historical/sync')
+            ->assertOk()
+            ->assertJsonPath('message', 'EODHD historical indices sync: 2 record(s) loaded/updated.')
+            ->assertJsonPath('requested_count', 1)
+            ->assertJsonPath('stored_count', 2)
+            ->assertJsonPath('index_data_update_settings.last_dispatched_at', '2026-06-17T02:00:00+02:00')
+            ->assertJsonPath('index_data_update_settings.table_name', 'index_watch_item_prices')
+            ->assertJsonPath('index_data_update_settings.table_row_count', 2)
+            ->assertJsonPath('index_data_update_settings.latest_table_update_at', '2026-06-17T02:00:00+02:00');
+
+        $storedPrice = IndexWatchItemPrice::query()
+            ->where('index_watch_item_id', $index->id)
+            ->whereDate('trading_date', '2026-06-16')
+            ->firstOrFail();
+
+        $this->assertSame('6116.53000000', (string) $storedPrice->actual_price);
+        $this->assertSame('6116.53000000', (string) $storedPrice->last_price);
+
+        $index->refresh();
+
+        $this->assertSame('6116.53000000', (string) $index->latest_price);
+        $this->assertSame('6116.53000000', (string) $index->last_price);
+        $this->assertSame('0.353240', (string) $index->latest_price_change_pct);
+        $this->assertSame('EODHD EOD', $index->latest_price_source);
     }
 
     public function test_due_intraday_backfill_command_retries_after_interval_when_historical_data_is_incomplete(): void

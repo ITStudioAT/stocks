@@ -993,8 +993,26 @@ export const useDepotStore = defineStore('depots', {
                 const data = await request('/admin/data/indices/sync', {
                     method: 'POST',
                 });
+                this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+                await this.loadIndexWatchItems();
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async syncDataIndexHistorical() {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/data/indices/historical/sync', {
+                    method: 'POST',
+                });
                 this.indexDataUpdateSettings = data.index_data_update_settings ?? this.indexDataUpdateSettings;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+                await this.loadIndexWatchItems();
 
                 return data;
             } catch (error) {

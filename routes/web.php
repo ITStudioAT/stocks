@@ -187,6 +187,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::post('/admin/data/realtime/sync', [AdminDataController::class, 'syncRealtime'])->name('admin.data.realtime.sync');
     Route::post('/admin/data/end-of-day/sync', [AdminDataController::class, 'syncEndOfDay'])->name('admin.data.endOfDay.sync');
     Route::post('/admin/data/indices/sync', [AdminDataController::class, 'syncIndices'])->name('admin.data.indices.sync');
+    Route::post('/admin/data/indices/historical/sync', [AdminDataController::class, 'syncIndexHistorical'])->name('admin.data.indices.historical.sync');
     Route::post('/admin/data/historical/sync', [AdminDataController::class, 'syncHistorical'])->name('admin.data.historical.sync');
     Route::get('/admin/data/intraday', [AdminDataController::class, 'intraday'])->name('admin.data.intraday');
     Route::post('/admin/data/intraday/reload', [AdminDataController::class, 'reloadIntraday'])->name('admin.data.intraday.reload');

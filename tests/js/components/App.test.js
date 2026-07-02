@@ -245,6 +245,9 @@ function indexPriceRefreshSettings(overrides = {}) {
         closed_refresh_enabled: false,
         closed_interval_minutes: 90,
         current_interval_minutes: 30,
+        table_name: 'index_watch_items',
+        table_row_count: 11,
+        latest_table_update_at: '2026-06-12T12:15:00+02:00',
         ...overrides,
     });
 }
@@ -324,6 +327,30 @@ function sessionHeaderDate(daysAgo) {
         Number(dateParts.year),
         Number(dateParts.month) - 1,
         Number(dateParts.day) - daysAgo,
+    ));
+
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: 'UTC',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    }).format(viennaDate);
+}
+
+function previousWeekEndDate() {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Vienna',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        weekday: 'short',
+    }).formatToParts(new Date());
+    const dateParts = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    const daysSinceMonday = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(dateParts.weekday);
+    const viennaDate = new Date(Date.UTC(
+        Number(dateParts.year),
+        Number(dateParts.month) - 1,
+        Number(dateParts.day) - daysSinceMonday - 1,
     ));
 
     return new Intl.DateTimeFormat('de-AT', {
@@ -1939,6 +1966,10 @@ describe('App', () => {
 
         const appleCard = analyzeOverview.findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Apple'));
+        expect(appleCard.find('.analyze-holding-card-symbol').text()).toBe('AAPL');
+        expect(appleCard.find('.analyze-holding-card-isin').text()).toBe('US0378331005');
+        expect(appleCard.find('.analyze-holding-card-name').text()).toBe('Apple');
+
         await appleCard.trigger('click');
         await flushPromises();
 
@@ -5096,6 +5127,7 @@ describe('App', () => {
     it('shows Data as a main dashboard item and Admin group with Users, Roles, and Cloudways submenu chips for super_admin', async () => {
         window.history.pushState({}, '', '/admin/menu/users');
         localStorage.removeItem('data_intraday_refresh_info_dismissed');
+        let mockedIndexPriceRefreshSettings = indexPriceRefreshSettings();
         let mockedIndexDataUpdateSettings = indexDataUpdateSettings();
         const fetchMock = vi.fn((path, options = {}) => {
             if (path === '/admin/me') {
@@ -5545,7 +5577,7 @@ describe('App', () => {
             if (path === '/admin/price-refresh-settings') {
                 return Promise.resolve(jsonResponse({
                     price_refresh_settings: priceRefreshSettings(),
-                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                    index_price_refresh_settings: mockedIndexPriceRefreshSettings,
                     intraday_backfill_settings: intradayBackfillSettings(),
                     end_of_day_data_update_settings: endOfDayDataUpdateSettings(),
                     index_data_update_settings: mockedIndexDataUpdateSettings,
@@ -5649,6 +5681,23 @@ describe('App', () => {
             }
 
             if (path === '/admin/data/indices/sync' && options?.method === 'POST') {
+                mockedIndexPriceRefreshSettings = indexPriceRefreshSettings({
+                    last_refreshed_at: '2026-06-12T13:05:00+02:00',
+                    next_refresh_at: '2026-06-12T13:35:00+02:00',
+                    table_row_count: 11,
+                    latest_table_update_at: '2026-06-12T13:05:00+02:00',
+                });
+
+                return Promise.resolve(jsonResponse({
+                    message: 'EODHD index live sync: 1 index(es) refreshed.',
+                    requested_count: 1,
+                    refreshed_count: 1,
+                    failed_count: 0,
+                    index_price_refresh_settings: mockedIndexPriceRefreshSettings,
+                }));
+            }
+
+            if (path === '/admin/data/indices/historical/sync' && options?.method === 'POST') {
                 mockedIndexDataUpdateSettings = indexDataUpdateSettings({
                     weekday: 3,
                     weekday_label: 'Wednesday',
@@ -5660,10 +5709,9 @@ describe('App', () => {
                 });
 
                 return Promise.resolve(jsonResponse({
-                    message: 'EODHD indices sync: 1 index(es) refreshed.',
+                    message: 'EODHD historical indices sync: 1 record(s) loaded/updated.',
                     requested_count: 1,
-                    refreshed_count: 1,
-                    failed_count: 0,
+                    stored_count: 1,
                     index_data_update_settings: mockedIndexDataUpdateSettings,
                 }));
             }
@@ -6072,21 +6120,33 @@ describe('App', () => {
         expect(eodhdEndOfDayDataButton.exists()).toBe(true);
         const indicesDataCard = dataOverview.find('.test-selected-stock-card--indices');
         expect(indicesDataCard.exists()).toBe(true);
-        expect(indicesDataCard.text()).toContain('Indices-Date');
+        expect(indicesDataCard.text()).toContain('Index Live-Daten');
+        expect(indicesDataCard.text()).toContain('Index Historical Data');
+        expect(indicesDataCard.text()).toContain('Affected table: index_watch_items');
         expect(indicesDataCard.text()).toContain('Affected table: index_watch_item_prices');
+        expect(indicesDataCard.text()).toContain('Total rows: 11');
         expect(indicesDataCard.text()).toContain('Total rows: 3');
         expect(indicesDataCard.text()).toContain('Monday 02:00 · Vienna');
-        expect(indicesDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+        expect(indicesDataCard.find('.test-index-data-block--live').findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest update02.06.2026, 14:20',
+            'Next update02.06.2026, 14:40',
+        ]);
+        expect(indicesDataCard.find('.test-index-data-block--historical').findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
             'Latest updateNever',
             'Next update15.06.2026, 02:00',
         ]);
-        const indicesDataWaitingStatusDot = indicesDataCard.find('[aria-label="Indices data update status: waiting"]');
+        const indicesLiveWaitingStatusDot = indicesDataCard.find('[aria-label="Indices live update status: waiting"]');
+        expect(indicesLiveWaitingStatusDot.exists()).toBe(true);
+        expect(indicesLiveWaitingStatusDot.classes()).toContain('test-live-data-update-status-dot--waiting');
+        const indicesDataWaitingStatusDot = indicesDataCard.find('[aria-label="Indices historical data update status: waiting"]');
         expect(indicesDataWaitingStatusDot.exists()).toBe(true);
         expect(indicesDataWaitingStatusDot.classes()).toContain('test-live-data-update-status-dot--waiting');
         const editIndicesDataUpdatesButton = indicesDataCard.find('[aria-label="Edit indices data updates"]');
         expect(editIndicesDataUpdatesButton.exists()).toBe(true);
-        const eodhdIndicesDataButton = indicesDataCard.find('[aria-label="Sync EODHD indices data"]');
+        const eodhdIndicesDataButton = indicesDataCard.find('[aria-label="Sync EODHD realtime indices data"]');
         expect(eodhdIndicesDataButton.exists()).toBe(true);
+        const eodhdHistoricalIndicesDataButton = indicesDataCard.find('[aria-label="Sync EODHD historical indices data"]');
+        expect(eodhdHistoricalIndicesDataButton.exists()).toBe(true);
         const historicalDataWaitingStatusDot = historicalDataCard.find('[aria-label="Historical data update status: waiting"]');
         expect(historicalDataWaitingStatusDot.exists()).toBe(true);
         expect(historicalDataWaitingStatusDot.classes()).toContain('test-live-data-update-status-dot--waiting');
@@ -6215,33 +6275,69 @@ describe('App', () => {
             weekday: 3,
         });
         expect(indicesDataCard.text()).toContain('Wednesday 02:00 · Vienna');
-        expect(indicesDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+        expect(indicesDataCard.find('.test-index-data-block--historical').findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
             'Latest updateNever',
             'Next update17.06.2026, 02:00',
         ]);
+        const indexWatchCallsBeforeLiveSync = fetchMock.mock.calls
+            .filter(([path]) => path === '/admin/index-watch-items')
+            .length;
+
         await eodhdIndicesDataButton.trigger('click');
 
-        const indicesDataManualSyncStatusDot = indicesDataCard.find('[aria-label="Indices data update status: updating"]');
-        expect(indicesDataManualSyncStatusDot.exists()).toBe(true);
-        expect(indicesDataManualSyncStatusDot.classes()).toContain('test-live-data-update-status-dot--updating');
+        const indicesLiveManualSyncStatusDot = indicesDataCard.find('[aria-label="Indices live update status: updating"]');
+        expect(indicesLiveManualSyncStatusDot.exists()).toBe(true);
+        expect(indicesLiveManualSyncStatusDot.classes()).toContain('test-live-data-update-status-dot--updating');
 
         await flushPromises();
 
         expect(fetchMock).toHaveBeenCalledWith('/admin/data/indices/sync', expect.objectContaining({
             method: 'POST',
         }));
-        expect(dataOverview.text()).toContain('EODHD indices sync: 1 index(es) refreshed.');
-        expect(indicesDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
-            'Latest update17.06.2026, 02:01',
-            'Next update24.06.2026, 02:00',
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(
+            indexWatchCallsBeforeLiveSync + 1,
+        );
+        expect(dataOverview.text()).toContain('EODHD index live sync: 1 index(es) refreshed.');
+        expect(indicesDataCard.find('.test-index-data-block--live').findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest update12.06.2026, 13:05',
+            'Next update12.06.2026, 13:35',
         ]);
-        expect(indicesDataCard.text()).toContain('Total rows: 4');
-        const indicesDataSyncAlertCloseButton = dataOverview.find('[aria-label="Close indices data sync message"]');
+        const indicesDataSyncAlertCloseButton = dataOverview.find('[aria-label="Close indices live sync message"]');
         expect(indicesDataSyncAlertCloseButton.exists()).toBe(true);
         await indicesDataSyncAlertCloseButton.trigger('click');
         await flushPromises();
 
-        expect(dataOverview.text()).not.toContain('EODHD indices sync: 1 index(es) refreshed.');
+        expect(dataOverview.text()).not.toContain('EODHD index live sync: 1 index(es) refreshed.');
+        const indexWatchCallsBeforeHistoricalSync = fetchMock.mock.calls
+            .filter(([path]) => path === '/admin/index-watch-items')
+            .length;
+
+        await eodhdHistoricalIndicesDataButton.trigger('click');
+
+        const indicesDataManualSyncStatusDot = indicesDataCard.find('[aria-label="Indices historical data update status: updating"]');
+        expect(indicesDataManualSyncStatusDot.exists()).toBe(true);
+        expect(indicesDataManualSyncStatusDot.classes()).toContain('test-live-data-update-status-dot--updating');
+
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/data/indices/historical/sync', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(
+            indexWatchCallsBeforeHistoricalSync + 1,
+        );
+        expect(dataOverview.text()).toContain('EODHD historical indices sync: 1 record(s) loaded/updated.');
+        expect(indicesDataCard.find('.test-index-data-block--historical').findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
+            'Latest update17.06.2026, 02:01',
+            'Next update24.06.2026, 02:00',
+        ]);
+        expect(indicesDataCard.text()).toContain('Total rows: 4');
+        const indicesHistoricalDataSyncAlertCloseButton = dataOverview.find('[aria-label="Close historical indices data sync message"]');
+        expect(indicesHistoricalDataSyncAlertCloseButton.exists()).toBe(true);
+        await indicesHistoricalDataSyncAlertCloseButton.trigger('click');
+        await flushPromises();
+
+        expect(dataOverview.text()).not.toContain('EODHD historical indices sync: 1 record(s) loaded/updated.');
         await eodhdEndOfDayDataButton.trigger('click');
 
         const endOfDayDataManualSyncStatusDot = endOfDayDataCard.find('[aria-label="End-of-day data update status: updating"]');
@@ -7137,12 +7233,16 @@ describe('App', () => {
         await flushPromises();
 
         expect(wrapper.text()).toContain('Depot stocks');
+        expect(wrapper.text()).toContain('Depot');
         expect(wrapper.text()).toContain('Depot balance');
         expect(wrapper.text()).toContain('383.00 EUR');
         expect(wrapper.text()).toContain('Cash balance');
         expect(wrapper.text()).toContain('650.00 EUR');
         expect(wrapper.text()).toContain('Account balance');
         expect(wrapper.text()).toContain('1,033.00 EUR');
+        expect(wrapper.text()).not.toContain('Status');
+        expect(wrapper.text()).not.toContain('Active');
+        expect(wrapper.text()).toContain('Aktuelles Jahr');
         expect(wrapper.text()).toContain('Balance 01.01.');
         expect(wrapper.text()).toContain('1,000.00 EUR');
         expect(wrapper.text()).toContain(`Balance ${sessionHeaderDate(0).slice(0, 6)}`);
@@ -7152,10 +7252,12 @@ describe('App', () => {
         expect(wrapper.text()).toContain('1,023.92 EUR');
         expect(wrapper.text()).toContain('Corrected +/-');
         expect(wrapper.text()).toContain('+2.39% · +23.92 EUR');
-        expect(wrapper.text()).toContain(`Balance ${sessionHeaderDate(7).slice(0, 6)}`);
+        expect(wrapper.text()).toContain('Aktuelle Woche');
+        expect(wrapper.text()).toContain(`Balance ${previousWeekEndDate().slice(0, 6)}`);
         expect(wrapper.text()).toContain('990.00 EUR');
         expect(wrapper.text()).toContain('1 week');
         expect(wrapper.text()).toContain('+4.34% · +43.00 EUR');
+        expect(wrapper.text()).toContain('Aktueller Monat');
         expect(wrapper.text()).toContain(`Balance 01.${sessionHeaderDate(0).slice(3, 6)}`);
         expect(wrapper.text()).toContain('Month');
         expect(wrapper.text()).toContain('+3.30% · +33.00 EUR');

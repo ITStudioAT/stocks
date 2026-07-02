@@ -98,7 +98,7 @@ class AdminIndexWatchItemController extends Controller
             'wkn' => $request->filled('wkn') ? Str::upper(trim((string) $request->input('wkn'))) : null,
             'exchange' => $request->filled('exchange') ? trim((string) $request->input('exchange')) : null,
             'mic_code' => $request->filled('mic_code') ? Str::upper(trim((string) $request->input('mic_code'))) : null,
-            'instrument_type' => $request->filled('instrument_type') ? trim((string) $request->input('instrument_type')) : null,
+            'instrument_type' => $request->filled('instrument_type') ? Str::upper(trim((string) $request->input('instrument_type'))) : null,
             'country' => $request->filled('country') ? trim((string) $request->input('country')) : null,
             'currency' => $request->filled('currency') ? Str::upper(trim((string) $request->input('currency'))) : null,
         ]);
@@ -122,7 +122,7 @@ class AdminIndexWatchItemController extends Controller
             ],
             'exchange' => ['nullable', 'string', 'max:255'],
             'mic_code' => ['nullable', 'string', 'max:32'],
-            'instrument_type' => ['nullable', 'string', 'max:255'],
+            'instrument_type' => ['required', 'string', Rule::in(['INDEX'])],
             'country' => ['nullable', 'string', 'max:255'],
             'currency' => ['nullable', 'string', 'max:8'],
         ]);

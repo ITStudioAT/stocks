@@ -142,6 +142,87 @@ class AdminIndexWatchItemTest extends TestCase
         }
     }
 
+    public function test_austrian_index_prices_are_loaded_from_the_index_exchange(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-07-02 18:00:00', 'Europe/Vienna'));
+
+        try {
+            config(['services.eodhd.key' => 'test-token']);
+            Http::fake([
+                'eodhd.com/api/real-time/ATX.INDX*' => Http::response([
+                    'code' => 'ATX.INDX',
+                    'timestamp' => Carbon::parse('2026-07-02 16:30:00', 'UTC')->timestamp,
+                    'open' => 6400.00,
+                    'close' => 6497.1401,
+                    'previousClose' => 6386.8101,
+                    'change_p' => 1.727466,
+                    'currency' => 'EUR',
+                ]),
+                'eodhd.com/api/eod/ATX.INDX*' => Http::response($this->eodhdDailyIndexRecords()),
+            ]);
+            $admin = $this->adminUser();
+            $index = IndexWatchItem::factory()->create([
+                'symbol' => 'ATX',
+                'name' => 'Austrian Traded Index in EUR',
+                'isin' => 'AT0000999982',
+                'exchange' => 'INDX',
+                'mic_code' => null,
+                'instrument_type' => 'INDEX',
+                'country' => 'Austria',
+                'currency' => 'EUR',
+            ]);
+
+            $this->actingAs($admin)
+                ->postJson("/admin/index-watch-items/{$index->id}/prices/ensure")
+                ->assertOk()
+                ->assertJsonPath('index.latest_price', '6497.140100')
+                ->assertJsonPath('index.latest_price_source', 'EODHD real-time');
+
+            Http::assertSent(fn ($request): bool => str_contains($request->url(), '/api/real-time/ATX.INDX'));
+            Http::assertNotSent(fn ($request): bool => str_contains($request->url(), '/api/real-time/ATX.VI'));
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_index_realtime_refresh_uses_previous_close_when_close_is_unavailable(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-07-03 01:30:00', 'Europe/Vienna'));
+
+        try {
+            config(['services.eodhd.key' => 'test-token']);
+            Http::fake([
+                'eodhd.com/api/real-time/ATG.INDX*' => Http::response([
+                    'code' => 'ATG.INDX',
+                    'timestamp' => Carbon::parse('2026-07-02 16:30:00', 'UTC')->timestamp,
+                    'open' => 'NA',
+                    'close' => 'NA',
+                    'previousClose' => 2481.33,
+                    'change_p' => 0,
+                    'currency' => 'EUR',
+                ]),
+                'eodhd.com/api/eod/ATG.INDX*' => Http::response([]),
+            ]);
+            $admin = $this->adminUser();
+            $index = IndexWatchItem::factory()->create([
+                'symbol' => 'ATG',
+                'name' => 'Athens General Composite',
+                'exchange' => 'INDX',
+                'instrument_type' => 'INDEX',
+                'country' => 'Greece',
+                'currency' => 'EUR',
+            ]);
+
+            $this->actingAs($admin)
+                ->postJson("/admin/index-watch-items/{$index->id}/prices/ensure")
+                ->assertOk()
+                ->assertJsonPath('index.latest_price', '2481.330000')
+                ->assertJsonPath('index.last_price', '2481.330000');
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
     public function test_admin_index_recent_prices_hide_only_current_trading_day_last_price_from_open_quote_timestamp(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-05 18:00:00', 'Europe/Berlin'));
@@ -237,6 +318,25 @@ class AdminIndexWatchItemTest extends TestCase
             'country' => 'United States',
             'currency' => 'USD',
         ]);
+    }
+
+    public function test_admin_cannot_add_a_non_index_watch_item(): void
+    {
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->postJson('/admin/index-watch-items', [
+                'symbol' => 'BBVAI',
+                'name' => 'Accion IBEX 35 Cotizado Armonizado FI',
+                'isin' => 'ES0105336038',
+                'exchange' => 'MC',
+                'mic_code' => 'XMAD',
+                'instrument_type' => 'ETF',
+                'country' => 'Spain',
+                'currency' => 'EUR',
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('instrument_type');
     }
 
     public function test_guest_cannot_add_index_watch_items(): void

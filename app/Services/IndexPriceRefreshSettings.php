@@ -34,13 +34,18 @@ class IndexPriceRefreshSettings
     }
 
     /**
-     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string, status: string, status_label: string, is_trading_time: bool, current_interval_minutes: int}
+     * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string, status: string, status_label: string, is_trading_time: bool, current_interval_minutes: int, table_name: string, table_row_count: int, latest_table_update_at: ?string}
      */
     public function payload(): array
     {
         $settings = $this->settings();
         $isTradingTime = $this->isAnyIndexWithinTradingTimes(settings: $settings);
         $isUpdating = $this->hasRunningCombinedRefresh();
+        $latestTableUpdateAt = IndexWatchItem::query()
+            ->whereNotNull('updated_at')
+            ->latest('updated_at')
+            ->first()
+            ?->updated_at;
 
         return [
             'trading_interval_minutes' => $settings['trading_interval_minutes'],
@@ -54,6 +59,11 @@ class IndexPriceRefreshSettings
             'status_label' => $isUpdating ? 'Updating prices' : 'waiting',
             'is_trading_time' => $isTradingTime,
             'current_interval_minutes' => $this->currentIntervalMinutes($settings, $isTradingTime),
+            'table_name' => (new IndexWatchItem)->getTable(),
+            'table_row_count' => IndexWatchItem::query()->count(),
+            'latest_table_update_at' => $latestTableUpdateAt
+                ? Carbon::parse($latestTableUpdateAt)->toIso8601String()
+                : null,
         ];
     }
 
@@ -118,19 +128,23 @@ class IndexPriceRefreshSettings
             return 0;
         }
 
-        $settings = $this->settings();
-
-        foreach (IndexWatchItem::query()->orderBy('id')->cursor() as $item) {
-            app(IndexWatchItemPriceRefresher::class)->refresh($item);
-        }
-
-        $this->storeSettings([
-            ...$settings,
-            'last_refreshed_at' => now()->toIso8601String(),
-            'next_refresh_at' => $this->nextRefreshAt(now(), $settings),
-        ]);
+        app(IndexWatchItemPriceRefresher::class)->refreshAll();
+        $this->markRefreshed();
 
         return 1;
+    }
+
+    public function markRefreshed(?Carbon $refreshedAt = null): array
+    {
+        $refreshedAt ??= now();
+        $settings = $this->settings();
+        $this->storeSettings([
+            ...$settings,
+            'last_refreshed_at' => $refreshedAt->toIso8601String(),
+            'next_refresh_at' => $this->nextRefreshAt($refreshedAt, $settings),
+        ]);
+
+        return $this->payload();
     }
 
     /**

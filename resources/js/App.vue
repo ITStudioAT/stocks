@@ -257,10 +257,12 @@ const isLiveDataRealtimeSyncing = ref(false);
 const isHistoricalDataSyncing = ref(false);
 const isEndOfDayDataSyncing = ref(false);
 const isIndexDataSyncing = ref(false);
+const isIndexHistoricalDataSyncing = ref(false);
 const liveDataRealtimeSyncMessage = ref('');
 const historicalDataSyncMessage = ref('');
 const endOfDayDataSyncMessage = ref('');
 const indexDataSyncMessage = ref('');
+const indexHistoricalDataSyncMessage = ref('');
 const dataHistoricalPriceLoading = ref(false);
 const dataHistoricalPriceError = ref('');
 const dataExchangeReloadTimer = ref(null);
@@ -497,6 +499,22 @@ const selectedDataHistoricStockEndOfDaySummary = computed(() => {
             rowCount,
             tableRowCount,
             outdatedStocks,
+        };
+});
+const selectedDataHistoricIndexLiveSummary = computed(() => {
+    const settings = indexPriceRefreshSettings.value;
+    const rawTableRowCount = Number(settings?.table_row_count ?? 0);
+    const tableRowCount = Number.isFinite(rawTableRowCount) ? rawTableRowCount : 0;
+
+    return settings === null
+        ? null
+        : {
+            latestUpdate: formatScheduleDateTime(settings.last_refreshed_at),
+            nextUpdate: formatScheduleDateTime(settings.next_refresh_at),
+            updateStatus: indexLiveDataUpdateStatus(settings),
+            schedule: formatLiveDataUpdateSchedule(settings),
+            tableName: settings.table_name ?? 'index_watch_items',
+            tableRowCount,
         };
 });
 const selectedDataHistoricIndexDataSummary = computed(() => {
@@ -4049,12 +4067,28 @@ async function syncIndexData() {
 
     try {
         const data = await depotsStore.syncDataIndices();
-        indexDataSyncMessage.value = data.message ?? 'EODHD indices sync finished.';
+        indexDataSyncMessage.value = data.message ?? 'EODHD index live sync finished.';
         await loadDataHistoricalPriceCoverage();
     } catch (err) {
         dataHistoricalPriceError.value = err.message;
     } finally {
         isIndexDataSyncing.value = false;
+    }
+}
+
+async function syncIndexHistoricalData() {
+    indexHistoricalDataSyncMessage.value = '';
+    dataHistoricalPriceError.value = '';
+    isIndexHistoricalDataSyncing.value = true;
+
+    try {
+        const data = await depotsStore.syncDataIndexHistorical();
+        indexHistoricalDataSyncMessage.value = data.message ?? 'EODHD historical indices sync finished.';
+        await loadDataHistoricalPriceCoverage();
+    } catch (err) {
+        dataHistoricalPriceError.value = err.message;
+    } finally {
+        isIndexHistoricalDataSyncing.value = false;
     }
 }
 
@@ -5408,30 +5442,53 @@ function depotMonthChangeClass() {
 }
 
 function formatCurrentDayMonth() {
-    return formatDayMonthDaysAgo(0);
+    return formatDayMonth(currentDisplayDate());
 }
 
 function formatOneWeekAgoDayMonth() {
-    return formatDayMonthDaysAgo(7);
+    const dateParts = currentDisplayDateParts({ weekday: 'short' });
+    const date = dateFromDisplayDateParts(dateParts);
+    const daysSinceMonday = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(dateParts.weekday);
+
+    date.setUTCDate(date.getUTCDate() - daysSinceMonday - 1);
+
+    return formatDayMonth(date);
 }
 
 function formatMonthStartDayMonth() {
-    const date = new Date();
-    date.setDate(1);
+    const date = currentDisplayDate();
+    date.setUTCDate(1);
 
-    return new Intl.DateTimeFormat('de-AT', {
-        timeZone: displayTimeZone,
-        day: '2-digit',
-        month: '2-digit',
-    }).format(date);
+    return formatDayMonth(date);
 }
 
-function formatDayMonthDaysAgo(daysAgo) {
-    const date = new Date();
-    date.setDate(date.getDate() - daysAgo);
+function currentDisplayDate() {
+    return dateFromDisplayDateParts(currentDisplayDateParts());
+}
 
-    return new Intl.DateTimeFormat('de-AT', {
+function currentDisplayDateParts(options = {}) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
         timeZone: displayTimeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        ...options,
+    }).formatToParts(new Date());
+
+    return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
+function dateFromDisplayDateParts(dateParts) {
+    return new Date(Date.UTC(
+        Number(dateParts.year),
+        Number(dateParts.month) - 1,
+        Number(dateParts.day),
+    ));
+}
+
+function formatDayMonth(date) {
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: 'UTC',
         day: '2-digit',
         month: '2-digit',
     }).format(date);
@@ -9198,8 +9255,22 @@ function endOfDayDataUpdateStatus(settings) {
     return 'waiting';
 }
 
+function indexLiveDataUpdateStatus(settings) {
+    if (isIndexDataSyncing.value || settings?.status === 'updating') {
+        return 'updating';
+    }
+
+    const nextRefreshAt = Date.parse(settings?.next_refresh_at ?? '');
+
+    if (Number.isFinite(nextRefreshAt) && nextRefreshAt <= liveDataStatusNow.value) {
+        return 'due';
+    }
+
+    return 'waiting';
+}
+
 function indexDataUpdateStatus(settings) {
-    if (isIndexDataSyncing.value || isIndexDataUpdateScheduleSaving.value) {
+    if (isIndexHistoricalDataSyncing.value || isIndexDataUpdateScheduleSaving.value) {
         return 'updating';
     }
 
@@ -9272,6 +9343,8 @@ function clearSectionMessages() {
     priceRefreshScheduleMessage.value = '';
     priceRefreshScheduleError.value = '';
     dataHistoricalPriceError.value = '';
+    indexDataSyncMessage.value = '';
+    indexHistoricalDataSyncMessage.value = '';
     isPriceRefreshScheduleEditing.value = false;
     isIndexPriceRefreshScheduleEditing.value = false;
     userMessage.value = '';
@@ -10548,6 +10621,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                     :aria-pressed="selectedAnalyzeHoldingId === holding.id"
                                     @click="selectAnalyzeHolding(holding.id)"
                                 >
+                                    <span class="analyze-holding-card-header">
+                                        <span class="analyze-holding-card-symbol">
+                                            {{ holding.symbol || '-' }}
+                                        </span>
+                                        <span
+                                            v-if="holding.isin"
+                                            class="analyze-holding-card-isin"
+                                        >
+                                            {{ holding.isin }}
+                                        </span>
+                                    </span>
                                     <span class="index-watch-card-label analyze-holding-card-name">
                                         {{ holding.name || holding.symbol || '-' }}
                                     </span>
@@ -10883,6 +10967,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                     :aria-pressed="selectedAnalyzeHoldingId === holding.id"
                                     @click="selectAnalyzeHolding(holding.id)"
                                 >
+                                    <span class="analyze-holding-card-header">
+                                        <span class="analyze-holding-card-symbol">
+                                            {{ holding.symbol || '-' }}
+                                        </span>
+                                        <span
+                                            v-if="holding.isin"
+                                            class="analyze-holding-card-isin"
+                                        >
+                                            {{ holding.isin }}
+                                        </span>
+                                    </span>
                                     <span class="index-watch-card-label analyze-holding-card-name">
                                         {{ holding.name || holding.symbol || '-' }}
                                     </span>
@@ -11016,6 +11111,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                     :aria-pressed="selectedAnalyzeHoldingId === holding.id"
                                     @click="selectAnalyzeHolding(holding.id)"
                                 >
+                                    <span class="analyze-holding-card-header">
+                                        <span class="analyze-holding-card-symbol">
+                                            {{ holding.symbol || '-' }}
+                                        </span>
+                                        <span
+                                            v-if="holding.isin"
+                                            class="analyze-holding-card-isin"
+                                        >
+                                            {{ holding.isin }}
+                                        </span>
+                                    </span>
                                     <span class="index-watch-card-label analyze-holding-card-name">
                                         {{ holding.name || holding.symbol || '-' }}
                                     </span>
@@ -11248,6 +11354,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                         :aria-pressed="selectedAnalyzeHoldingId === holding.id"
                                         @click="selectAnalyzeHolding(holding.id)"
                                     >
+                                        <span class="analyze-holding-card-header">
+                                            <span class="analyze-holding-card-symbol">
+                                                {{ holding.symbol || '-' }}
+                                            </span>
+                                            <span
+                                                v-if="holding.isin"
+                                                class="analyze-holding-card-isin"
+                                            >
+                                                {{ holding.isin }}
+                                            </span>
+                                        </span>
                                         <span class="index-watch-card-label analyze-holding-card-name">
                                             {{ holding.name || holding.symbol || '-' }}
                                         </span>
@@ -12675,74 +12792,145 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </form>
                                 </v-card>
                             </v-dialog>
-                            <section v-if="selectedDataHistoricIndexDataSummary" class="test-selected-stock-card test-selected-stock-card--indices mt-4">
+                            <section
+                                v-if="selectedDataHistoricIndexLiveSummary || selectedDataHistoricIndexDataSummary"
+                                class="test-selected-stock-card test-selected-stock-card--indices mt-4"
+                            >
                                 <div class="test-selected-stock-card-header">
                                     <div class="test-selected-stock-summary">
-                                        <h3 class="test-selected-stock-title">Indices-Date</h3>
-                                        <p class="test-affected-table-caption text-medium-emphasis">
-                                            Affected table: {{ selectedDataHistoricIndexDataSummary.tableName }} · Total rows:
-                                            {{ formatInteger(selectedDataHistoricIndexDataSummary.tableRowCount) }}
-                                        </p>
-                                        <p class="test-live-data-schedule text-medium-emphasis">
-                                            {{ selectedDataHistoricIndexDataSummary.schedule }}
-                                        </p>
-                                        <v-alert
-                                            v-if="indexDataSyncMessage"
-                                            class="test-index-data-sync-alert mt-3"
-                                            closable
-                                            close-label="Close indices data sync message"
-                                            density="compact"
-                                            type="success"
-                                            variant="tonal"
-                                            @click:close="indexDataSyncMessage = ''"
+                                        <div
+                                            v-if="selectedDataHistoricIndexLiveSummary"
+                                            class="test-index-data-block test-index-data-block--live"
                                         >
-                                            {{ indexDataSyncMessage }}
-                                        </v-alert>
-                                        <div class="test-intraday-summary test-intraday-summary--indices">
-                                            <div class="test-intraday-summary-card--update">
-                                                <span class="test-intraday-label">Latest update</span>
-                                                <strong>{{ selectedDataHistoricIndexDataSummary.latestUpdate }}</strong>
+                                            <h3 class="test-selected-stock-title">Index Live-Daten</h3>
+                                            <p class="test-affected-table-caption text-medium-emphasis">
+                                                Affected table: {{ selectedDataHistoricIndexLiveSummary.tableName }} · Total rows:
+                                                {{ formatInteger(selectedDataHistoricIndexLiveSummary.tableRowCount) }}
+                                            </p>
+                                            <p class="test-live-data-schedule text-medium-emphasis">
+                                                {{ selectedDataHistoricIndexLiveSummary.schedule }}
+                                            </p>
+                                            <v-alert
+                                                v-if="indexDataSyncMessage"
+                                                class="test-index-data-sync-alert mt-3"
+                                                closable
+                                                close-label="Close indices live sync message"
+                                                density="compact"
+                                                type="success"
+                                                variant="tonal"
+                                                @click:close="indexDataSyncMessage = ''"
+                                            >
+                                                {{ indexDataSyncMessage }}
+                                            </v-alert>
+                                            <div class="test-intraday-summary test-intraday-summary--indices-live">
+                                                <div class="test-intraday-summary-card--update">
+                                                    <span class="test-intraday-label">Latest update</span>
+                                                    <strong>{{ selectedDataHistoricIndexLiveSummary.latestUpdate }}</strong>
+                                                </div>
+                                                <div class="test-intraday-summary-card--update test-intraday-summary-card--next-update">
+                                                    <span class="test-intraday-label">Next update</span>
+                                                    <span class="test-live-data-next-update">
+                                                        <strong>{{ selectedDataHistoricIndexLiveSummary.nextUpdate }}</strong>
+                                                    </span>
+                                                    <span
+                                                        class="test-live-data-update-status-dot"
+                                                        :class="{
+                                                            'test-live-data-update-status-dot--waiting': selectedDataHistoricIndexLiveSummary.updateStatus === 'waiting',
+                                                            'test-live-data-update-status-dot--due': selectedDataHistoricIndexLiveSummary.updateStatus === 'due',
+                                                            'test-live-data-update-status-dot--updating': selectedDataHistoricIndexLiveSummary.updateStatus === 'updating',
+                                                        }"
+                                                        :aria-label="`Indices live update status: ${selectedDataHistoricIndexLiveSummary.updateStatus}`"
+                                                        role="status"
+                                                    />
+                                                </div>
+                                                <div class="test-intraday-summary-card--edit">
+                                                    <div class="d-flex flex-wrap ga-2">
+                                                        <v-btn
+                                                            class="test-live-data-action-button"
+                                                            aria-label="Sync EODHD realtime indices data"
+                                                            prepend-icon="mdi-cloud-sync-outline"
+                                                            type="button"
+                                                            variant="tonal"
+                                                            :loading="isIndexDataSyncing"
+                                                            :disabled="isIndexDataSyncing"
+                                                            @click="syncIndexData"
+                                                        >
+                                                            EODHD-Sync
+                                                        </v-btn>
+                                                    </div>
+                                                </div>
                                             </div>
-                                            <div class="test-intraday-summary-card--update test-intraday-summary-card--next-update">
-                                                <span class="test-intraday-label">Next update</span>
-                                                <span class="test-live-data-next-update">
-                                                    <strong>{{ selectedDataHistoricIndexDataSummary.nextUpdate }}</strong>
-                                                </span>
-                                                <span
-                                                    class="test-live-data-update-status-dot"
-                                                    :class="{
-                                                        'test-live-data-update-status-dot--waiting': selectedDataHistoricIndexDataSummary.updateStatus === 'waiting',
-                                                        'test-live-data-update-status-dot--due': selectedDataHistoricIndexDataSummary.updateStatus === 'due',
-                                                        'test-live-data-update-status-dot--updating': selectedDataHistoricIndexDataSummary.updateStatus === 'updating',
-                                                    }"
-                                                    :aria-label="`Indices data update status: ${selectedDataHistoricIndexDataSummary.updateStatus}`"
-                                                    role="status"
-                                                />
-                                            </div>
-                                            <div class="test-intraday-summary-card--edit">
-                                                <div class="d-flex flex-wrap ga-2">
-                                                    <v-btn
-                                                        class="test-live-data-action-button"
-                                                        aria-label="Edit indices data updates"
-                                                        prepend-icon="mdi-pencil"
-                                                        type="button"
-                                                        variant="tonal"
-                                                        @click="openIndexDataUpdateDialog"
-                                                    >
-                                                        Edit
-                                                    </v-btn>
-                                                    <v-btn
-                                                        class="test-live-data-action-button"
-                                                        aria-label="Sync EODHD indices data"
-                                                        prepend-icon="mdi-cloud-sync-outline"
-                                                        type="button"
-                                                        variant="tonal"
-                                                        :loading="isIndexDataSyncing"
-                                                        :disabled="isIndexDataSyncing"
-                                                        @click="syncIndexData"
-                                                    >
-                                                        EODHD-Sync
-                                                    </v-btn>
+                                        </div>
+                                        <div
+                                            v-if="selectedDataHistoricIndexDataSummary"
+                                            class="test-index-data-block test-index-data-block--historical mt-4"
+                                        >
+                                            <h3 class="test-selected-stock-title">Index Historical Data</h3>
+                                            <p class="test-affected-table-caption text-medium-emphasis">
+                                                Affected table: {{ selectedDataHistoricIndexDataSummary.tableName }} · Total rows:
+                                                {{ formatInteger(selectedDataHistoricIndexDataSummary.tableRowCount) }}
+                                            </p>
+                                            <p class="test-live-data-schedule text-medium-emphasis">
+                                                {{ selectedDataHistoricIndexDataSummary.schedule }}
+                                            </p>
+                                            <v-alert
+                                                v-if="indexHistoricalDataSyncMessage"
+                                                class="test-index-historical-data-sync-alert mt-3"
+                                                closable
+                                                close-label="Close historical indices data sync message"
+                                                density="compact"
+                                                type="success"
+                                                variant="tonal"
+                                                @click:close="indexHistoricalDataSyncMessage = ''"
+                                            >
+                                                {{ indexHistoricalDataSyncMessage }}
+                                            </v-alert>
+                                            <div class="test-intraday-summary test-intraday-summary--indices">
+                                                <div class="test-intraday-summary-card--update">
+                                                    <span class="test-intraday-label">Latest update</span>
+                                                    <strong>{{ selectedDataHistoricIndexDataSummary.latestUpdate }}</strong>
+                                                </div>
+                                                <div class="test-intraday-summary-card--update test-intraday-summary-card--next-update">
+                                                    <span class="test-intraday-label">Next update</span>
+                                                    <span class="test-live-data-next-update">
+                                                        <strong>{{ selectedDataHistoricIndexDataSummary.nextUpdate }}</strong>
+                                                    </span>
+                                                    <span
+                                                        class="test-live-data-update-status-dot"
+                                                        :class="{
+                                                            'test-live-data-update-status-dot--waiting': selectedDataHistoricIndexDataSummary.updateStatus === 'waiting',
+                                                            'test-live-data-update-status-dot--due': selectedDataHistoricIndexDataSummary.updateStatus === 'due',
+                                                            'test-live-data-update-status-dot--updating': selectedDataHistoricIndexDataSummary.updateStatus === 'updating',
+                                                        }"
+                                                        :aria-label="`Indices historical data update status: ${selectedDataHistoricIndexDataSummary.updateStatus}`"
+                                                        role="status"
+                                                    />
+                                                </div>
+                                                <div class="test-intraday-summary-card--edit">
+                                                    <div class="d-flex flex-wrap ga-2">
+                                                        <v-btn
+                                                            class="test-live-data-action-button"
+                                                            aria-label="Edit indices data updates"
+                                                            prepend-icon="mdi-pencil"
+                                                            type="button"
+                                                            variant="tonal"
+                                                            @click="openIndexDataUpdateDialog"
+                                                        >
+                                                            Edit
+                                                        </v-btn>
+                                                        <v-btn
+                                                            class="test-live-data-action-button"
+                                                            aria-label="Sync EODHD historical indices data"
+                                                            prepend-icon="mdi-cloud-sync-outline"
+                                                            type="button"
+                                                            variant="tonal"
+                                                            :loading="isIndexHistoricalDataSyncing"
+                                                            :disabled="isIndexHistoricalDataSyncing"
+                                                            @click="syncIndexHistoricalData"
+                                                        >
+                                                            EODHD-Sync
+                                                        </v-btn>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
@@ -13322,6 +13510,7 @@ function formatIndexDataUpdateSchedule(settings) {
 
                         <div v-if="activeDepot" class="d-flex flex-wrap align-start ga-4">
                             <v-card class="depot-balance-card" variant="outlined" width="100%" max-width="480">
+                                <v-card-title class="text-subtitle-2 pb-0">Depot</v-card-title>
                                 <v-table density="compact">
                                     <tbody>
                                         <tr>
@@ -13336,17 +13525,12 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <td class="text-medium-emphasis text-caption">Account balance</td>
                                             <td class="text-right">{{ formatDepotAccountBalance() }}</td>
                                         </tr>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">Status</td>
-                                            <td class="text-right">
-                                                <v-chip color="success" density="comfortable" size="x-small" variant="tonal">Active</v-chip>
-                                            </td>
-                                        </tr>
                                     </tbody>
                                 </v-table>
                             </v-card>
 
                             <v-card class="depot-balance-card" variant="outlined" width="100%" max-width="480">
+                                <v-card-title class="text-subtitle-2 pb-0">Aktuelles Jahr</v-card-title>
                                 <v-table density="compact">
                                     <tbody>
                                         <tr>
@@ -13383,6 +13567,7 @@ function formatIndexDataUpdateSchedule(settings) {
                             </v-card>
 
                             <v-card class="depot-balance-card" variant="outlined" width="100%" max-width="480">
+                                <v-card-title class="text-subtitle-2 pb-0">Aktuelle Woche</v-card-title>
                                 <v-table density="compact">
                                     <tbody>
                                         <tr>
@@ -13406,6 +13591,7 @@ function formatIndexDataUpdateSchedule(settings) {
                             </v-card>
 
                             <v-card class="depot-balance-card" variant="outlined" width="100%" max-width="480">
+                                <v-card-title class="text-subtitle-2 pb-0">Aktueller Monat</v-card-title>
                                 <v-table density="compact">
                                     <tbody>
                                         <tr>
@@ -16291,8 +16477,13 @@ function formatIndexDataUpdateSchedule(settings) {
 }
 
 .analyze-holding-card {
+    align-items: stretch;
     gap: 6px;
+    height: 146px;
     justify-content: flex-start;
+    padding: 9px 10px;
+    text-align: left;
+    width: 190px;
 }
 
 .analyze-trend-holding-item {
@@ -16325,16 +16516,49 @@ function formatIndexDataUpdateSchedule(settings) {
     border-color: rgba(var(--v-theme-primary), 0.72);
 }
 
+.analyze-holding-card-header {
+    align-items: center;
+    display: flex;
+    gap: 6px;
+    justify-content: space-between;
+    min-width: 0;
+}
+
+.analyze-holding-card-symbol {
+    color: #145b4b;
+    font-size: 0.88rem;
+    font-weight: 900;
+    line-height: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.analyze-holding-card-isin {
+    color: rgba(var(--v-theme-on-surface), 0.58);
+    font-size: 0.58rem;
+    font-weight: 800;
+    letter-spacing: 0;
+    line-height: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .analyze-holding-card-name {
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 4;
+    color: rgba(var(--v-theme-on-surface), 0.88);
     font-weight: 700;
+    line-height: 1.2;
     margin-top: 0;
+    overflow-wrap: anywhere;
     text-overflow: ellipsis;
 }
 
 .analyze-holding-card-price {
     color: rgb(var(--v-theme-primary));
-    font-size: 0.7rem;
+    font-size: 0.76rem;
 }
 
 .analyze-holding-card-stat {

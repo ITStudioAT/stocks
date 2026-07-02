@@ -15,6 +15,8 @@ use App\Services\EodhdBatchRealtimePriceService;
 use App\Services\EodhdEndOfDayDataService;
 use App\Services\EodhdExchangeDataImporter;
 use App\Services\IndexDataUpdateScheduler;
+use App\Services\IndexPriceRefreshSettings;
+use App\Services\IndexWatchItemPriceRefresher;
 use App\Services\IntradayCandleBackfillScheduler;
 use App\Services\PriceRefreshScheduler;
 use App\Services\StockEndOfDayRepairService;
@@ -264,6 +266,21 @@ class AdminDataController extends Controller
     }
 
     public function syncIndices(
+        IndexWatchItemPriceRefresher $indexWatchItemPriceRefresher,
+        IndexPriceRefreshSettings $indexPriceRefreshSettings,
+        EodhdApiUsage $eodhdApiUsage,
+    ): JsonResponse {
+        $result = $indexWatchItemPriceRefresher->refreshAll();
+
+        return response()->json([
+            ...$result,
+            'message' => "EODHD index live sync: {$result['refreshed_count']} index(es) refreshed.",
+            'index_price_refresh_settings' => $indexPriceRefreshSettings->markRefreshed(),
+            'eodhd_api_usage' => $eodhdApiUsage->payload(),
+        ]);
+    }
+
+    public function syncIndexHistorical(
         IndexDataUpdateScheduler $indexDataUpdateScheduler,
         EodhdApiUsage $eodhdApiUsage,
     ): JsonResponse {
@@ -271,7 +288,7 @@ class AdminDataController extends Controller
 
         return response()->json([
             ...$result,
-            'message' => "EODHD indices sync: {$result['refreshed_count']} index(es) refreshed.",
+            'message' => "EODHD historical indices sync: {$result['stored_count']} record(s) loaded/updated.",
             'index_data_update_settings' => $indexDataUpdateScheduler->payload(),
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
