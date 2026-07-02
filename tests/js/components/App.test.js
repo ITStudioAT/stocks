@@ -401,6 +401,25 @@ function indexMonthPrices() {
     });
 }
 
+const dashboardWatchlistHoldingsPath = '/admin/watchlist/holdings?page=1&include_charts=1&all_chart_holdings=1&all=1&chart_range=1y';
+
+function trendDailyPrices(direction = 'up') {
+    const baseDate = new Date(Date.UTC(2026, 4, 1));
+
+    return Array.from({ length: 40 }, (_, index) => {
+        const tradingDate = new Date(baseDate);
+        tradingDate.setUTCDate(baseDate.getUTCDate() + index);
+        const price = direction === 'up' ? 100 + index : 140 - index;
+
+        return {
+            trading_date: tradingDate.toISOString().slice(0, 10),
+            price: price.toFixed(6),
+            volume: 1000 + index,
+            currency: 'EUR',
+        };
+    });
+}
+
 describe('App', () => {
     it('renders the admin login screen without loading authenticated data', () => {
         window.history.pushState({}, '', '/admin/login');
@@ -484,9 +503,10 @@ describe('App', () => {
                             symbol: 'MSFT',
                             name: 'Microsoft',
                             currency: 'USD',
-                            latest_price: null,
+                            latest_price: '429.950000',
                             end_price: '429.950000',
                             end_price_24: '420.000000',
+                            latest_price_change_pct: '2.37',
                             latest_price_status: 'closed_market',
                             recent_prices: [],
                             position_pieces: '0.00000000',
@@ -2609,17 +2629,26 @@ describe('App', () => {
         expect(firstHourlySummary.text()).toContain('Hourly');
         expect(firstHourlySummary.text()).toContain('Europe/Vienna');
         expect(firstHourlySummary.findAll('.analyze-detail-hourly-summary-card')).toHaveLength(3);
-        expect(firstHourlySummary.find('.analyze-detail-hourly-summary-meta').text()).toContain('09:00');
-        expect(firstHourlySummary.find('.analyze-detail-hourly-summary-meta').text()).toContain('Vol 26,690');
-        expect(firstHourlySummary.text()).toContain('09:00');
-        expect(firstHourlySummary.text()).toContain('469.55');
-        expect(firstHourlySummary.text()).toContain('Vol 26,690');
-        expect(firstHourlySummary.text()).toContain('12:00');
-        expect(firstHourlySummary.text()).toContain('472.75');
-        expect(firstHourlySummary.text()).toContain('Vol 14,345');
-        expect(firstHourlySummary.text()).toContain('15:00');
-        expect(firstHourlySummary.text()).toContain('471.75');
-        expect(firstHourlySummary.text()).toContain('Vol 15,345');
+        const normalizedHourlySummaryMeta = firstHourlySummary
+            .find('.analyze-detail-hourly-summary-meta')
+            .text()
+            .replace(/\u00a0/g, ' ')
+            .replace(/(\d)[ ,](\d{3})/g, '$1,$2');
+        const normalizedHourlySummaryText = firstHourlySummary
+            .text()
+            .replace(/\u00a0/g, ' ')
+            .replace(/(\d)[ ,](\d{3})/g, '$1,$2');
+        expect(normalizedHourlySummaryMeta).toContain('09:00');
+        expect(normalizedHourlySummaryMeta).toContain('Vol 26,690');
+        expect(normalizedHourlySummaryText).toContain('09:00');
+        expect(normalizedHourlySummaryText).toContain('469.55');
+        expect(normalizedHourlySummaryText).toContain('Vol 26,690');
+        expect(normalizedHourlySummaryText).toContain('12:00');
+        expect(normalizedHourlySummaryText).toContain('472.75');
+        expect(normalizedHourlySummaryText).toContain('Vol 14,345');
+        expect(normalizedHourlySummaryText).toContain('15:00');
+        expect(normalizedHourlySummaryText).toContain('471.75');
+        expect(normalizedHourlySummaryText).toContain('Vol 15,345');
         expect(firstHourlySummary.findAll('.analyze-detail-hourly-summary-arrow.is-up')).toHaveLength(2);
         expect(firstHourlySummary.findAll('.analyze-detail-hourly-summary-arrow.is-down')).toHaveLength(1);
 
@@ -3665,6 +3694,7 @@ describe('App', () => {
                             venue: 'Tradegate',
                             price_type: 'indicative_mid',
                             price_spread_pct: '0.050000',
+                            daily_prices: trendDailyPrices('up'),
                             recent_prices: [
                                 {
                                     id: 10,
@@ -3791,6 +3821,7 @@ describe('App', () => {
                             venue: 'Tradegate',
                             price_type: 'last',
                             price_spread_pct: '0.020000',
+                            daily_prices: trendDailyPrices('down'),
                             recent_prices_are_fallback: true,
                             recent_prices: [
                                 {
@@ -4237,7 +4268,7 @@ describe('App', () => {
         expect(wrapper.find('thead th.watch-list-actions-cell').exists()).toBe(true);
         expect(wrapper.get('.app-bar-row').text()).not.toContain('Stocks Last:');
         expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
-        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings?page=1&all=1', expect.any(Object));
+        expect(fetchMock).toHaveBeenCalledWith(dashboardWatchlistHoldingsPath, expect.any(Object));
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
@@ -4290,6 +4321,10 @@ describe('App', () => {
         expect(holdingRows[0].findAll('td')[1].text()).not.toContain('Pieces: 0');
         expect(holdingRows[0].findAll('td')[1].text()).toContain('US0378331005 · WKN: 865985');
         expect(holdingRows[0].findAll('td')[5].text()).toContain('03.06.2026, 17:35');
+        expect(holdingRows[0].findAll('td')[5].find('.dashboard-trend-badge').text()).toBe('BUY');
+        expect(holdingRows[0].findAll('td')[5].find('.dashboard-trend-badge').classes()).toContain('dashboard-trend-badge--buy');
+        expect(holdingRows[1].findAll('td')[5].find('.dashboard-trend-badge').text()).toBe('SELL');
+        expect(holdingRows[1].findAll('td')[5].find('.dashboard-trend-badge').classes()).toContain('dashboard-trend-badge--sell');
         expect(holdingRows[0].findAll('td')[5].text()).not.toContain('Tradegate Exchange');
         expect(holdingRows[0].findAll('td')[5].classes()).toContain('watch-list-source-time-cell');
         expect(holdingRows[0].findAll('td')[6].classes()).toContain('watch-list-actions-cell');
@@ -4395,7 +4430,7 @@ describe('App', () => {
         expect(fetchMock.mock.calls.some(([path, options]) => (
             path === '/admin/watchlist/holdings/refresh-prices' && options?.method === 'POST'
         ))).toBe(false);
-        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1&all=1')).toHaveLength(1);
+        expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(1);
         expect(wrapper.text()).not.toContain('2 stock prices refreshed.');
         expect(wrapper.text()).not.toContain('Price refresh: 2/2');
 
@@ -4614,7 +4649,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1&all=1') {
+            if (path === dashboardWatchlistHoldingsPath) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -4656,7 +4691,7 @@ describe('App', () => {
         await flushPromises();
 
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(2);
-        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1&all=1')).toHaveLength(2);
+        expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(2);
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(2);
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(2);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
@@ -4703,7 +4738,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1&all=1') {
+            if (path === dashboardWatchlistHoldingsPath) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -4741,7 +4776,7 @@ describe('App', () => {
             await flushPromises();
 
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);
-            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1&all=1')).toHaveLength(1);
+            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(1);
 
@@ -4749,7 +4784,7 @@ describe('App', () => {
             await flushPromises();
 
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(2);
-            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1&all=1')).toHaveLength(2);
+            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(2);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(2);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(2);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
@@ -7837,7 +7872,7 @@ describe('App', () => {
             await vi.advanceTimersByTimeAsync(5000);
             await flushPromises();
 
-            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings?page=1&all=1')).toHaveLength(1);
+            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(1);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
@@ -7995,7 +8030,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/watchlist/holdings?page=1&all=1') {
+            if (path === dashboardWatchlistHoldingsPath) {
                 return Promise.resolve(failedJsonResponse({
                     message: 'The request failed.',
                 }));

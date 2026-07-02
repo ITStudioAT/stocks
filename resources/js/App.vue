@@ -309,6 +309,10 @@ const watchListTableColumnCount = computed(() => {
 
     return isCompactWatchListTable.value ? 5 : 7;
 });
+const dashboardTrendRecommendations = computed(() => new Map(holdings.value.map((holding) => [
+    holding.id,
+    latestAnalyzeTrendRecommendation(holding),
+])));
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
 const selectedTestStock = computed(() => testOptions.value.stocks
     .find((stock) => stock.id === selectedTestStockId.value) ?? null);
@@ -1413,16 +1417,28 @@ function analyzeTrendRecommendation(prices, priceIndex, patternStats, indicators
     const bestPattern = analyzeTrendBestPattern(prices, priceIndex, patternStats, indicators);
     const scoreParts = analyzeTrendScoreParts(indicators, bestPattern);
     const score = analyzeTrendRecommendationScore(scoreParts, indicators, prices, priceIndex);
-    const key = score >= 0.35 ? 'buy' : 'none';
+    const key = score >= 0.35 ? 'buy' : (score <= -0.35 ? 'sell' : 'none');
 
     return {
         key,
-        label: key === 'buy' ? 'Buy' : '',
+        label: analyzeTrendRecommendationLabel(key),
         reason: analyzeTrendRecommendationReason(score, scoreParts, bestPattern),
         confidence: analyzeTrendScoreConfidence(score),
         score,
         pattern: bestPattern,
     };
+}
+
+function analyzeTrendRecommendationLabel(key) {
+    if (key === 'buy') {
+        return 'Buy';
+    }
+
+    if (key === 'sell') {
+        return 'Sell';
+    }
+
+    return '';
 }
 
 function analyzeTrendBestPattern(prices, priceIndex, patternStats, indicators) {
@@ -1649,12 +1665,26 @@ function analyzeTrendRecommendationReason(score, scoreParts, bestPattern) {
     const direction = score >= 0 ? '+' : '';
     const scoreLabel = `${direction}${score.toFixed(1)}`;
 
-    if (score < 0.35) {
-        if (bestPattern) {
-            return `${scoreLabel}: no buy signal (${analyzeTrendPatternReason(bestPattern)})`;
+    if (score <= -0.35) {
+        if (bestPattern?.direction === 'sell') {
+            return `${scoreLabel}: ${analyzeTrendPatternReason(bestPattern)}`;
         }
 
-        return `${scoreLabel}: no buy signal`;
+        const negativeScoreParts = scoreParts.filter((scorePart) => scorePart.score < 0);
+
+        if (negativeScoreParts.length === 0) {
+            return `${scoreLabel}: downside signal`;
+        }
+
+        return `${scoreLabel}: ${negativeScoreParts.map((scorePart) => scorePart.label).join(', ')}`;
+    }
+
+    if (score < 0.35) {
+        if (bestPattern) {
+            return `${scoreLabel}: no trade signal (${analyzeTrendPatternReason(bestPattern)})`;
+        }
+
+        return `${scoreLabel}: no trade signal`;
     }
 
     if (bestPattern?.direction === 'buy') {
@@ -1673,6 +1703,38 @@ function analyzeTrendRecommendationReason(score, scoreParts, bestPattern) {
 
 function analyzeTrendScoreConfidence(score) {
     return Math.min(95, 50 + Math.abs(score) * 10);
+}
+
+function latestAnalyzeTrendRecommendation(holding) {
+    const latestRow = buildAnalyzeTrendRows(holding, null, 1, defaultAnalyzeTrendTradeAmounts)[0] ?? null;
+    const recommendation = latestRow?.recommendation ?? null;
+
+    if (!recommendation || !['buy', 'sell'].includes(recommendation.key)) {
+        return null;
+    }
+
+    return recommendation;
+}
+
+function dashboardTrendRecommendation(holding) {
+    return dashboardTrendRecommendations.value.get(holding.id) ?? null;
+}
+
+function dashboardTrendRecommendationLabel(holding) {
+    return dashboardTrendRecommendation(holding)?.label?.toUpperCase() ?? '';
+}
+
+function dashboardTrendRecommendationTitle(holding) {
+    return dashboardTrendRecommendation(holding)?.reason ?? '';
+}
+
+function dashboardTrendRecommendationClass(holding) {
+    const recommendation = dashboardTrendRecommendation(holding);
+
+    return {
+        'dashboard-trend-badge--buy': recommendation?.key === 'buy',
+        'dashboard-trend-badge--sell': recommendation?.key === 'sell',
+    };
 }
 
 function analyzeTrendLine(prices, priceIndex) {
@@ -2761,8 +2823,11 @@ function syncUpdateStatusPolling() {
 }
 
 function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.current_page, options = {}) {
-    const shouldIncludeCharts = activeSection.value === 'analyze' && selectedAnalyzeHoldingId.value !== null;
-    const shouldIncludeAllChartHoldings = shouldIncludeCharts && activeAnalyzeSubsection.value === 'trend';
+    const shouldIncludeDashboardTrendCharts = activeSection.value === 'dashboard';
+    const shouldIncludeAnalyzeCharts = activeSection.value === 'analyze' && selectedAnalyzeHoldingId.value !== null;
+    const shouldIncludeCharts = shouldIncludeDashboardTrendCharts || shouldIncludeAnalyzeCharts;
+    const shouldIncludeAllChartHoldings = shouldIncludeDashboardTrendCharts
+        || (shouldIncludeAnalyzeCharts && activeAnalyzeSubsection.value === 'trend');
     const shouldIncludeAllHoldings = activeSection.value === 'dashboard';
 
     return depotsStore.loadWatchlistHoldings(page, {
@@ -2770,8 +2835,8 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
         allHoldings: shouldIncludeAllHoldings,
         includeCharts: shouldIncludeCharts,
         allChartHoldings: shouldIncludeAllChartHoldings,
-        chartStockId: shouldIncludeCharts && !shouldIncludeAllChartHoldings ? selectedAnalyzeHoldingId.value : null,
-        chartRange: shouldIncludeCharts ? selectedAnalyzeHistoryRange.value : null,
+        chartStockId: shouldIncludeAnalyzeCharts && !shouldIncludeAllChartHoldings ? selectedAnalyzeHoldingId.value : null,
+        chartRange: shouldIncludeDashboardTrendCharts ? '1y' : (shouldIncludeAnalyzeCharts ? selectedAnalyzeHistoryRange.value : null),
     });
 }
 
@@ -9760,6 +9825,18 @@ function formatIndexDataUpdateSchedule(settings) {
                                             </span>
                                         </span>
                                     </div>
+                                    <div
+                                        v-if="dashboardTrendRecommendation(holding)"
+                                        class="mobile-stock-signal-row"
+                                    >
+                                        <span
+                                            class="dashboard-trend-badge"
+                                            :class="dashboardTrendRecommendationClass(holding)"
+                                            :title="dashboardTrendRecommendationTitle(holding)"
+                                        >
+                                            {{ dashboardTrendRecommendationLabel(holding) }}
+                                        </span>
+                                    </div>
                                     <div class="mobile-stock-actions">
                                         <v-btn
                                             aria-label="Add"
@@ -9898,6 +9975,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     >
                                                         {{ mobileHoldingPriceChangeText(holding) }}
                                                     </span>
+                                                    <span
+                                                        v-if="dashboardTrendRecommendation(holding)"
+                                                        class="dashboard-trend-badge"
+                                                        :class="dashboardTrendRecommendationClass(holding)"
+                                                        :title="dashboardTrendRecommendationTitle(holding)"
+                                                    >
+                                                        {{ dashboardTrendRecommendationLabel(holding) }}
+                                                    </span>
                                                 </span>
                                             </span>
                                         </td>
@@ -9926,6 +10011,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 >
                                                     {{ formatLatestPriceChangePercent(holding) }}
                                                 </span>
+                                                <span
+                                                    v-if="isCompactWatchListTable && dashboardTrendRecommendation(holding)"
+                                                    class="dashboard-trend-badge"
+                                                    :class="dashboardTrendRecommendationClass(holding)"
+                                                    :title="dashboardTrendRecommendationTitle(holding)"
+                                                >
+                                                    {{ dashboardTrendRecommendationLabel(holding) }}
+                                                </span>
                                             </span>
                                         </td>
                                         <td class="watch-list-content-cell">
@@ -9951,6 +10044,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </td>
                                         <td v-if="!isCompactWatchListTable" class="watch-list-source-time-cell">
                                             <div>{{ formatSourceDateTime(holding.latest_price_as_of) }}</div>
+                                            <span
+                                                v-if="dashboardTrendRecommendation(holding)"
+                                                class="dashboard-trend-badge"
+                                                :class="dashboardTrendRecommendationClass(holding)"
+                                                :title="dashboardTrendRecommendationTitle(holding)"
+                                            >
+                                                {{ dashboardTrendRecommendationLabel(holding) }}
+                                            </span>
                                         </td>
                                         <td class="text-right watch-list-actions-cell">
                                             <v-btn
@@ -14841,6 +14942,31 @@ function formatIndexDataUpdateSchedule(settings) {
     text-align: right;
     white-space: nowrap;
     width: 132px;
+}
+
+.dashboard-trend-badge {
+    border-radius: 999px;
+    display: inline-flex;
+    font-size: 0.68rem;
+    font-weight: 850;
+    line-height: 1;
+    margin-top: 4px;
+    padding: 5px 8px;
+}
+
+.dashboard-trend-badge--buy {
+    background: rgba(var(--v-theme-success), 0.12);
+    color: rgb(var(--v-theme-success));
+}
+
+.dashboard-trend-badge--sell {
+    background: rgba(var(--v-theme-error), 0.12);
+    color: rgb(var(--v-theme-error));
+}
+
+.mobile-stock-signal-row {
+    align-items: center;
+    display: flex;
 }
 
 .dashboard-compact-menu {
