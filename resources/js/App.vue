@@ -311,7 +311,7 @@ const watchListTableColumnCount = computed(() => {
 });
 const dashboardTrendRecommendations = computed(() => new Map(holdings.value.map((holding) => [
     holding.id,
-    latestAnalyzeTrendRecommendation(holding),
+    latestAnalyzeTrendMarker(holding, analyzeTrendRowLimit.value, analyzeTrendTradeAmounts.value),
 ])));
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
 const selectedTestStock = computed(() => testOptions.value.stocks
@@ -1705,15 +1705,32 @@ function analyzeTrendScoreConfidence(score) {
     return Math.min(95, 50 + Math.abs(score) * 10);
 }
 
-function latestAnalyzeTrendRecommendation(holding) {
-    const latestRow = buildAnalyzeTrendRows(holding, null, 1, defaultAnalyzeTrendTradeAmounts)[0] ?? null;
-    const recommendation = latestRow?.recommendation ?? null;
+function latestAnalyzeTrendMarker(
+    holding,
+    rowLimit = defaultAnalyzeTrendRowLimit,
+    tradeAmounts = defaultAnalyzeTrendTradeAmounts,
+) {
+    const latestRow = buildAnalyzeTrendRows(holding, null, rowLimit, tradeAmounts)[0] ?? null;
 
-    if (!recommendation || !['buy', 'sell'].includes(recommendation.key)) {
+    if (!latestRow) {
         return null;
     }
 
-    return recommendation;
+    const recommendationMarker = latestRow.streakRecommendations.find((recommendationItem) => (
+        ['buy', 'sell'].includes(recommendationItem.type)
+    ));
+    const depotMarker = latestRow.depot.actions.find((depotAction) => ['buy', 'sell'].includes(depotAction.type));
+    const marker = recommendationMarker ?? depotMarker;
+
+    if (!marker) {
+        return null;
+    }
+
+    return {
+        key: marker.type,
+        label: marker.type.toUpperCase(),
+        reason: marker.label,
+    };
 }
 
 function dashboardTrendRecommendation(holding) {

@@ -3915,14 +3915,62 @@ describe('App', () => {
                             price_spread_pct: null,
                             validation_errors: [],
                         },
+                        {
+                            id: 8,
+                            symbol: 'BUY',
+                            name: 'Buy Streak Fund',
+                            isin: 'IE00BUY00008',
+                            wkn: 'BUY001',
+                            exchange: 'XETR',
+                            currency: 'EUR',
+                            latest_price: '95.000000',
+                            start_price: '95.000000',
+                            end_price: '100.016033',
+                            end_price_24: '97.008761',
+                            end_price_48: '95.106628',
+                            latest_price_trend: null,
+                            latest_price_change_pct: null,
+                            latest_price_tick_trend: null,
+                            latest_price_status: 'fresh',
+                            price_status: 'fresh',
+                            latest_price_fetched_at: '2026-06-15T16:00:00+00:00',
+                            latest_price_source: 'Tradegate Exchange',
+                            latest_price_source_url: 'https://example.com/buy',
+                            latest_price_as_of: '2026-06-15T16:00:00+00:00',
+                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Berlin',
+                            venue: 'Tradegate',
+                            price_type: 'last',
+                            price_spread_pct: null,
+                            depot_transactions: [
+                                {
+                                    id: 801,
+                                    type: 'buy',
+                                    pieces: '70.00000000',
+                                    total_amount: '6792.64',
+                                    currency: 'EUR',
+                                    booked_at: '2026-06-11T00:00:00+00:00',
+                                },
+                                {
+                                    id: 802,
+                                    type: 'sell',
+                                    pieces: '70.00000000',
+                                    total_amount: '7001.12',
+                                    currency: 'EUR',
+                                    booked_at: '2026-06-15T00:00:00+00:00',
+                                },
+                            ],
+                            daily_prices: streakRecommendationDailyPrices(),
+                            recent_prices: [],
+                            validation_errors: [],
+                        },
                     ],
                     meta: {
                         current_page: 1,
                         last_page: 1,
                         per_page: 5,
-                        total: 5,
+                        total: 6,
                         from: 1,
-                        to: 5,
+                        to: 6,
                     },
                     price_refresh_settings: currentPriceRefreshSettings,
                     index_price_refresh_settings: currentIndexPriceRefreshSettings,
@@ -4276,7 +4324,7 @@ describe('App', () => {
         const watchListSection = wrapper.get('.watch-list-section');
         expect(watchListSection.text()).toContain('Stocks');
         expect(watchListSection.find('.watch-list-section-title-row .watch-list-live-badge').exists()).toBe(false);
-        expect(watchListSection.text()).toContain('5');
+        expect(watchListSection.text()).toContain('6');
         expect(wrapper.find('.v-pagination').exists()).toBe(false);
         expect(wrapper.text()).toContain('Watch-list');
         expect(wrapper.text()).not.toContain('Free calls remaining');
@@ -4321,10 +4369,10 @@ describe('App', () => {
         expect(holdingRows[0].findAll('td')[1].text()).not.toContain('Pieces: 0');
         expect(holdingRows[0].findAll('td')[1].text()).toContain('US0378331005 · WKN: 865985');
         expect(holdingRows[0].findAll('td')[5].text()).toContain('03.06.2026, 17:35');
-        expect(holdingRows[0].findAll('td')[5].find('.dashboard-trend-badge').text()).toBe('BUY');
-        expect(holdingRows[0].findAll('td')[5].find('.dashboard-trend-badge').classes()).toContain('dashboard-trend-badge--buy');
-        expect(holdingRows[1].findAll('td')[5].find('.dashboard-trend-badge').text()).toBe('SELL');
-        expect(holdingRows[1].findAll('td')[5].find('.dashboard-trend-badge').classes()).toContain('dashboard-trend-badge--sell');
+        expect(holdingRows[0].findAll('td')[5].find('.dashboard-trend-badge').exists()).toBe(false);
+        expect(holdingRows[1].findAll('td')[5].find('.dashboard-trend-badge').exists()).toBe(false);
+        expect(holdingRows[5].findAll('td')[5].find('.dashboard-trend-badge').text()).toBe('SELL');
+        expect(holdingRows[5].findAll('td')[5].find('.dashboard-trend-badge').classes()).toContain('dashboard-trend-badge--sell');
         expect(holdingRows[0].findAll('td')[5].text()).not.toContain('Tradegate Exchange');
         expect(holdingRows[0].findAll('td')[5].classes()).toContain('watch-list-source-time-cell');
         expect(holdingRows[0].findAll('td')[6].classes()).toContain('watch-list-actions-cell');
