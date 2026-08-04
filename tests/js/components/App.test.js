@@ -578,6 +578,7 @@ describe('App', () => {
         const mobileCards = wrapper.findAll('.mobile-stock-card');
         expect(mobileCards).toHaveLength(2);
         expect(mobileCards[0].text()).toContain('Apple');
+        expect(mobileCards[0].get('.mobile-stock-position').text()).toBe('Pieces: 2');
         expect(mobileCards[0].text()).toContain('306.32');
         expect(mobileCards[0].text()).toContain('+2.28% · 299.50');
         expect(mobileCards[0].text()).not.toContain('Add');
@@ -589,6 +590,7 @@ describe('App', () => {
             'Delete',
         ]);
         expect(mobileCards[1].text()).toContain('Microsoft');
+        expect(mobileCards[1].get('.mobile-stock-position').text()).toBe('Pieces: 0');
         expect(mobileCards[1].text()).toContain('429.95 USD');
         expect(mobileCards[1].text()).toContain('+2.37% · 420.00 USD');
         expect(wrapper.text()).not.toContain('EODHD exchange details');

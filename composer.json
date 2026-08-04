@@ -41,6 +41,16 @@
         }
     },
     "scripts": {
+        "deploy": [
+            "Composer\\Config::disableProcessTimeout",
+            "@php scripts/update.php"
+        ],
+        "setup:powershell": [
+            "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install_powershell_helpers.ps1"
+        ],
+        "check:encoding": [
+            "@php scripts/check-encoding.php"
+        ],
         "setup": [
             "composer install",
             "@php -r \"file_exists('.env') || copy('.env.example', '.env');\"",

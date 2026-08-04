@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [ "$remote_ref" != "refs/heads/main" ]; then
+        continue
+    fi
+
+    if [ "$local_sha" = "0000000000000000000000000000000000000000" ]; then
+        echo "Deleting main is not allowed." >&2
+        exit 1
+    fi
+
+    source_commit="$(git show "${local_sha}:deployment/source-commit" 2>/dev/null | tr -d '\r\n' || true)"
+    parent_commit="$(git rev-parse "${local_sha}^" 2>/dev/null || true)"
+
+    if [ -z "$source_commit" ] || [ "$source_commit" != "$parent_commit" ]; then
+        echo "main must point to a complete deployment release." >&2
+        echo "Use gitpush so source and frontend release are published together." >&2
+        exit 1
+    fi
+
+    for release_path in \
+        deployment/frontend-build.tar.gz \
+        deployment/source-manifest.sha256; do
+        if ! git cat-file -e "${local_sha}:${release_path}" 2>/dev/null; then
+            echo "Deployment release is missing ${release_path}." >&2
+            exit 1
+        fi
+    done
+done

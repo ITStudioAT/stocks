@@ -9820,6 +9820,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <div class="mobile-stock-name">
                                         {{ holding.name || holding.symbol || '-' }}
                                     </div>
+                                    <div class="mobile-stock-position">
+                                        Pieces: {{ formatPositionPieces(holding) }}
+                                    </div>
                                     <div class="mobile-stock-price-row">
                                         <span
                                             class="latest-price-value mobile-stock-price"
@@ -15234,6 +15237,12 @@ function formatIndexDataUpdateSchedule(settings) {
         font-size: 0.95rem;
         font-weight: 600;
         line-height: 1.25;
+    }
+
+    .mobile-stock-position {
+        color: rgba(var(--v-theme-on-surface), var(--v-medium-emphasis-opacity));
+        font-size: 0.78rem;
+        line-height: 1.2;
     }
 
     .mobile-stock-price-row {
