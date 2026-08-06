@@ -45,6 +45,10 @@
             "Composer\\Config::disableProcessTimeout",
             "@php scripts/update.php"
         ],
+        "deploy:prepare": [
+            "Composer\\Config::disableProcessTimeout",
+            "@php scripts/update.php --target=cloudways --prepare"
+        ],
         "setup:powershell": [
             "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install_powershell_helpers.ps1"
         ],

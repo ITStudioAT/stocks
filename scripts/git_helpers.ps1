@@ -214,7 +214,7 @@ function gitpush {
         }
 
         $sourceChanges = git status --porcelain --untracked-files=all | Where-Object {
-            $_ -notmatch '^.. deployment/(frontend-build\.tar\.gz|source-commit|source-manifest\.sha256)$'
+            $_ -notmatch '^.. deployment/(frontend-build\.(?:tar\.gz|sha256)|source-commit|source-manifest\.sha256)$'
         }
         $localHead = git rev-parse HEAD
         $remoteHead = git rev-parse origin/main
@@ -235,6 +235,7 @@ function gitpush {
             $parentCommit = git rev-parse "$localHead^"
             $releaseFilesExist =
                 (Test-Path -LiteralPath 'deployment/frontend-build.tar.gz') -and
+                (Test-Path -LiteralPath 'deployment/frontend-build.sha256') -and
                 (Test-Path -LiteralPath 'deployment/source-commit') -and
                 (Test-Path -LiteralPath 'deployment/source-manifest.sha256')
 
@@ -257,12 +258,13 @@ function gitpush {
             Invoke-StocksReleaseChecks -Full:$Full
 
             $sourceChanges = git status --porcelain --untracked-files=all | Where-Object {
-                $_ -notmatch '^.. deployment/(frontend-build\.tar\.gz|source-commit|source-manifest\.sha256)$'
+                $_ -notmatch '^.. deployment/(frontend-build\.(?:tar\.gz|sha256)|source-commit|source-manifest\.sha256)$'
             }
 
             if ($sourceChanges) {
                 foreach ($releasePath in @(
                     'deployment/frontend-build.tar.gz',
+                    'deployment/frontend-build.sha256',
                     'deployment/source-commit',
                     'deployment/source-manifest.sha256'
                 )) {
@@ -282,7 +284,7 @@ function gitpush {
                 }
 
                 $postCommitChanges = git status --porcelain --untracked-files=all | Where-Object {
-                    $_ -notmatch '^.. deployment/(frontend-build\.tar\.gz|source-commit|source-manifest\.sha256)$'
+                    $_ -notmatch '^.. deployment/(frontend-build\.(?:tar\.gz|sha256)|source-commit|source-manifest\.sha256)$'
                 }
 
                 if ($postCommitChanges) {
@@ -305,7 +307,7 @@ function gitpush {
                 php scripts/frontend-release.php verify $sourceCommit
             }
 
-            git add -f deployment/frontend-build.tar.gz deployment/source-commit deployment/source-manifest.sha256
+            git add -f deployment/frontend-build.tar.gz deployment/frontend-build.sha256 deployment/source-commit deployment/source-manifest.sha256
             if ($LASTEXITCODE -ne 0) {
                 throw 'Could not stage the deployment release.'
             }
@@ -354,7 +356,7 @@ function gitpush {
         Write-Host ''
         Write-Host 'READY.' -ForegroundColor Green
         Write-Host 'Windows PCs may pull main and run: composer deploy' -ForegroundColor Green
-        Write-Host 'Cloudways may Pull main and run: composer deploy' -ForegroundColor Green
+        Write-Host 'Cloudways: run composer deploy:prepare, Pull main, then run composer deploy' -ForegroundColor Green
 
         if (-not $WaitForCI) {
             Write-Host 'GitHub is checking the release in the background.' -ForegroundColor DarkGray

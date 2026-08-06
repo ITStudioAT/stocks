@@ -108,6 +108,64 @@ function trackedSourceFiles(): array
     return array_values(array_unique($files));
 }
 
+/**
+ * @param  array<int, string>  $files
+ */
+function collectDeployedSourceFiles(string $relativeDirectory, array &$files): void
+{
+    $absoluteDirectory = projectPath($relativeDirectory);
+
+    if (! is_dir($absoluteDirectory) || is_link($absoluteDirectory)) {
+        if (is_link($absoluteDirectory)) {
+            $files[] = $relativeDirectory;
+        }
+
+        return;
+    }
+
+    foreach (new FilesystemIterator($absoluteDirectory, FilesystemIterator::SKIP_DOTS) as $item) {
+        $relativePath = $relativeDirectory.'/'.$item->getFilename();
+
+        if (isExcludedSourcePath($relativePath)) {
+            continue;
+        }
+
+        if ($item->isLink() || ! $item->isDir()) {
+            $files[] = $relativePath;
+
+            continue;
+        }
+
+        collectDeployedSourceFiles($relativePath, $files);
+    }
+}
+
+/** @return array<int, string> */
+function deployedSourceFiles(): array
+{
+    $files = [];
+
+    foreach (SOURCE_MANIFEST_PATHS as $includedPath) {
+        if (isExcludedSourcePath($includedPath)) {
+            continue;
+        }
+
+        $absolutePath = projectPath($includedPath);
+
+        if (is_link($absolutePath) || is_file($absolutePath)) {
+            $files[] = $includedPath;
+
+            continue;
+        }
+
+        collectDeployedSourceFiles($includedPath, $files);
+    }
+
+    sort($files, SORT_STRING);
+
+    return array_values(array_unique($files));
+}
+
 function sourceFileHash(string $relativePath): string
 {
     $absolutePath = projectPath($relativePath);
@@ -226,18 +284,18 @@ function verifySourceManifest(string $manifestPath): int
     }
 
     $manifestEntries = parseSourceManifest($expected);
-    $trackedFiles = trackedSourceFiles();
+    $deployedFiles = deployedSourceFiles();
     $differences = [];
 
-    foreach ($trackedFiles as $relativePath) {
+    foreach ($deployedFiles as $relativePath) {
         if (! array_key_exists($relativePath, $manifestEntries)) {
             $differences[] = "unlisted: {$relativePath}";
         }
     }
 
     foreach ($manifestEntries as $relativePath => $expectedHash) {
-        if (! in_array($relativePath, $trackedFiles, true)) {
-            $differences[] = "no longer tracked: {$relativePath}";
+        if (! in_array($relativePath, $deployedFiles, true)) {
+            $differences[] = "missing: {$relativePath}";
 
             continue;
         }
@@ -257,6 +315,7 @@ function verifySourceManifest(string $manifestPath): int
         fwrite(STDERR, "The pulled source does not match its deployment release:\n");
         describeManifestMismatch($differences);
         fwrite(STDERR, "Pull main again after gitpush has completed.\n");
+        fwrite(STDERR, "If only unlisted files remain, Cloudways preserved removed source files; delete exactly those listed files before retrying.\n");
 
         return 1;
     }

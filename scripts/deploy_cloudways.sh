@@ -4,18 +4,56 @@ set -Eeuo pipefail
 project_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_directory"
 
+prepare_only=false
+
+if [ "${1:-}" = "--prepare" ]; then
+    prepare_only=true
+elif [ "$#" -gt 0 ]; then
+    echo "Usage: bash scripts/deploy_cloudways.sh [--prepare]" >&2
+    exit 2
+fi
+
 maintenance_mode_enabled=false
 backend_update_started=false
+maintenance_marker="${project_directory}/storage/framework/cloudways-deploy-maintenance"
 frontend_release_archive="${project_directory}/deployment/frontend-build.tar.gz"
+frontend_release_archive_hash="${project_directory}/deployment/frontend-build.sha256"
 frontend_release_marker="${project_directory}/deployment/source-commit"
 frontend_release_manifest="${project_directory}/deployment/source-manifest.sha256"
 frontend_artifact_directory=""
 frontend_backup_directory=""
+frontend_artifact_installed=false
+
+prepare_cloudways_pull() {
+    if [ -f storage/framework/down ]; then
+        if [ ! -f "$maintenance_marker" ]; then
+            echo "The application is in maintenance mode, but not because of this deployment workflow." >&2
+            echo "Resolve that state before preparing a Cloudways Pull." >&2
+
+            return 1
+        fi
+
+        echo "Cloudways deployment maintenance mode is already active."
+    else
+        printf 'preparing\n' > "$maintenance_marker"
+
+        if ! php artisan down --render="errors::503" --retry=60 --refresh=15; then
+            rm -f -- "$maintenance_marker"
+
+            return 1
+        fi
+
+        printf 'prepared\n' > "$maintenance_marker"
+        echo "Cloudways deployment maintenance mode enabled."
+    fi
+
+    echo "Now use Cloudways Pull from main, then run composer deploy."
+}
 
 prepare_frontend_artifact() {
     echo "Verifying the locally built frontend release..."
 
-    if [ ! -f "$frontend_release_archive" ] || [ ! -f "$frontend_release_marker" ] || [ ! -f "$frontend_release_manifest" ]; then
+    if [ ! -f "$frontend_release_archive" ] || [ ! -f "$frontend_release_archive_hash" ] || [ ! -f "$frontend_release_marker" ] || [ ! -f "$frontend_release_manifest" ]; then
         echo "The deployment release is missing." >&2
         echo "Run gitpush locally, then use Cloudways Pull from the main branch again." >&2
 
@@ -109,11 +147,14 @@ install_frontend_artifact() {
     fi
 
     frontend_artifact_directory=""
+    frontend_artifact_installed=true
     echo "Frontend artifact installed."
 }
 
 finalize_frontend_artifact() {
     if [ -z "$frontend_backup_directory" ] || [ ! -d "$frontend_backup_directory" ]; then
+        frontend_artifact_installed=false
+
         return
     fi
 
@@ -121,6 +162,7 @@ finalize_frontend_artifact() {
         "${project_directory}"/public/.stocks-build-backup.*)
             rm -rf -- "$frontend_backup_directory"
             frontend_backup_directory=""
+            frontend_artifact_installed=false
             ;;
         *)
             echo "Refusing to remove unexpected frontend backup directory: ${frontend_backup_directory}" >&2
@@ -131,7 +173,7 @@ finalize_frontend_artifact() {
 }
 
 rollback_frontend_artifact() {
-    if [ -z "$frontend_backup_directory" ] || [ ! -d "$frontend_backup_directory" ]; then
+    if [ "$frontend_artifact_installed" != true ]; then
         return
     fi
 
@@ -141,8 +183,15 @@ rollback_frontend_artifact() {
         rm -rf -- public/build
     fi
 
+    if [ -z "$frontend_backup_directory" ] || [ ! -d "$frontend_backup_directory" ]; then
+        frontend_artifact_installed=false
+
+        return
+    fi
+
     if mv "$frontend_backup_directory" public/build; then
         frontend_backup_directory=""
+        frontend_artifact_installed=false
 
         return
     fi
@@ -198,16 +247,42 @@ if ! flock -n 9; then
     exit 1
 fi
 
+if [ "$prepare_only" = true ]; then
+    prepare_cloudways_pull
+    trap - EXIT
+
+    exit 0
+fi
+
 if [ -f storage/framework/down ]; then
-    echo "The application was already in maintenance mode. Resolve that state before deploying." >&2
-    exit 1
+    if [ ! -f "$maintenance_marker" ]; then
+        echo "The application is in maintenance mode, but not because of this deployment workflow." >&2
+        echo "Resolve that state before deploying." >&2
+        exit 1
+    fi
+
+    maintenance_mode_enabled=true
+    backend_update_started=true
+    echo "Resuming the interrupted Cloudways deployment."
+elif [ -f "$maintenance_marker" ]; then
+    rm -f -- "$maintenance_marker"
 fi
 
 prepare_frontend_artifact
 
-php artisan down --render="errors::503" --retry=60 --refresh=15
-maintenance_mode_enabled=true
+if [ "$maintenance_mode_enabled" != true ]; then
+    printf 'preparing\n' > "$maintenance_marker"
+
+    if ! php artisan down --render="errors::503" --retry=60 --refresh=15; then
+        rm -f -- "$maintenance_marker"
+        exit 1
+    fi
+
+    maintenance_mode_enabled=true
+fi
+
 backend_update_started=true
+printf 'backend-started\n' > "$maintenance_marker"
 
 composer install \
     --no-dev \
@@ -218,10 +293,11 @@ composer install \
 install_frontend_artifact
 php artisan app:update --no-interaction --skip-composer --skip-npm --skip-build
 
+finalize_frontend_artifact
 php artisan up
 maintenance_mode_enabled=false
 backend_update_started=false
-finalize_frontend_artifact
+rm -f -- "$maintenance_marker"
 cleanup_frontend_artifact
 trap - EXIT
 

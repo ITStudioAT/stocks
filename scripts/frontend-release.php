@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 const FRONTEND_RELEASE_ARCHIVE = 'deployment/frontend-build.tar.gz';
+const FRONTEND_RELEASE_ARCHIVE_HASH = 'deployment/frontend-build.sha256';
 const FRONTEND_RELEASE_SOURCE = 'deployment/source-commit';
 const FRONTEND_RELEASE_MANIFEST = 'deployment/source-manifest.sha256';
 
@@ -25,38 +26,6 @@ function runReleaseCommand(array $command): int
     }
 
     return proc_close($process);
-}
-
-/** @param array<int, string> $command */
-function releaseCommandOutput(array $command): string
-{
-    $process = proc_open(
-        $command,
-        [
-            0 => ['pipe', 'r'],
-            1 => ['pipe', 'w'],
-            2 => ['pipe', 'w'],
-        ],
-        $pipes,
-        releaseProjectPath(),
-    );
-
-    if (! is_resource($process)) {
-        throw new RuntimeException('Could not inspect the release commit.');
-    }
-
-    fclose($pipes[0]);
-    $output = stream_get_contents($pipes[1]);
-    $error = stream_get_contents($pipes[2]);
-    fclose($pipes[1]);
-    fclose($pipes[2]);
-    $exitCode = proc_close($process);
-
-    if ($exitCode !== 0 || ! is_string($output)) {
-        throw new RuntimeException('Could not inspect the release commit: '.trim((string) $error));
-    }
-
-    return trim($output);
 }
 
 function removeReleaseDirectory(string $directory): void
@@ -110,6 +79,43 @@ function validateFrontendManifest(string $buildDirectory): void
     json_decode($manifest, true, flags: JSON_THROW_ON_ERROR);
 }
 
+function writeFrontendArchiveHash(string $archivePath): void
+{
+    $archiveHash = hash_file('sha256', $archivePath);
+
+    if (! is_string($archiveHash)) {
+        throw new RuntimeException('The frontend release archive could not be hashed.');
+    }
+
+    if (file_put_contents(
+        releaseProjectPath(FRONTEND_RELEASE_ARCHIVE_HASH),
+        "{$archiveHash}  frontend-build.tar.gz\n",
+    ) === false) {
+        throw new RuntimeException('The frontend release archive hash could not be saved.');
+    }
+}
+
+function verifyFrontendArchiveHash(string $archivePath): void
+{
+    $hashPath = releaseProjectPath(FRONTEND_RELEASE_ARCHIVE_HASH);
+
+    if (! is_file($hashPath)) {
+        throw new RuntimeException('The frontend release archive hash is missing.');
+    }
+
+    $storedHash = trim((string) file_get_contents($hashPath));
+
+    if (! preg_match('/^(?<hash>[0-9a-f]{64})  frontend-build\.tar\.gz$/', $storedHash, $matches)) {
+        throw new RuntimeException('The frontend release archive hash is invalid.');
+    }
+
+    $actualHash = hash_file('sha256', $archivePath);
+
+    if (! is_string($actualHash) || ! hash_equals($matches['hash'], $actualHash)) {
+        throw new RuntimeException('The frontend release archive checksum does not match.');
+    }
+}
+
 function createFrontendRelease(string $sourceCommit): int
 {
     validateReleaseSource($sourceCommit);
@@ -152,6 +158,8 @@ function createFrontendRelease(string $sourceCommit): int
         throw new RuntimeException('The frontend release archive could not be created.');
     }
 
+    writeFrontendArchiveHash($archivePath);
+
     fwrite(STDOUT, "Frontend release created for {$sourceCommit}.\n");
 
     return 0;
@@ -168,12 +176,7 @@ function releaseSourceCommit(?string $expectedSourceCommit = null): string
     $sourceCommit = trim((string) file_get_contents($sourcePath));
     validateReleaseSource($sourceCommit);
 
-    if ($expectedSourceCommit === null) {
-        $expectedSourceCommit = releaseCommandOutput(['git', 'rev-parse', 'HEAD^']);
-        validateReleaseSource($expectedSourceCommit);
-    }
-
-    if (! hash_equals($expectedSourceCommit, $sourceCommit)) {
+    if ($expectedSourceCommit !== null && ! hash_equals($expectedSourceCommit, $sourceCommit)) {
         throw new RuntimeException("The frontend release belongs to {$sourceCommit}, not {$expectedSourceCommit}.");
     }
 
@@ -187,6 +190,8 @@ function extractFrontendRelease(string $sourceCommit): string
     if (! is_file($archivePath)) {
         throw new RuntimeException('The frontend release archive is missing.');
     }
+
+    verifyFrontendArchiveHash($archivePath);
 
     $temporaryDirectory = releaseProjectPath('public/.stocks-release.'.bin2hex(random_bytes(6)));
 

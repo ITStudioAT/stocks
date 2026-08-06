@@ -318,9 +318,11 @@ if (! in_array($target, ['local', 'cloudways'], true)) {
 
 if ($dryRun) {
     fwrite(STDOUT, "Update target: {$target}\n");
-    fwrite(STDOUT, $target === 'local'
-        ? "Plan: Composer dependencies, changed frontend dependencies, verified release artifact, application update.\n"
-        : "Plan: guarded Cloudways production deployment.\n");
+    fwrite(STDOUT, match (true) {
+        $target === 'local' => "Plan: Composer dependencies, changed frontend dependencies, verified release artifact, application update.\n",
+        $prepareOnly => "Plan: enable owned maintenance mode before Cloudways Pull.\n",
+        default => "Plan: guarded Cloudways production deployment.\n",
+    });
 
     exit(0);
 }
@@ -330,7 +332,7 @@ if ($target === 'local') {
 }
 
 if ($prepareOnly) {
-    exit(updateUsage());
+    exit(runUpdateCommand(['bash', updateProjectPath('scripts/deploy_cloudways.sh'), '--prepare']));
 }
 
 fwrite(STDOUT, "Update target: Cloudways production.\n");
