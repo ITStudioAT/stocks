@@ -494,7 +494,7 @@ class AdminDepotHoldingTest extends TestCase
                 ->assertJsonPath('holdings.0.intraday_candles.0.price', '41.00000000')
                 ->assertJsonPath('holdings.0.intraday_candles.1.trading_date', '2026-06-12')
                 ->assertJsonPath('holdings.0.intraday_candles.1.price', '42.60000000')
-                ->assertJsonPath('holdings.0.intraday_candles.1.as_of', '2026-06-12T09:00:00+00:00');
+                ->assertJsonPath('holdings.0.intraday_candles.1.as_of', '2026-06-12T09:00:00+02:00');
         } finally {
             Carbon::setTestNow();
         }

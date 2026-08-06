@@ -19,6 +19,8 @@ function mu {
         throw 'mu must be run from a project containing composer.json and package.json.'
     }
 
+    `$npmExecutable = if (`$env:OS -eq 'Windows_NT') { 'npm.cmd' } else { 'npm' }
+
     Write-Host 'Checking Composer packages...' -ForegroundColor Cyan
     & composer outdated --direct
 
@@ -27,7 +29,7 @@ function mu {
     }
 
     Write-Host 'Checking npm packages...' -ForegroundColor Cyan
-    & npm outdated
+    & `$npmExecutable outdated
 
     Write-Host 'Updating Composer packages...' -ForegroundColor Cyan
     & composer update
@@ -37,7 +39,7 @@ function mu {
     }
 
     Write-Host 'Updating npm packages...' -ForegroundColor Cyan
-    & npm update
+    & `$npmExecutable update
 
     if (`$LASTEXITCODE -ne 0) {
         throw 'npm package update failed.'

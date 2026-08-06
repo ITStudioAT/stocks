@@ -564,7 +564,7 @@ describe('App', () => {
 
         expect(wrapper.find('.dashboard-navigation-drawer').classes()).toContain('dashboard-navigation-drawer--compact');
         expect(wrapper.findComponent({ name: 'VNavigationDrawer' }).props('width')).toBe(64);
-        expect(wrapper.findAll('.dashboard-compact-menu-item')).toHaveLength(8);
+        expect(wrapper.findAll('.dashboard-compact-menu-item')).toHaveLength(9);
         expect(wrapper.find('.dashboard-compact-menu-item--active').exists()).toBe(true);
         expect(wrapper.find('[aria-label="Enhance dashboard menu"]').exists()).toBe(true);
         expect(wrapper.find('.dashboard-navigation-drawer').text()).not.toContain('Stocks');

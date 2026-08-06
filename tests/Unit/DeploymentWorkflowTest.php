@@ -118,9 +118,11 @@ class DeploymentWorkflowTest extends TestCase
 
         $this->assertStringContainsString('function mu', $installer);
         $this->assertMatchesRegularExpression(
-            '/composer outdated --direct.*npm outdated.*composer update.*npm update/s',
+            '/composer outdated --direct.*npmExecutable outdated.*composer update.*npmExecutable update/s',
             $installer,
         );
+        $this->assertStringContainsString("'npm.cmd'", $installer);
+        $this->assertStringNotContainsString('& npm update', $installer);
         $this->assertStringContainsString("throw 'Composer package update failed.'", $installer);
         $this->assertStringContainsString("throw 'npm package update failed.'", $installer);
         $this->assertStringContainsString("'PowerShell\\Microsoft.PowerShell_profile.ps1'", $installer);
