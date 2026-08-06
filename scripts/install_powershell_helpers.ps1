@@ -1,11 +1,51 @@
-$profilePath = $PROFILE.CurrentUserCurrentHost
-$profileDirectory = Split-Path -Parent $profilePath
+$documentsPath = [Environment]::GetFolderPath('MyDocuments')
+$profilePaths = @(
+    $PROFILE.CurrentUserCurrentHost
+    (Join-Path $documentsPath 'PowerShell\Microsoft.PowerShell_profile.ps1')
+    (Join-Path $documentsPath 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1')
+) | Select-Object -Unique
 $legacyStartMarker = '# >>> schooltool managed helpers >>>'
 $legacyEndMarker = '# <<< schooltool managed helpers <<<'
 $startMarker = '# >>> project git dispatcher >>>'
 $endMarker = '# <<< project git dispatcher <<<'
 $managedBlock = @"
 $startMarker
+function mu {
+    [CmdletBinding()]
+    param()
+
+    if (-not (Test-Path -LiteralPath (Join-Path (Get-Location) 'composer.json') -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path (Get-Location) 'package.json') -PathType Leaf)) {
+        throw 'mu must be run from a project containing composer.json and package.json.'
+    }
+
+    Write-Host 'Checking Composer packages...' -ForegroundColor Cyan
+    & composer outdated --direct
+
+    if (`$LASTEXITCODE -ne 0) {
+        throw 'Could not check Composer package updates.'
+    }
+
+    Write-Host 'Checking npm packages...' -ForegroundColor Cyan
+    & npm outdated
+
+    Write-Host 'Updating Composer packages...' -ForegroundColor Cyan
+    & composer update
+
+    if (`$LASTEXITCODE -ne 0) {
+        throw 'Composer package update failed.'
+    }
+
+    Write-Host 'Updating npm packages...' -ForegroundColor Cyan
+    & npm update
+
+    if (`$LASTEXITCODE -ne 0) {
+        throw 'npm package update failed.'
+    }
+
+    Write-Host 'Composer and npm packages are up to date.' -ForegroundColor Green
+}
+
 function gitpush {
     [CmdletBinding()]
     param(
@@ -76,42 +116,48 @@ function gitpush {
 $endMarker
 "@
 
-if (-not (Test-Path -LiteralPath $profileDirectory)) {
-    [System.IO.Directory]::CreateDirectory($profileDirectory) | Out-Null
-}
-
-$profileContent = if (Test-Path -LiteralPath $profilePath) {
-    [System.IO.File]::ReadAllText($profilePath)
-}
-else {
-    ''
-}
-
-foreach ($markers in @(
-    @($legacyStartMarker, $legacyEndMarker),
-    @($startMarker, $endMarker)
-)) {
-    $pattern = [regex]::Escape($markers[0]) + '.*?' + [regex]::Escape($markers[1])
-    $profileContent = [regex]::Replace(
-        $profileContent,
-        $pattern,
-        '',
-        [System.Text.RegularExpressions.RegexOptions]::Singleline
-    ).TrimEnd()
-}
-
-if ($profileContent) {
-    $profileContent += [Environment]::NewLine + [Environment]::NewLine
-}
-
-$profileContent += $managedBlock + [Environment]::NewLine
 $windowsPowerShellUtf8 = New-Object System.Text.UTF8Encoding($true)
-[System.IO.File]::WriteAllText($profilePath, $profileContent, $windowsPowerShellUtf8)
+
+foreach ($profilePath in $profilePaths) {
+    $profileDirectory = Split-Path -Parent $profilePath
+
+    if (-not (Test-Path -LiteralPath $profileDirectory)) {
+        [System.IO.Directory]::CreateDirectory($profileDirectory) | Out-Null
+    }
+
+    $profileContent = if (Test-Path -LiteralPath $profilePath) {
+        [System.IO.File]::ReadAllText($profilePath)
+    }
+    else {
+        ''
+    }
+
+    foreach ($markers in @(
+        @($legacyStartMarker, $legacyEndMarker),
+        @($startMarker, $endMarker)
+    )) {
+        $pattern = [regex]::Escape($markers[0]) + '.*?' + [regex]::Escape($markers[1])
+        $profileContent = [regex]::Replace(
+            $profileContent,
+            $pattern,
+            '',
+            [System.Text.RegularExpressions.RegexOptions]::Singleline
+        ).TrimEnd()
+    }
+
+    if ($profileContent) {
+        $profileContent += [Environment]::NewLine + [Environment]::NewLine
+    }
+
+    $profileContent += $managedBlock + [Environment]::NewLine
+    [System.IO.File]::WriteAllText($profilePath, $profileContent, $windowsPowerShellUtf8)
+
+    Write-Host "Project-aware helpers installed in $profilePath" -ForegroundColor Green
+}
 
 git config core.hooksPath .githooks
 if ($LASTEXITCODE -ne 0) {
     throw 'Could not configure the repository hooks path.'
 }
 
-Write-Host "Project-aware Git helpers installed in $profilePath" -ForegroundColor Green
-Write-Host 'Open a new PowerShell terminal before using gitpush.' -ForegroundColor Cyan
+Write-Host 'Open a new PowerShell terminal before using gitpush or mu.' -ForegroundColor Cyan

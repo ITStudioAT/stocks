@@ -112,6 +112,21 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertStringNotContainsString('C:\\laravel\\schooltool', $installer);
     }
 
+    public function test_powershell_update_helper_checks_and_updates_composer_and_npm_packages(): void
+    {
+        $installer = file_get_contents($this->projectPath('scripts/install_powershell_helpers.ps1'));
+
+        $this->assertStringContainsString('function mu', $installer);
+        $this->assertMatchesRegularExpression(
+            '/composer outdated --direct.*npm outdated.*composer update.*npm update/s',
+            $installer,
+        );
+        $this->assertStringContainsString("throw 'Composer package update failed.'", $installer);
+        $this->assertStringContainsString("throw 'npm package update failed.'", $installer);
+        $this->assertStringContainsString("'PowerShell\\Microsoft.PowerShell_profile.ps1'", $installer);
+        $this->assertStringContainsString("'WindowsPowerShell\\Microsoft.PowerShell_profile.ps1'", $installer);
+    }
+
     public function test_source_manifest_rejects_unlisted_tracked_files(): void
     {
         $manifestName = 'deployment-test-'.bin2hex(random_bytes(4)).'.sha256';
