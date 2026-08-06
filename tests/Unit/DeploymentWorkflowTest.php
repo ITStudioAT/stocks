@@ -111,6 +111,10 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertStringContainsString('flock -n 9', $deployment);
         $this->assertStringContainsString('php scripts/frontend-release.php verify', $deployment);
         $this->assertStringContainsString('frontend-build.sha256', $deployment);
+        $this->assertStringContainsString(
+            'php scripts/source-manifest.php prune-unlisted "$frontend_release_manifest_path"',
+            $deployment,
+        );
         $this->assertStringContainsString('tar -xzf "$frontend_release_archive"', $deployment);
         $this->assertStringContainsString('Resuming the interrupted Cloudways deployment.', $deployment);
         $this->assertStringContainsString('frontend_artifact_installed=true', $deployment);
@@ -125,6 +129,14 @@ class DeploymentWorkflowTest extends TestCase
         );
         $this->assertStringNotContainsString('--skip-frontend', $deployment);
         $this->assertStringNotContainsString('npm run build', $deployment);
+        $this->assertLessThan(
+            strpos($deployment, 'php scripts/source-manifest.php prune-unlisted'),
+            strpos($deployment, "printf 'backend-started\\n'"),
+        );
+        $this->assertLessThan(
+            strrpos($deployment, 'prepare_frontend_artifact'),
+            strrpos($deployment, 'php scripts/source-manifest.php prune-unlisted'),
+        );
     }
 
     public function test_cloudways_deployment_script_has_valid_bash_syntax(): void
@@ -165,6 +177,7 @@ class DeploymentWorkflowTest extends TestCase
     public function test_cloudways_pull_preparation_is_repeatable_and_the_deployment_resumes_it(): void
     {
         $deploymentDirectory = $this->createCloudwaysShellFixture();
+        file_put_contents("{$deploymentDirectory}/app/Legacy.php", '<?php');
 
         $prepared = $this->runCloudwaysShellFixture($deploymentDirectory, '--prepare');
         $preparedAgain = $this->runCloudwaysShellFixture($deploymentDirectory, '--prepare');
@@ -177,7 +190,30 @@ class DeploymentWorkflowTest extends TestCase
         $deployed = $this->runCloudwaysShellFixture($deploymentDirectory);
 
         $this->assertTrue($deployed->isSuccessful(), $deployed->getErrorOutput());
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/app/Legacy.php");
         $this->assertDirectoryExists("{$deploymentDirectory}/public/build");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
+    }
+
+    public function test_cloudways_source_pruning_failure_keeps_maintenance_mode_and_can_resume(): void
+    {
+        $deploymentDirectory = $this->createCloudwaysShellFixture();
+        file_put_contents("{$deploymentDirectory}/app/Legacy.php", '<?php');
+        file_put_contents("{$deploymentDirectory}/storage/framework/fail-source-prune", '1');
+
+        $failed = $this->runCloudwaysShellFixture($deploymentDirectory);
+
+        $this->assertFalse($failed->isSuccessful());
+        $this->assertFileExists("{$deploymentDirectory}/app/Legacy.php");
+        $this->assertFileExists("{$deploymentDirectory}/storage/framework/down");
+        $this->assertFileExists("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
+
+        unlink("{$deploymentDirectory}/storage/framework/fail-source-prune");
+        $resumed = $this->runCloudwaysShellFixture($deploymentDirectory);
+
+        $this->assertTrue($resumed->isSuccessful(), $resumed->getErrorOutput());
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/app/Legacy.php");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
     }
@@ -284,6 +320,98 @@ class DeploymentWorkflowTest extends TestCase
 
         $this->assertFalse($missing->isSuccessful());
         $this->assertStringContainsString('missing: artisan', $missing->getErrorOutput());
+    }
+
+    public function test_source_pruning_removes_only_unlisted_managed_files(): void
+    {
+        $deploymentDirectory = $this->createDeploymentFixture();
+
+        foreach (['app/Http/Middleware', 'bootstrap/cache', 'public/storage', 'storage/framework'] as $relativeDirectory) {
+            mkdir("{$deploymentDirectory}/{$relativeDirectory}", 0777, true);
+        }
+
+        file_put_contents("{$deploymentDirectory}/app/Http/Middleware/Legacy.php", '<?php');
+        file_put_contents("{$deploymentDirectory}/bootstrap/cache/runtime.php", '<?php');
+        file_put_contents("{$deploymentDirectory}/public/storage/runtime.txt", 'runtime');
+        file_put_contents("{$deploymentDirectory}/storage/framework/runtime.txt", 'runtime');
+        file_put_contents("{$deploymentDirectory}/.env", 'APP_ENV=production');
+
+        $prune = $this->runPhpScriptIn(
+            $deploymentDirectory,
+            'scripts/source-manifest.php',
+            'prune-unlisted',
+            'deployment/source-manifest.sha256',
+        );
+
+        $this->assertTrue($prune->isSuccessful(), $prune->getErrorOutput());
+        $this->assertStringContainsString(
+            'Pruned stale deployment source file: app/Http/Middleware/Legacy.php',
+            $prune->getOutput(),
+        );
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/app/Http/Middleware/Legacy.php");
+        $this->assertFileExists("{$deploymentDirectory}/artisan");
+        $this->assertFileExists("{$deploymentDirectory}/bootstrap/cache/runtime.php");
+        $this->assertFileExists("{$deploymentDirectory}/public/storage/runtime.txt");
+        $this->assertFileExists("{$deploymentDirectory}/storage/framework/runtime.txt");
+        $this->assertFileExists("{$deploymentDirectory}/.env");
+    }
+
+    public function test_source_pruning_refuses_all_removal_when_expected_source_changed_or_missing(): void
+    {
+        $changedDirectory = $this->createDeploymentFixture();
+        mkdir("{$changedDirectory}/app");
+        file_put_contents("{$changedDirectory}/app/Legacy.php", '<?php');
+        file_put_contents("{$changedDirectory}/artisan", "changed\n");
+
+        $changed = $this->runPhpScriptIn(
+            $changedDirectory,
+            'scripts/source-manifest.php',
+            'prune-unlisted',
+            'deployment/source-manifest.sha256',
+        );
+
+        $this->assertFalse($changed->isSuccessful());
+        $this->assertStringContainsString('changed: artisan', $changed->getErrorOutput());
+        $this->assertFileExists("{$changedDirectory}/app/Legacy.php");
+
+        $missingDirectory = $this->createDeploymentFixture();
+        mkdir("{$missingDirectory}/app");
+        file_put_contents("{$missingDirectory}/app/Legacy.php", '<?php');
+        unlink("{$missingDirectory}/artisan");
+
+        $missing = $this->runPhpScriptIn(
+            $missingDirectory,
+            'scripts/source-manifest.php',
+            'prune-unlisted',
+            'deployment/source-manifest.sha256',
+        );
+
+        $this->assertFalse($missing->isSuccessful());
+        $this->assertStringContainsString('missing: artisan', $missing->getErrorOutput());
+        $this->assertFileExists("{$missingDirectory}/app/Legacy.php");
+    }
+
+    public function test_source_pruning_rejects_an_incomplete_manifest_without_removing_files(): void
+    {
+        $deploymentDirectory = $this->createDeploymentFixture();
+        mkdir("{$deploymentDirectory}/app");
+        file_put_contents("{$deploymentDirectory}/app/Legacy.php", '<?php');
+        file_put_contents(
+            "{$deploymentDirectory}/deployment/source-manifest.sha256",
+            $this->normalizedFileHash("{$deploymentDirectory}/artisan")."  artisan\n",
+        );
+
+        $prune = $this->runPhpScriptIn(
+            $deploymentDirectory,
+            'scripts/source-manifest.php',
+            'prune-unlisted',
+            'deployment/source-manifest.sha256',
+        );
+
+        $this->assertFalse($prune->isSuccessful());
+        $this->assertStringContainsString('cannot safely prune files because it omits', $prune->getErrorOutput());
+        $this->assertFileExists("{$deploymentDirectory}/app/Legacy.php");
+        $this->assertFileExists("{$deploymentDirectory}/scripts/source-manifest.php");
     }
 
     public function test_no_git_release_verification_rejects_marker_and_expected_commit_mismatches(): void
@@ -401,15 +529,21 @@ class DeploymentWorkflowTest extends TestCase
             mkdir($directory.DIRECTORY_SEPARATOR.str_replace('/', DIRECTORY_SEPARATOR, $relativeDirectory), 0777, true);
         }
 
+        copy($this->projectPath('scripts/deploy_cloudways.sh'), "{$directory}/scripts/deploy_cloudways.sh");
         copy($this->projectPath('scripts/frontend-release.php'), "{$directory}/scripts/frontend-release.php");
         copy($this->projectPath('scripts/source-manifest.php'), "{$directory}/scripts/source-manifest.php");
         file_put_contents("{$directory}/artisan", "fixture-artisan\n");
+        file_put_contents("{$directory}/composer.json", "{}\n");
+        file_put_contents("{$directory}/composer.lock", "{}\n");
         file_put_contents("{$directory}/public/build/manifest.json", "{}\n");
         file_put_contents("{$directory}/public/build/deployment-source.txt", str_repeat('a', 40)."\n");
         file_put_contents("{$directory}/deployment/source-commit", str_repeat('a', 40)."\n");
 
         $manifestPaths = [
             'artisan',
+            'composer.json',
+            'composer.lock',
+            'scripts/deploy_cloudways.sh',
             'scripts/frontend-release.php',
             'scripts/source-manifest.php',
         ];
@@ -428,7 +562,7 @@ class DeploymentWorkflowTest extends TestCase
         $directory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'stocks-deployment-test-'.bin2hex(random_bytes(8));
         $this->temporaryDeploymentDirectories[] = $directory;
 
-        foreach (['artifact', 'bin', 'deployment', 'public', 'scripts', 'storage/framework'] as $relativeDirectory) {
+        foreach (['app', 'artifact', 'bin', 'deployment', 'public', 'scripts', 'storage/framework'] as $relativeDirectory) {
             mkdir($directory.DIRECTORY_SEPARATOR.str_replace('/', DIRECTORY_SEPARATOR, $relativeDirectory), 0777, true);
         }
 
@@ -454,6 +588,15 @@ class DeploymentWorkflowTest extends TestCase
         $this->writeExecutable("{$directory}/bin/php", <<<'BASH'
 #!/usr/bin/env bash
 set -e
+
+if [ "${1:-}" = "scripts/source-manifest.php" ] && [ "${2:-}" = "prune-unlisted" ]; then
+    if [ -f storage/framework/fail-source-prune ]; then
+        exit 1
+    fi
+
+    rm -f app/Legacy.php
+    exit 0
+fi
 
 if [ "${1:-}" != "artisan" ]; then
     exit 0

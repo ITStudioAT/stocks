@@ -19,6 +19,7 @@ maintenance_marker="${project_directory}/storage/framework/cloudways-deploy-main
 frontend_release_archive="${project_directory}/deployment/frontend-build.tar.gz"
 frontend_release_archive_hash="${project_directory}/deployment/frontend-build.sha256"
 frontend_release_marker="${project_directory}/deployment/source-commit"
+frontend_release_manifest_path="deployment/source-manifest.sha256"
 frontend_release_manifest="${project_directory}/deployment/source-manifest.sha256"
 frontend_artifact_directory=""
 frontend_backup_directory=""
@@ -50,15 +51,17 @@ prepare_cloudways_pull() {
     echo "Now use Cloudways Pull from main, then run composer deploy."
 }
 
-prepare_frontend_artifact() {
-    echo "Verifying the locally built frontend release..."
-
+ensure_release_files() {
     if [ ! -f "$frontend_release_archive" ] || [ ! -f "$frontend_release_archive_hash" ] || [ ! -f "$frontend_release_marker" ] || [ ! -f "$frontend_release_manifest" ]; then
         echo "The deployment release is missing." >&2
         echo "Run gitpush locally, then use Cloudways Pull from the main branch again." >&2
 
         return 1
     fi
+}
+
+prepare_frontend_artifact() {
+    echo "Verifying the locally built frontend release..."
 
     if ! php scripts/frontend-release.php verify; then
         echo "The pulled source and frontend release do not belong together." >&2
@@ -268,7 +271,7 @@ elif [ -f "$maintenance_marker" ]; then
     rm -f -- "$maintenance_marker"
 fi
 
-prepare_frontend_artifact
+ensure_release_files
 
 if [ "$maintenance_mode_enabled" != true ]; then
     printf 'preparing\n' > "$maintenance_marker"
@@ -283,6 +286,10 @@ fi
 
 backend_update_started=true
 printf 'backend-started\n' > "$maintenance_marker"
+
+echo "Pruning stale source files preserved by Cloudways Pull..."
+php scripts/source-manifest.php prune-unlisted "$frontend_release_manifest_path"
+prepare_frontend_artifact
 
 composer install \
     --no-dev \

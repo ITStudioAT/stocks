@@ -27,6 +27,15 @@ const SOURCE_MANIFEST_EXCLUDED_PATHS = [
     'public/storage',
 ];
 
+const SOURCE_MANIFEST_PRUNE_REQUIRED_PATHS = [
+    'artisan',
+    'composer.json',
+    'composer.lock',
+    'scripts/deploy_cloudways.sh',
+    'scripts/frontend-release.php',
+    'scripts/source-manifest.php',
+];
+
 function projectPath(string $relativePath = ''): string
 {
     $projectDirectory = dirname(__DIR__);
@@ -231,6 +240,68 @@ function parseSourceManifest(string $manifest): array
     return $entries;
 }
 
+/**
+ * @param  array<string, string>  $manifestEntries
+ * @param  array<int, string>  $deployedFiles
+ * @return array{unlisted: array<int, string>, blocking: array<int, string>}
+ */
+function sourceManifestDifferences(array $manifestEntries, array $deployedFiles): array
+{
+    $unlisted = [];
+    $blocking = [];
+
+    foreach ($deployedFiles as $relativePath) {
+        if (! array_key_exists($relativePath, $manifestEntries)) {
+            $unlisted[] = $relativePath;
+        }
+    }
+
+    foreach ($manifestEntries as $relativePath => $expectedHash) {
+        if (! in_array($relativePath, $deployedFiles, true)) {
+            $blocking[] = "missing: {$relativePath}";
+
+            continue;
+        }
+
+        if (! is_file(projectPath($relativePath)) || is_link(projectPath($relativePath))) {
+            $blocking[] = "missing: {$relativePath}";
+
+            continue;
+        }
+
+        if (! hash_equals($expectedHash, sourceFileHash($relativePath))) {
+            $blocking[] = "changed: {$relativePath}";
+        }
+    }
+
+    return [
+        'unlisted' => $unlisted,
+        'blocking' => $blocking,
+    ];
+}
+
+/** @param array<string, string> $manifestEntries */
+function validatePrunableManifest(array $manifestEntries): void
+{
+    foreach (SOURCE_MANIFEST_PRUNE_REQUIRED_PATHS as $requiredPath) {
+        if (! array_key_exists($requiredPath, $manifestEntries)) {
+            throw new RuntimeException("The source manifest cannot safely prune files because it omits: {$requiredPath}");
+        }
+    }
+}
+
+/** @param array<string, string> $manifestEntries */
+function isPrunableSourcePath(string $relativePath, array $manifestEntries): bool
+{
+    if (! isIncludedSourcePath($relativePath) || array_key_exists($relativePath, $manifestEntries)) {
+        return false;
+    }
+
+    $absolutePath = projectPath($relativePath);
+
+    return is_link($absolutePath) || is_file($absolutePath);
+}
+
 /** @param array<int, string> $differences */
 function describeManifestMismatch(array $differences): void
 {
@@ -284,32 +355,14 @@ function verifySourceManifest(string $manifestPath): int
     }
 
     $manifestEntries = parseSourceManifest($expected);
-    $deployedFiles = deployedSourceFiles();
-    $differences = [];
-
-    foreach ($deployedFiles as $relativePath) {
-        if (! array_key_exists($relativePath, $manifestEntries)) {
-            $differences[] = "unlisted: {$relativePath}";
-        }
-    }
-
-    foreach ($manifestEntries as $relativePath => $expectedHash) {
-        if (! in_array($relativePath, $deployedFiles, true)) {
-            $differences[] = "missing: {$relativePath}";
-
-            continue;
-        }
-
-        if (! is_file(projectPath($relativePath)) || is_link(projectPath($relativePath))) {
-            $differences[] = "missing: {$relativePath}";
-
-            continue;
-        }
-
-        if (! hash_equals($expectedHash, sourceFileHash($relativePath))) {
-            $differences[] = "changed: {$relativePath}";
-        }
-    }
+    $manifestDifferences = sourceManifestDifferences($manifestEntries, deployedSourceFiles());
+    $differences = [
+        ...array_map(
+            fn (string $relativePath): string => "unlisted: {$relativePath}",
+            $manifestDifferences['unlisted'],
+        ),
+        ...$manifestDifferences['blocking'],
+    ];
 
     if ($differences !== []) {
         fwrite(STDERR, "The pulled source does not match its deployment release:\n");
@@ -325,9 +378,64 @@ function verifySourceManifest(string $manifestPath): int
     return 0;
 }
 
+function pruneUnlistedSourceFiles(string $manifestPath): int
+{
+    $absoluteManifestPath = projectPath($manifestPath);
+
+    if (! is_file($absoluteManifestPath)) {
+        fwrite(STDERR, "Source manifest is missing: {$manifestPath}\n");
+
+        return 1;
+    }
+
+    $manifest = file_get_contents($absoluteManifestPath);
+
+    if ($manifest === false) {
+        fwrite(STDERR, "Could not read source manifest: {$manifestPath}\n");
+
+        return 1;
+    }
+
+    $manifestEntries = parseSourceManifest($manifest);
+    validatePrunableManifest($manifestEntries);
+    $manifestDifferences = sourceManifestDifferences($manifestEntries, deployedSourceFiles());
+
+    if ($manifestDifferences['blocking'] !== []) {
+        fwrite(STDERR, "Refusing to prune stale source files because expected release files differ:\n");
+        describeManifestMismatch($manifestDifferences['blocking']);
+
+        return 1;
+    }
+
+    foreach ($manifestDifferences['unlisted'] as $relativePath) {
+        if (! isPrunableSourcePath($relativePath, $manifestEntries)) {
+            fwrite(STDERR, "Refusing to prune an unsafe or changed source path: {$relativePath}\n");
+
+            return 1;
+        }
+    }
+
+    foreach ($manifestDifferences['unlisted'] as $relativePath) {
+        if (! isPrunableSourcePath($relativePath, $manifestEntries)
+            || ! unlink(projectPath($relativePath))) {
+            fwrite(STDERR, "Could not safely prune stale source file: {$relativePath}\n");
+
+            return 1;
+        }
+
+        fwrite(STDOUT, "Pruned stale deployment source file: {$relativePath}\n");
+    }
+
+    if ($manifestDifferences['unlisted'] === []) {
+        fwrite(STDOUT, "No stale deployment source files found.\n");
+    }
+
+    return verifySourceManifest($manifestPath);
+}
+
 function sourceManifestUsage(): int
 {
-    fwrite(STDERR, "Usage: php scripts/source-manifest.php <write|verify> <manifest-path>\n");
+    fwrite(STDERR, "Usage: php scripts/source-manifest.php <write|verify|prune-unlisted> <manifest-path>\n");
 
     return 2;
 }
@@ -343,6 +451,7 @@ try {
     exit(match ($command) {
         'write' => writeSourceManifest($manifestPath),
         'verify' => verifySourceManifest($manifestPath),
+        'prune-unlisted' => pruneUnlistedSourceFiles($manifestPath),
         default => sourceManifestUsage(),
     });
 } catch (Throwable $throwable) {
