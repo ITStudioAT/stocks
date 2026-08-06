@@ -231,6 +231,45 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonCount(0, 'holdings.1.intraday_candles');
     }
 
+    public function test_admin_listing_without_pagination_includes_chart_history_only_for_selected_chart_stock(): void
+    {
+        $admin = $this->adminUser();
+        $selectedHolding = StockHolding::factory()->create([
+            'name' => 'Alpha Selected',
+        ]);
+        $otherHolding = StockHolding::factory()->create([
+            'name' => 'Beta Other',
+        ]);
+
+        foreach ([$selectedHolding, $otherHolding] as $holding) {
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-06-04',
+                'close' => '123.45000000',
+                'currency' => 'USD',
+            ]);
+            StockHoldingIntradayCandle::query()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => '2026-06-04',
+                'interval' => '5m',
+                'as_of' => Carbon::parse('2026-06-04 09:00:00', 'UTC'),
+                'close' => '124.56000000',
+                'currency' => 'USD',
+                'source_key' => 'eodhd_intraday',
+            ]);
+        }
+
+        $this->actingAs($admin)
+            ->getJson("/admin/watchlist/holdings?all=1&include_charts=1&chart_stock_id={$selectedHolding->id}&chart_range=today")
+            ->assertOk()
+            ->assertJsonPath('holdings.0.id', $selectedHolding->id)
+            ->assertJsonCount(1, 'holdings.0.daily_prices')
+            ->assertJsonCount(1, 'holdings.0.intraday_candles')
+            ->assertJsonPath('holdings.1.id', $otherHolding->id)
+            ->assertJsonCount(0, 'holdings.1.daily_prices')
+            ->assertJsonCount(0, 'holdings.1.intraday_candles');
+    }
+
     public function test_admin_listing_can_include_chart_history_for_all_holdings_without_pagination(): void
     {
         Carbon::setTestNow('2026-06-15 12:00:00');

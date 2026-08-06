@@ -44,4 +44,12 @@ class IndexWatchItem extends Model
     {
         return $this->hasMany(IndexWatchItemIntradayCandle::class);
     }
+
+    /**
+     * @return HasMany<IndexWatchItemRealtimePrice, $this>
+     */
+    public function realtimePrices(): HasMany
+    {
+        return $this->hasMany(IndexWatchItemRealtimePrice::class);
+    }
 }

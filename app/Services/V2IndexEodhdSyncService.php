@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\EodhdExchange;
 use App\Models\IndexEodhdSyncRun;
 use App\Models\IndexWatchItem;
 use App\Models\IndexWatchItemIntradayCandle;
@@ -691,6 +692,60 @@ class V2IndexEodhdSyncService
             $this->updateIntradayRunCounts($run, $summary);
         }
 
+        $finalCoverage = $this->missingIntradayCoverage($index, $run->date_from, $run->date_to);
+        $newMarketClosedDateCount = max(
+            $finalCoverage['market_closed_dates'] - $plan['coverage']['market_closed_dates'],
+            0,
+        );
+        $newRetryLaterDateCount = max(
+            $finalCoverage['retry_later_dates'] - $plan['coverage']['retry_later_dates'],
+            0,
+        );
+        $summary['intraday']['market_closed_dates'] += $newMarketClosedDateCount;
+        $summary['intraday']['retry_later_dates'] += $newRetryLaterDateCount;
+        $newMarketClosedDates = collect($finalCoverage['market_closed_date_values'])
+            ->diff($plan['coverage']['market_closed_date_values'])
+            ->values();
+
+        if ($newMarketClosedDates->isNotEmpty()) {
+            $blocks = collect($blocks)
+                ->map(function (array $block) use ($newMarketClosedDates): array {
+                    $remainingMissingDates = collect($block['missing_dates'])
+                        ->diff($newMarketClosedDates)
+                        ->values()
+                        ->all();
+
+                    if ($remainingMissingDates === $block['missing_dates']) {
+                        return $block;
+                    }
+
+                    if ($remainingMissingDates === []) {
+                        return [
+                            ...$block,
+                            'status' => 'finished',
+                            'missing_dates' => [],
+                            'message' => 'Empty dates were confirmed as non-trading dates.',
+                        ];
+                    }
+
+                    return [
+                        ...$block,
+                        'missing_dates' => $remainingMissingDates,
+                        'message' => count($remainingMissingDates).' date(s) still have no EODHD data.',
+                    ];
+                })
+                ->all();
+
+            foreach ($blocks as $block) {
+                $this->updateIntradayBlockProgress($run, $index, $block);
+            }
+        }
+
+        $noDataDates = $noDataDates
+            ->intersect($finalCoverage['missing_date_values'])
+            ->values();
+        $verifiedDateCount = $finalCoverage['complete_dates'];
+
         if ($noDataDates->isNotEmpty()) {
             $hasStoredCandles = $hadStoredCandles || $storedCount > 0;
             $status = $hasStoredCandles ? 'partial' : 'no_data';
@@ -704,20 +759,20 @@ class V2IndexEodhdSyncService
             $dateList = $this->dateList($noDataDates);
             $summary['indices'][$index->id]['intraday'] = [
                 'available' => $returnedCandleCount,
-                'missing' => max($plan['coverage']['expected_dates'] - $verifiedDateCount, 0),
+                'missing' => max($finalCoverage['expected_dates'] - $verifiedDateCount, 0),
                 'synced' => $storedCount,
                 'returned_candles' => $returnedCandleCount,
                 'existing_candles' => $existingCandleCount,
                 'stored_candles' => $existingCandleCount + $storedCount,
                 'new_candles' => $storedCount,
                 'status' => $status,
-                'expected_dates' => $plan['coverage']['expected_dates'],
+                'expected_dates' => $finalCoverage['expected_dates'],
                 'verified_dates' => $verifiedDateCount,
-                'deferred_dates' => $plan['coverage']['deferred_dates'],
-                'market_closed_dates' => $plan['coverage']['market_closed_dates'],
-                'retry_later_dates' => $plan['coverage']['retry_later_dates'],
-                'retry_later_date_values' => $plan['coverage']['retry_later_date_values'],
-                'next_retry_at' => $plan['coverage']['next_retry_at'],
+                'deferred_dates' => $finalCoverage['deferred_dates'],
+                'market_closed_dates' => $finalCoverage['market_closed_dates'],
+                'retry_later_dates' => $finalCoverage['retry_later_dates'],
+                'retry_later_date_values' => $finalCoverage['retry_later_date_values'],
+                'next_retry_at' => $finalCoverage['next_retry_at'],
                 'no_data_dates' => $noDataDates->all(),
                 'blocks' => $blocks,
             ];
@@ -729,9 +784,9 @@ class V2IndexEodhdSyncService
             return;
         }
 
-        $status = $plan['coverage']['deferred_dates'] > 0 ? 'deferred' : 'finished';
-        $message = $plan['coverage']['deferred_dates'] > 0
-            ? "{$storedCount} candle(s) synced; {$plan['coverage']['deferred_dates']} current date(s) deferred until EODHD finalization."
+        $status = $finalCoverage['deferred_dates'] > 0 ? 'deferred' : 'finished';
+        $message = $finalCoverage['deferred_dates'] > 0
+            ? "{$storedCount} candle(s) synced; {$finalCoverage['deferred_dates']} current date(s) deferred until EODHD finalization."
             : "{$storedCount} candle(s) synced from {$rangeCount} small period(s).";
         $summary['indices'][$index->id]['intraday'] = [
             'available' => $returnedCandleCount,
@@ -742,10 +797,10 @@ class V2IndexEodhdSyncService
             'stored_candles' => $existingCandleCount + $storedCount,
             'new_candles' => $storedCount,
             'status' => $status,
-            'expected_dates' => $plan['coverage']['expected_dates'],
-            'verified_dates' => $plan['coverage']['expected_dates'],
-            'deferred_dates' => $plan['coverage']['deferred_dates'],
-            'market_closed_dates' => $plan['coverage']['market_closed_dates'],
+            'expected_dates' => $finalCoverage['expected_dates'],
+            'verified_dates' => $finalCoverage['complete_dates'],
+            'deferred_dates' => $finalCoverage['deferred_dates'],
+            'market_closed_dates' => $finalCoverage['market_closed_dates'],
             'retry_later_dates' => 0,
             'blocks' => $blocks,
         ];
@@ -798,6 +853,9 @@ class V2IndexEodhdSyncService
             ->whereBetween('trading_date', [$dateFrom, $dateTo])
             ->get(['trading_date'])
             ->countBy(fn (IndexWatchItemIntradayCandle $candle): string => $candle->trading_date->toDateString());
+        $marketCalendarDates = $this->marketCalendarDates($index);
+        $marketHolidayDates = $marketCalendarDates['holidays'];
+        $knownTradingDates = $marketCalendarDates['trading_dates'];
         $deferredPrices = $prices
             ->filter(fn (IndexWatchItemPrice $price): bool => ! $this->intradayDateIsFinalized($index, $price->trading_date));
         $finalizedPrices = $prices->diff($deferredPrices)->values();
@@ -806,15 +864,22 @@ class V2IndexEodhdSyncService
                 $price,
                 $finalizedPrices,
                 $dailyCandleCounts,
+                $marketHolidayDates,
+                $knownTradingDates,
             ));
         $marketClosedPrices
             ->filter(fn (IndexWatchItemPrice $price): bool => $price->intraday_sync_status !== 'market_closed')
-            ->each(function (IndexWatchItemPrice $price): void {
+            ->each(function (IndexWatchItemPrice $price) use ($marketHolidayDates): void {
+                $date = $price->trading_date->toDateString();
+                $message = $marketHolidayDates->has($date)
+                    ? 'Official exchange holiday; excluded from expected intraday trading dates.'
+                    : 'Zero-volume EOD reference between verified sessions; treated as a non-trading date.';
+
                 $price->update([
                     'intraday_sync_status' => 'market_closed',
                     'intraday_candle_count' => 0,
                     'intraday_http_status' => 200,
-                    'intraday_sync_message' => 'Zero-volume EOD reference between verified sessions; treated as a non-trading date.',
+                    'intraday_sync_message' => $message,
                     'intraday_checked_at' => now(),
                 ]);
             });
@@ -891,12 +956,30 @@ class V2IndexEodhdSyncService
     /**
      * @param  Collection<int, IndexWatchItemPrice>  $finalizedPrices
      * @param  Collection<string, int>  $dailyCandleCounts
+     * @param  Collection<string, true>  $marketHolidayDates
+     * @param  Collection<string, true>  $knownTradingDates
      */
     private function isConfirmedMarketClosure(
         IndexWatchItemPrice $price,
         Collection $finalizedPrices,
         Collection $dailyCandleCounts,
+        Collection $marketHolidayDates,
+        Collection $knownTradingDates,
     ): bool {
+        $date = $price->trading_date->toDateString();
+
+        if ((int) $dailyCandleCounts->get($date, 0) > 0) {
+            return false;
+        }
+
+        if ($marketHolidayDates->has($date)) {
+            return true;
+        }
+
+        if ($knownTradingDates->has($date)) {
+            return false;
+        }
+
         if ($price->intraday_sync_status === 'market_closed') {
             return true;
         }
@@ -908,12 +991,10 @@ class V2IndexEodhdSyncService
         }
 
         $volume = data_get($rawPayload, 'volume');
-        $date = $price->trading_date->toDateString();
 
         if ($price->intraday_sync_status !== 'no_data'
             || ! is_numeric($volume)
-            || (float) $volume !== 0.0
-            || (int) $dailyCandleCounts->get($date, 0) > 0) {
+            || (float) $volume !== 0.0) {
             return false;
         }
 
@@ -934,6 +1015,118 @@ class V2IndexEodhdSyncService
             && $nextPrice->intraday_sync_status === 'complete'
             && (int) $dailyCandleCounts->get($previousPrice->trading_date->toDateString(), 0) > 0
             && (int) $dailyCandleCounts->get($nextPrice->trading_date->toDateString(), 0) > 0;
+    }
+
+    /**
+     * @return array{
+     *     holidays: Collection<string, true>,
+     *     trading_dates: Collection<string, true>
+     * }
+     */
+    private function marketCalendarDates(IndexWatchItem $index): array
+    {
+        $exchange = $this->holidayExchangeForIndex($index);
+        $holidays = $exchange?->holidays;
+
+        if (! is_array($holidays)) {
+            return [
+                'holidays' => collect(),
+                'trading_dates' => collect(),
+            ];
+        }
+
+        $marketHolidayDates = [];
+        $knownTradingDates = [];
+        $holidaysAreList = array_is_list($holidays);
+
+        foreach ($holidays as $date => $holiday) {
+            $holidayDate = $holidaysAreList
+                ? $this->holidayDate(is_array($holiday) ? ($holiday['Date'] ?? $holiday['date'] ?? null) : $holiday)
+                : $this->holidayDate($date);
+
+            if ($holidayDate === null) {
+                continue;
+            }
+
+            if ($this->isFullMarketHoliday($holiday)) {
+                $marketHolidayDates[$holidayDate] = true;
+
+                continue;
+            }
+
+            $knownTradingDates[$holidayDate] = true;
+        }
+
+        return [
+            'holidays' => collect($marketHolidayDates),
+            'trading_dates' => collect($knownTradingDates),
+        ];
+    }
+
+    private function holidayExchangeForIndex(IndexWatchItem $index): ?EodhdExchange
+    {
+        $marketIdentifiers = collect([$index->exchange, $index->mic_code])
+            ->filter(fn (mixed $identifier): bool => is_string($identifier) && trim($identifier) !== '')
+            ->map(fn (string $identifier): string => Str::upper(trim($identifier)))
+            ->unique()
+            ->values();
+
+        if ($marketIdentifiers->isNotEmpty()) {
+            $exchange = EodhdExchange::query()
+                ->whereNotNull('holidays')
+                ->where(function ($query) use ($marketIdentifiers): void {
+                    $query
+                        ->whereIn('code', $marketIdentifiers)
+                        ->orWhereIn('detail_code', $marketIdentifiers)
+                        ->orWhereIn('operating_mic', $marketIdentifiers);
+                })
+                ->latest('synced_at')
+                ->first();
+
+            if ($exchange) {
+                return $exchange;
+            }
+        }
+
+        $country = is_string($index->country) ? trim($index->country) : '';
+
+        if ($country === '') {
+            return null;
+        }
+
+        return EodhdExchange::query()
+            ->where('country', $country)
+            ->whereNotNull('holidays')
+            ->latest('synced_at')
+            ->first();
+    }
+
+    private function isFullMarketHoliday(mixed $holiday): bool
+    {
+        if (! is_array($holiday)) {
+            return true;
+        }
+
+        $earlyClose = $holiday['EarlyClose'] ?? $holiday['early_close'] ?? null;
+
+        if (is_string($earlyClose) && trim($earlyClose) !== '') {
+            return false;
+        }
+
+        $type = Str::lower((string) ($holiday['Type'] ?? $holiday['type'] ?? ''));
+
+        return ! Str::contains($type, ['early close', 'earlyclose', 'half day', 'half-day', 'partial']);
+    }
+
+    private function holidayDate(mixed $date): ?string
+    {
+        if (! is_string($date)) {
+            return null;
+        }
+
+        $date = trim($date);
+
+        return preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) === 1 ? $date : null;
     }
 
     /**

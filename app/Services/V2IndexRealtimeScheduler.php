@@ -6,6 +6,7 @@ use App\Jobs\SyncV2IndexRealtimeData;
 use App\Models\AppConfig;
 use App\Models\IndexEodhdSyncRun;
 use App\Models\IndexWatchItem;
+use DateTimeZone;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Throwable;
@@ -186,9 +187,13 @@ class V2IndexRealtimeScheduler
     /** @return array{requested_count: int, refreshed_count: int, failed_count: int} */
     public function syncNow(): array
     {
-        $result = $this->priceRefresher->refreshAll();
-        $finishedAt = now(self::Timezone);
+        $startedAt = now(self::Timezone);
         $settings = $this->settings();
+        $indexWatchItemIds = $settings['closed_refresh_enabled']
+            ? IndexWatchItem::query()->orderBy('id')->pluck('id')->map(fn (mixed $id): int => (int) $id)->all()
+            : $this->indexIdsWithinTradingTimes($startedAt, $settings);
+        $result = $this->priceRefresher->refreshIds($indexWatchItemIds);
+        $finishedAt = now(self::Timezone);
         $this->storeSettings([
             ...$settings,
             'last_refreshed_at' => $finishedAt->toIso8601String(),
@@ -268,6 +273,10 @@ class V2IndexRealtimeScheduler
 
         if (! $isTradingTime && ! $settings['closed_refresh_enabled']) {
             return $this->nextTradingRefreshAt($from, $settings)->toIso8601String();
+        }
+
+        if ($settings['next_refresh_at'] !== null && $this->isUpdating($settings, $from)) {
+            return $settings['next_refresh_at'];
         }
 
         $lastRefreshedAt = $this->carbon($settings['last_refreshed_at']);
@@ -372,13 +381,27 @@ class V2IndexRealtimeScheduler
     {
         $now = ($at ?? now(self::Timezone))->copy();
         $settings ??= $this->settings();
+
+        return $this->indexIdsWithinTradingTimes($now, $settings) !== [];
+    }
+
+    /**
+     * @param  array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, timezone: string, last_dispatched_at: ?string, last_refreshed_at: ?string, last_finished_at: ?string, last_error: ?string, next_refresh_at: ?string}  $settings
+     * @return array<int, int>
+     */
+    private function indexIdsWithinTradingTimes(Carbon $at, array $settings): array
+    {
         $hasRegularTradingWindow = $this->hasRegularTradingWindow($settings);
 
         return IndexWatchItem::query()
             ->whereNotNull('trading_times')
+            ->orderBy('id')
             ->cursor()
-            ->contains(fn (IndexWatchItem $item): bool => (! $hasRegularTradingWindow || ! $this->isFullDayTradingWindow((string) $item->trading_times, $settings))
-                && $this->isTradingTime((string) $item->trading_times, $now, $settings));
+            ->filter(fn (IndexWatchItem $item): bool => (! $hasRegularTradingWindow || ! $this->isFullDayTradingWindow((string) $item->trading_times, $settings))
+                && $this->isTradingTime((string) $item->trading_times, $at, $settings))
+            ->map(fn (IndexWatchItem $item): int => (int) $item->getKey())
+            ->values()
+            ->all();
     }
 
     /**
@@ -438,15 +461,26 @@ class V2IndexRealtimeScheduler
             return null;
         }
 
-        $timezone = preg_match('/\bEurope\/[A-Za-z_]+\b/', $tradingTimes, $timezoneMatches)
-            ? $timezoneMatches[0]
-            : self::Timezone;
+        $timezone = $this->tradingTimezone($tradingTimes);
 
         return [
             'timezone' => $timezone,
             'open_minute' => (((int) $matches['open_hour'] * 60) + (int) $matches['open_minute']) - $settings['trading_starts_before_minutes'],
             'close_minute' => (((int) $matches['close_hour'] * 60) + (int) $matches['close_minute']) + $settings['trading_ends_after_minutes'],
         ];
+    }
+
+    private function tradingTimezone(string $tradingTimes): string
+    {
+        if (! preg_match('/(?<timezone>(?:[A-Za-z0-9_+\-]+\/)+[A-Za-z0-9_+\-]+|UTC)\s*$/', trim($tradingTimes), $matches)) {
+            return self::Timezone;
+        }
+
+        try {
+            return (new DateTimeZone($matches['timezone']))->getName();
+        } catch (Throwable) {
+            return self::Timezone;
+        }
     }
 
     /**

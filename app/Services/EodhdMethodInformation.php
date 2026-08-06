@@ -241,7 +241,7 @@ class EodhdMethodInformation
                     $this->method('Service', IndexWatchItemPriceRefresher::class, 'ensureRecentPrices'),
                     $this->method('EODHD client', EodhdApiClient::class, 'get'),
                 ],
-                'tables' => ['index_watch_items', 'index_watch_item_prices'],
+                'tables' => ['index_watch_items', 'index_watch_item_prices', 'index_watch_item_realtime_prices'],
                 'note' => 'Der automatische Index-Live-Job pausiert, solange eine V2-EOD-/Intraday-Synchronisierung läuft.',
             ],
             [

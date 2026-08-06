@@ -118,8 +118,9 @@ class AdminDepotHoldingController extends Controller
                 ->map(fn (StockHolding $holding): array => $this->holdingPayload(
                     $holding,
                     $activeDepot,
-                    $includeAllChartHoldings,
-                    false,
+                    $includeAllChartHoldings || ($includeCharts && $holding->id === $chartStockId),
+                    ! $includeAllChartHoldings && $includeIntradayCharts,
+                    $chartRange,
                 ));
 
             return response()->json([

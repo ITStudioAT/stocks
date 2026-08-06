@@ -25,6 +25,20 @@ class EodhdMarketData
 {
     private const IntradayDetailTradingDayCount = 7;
 
+    private const IndexMarketProfiles = [
+        '000001' => ['timezone' => 'Asia/Shanghai', 'open' => '09:30:00', 'close' => '15:00:00'],
+        'ATG' => ['timezone' => 'Europe/Athens', 'open' => '10:15:00', 'close' => '17:20:00'],
+        'ATX' => ['timezone' => 'Europe/Vienna', 'open' => '09:00:00', 'close' => '17:30:00'],
+        'DJI' => ['timezone' => 'America/New_York', 'open' => '09:30:00', 'close' => '16:00:00'],
+        'GDAXI' => ['timezone' => 'Europe/Berlin', 'open' => '09:00:00', 'close' => '17:30:00'],
+        'IBEX' => ['timezone' => 'Europe/Madrid', 'open' => '09:00:00', 'close' => '17:30:00'],
+        'KS11' => ['timezone' => 'Asia/Seoul', 'open' => '09:00:00', 'close' => '15:30:00'],
+        'N225' => ['timezone' => 'Asia/Tokyo', 'open' => '09:00:00', 'close' => '15:30:00'],
+        'NDX' => ['timezone' => 'America/New_York', 'open' => '09:30:00', 'close' => '16:00:00'],
+        'OEX' => ['timezone' => 'America/New_York', 'open' => '09:30:00', 'close' => '16:00:00'],
+        'SSMI' => ['timezone' => 'Europe/Zurich', 'open' => '09:00:00', 'close' => '17:30:00'],
+    ];
+
     /**
      * @var array<int, string>
      */
@@ -285,6 +299,29 @@ class EodhdMarketData
     public function exchangeDetailsForCode(string $exchangeCode): array
     {
         return $this->exchangeDetails($exchangeCode);
+    }
+
+    /**
+     * @return array{code: string, name: ?string, operating_mic: ?string, country: ?string, currency: ?string, timezone: ?string, is_open: bool, open: ?string, close: ?string, open_utc: ?string, close_utc: ?string, working_days: ?string, error: ?string}
+     */
+    public function exchangeDetailsForIndexWatchItem(IndexWatchItem $item): array
+    {
+        $profile = self::IndexMarketProfiles[Str::upper(trim((string) $item->symbol))] ?? null;
+        $exchange = $this->storedMarketExchangeForIndexWatchItem($item);
+        $details = $exchange
+            ? $this->storedExchangeDetails($exchange->code)
+            : $this->exchangeDetails($this->exchangeCodeForIndexWatchItem($item));
+
+        if ($profile === null || $details === null) {
+            return $details ?? $this->genericIndexExchangeDetails();
+        }
+
+        return [
+            ...$details,
+            'timezone' => $profile['timezone'],
+            'open' => $profile['open'],
+            'close' => $profile['close'],
+        ];
     }
 
     /**
@@ -851,6 +888,45 @@ class EodhdMarketData
             'holidays' => $this->exchangeHolidays(['ExchangeHolidays' => $exchange->holidays ?? []]),
             'error' => null,
         ];
+    }
+
+    private function storedMarketExchangeForIndexWatchItem(IndexWatchItem $item): ?EodhdExchange
+    {
+        $marketIdentifiers = collect([$item->exchange, $item->mic_code])
+            ->filter(fn (mixed $identifier): bool => is_string($identifier) && trim($identifier) !== '')
+            ->map(fn (string $identifier): string => Str::upper(trim($identifier)))
+            ->reject(fn (string $identifier): bool => $identifier === 'INDX')
+            ->unique()
+            ->values();
+
+        if ($marketIdentifiers->isNotEmpty()) {
+            $exchange = EodhdExchange::query()
+                ->whereNotNull('trading_hours')
+                ->where(function (Builder $query) use ($marketIdentifiers): void {
+                    $query
+                        ->whereIn('code', $marketIdentifiers)
+                        ->orWhereIn('detail_code', $marketIdentifiers)
+                        ->orWhereIn('operating_mic', $marketIdentifiers);
+                })
+                ->latest('synced_at')
+                ->first();
+
+            if ($exchange) {
+                return $exchange;
+            }
+        }
+
+        $country = trim((string) $item->country);
+
+        if ($country === '') {
+            return null;
+        }
+
+        return EodhdExchange::query()
+            ->where('country', $country)
+            ->whereNotNull('trading_hours')
+            ->latest('synced_at')
+            ->first();
     }
 
     /**

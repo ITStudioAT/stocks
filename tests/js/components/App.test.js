@@ -384,13 +384,13 @@ function displayDateFromKey(dateKey) {
     }).format(new Date(Date.UTC(year, month - 1, day)));
 }
 
-function indexMonthPrices() {
+function indexMonthPrices(direction = 'up') {
     const baseDate = new Date(Date.UTC(2026, 5, 7));
 
     return Array.from({ length: 30 }, (_, index) => {
         const tradingDate = new Date(baseDate);
         tradingDate.setUTCDate(baseDate.getUTCDate() - index);
-        const actualPrice = 6116.5298 - index;
+        const actualPrice = direction === 'up' ? 6116.5298 - index : 6087.5298 + index;
 
         return {
             trading_date: tradingDate.toISOString().slice(0, 10),
@@ -3597,9 +3597,131 @@ describe('App', () => {
         wrapper.unmount();
     });
 
+    it('queues an index realtime update as soon as its next refresh time passes', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-08-06T10:00:00+02:00'));
+        window.history.pushState({}, '', '/admin/menu/indices');
+
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
+        let realtimeDispatches = 0;
+        let indexLoads = 0;
+        let currentSettings = {
+            times: ['02:00'],
+            timezone: 'Europe/Vienna',
+            status: 'waiting',
+            realtime: {
+                timezone: 'Europe/Vienna',
+                latest_update_at: '2026-08-06T09:40:00+02:00',
+                next_refresh_at: '2026-08-06T10:00:02+02:00',
+                status: 'scheduled',
+                status_label: 'Scheduled',
+            },
+        };
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: { id: 1, name: 'Admin User', email: 'admin@example.com', roles: ['admin'] },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    holdings: [],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                indexLoads += 1;
+
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
+            if (path === '/admin/v2/indices/eodhd-sync-settings') {
+                if (realtimeDispatches > 0 && currentSettings.realtime.status === 'updating') {
+                    currentSettings = {
+                        ...currentSettings,
+                        realtime: {
+                            ...currentSettings.realtime,
+                            latest_update_at: '2026-08-06T10:00:04+02:00',
+                            status: 'scheduled',
+                            status_label: 'Scheduled',
+                        },
+                    };
+                }
+
+                return Promise.resolve(jsonResponse({ index_eodhd_sync_settings: currentSettings }));
+            }
+
+            if (path === '/admin/v2/indices/realtime-sync' && options.method === 'POST') {
+                realtimeDispatches += 1;
+                currentSettings = {
+                    ...currentSettings,
+                    realtime: {
+                        ...currentSettings.realtime,
+                        next_refresh_at: '2026-08-06T10:05:02+02:00',
+                        status: 'updating',
+                        status_label: 'Updating now',
+                    },
+                };
+
+                return Promise.resolve(jsonResponse({
+                    queued: true,
+                    index_eodhd_sync_settings: currentSettings,
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [], meta: pagination }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        try {
+            const wrapper = mountApp();
+            await flushPromises();
+
+            await vi.advanceTimersByTimeAsync(1000);
+            await flushPromises();
+            expect(realtimeDispatches).toBe(0);
+
+            await vi.advanceTimersByTimeAsync(2000);
+            await flushPromises();
+            expect(realtimeDispatches).toBe(1);
+            expect(fetchMock).toHaveBeenCalledWith('/admin/v2/indices/realtime-sync', expect.objectContaining({
+                method: 'POST',
+            }));
+            expect(wrapper.text()).toContain('Next 06.08.2026, 10:05');
+
+            await vi.advanceTimersByTimeAsync(5000);
+            await flushPromises();
+            expect(realtimeDispatches).toBe(1);
+            expect(indexLoads).toBe(2);
+            expect(wrapper.text()).toContain('Latest 06.08.2026, 10:00');
+
+            wrapper.unmount();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('shows the dedicated Stocks and Indices dashboard pages', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
         let currentPriceRefreshSettings = priceRefreshSettings();
+        let indexChartDirection = 'up';
         const currentIndexPriceRefreshSettings = indexPriceRefreshSettings({
             last_refreshed_at: '2026-06-02T13:00:00+00:00',
             next_refresh_at: '2026-06-02T13:30:00+00:00',
@@ -3624,6 +3746,7 @@ describe('App', () => {
                 status: 'scheduled',
                 status_label: 'Scheduled',
                 status_detail: 'No job is running; the next refresh starts at the time shown below.',
+                is_trading_time: false,
                 last_error: null,
             },
         };
@@ -3893,7 +4016,7 @@ describe('App', () => {
                             latest_price_source: 'EODHD intraday',
                             latest_price_source_url: 'https://example.com/flat',
                             latest_price_as_of: '2026-06-03T12:00:00+00:00',
-                            trading_times: 'Monday-Friday 09:00-17:30 Europe/Berlin',
+                            trading_times: null,
                             venue: null,
                             price_type: 'intraday',
                             price_spread_pct: null,
@@ -3906,7 +4029,7 @@ describe('App', () => {
                             name: 'iShares ATX UCITS ETF (DE)',
                             isin: 'DE000A0D8Q23',
                             wkn: 'A0D8Q2',
-                            exchange: 'XETR',
+                            exchange: 'US',
                             currency: 'EUR',
                             latest_price: null,
                             latest_price_status: 'missing',
@@ -4062,14 +4185,11 @@ describe('App', () => {
             }
 
             if (path === '/admin/price-refresh-settings' && options?.method === 'PATCH') {
+                const payload = JSON.parse(options.body);
                 currentPriceRefreshSettings = priceRefreshSettings({
-                    trading_interval_minutes: 15,
-                    trading_starts_before_minutes: 8,
-                    trading_ends_after_minutes: 12,
-                    closed_refresh_enabled: false,
-                    closed_interval_minutes: 45,
+                    ...payload,
                     next_refresh_at: '2026-06-02T12:35:00+00:00',
-                    current_interval_minutes: 15,
+                    current_interval_minutes: payload.trading_interval_minutes,
                 });
 
                 return Promise.resolve(jsonResponse({
@@ -4144,6 +4264,7 @@ describe('App', () => {
                         latest_price: '6116.529800',
                         last_price: '6096.169900',
                         latest_price_change_pct: '0.33',
+                        trading_times: 'Monday-Friday 09:00-17:30 Europe/Berlin',
                         recent_prices: [],
                     },
                 }));
@@ -4414,10 +4535,22 @@ describe('App', () => {
                         instrument_type: 'INDEX',
                         country: 'Germany',
                         currency: 'EUR',
+                        trading_times: 'Monday-Friday 09:00:00-17:30:00 Europe/Berlin',
                         latest_price: '6116.529800',
                         last_price: '6096.169900',
                         latest_price_change_pct: '0.33',
-                        recent_prices: indexMonthPrices(),
+                        recent_prices: range === 'intraday'
+                            ? indexMonthPrices(indexChartDirection).map((price, index) => index === 0
+                                ? { ...price, actual_price_as_of: '2026-06-07T13:45:00+02:00' }
+                                : price)
+                            : indexMonthPrices(indexChartDirection),
+                        realtime_prices: range === 'intraday'
+                            ? [
+                                { trading_date: '2026-06-07', price: '6116.529800', as_of: '2026-06-07T13:45:00+02:00' },
+                                { trading_date: '2026-06-07', price: '6098.400000', as_of: '2026-06-07T11:00:00+02:00' },
+                                { trading_date: '2026-06-07', price: '6080.100000', as_of: '2026-06-07T09:20:00+02:00' },
+                            ]
+                            : [],
                     },
                 }));
             }
@@ -4585,6 +4718,8 @@ describe('App', () => {
 
         const wrapper = mountApp();
         await flushPromises();
+        wrapper.vm.liveDataStatusNow = Date.parse('2026-08-06T18:49:00+02:00');
+        await wrapper.vm.$nextTick();
 
         const dashboardHeaders = wrapper.find('table').findAll('thead th').map((header) => header.text());
         expect(dashboardHeaders[0]).toBe('Symbol');
@@ -4645,12 +4780,10 @@ describe('App', () => {
         expect(wrapper.text()).toContain('FLAT');
         expect(wrapper.text()).toContain('100');
 
-        const holdingRows = wrapper.findAll('tbody tr');
+        const holdingRows = wrapper.findAll('tbody .stock-holding-row');
         const upPriceValue = holdingRows[0].findAll('td')[2].find('.latest-price-value');
         const downPriceValue = holdingRows[1].findAll('td')[2].find('.latest-price-value');
         const intradayPriceValue = holdingRows[2].findAll('td')[2].find('.latest-price-value');
-        const upStartPriceTick = holdingRows[0].findAll('td')[3].find('[aria-label="Start price higher than last day price"]');
-        const downStartPriceTick = holdingRows[1].findAll('td')[3].find('[aria-label="Start price lower than last day price"]');
         expect(holdingRows[0].findAll('td')[0].text()).toContain('Exchange: NASDAQ');
         expect(holdingRows[0].findAll('td')[0].text()).toContain('Pieces: 0');
         expect(holdingRows[0].findAll('td')[1].text()).not.toContain('Exchange: NASDAQ');
@@ -4680,16 +4813,10 @@ describe('App', () => {
         expect(upPriceValue.text()).toContain('+2.28%');
         expect(upPriceValue.find('.latest-price-tick').exists()).toBe(false);
         expect(downPriceValue.text()).not.toContain('+5.98%');
-        expect(upStartPriceTick.exists()).toBe(true);
-        expect(upStartPriceTick.text()).toBe('↑');
-        expect(upStartPriceTick.classes()).toContain('text-success');
-        expect(downStartPriceTick.exists()).toBe(true);
-        expect(downStartPriceTick.text()).toBe('↓');
-        expect(downStartPriceTick.classes()).toContain('text-error');
+        expect(holdingRows[0].findAll('td')[3].find('.latest-price-tick').exists()).toBe(false);
+        expect(holdingRows[1].findAll('td')[3].find('.latest-price-tick').exists()).toBe(false);
         expect(holdingRows[2].findAll('td')[3].find('.latest-price-tick').exists()).toBe(false);
         expect(holdingRows[0].findAll('td')[4].text()).not.toContain('%');
-        expect(wrapper.html()).toContain('latest-price-tick');
-        expect(wrapper.text()).toContain('↑');
         const recentPriceTrendDots = holdingRows[0].findAll('.recent-price-trend-dot');
         expect(recentPriceTrendDots).toHaveLength(10);
         expect(recentPriceTrendDots[0].classes()).toContain('recent-price-trend-dot-flat');
@@ -4829,6 +4956,13 @@ describe('App', () => {
         const topLevelMenuKeys = wrapper.vm.menuItems.map((item) => item.key);
         expect(topLevelMenuKeys.indexOf('stocks')).toBe(topLevelMenuKeys.indexOf('indices') + 1);
 
+        currentPriceRefreshSettings = priceRefreshSettings({
+            closed_refresh_enabled: false,
+            is_trading_time: true,
+            last_refreshed_at: '2026-08-06T16:49:00+00:00',
+            next_refresh_at: '2026-08-06T16:59:00+00:00',
+        });
+        wrapper.vm.liveDataStatusNow = Date.parse('2026-08-06T18:49:00+02:00');
         wrapper.vm.navigateSection('stocks');
         await flushPromises();
 
@@ -4849,8 +4983,32 @@ describe('App', () => {
         expect(wrapper.find('[aria-label="Sell stock"]').exists()).toBe(false);
 
         const stocksTable = wrapper.get('.desktop-watch-list-table');
+        expect(stocksTable.findAll('.watch-list-live-badge')).toHaveLength(1);
         const stockRows = stocksTable.findAll('tbody tr.stock-holding-row');
         const appleStockRow = stockRows[0];
+        const closedMarketStockRow = stockRows[1];
+        const usStockRow = stockRows[3];
+        const buyStockRow = stockRows[5];
+        expect(appleStockRow.get('[aria-label="AAPL live update schedule status"]').text()).toBe('Scheduled');
+        expect(appleStockRow.get('[aria-label="AAPL live update activity status"]').text()).toBe('Active');
+        expect(appleStockRow.get('[aria-label="AAPL live update activity status"] .live-update-status-dot').exists()).toBe(true);
+        expect(appleStockRow.get('.latest-price-value').classes()).toContain('bg-success');
+        expect(appleStockRow.find('.stock-holding-refresh-schedule').exists()).toBe(false);
+        expect(closedMarketStockRow.get('[aria-label="DOWN live update schedule status"]').text()).toBe('Waiting');
+        expect(closedMarketStockRow.get('[aria-label="DOWN live update activity status"]').text()).toBe('Inactive');
+        expect(closedMarketStockRow.get('[aria-label="DOWN live update activity status"]').classes()).toContain('text-error');
+        wrapper.vm.holdings.find((holding) => holding.id === 4).latest_price = '190.000000';
+        wrapper.vm.holdings.find((holding) => holding.id === 4).latest_price_trend = 'down';
+        await wrapper.vm.$nextTick();
+        expect(closedMarketStockRow.get('.latest-price-value').classes()).not.toContain('bg-error');
+        expect(closedMarketStockRow.get('.latest-price-value').classes()).not.toContain('text-white');
+        expect(closedMarketStockRow.get('.latest-price-value').classes()).toContain('text-error');
+        wrapper.vm.holdings.find((holding) => holding.id === 4).latest_price_trend = 'up';
+        await wrapper.vm.$nextTick();
+        expect(closedMarketStockRow.get('.latest-price-value').classes()).toContain('text-success');
+        expect(closedMarketStockRow.get('.latest-price-value').classes()).not.toContain('text-error');
+        expect(buyStockRow.find('.watch-list-live-badge').exists()).toBe(false);
+        expect(usStockRow.get('[aria-label="EXXX live update activity status"]').text()).toBe('Active');
         expect(stocksTable.findAll('thead th').map((heading) => heading.text())).not.toContain('Actions');
         expect(stocksTable.find('[aria-label="Delete stock"]').exists()).toBe(false);
         expect(appleStockRow.attributes('aria-selected')).toBe('false');
@@ -4862,6 +5020,63 @@ describe('App', () => {
         expect(appleStockRow.attributes('aria-selected')).toBe('true');
         expect(appleStockRow.classes()).toContain('stock-holding-row--selected');
         expect(stocksDeleteButton.attributes('disabled')).toBeUndefined();
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/admin/watchlist/holdings?page=1&include_charts=1&all=1&chart_stock_id=1&chart_range=today',
+            expect.any(Object),
+        );
+        const stockPriceCard = wrapper.get('.stock-price-inline-card');
+        const appleStockChartRow = appleStockRow.element.nextElementSibling;
+        expect(appleStockChartRow).not.toBeNull();
+        expect(appleStockChartRow.classList.contains('stock-price-chart-row')).toBe(true);
+        expect(appleStockChartRow.style.display).not.toBe('none');
+        expect(appleStockChartRow.querySelector('.stock-price-inline-card')).not.toBeNull();
+        expect(stockPriceCard.text()).toContain('Apple');
+        expect(stockPriceCard.text()).toContain('Actual price');
+        expect(stockPriceCard.text()).toContain('Evolution');
+        expect(stockPriceCard.text()).toContain("Previous trading day's close to latest available price.");
+        expect(stockPriceCard.findAll('.stock-price-range-tabs .v-tab').map((tab) => tab.text())).toEqual([
+            'Intraday',
+            '1 week',
+            '1 month',
+            '6 month',
+            '1 year',
+        ]);
+        expect(stockPriceCard.find('.stock-price-range-tabs .v-tab--selected').text()).toBe('Intraday');
+        expect(stockPriceCard.find('.stock-price-chart-line').exists()).toBe(true);
+        expect(stockPriceCard.get('.stock-price-chart-line').classes()).toContain('stock-price-chart-line--positive');
+        expect(stockPriceCard.findAll('.stock-price-chart-point').length).toBeGreaterThan(2);
+        expect(stockPriceCard.findAll('.stock-price-chart-x-label').at(0).text()).toBe('04.06');
+        expect(stockPriceCard.get('.index-price-chart-endpoint-label--start').text()).toContain('Previous close 299.50');
+
+        const oneWeekStockTab = stockPriceCard.findAll('.stock-price-range-tabs .v-tab')
+            .find((tab) => tab.text() === '1 week');
+        await oneWeekStockTab.trigger('click');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/admin/watchlist/holdings?page=1&include_charts=1&all=1&chart_stock_id=1&chart_range=1w',
+            expect.any(Object),
+        );
+        expect(wrapper.get('.stock-price-range-tabs .v-tab--selected').text()).toBe('1 week');
+
+        const sixMonthStockTab = wrapper.findAll('.stock-price-range-tabs .v-tab')
+            .find((tab) => tab.text() === '6 month');
+        await sixMonthStockTab.trigger('click');
+        await flushPromises();
+
+        expect(wrapper.get('.stock-price-range-tabs .v-tab--selected').text()).toBe('6 month');
+        expect(wrapper.find('.stock-price-chart-line').exists()).toBe(true);
+        expect(wrapper.findAll('.stock-price-chart-point')).toHaveLength(0);
+
+        const oneYearStockTab = wrapper.findAll('.stock-price-range-tabs .v-tab')
+            .find((tab) => tab.text() === '1 year');
+        await oneYearStockTab.trigger('click');
+        await flushPromises();
+
+        expect(wrapper.get('.stock-price-range-tabs .v-tab--selected').text()).toBe('1 year');
+        expect(wrapper.find('.stock-price-chart-line').exists()).toBe(true);
+        expect(wrapper.get('.stock-price-chart-line').classes()).toContain('stock-price-chart-line--positive');
+        expect(wrapper.findAll('.stock-price-chart-point')).toHaveLength(0);
 
         await appleStockRow.trigger('click');
         await flushPromises();
@@ -4869,18 +5084,105 @@ describe('App', () => {
         expect(appleStockRow.attributes('aria-selected')).toBe('false');
         expect(appleStockRow.classes()).not.toContain('stock-holding-row--selected');
         expect(stocksDeleteButton.attributes('disabled')).toBeDefined();
+        expect(wrapper.find('.stock-price-inline-card').exists()).toBe(false);
+        expect(appleStockRow.element.nextElementSibling?.style.display).toBe('none');
+
+        await closedMarketStockRow.trigger('click');
+        await flushPromises();
+
+        const closedMarketOneYearTab = wrapper.findAll('.stock-price-range-tabs .v-tab')
+            .find((tab) => tab.text() === '1 year');
+        await closedMarketOneYearTab.trigger('click');
+        await flushPromises();
+
+        expect(wrapper.get('.stock-price-chart-line').classes()).toContain('stock-price-chart-line--negative');
+
+        await closedMarketStockRow.trigger('click');
+        await flushPromises();
 
         await appleStockRow.trigger('click');
         await flushPromises();
 
         const automaticStockUpdates = wrapper.get('[aria-label="Automatic stock EODHD updates"]');
-        expect(automaticStockUpdates.text()).toContain('Current stock update schedule');
-        expect(automaticStockUpdates.text()).toContain('Latest update');
-        expect(automaticStockUpdates.text()).toContain('02.06.2026');
-        expect(automaticStockUpdates.text()).toContain('14:20');
-        expect(automaticStockUpdates.text()).toContain('Next automatic update');
-        expect(automaticStockUpdates.text()).toContain('Stored schedule');
-        expect(automaticStockUpdates.text()).toContain('20 min');
+        const stockRealtimeSchedule = automaticStockUpdates.get('[aria-label="Stock realtime schedule"]');
+        const stockRealtimeScheduleClasses = stockRealtimeSchedule.attributes('class');
+        expect(stockRealtimeSchedule.get('.text-body-2.font-weight-bold').text()).toBe('Automatic EODHD updates');
+        expect(stockRealtimeSchedule.text()).toContain('start 5 min before trading until 10 min after trading · 20 min · closed: off');
+        const stockRefreshExchangeWindows = stockRealtimeSchedule.get('.stock-refresh-exchange-windows');
+        expect(stockRefreshExchangeWindows.text()).toContain(
+            'US (America/New_York): trading 15:30–22:00 Europe/Vienna'
+                + ' → refresh 15:25–22:10 Europe/Vienna.',
+        );
+        expect(stockRefreshExchangeWindows.text()).toContain(
+            'XETR (Europe/Berlin): trading 09:00–17:30 Europe/Vienna'
+                + ' → refresh 08:55–17:40 Europe/Vienna.',
+        );
+        expect(stockRefreshExchangeWindows.text()).not.toContain('Tradegate');
+        expect(automaticStockUpdates.find('[aria-label="Stock live update schedule status"]').exists()).toBe(false);
+        expect(automaticStockUpdates.find('[aria-label="Stock live update activity status"]').exists()).toBe(false);
+        wrapper.vm.liveDataStatusNow = Date.parse('2026-03-20T12:00:00+01:00');
+        await wrapper.vm.$nextTick();
+        expect(stockRefreshExchangeWindows.text()).toContain(
+            'US (America/New_York): trading 14:30–21:00 Europe/Vienna'
+                + ' → refresh 14:25–21:10 Europe/Vienna.',
+        );
+        expect(usStockRow.get('[aria-label="EXXX live update schedule status"]').text()).toBe('Waiting');
+        expect(usStockRow.get('[aria-label="EXXX live update activity status"]').text()).toBe('Inactive');
+        wrapper.vm.liveDataStatusNow = Date.parse('2026-08-06T18:49:00+02:00');
+        await wrapper.vm.$nextTick();
+        expect(usStockRow.get('[aria-label="EXXX live update schedule status"]').text()).toBe('Scheduled');
+        expect(usStockRow.get('[aria-label="EXXX live update activity status"]').text()).toBe('Active');
+        expect(stockRealtimeSchedule.text()).toContain('No job is running; the next refresh starts at the time shown below.');
+        expect(stockRealtimeSchedule.text()).toContain('Latest 06.08.2026, 18:49');
+        expect(stockRealtimeSchedule.text()).toContain('Next 06.08.2026, 18:59');
+        expect(stockRealtimeSchedule.text()).toContain('Europe/Vienna');
+        const editStockLivePeriodButton = stockRealtimeSchedule.get('button');
+        expect(editStockLivePeriodButton.text()).toBe('Edit live period');
+        expect(editStockLivePeriodButton.classes()).toContain('v-btn--variant-text');
+
+        await editStockLivePeriodButton.trigger('click');
+        await flushPromises();
+
+        const stockLiveScheduleDialog = document.body.querySelector('.stock-live-schedule-dialog');
+        expect(stockLiveScheduleDialog.textContent).toContain('Edit live/realtime update period');
+        expect(stockLiveScheduleDialog.textContent).toContain(
+            'Refreshes each stock from EODHD around its stored trading hours.',
+        );
+        expect(stockLiveScheduleDialog.textContent).toContain('Every (minutes)');
+        expect(stockLiveScheduleDialog.textContent).toContain('Start before (minutes)');
+        expect(stockLiveScheduleDialog.textContent).toContain('End after (minutes)');
+        expect(stockLiveScheduleDialog.textContent).toContain('Also refresh while markets are closed');
+        wrapper.vm.liveDataUpdateScheduleForm.trading_interval_minutes = 12;
+        wrapper.vm.liveDataUpdateScheduleForm.trading_starts_before_minutes = 45;
+        wrapper.vm.liveDataUpdateScheduleForm.trading_ends_after_minutes = 30;
+        wrapper.vm.liveDataUpdateScheduleForm.closed_refresh_enabled = true;
+        wrapper.vm.liveDataUpdateScheduleForm.closed_interval_minutes = 90;
+        await wrapper.vm.$nextTick();
+
+        const saveStockLiveScheduleButton = Array.from(stockLiveScheduleDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.trim() === 'Save live schedule');
+        saveStockLiveScheduleButton.click();
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/price-refresh-settings', expect.objectContaining({
+            method: 'PATCH',
+            body: JSON.stringify({
+                trading_interval_minutes: 12,
+                trading_starts_before_minutes: 45,
+                trading_ends_after_minutes: 30,
+                trading_start_time: null,
+                trading_end_time: null,
+                closed_refresh_enabled: true,
+                closed_interval_minutes: 90,
+            }),
+        }));
+        expect(stockRealtimeSchedule.text()).toContain(
+            'start 45 min before trading until 30 min after trading · 12 min · closed: every 90 min',
+        );
+        expect(stockRefreshExchangeWindows.text()).toContain(
+            'NASDAQ (Europe/Berlin): trading 08:00–22:00 Europe/Vienna'
+                + ' → refresh 07:15–22:30 Europe/Vienna.',
+        );
 
         await stocksAddButton.trigger('click');
         await flushPromises();
@@ -4902,13 +5204,27 @@ describe('App', () => {
         expect(wrapper.find('[aria-label="Indices"]').exists()).toBe(true);
         expect(wrapper.find('.watch-list-section').exists()).toBe(false);
         const automaticUpdatesCard = wrapper.get('[aria-label="Automatic v2 index updates"]');
-        expect(automaticUpdatesCard.text()).toContain('V2 schedules for daily, intraday, and live index data');
-        expect(automaticUpdatesCard.text()).toContain('EOD + 5-minute intraday run times');
+        const eodAndIntradaySchedule = automaticUpdatesCard.get('[aria-label="V2 index EOD and intraday schedule"]');
+        const realtimeSchedule = automaticUpdatesCard.get('[aria-label="V2 index realtime schedule"]');
+        expect(stockRealtimeScheduleClasses).toBe(realtimeSchedule.attributes('class'));
+        expect(eodAndIntradaySchedule.attributes('class')).toBe(realtimeSchedule.attributes('class'));
+        expect(eodAndIntradaySchedule.get('.text-body-2.font-weight-bold').text()).toBe('Automatic EODHD updates');
+        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update schedule status"]').text()).toBe('Waiting');
+        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update activity status"]').text()).toBe('Inactive');
+        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update activity status"]').classes()).toContain('text-error');
+        expect(realtimeSchedule.get('.text-body-2.font-weight-bold').text()).toBe('Live/realtime prices');
+        expect(eodAndIntradaySchedule.get('.v-chip').classes()).toContain('v-chip--size-x-small');
+        expect(realtimeSchedule.find('.v-chip').exists()).toBe(false);
+        expect(eodAndIntradaySchedule.get('.v-btn').classes()).toContain('v-btn--variant-text');
+        expect(realtimeSchedule.get('.v-btn').classes()).toContain('v-btn--variant-text');
+        expect(automaticUpdatesCard.text()).toContain('EOD + 5-minute intraday run times · 02:00 · 18:30');
+        expect(automaticUpdatesCard.text()).toContain('No job is running; the next update starts at the time shown below.');
         expect(automaticUpdatesCard.text()).toContain('Live/realtime prices');
-        expect(automaticUpdatesCard.text()).toContain('Scheduled');
+        expect(realtimeSchedule.find('[aria-label="Index live update schedule status"]').exists()).toBe(false);
+        expect(realtimeSchedule.find('[aria-label="Index live update activity status"]').exists()).toBe(false);
         expect(automaticUpdatesCard.text()).toContain('No job is running; the next refresh starts at the time shown below.');
         expect(automaticUpdatesCard.text()).toContain('start 15 min before trading until 20 min after trading · 30 min · closed: off');
-        expect(automaticUpdatesCard.text()).toContain('Latest update');
+        expect(eodAndIntradaySchedule.text()).toContain('Latest 05.08.2026, 09:45');
         expect(automaticUpdatesCard.text()).toContain('05.08.2026');
         expect(automaticUpdatesCard.text()).toContain('09:45');
         expect(automaticUpdatesCard.text()).toContain('02:00');
@@ -4984,6 +5300,9 @@ describe('App', () => {
         expect(wrapper.get('.index-eodhd-sync-checklist').text()).toContain('checking');
         expect(wrapper.get('.index-eodhd-sync-card').text()).toContain('6 / 8 steps processed');
         expect(wrapper.get('.index-eodhd-sync-card').text()).toContain('Estimated remaining: about 2 minutes');
+        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update schedule status"]').text()).toBe('Updating indices');
+        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update activity status"]').text()).toBe('Active');
+        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update activity status"]').classes()).toContain('text-success');
 
         await wrapper.vm.pollIndexEodhdSync('index-eodhd-test');
         await flushPromises();
@@ -5010,6 +5329,8 @@ describe('App', () => {
         expect(syncCard.text()).toContain('Block 1/4: 2026-07-01 – 2026-07-30');
         expect(syncCard.text()).toContain('3 attempt(s), 0 returned, 0 new');
         expect(automaticUpdatesCard.text()).toContain('10:30');
+        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update schedule status"]').text()).toBe('Waiting');
+        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update activity status"]').text()).toBe('Inactive');
 
         await wrapper.get('[aria-label="Close EODHD synchronization result"]').trigger('click');
         await flushPromises();
@@ -5064,6 +5385,36 @@ describe('App', () => {
         expect(indexWatchStrip.text()).toContain('DAX Index');
         expect(indexWatchStrip.text()).toContain('+0.33%');
         expect(indexWatchStrip.text()).toContain('6,116.53');
+        wrapper.vm.indexEodhdSyncSettings.realtime.closed_refresh_enabled = false;
+        wrapper.vm.liveDataStatusNow = Date.parse('2026-08-06T18:40:00+02:00');
+        wrapper.vm.indexWatchItems.push({
+            id: 2,
+            symbol: 'DJI',
+            name: 'Dow Jones Industrial Average',
+            exchange: 'INDX',
+            country: 'USA',
+            trading_times: 'Monday-Friday 09:30-16:00 America/New_York',
+            latest_price: '44500.00',
+            latest_price_change_pct: '0.20',
+            recent_prices: [],
+        });
+        await wrapper.vm.$nextTick();
+
+        const daxIndexCard = wrapper.findAll('.index-watch-card')
+            .find((card) => card.text().includes('DAX Index'));
+        const djiIndexCard = wrapper.findAll('.index-watch-card')
+            .find((card) => card.text().includes('Dow Jones Industrial Average'));
+        expect(daxIndexCard.get('[aria-label="DAX live update schedule status"]').text()).toBe('Waiting');
+        expect(daxIndexCard.get('[aria-label="DAX live update activity status"]').text()).toBe('Inactive');
+        expect(daxIndexCard.get('[aria-label="DAX live update activity status"]').classes()).toContain('text-error');
+        expect(djiIndexCard.get('[aria-label="DJI live update schedule status"]').text()).toBe('Scheduled');
+        expect(djiIndexCard.get('[aria-label="DJI live update activity status"]').text()).toBe('Active');
+        expect(djiIndexCard.get('[aria-label="DJI live update activity status"]').classes()).toContain('text-success');
+        wrapper.vm.indexWatchItems.splice(
+            wrapper.vm.indexWatchItems.findIndex((indexItem) => indexItem.id === 2),
+            1,
+        );
+        await wrapper.vm.$nextTick();
         expect(wrapper.find('.index-watch-card').text()).not.toContain('2026-06-07');
         expect(wrapper.find('.index-watch-card').text()).not.toContain('DE0008469008');
         expect(wrapper.find('.index-add-tile').exists()).toBe(false);
@@ -5090,11 +5441,18 @@ describe('App', () => {
         expect(wrapper.find('.index-price-range-tabs .v-tab--selected').text()).toBe('Intraday');
         expect(wrapper.find('.index-price-inline-card').text()).toContain('Actual price');
         expect(wrapper.find('.index-price-inline-card').text()).toContain('Evolution');
-        expect(wrapper.find('.index-price-inline-card').text()).toContain('Current day: opening price to latest available price.');
+        expect(wrapper.find('.index-price-inline-card').text()).toContain("Previous trading day's close to latest available price.");
         expect(wrapper.find('.index-price-chart-date-range').text()).toBe('07.06.2026');
         expect(wrapper.find('.index-price-chart-date-range').classes()).toContain('text-h6');
-        expect(wrapper.findAll('.index-price-chart-point')).toHaveLength(2);
-        expect(wrapper.findAll('.index-price-chart-x-label').map((label) => label.text())).toEqual(['Start', 'Latest']);
+        expect(wrapper.get('.index-price-chart-line').classes()).toContain('index-price-chart-line--positive');
+        expect(wrapper.findAll('.index-price-chart-point')).toHaveLength(4);
+        expect(wrapper.findAll('.index-price-chart-x-label').map((label) => label.text())).toEqual([
+            'Previous close',
+            '09:20',
+            '11:00',
+            '13:45',
+        ]);
+        expect(wrapper.get('.index-price-chart-endpoint-label--start').text()).toContain('Previous close 6,096.17');
 
         const intradayRequestCount = fetchMock.mock.calls
             .filter(([path]) => path === '/admin/index-watch-items/1/prices/ensure?range=intraday').length;
@@ -5122,6 +5480,7 @@ describe('App', () => {
         expect(wrapper.find('.index-price-range-tabs .v-tab--selected').text()).toBe('1 month');
         expect(wrapper.find('.index-price-chart-date-range').text()).toBe('09.05.2026 – 07.06.2026');
         expect(wrapper.find('.index-price-chart-line').exists()).toBe(true);
+        expect(wrapper.get('.index-price-chart-line').classes()).toContain('index-price-chart-line--positive');
         expect(wrapper.find('.index-price-chart-trend-line').exists()).toBe(true);
         expect(Number(wrapper.find('.index-price-chart-trend-line').attributes('x2'))).toBeGreaterThan(
             Number(wrapper.find('.index-price-chart-trend-line').attributes('x1')),
@@ -5137,6 +5496,26 @@ describe('App', () => {
         expect(Number(wrapper.find('.index-price-chart-endpoint-label--latest').attributes('y'))).toBeLessThan(70);
         expect(wrapper.find('.index-price-inline-card').text()).toContain('6,116.53');
         expect(wrapper.find('.index-price-inline-card').text()).toContain('09.05');
+
+        const sixMonthTab = wrapper.findAll('.index-price-range-tabs .v-tab')
+            .find((tab) => tab.text() === '6 month');
+        await sixMonthTab.trigger('click');
+        await flushPromises();
+
+        expect(wrapper.find('.index-price-range-tabs .v-tab--selected').text()).toBe('6 month');
+        expect(wrapper.find('.index-price-chart-line').exists()).toBe(true);
+        expect(wrapper.findAll('.index-price-chart-point')).toHaveLength(0);
+
+        const oneYearTab = wrapper.findAll('.index-price-range-tabs .v-tab')
+            .find((tab) => tab.text() === '1 year');
+        indexChartDirection = 'down';
+        await oneYearTab.trigger('click');
+        await flushPromises();
+
+        expect(wrapper.find('.index-price-range-tabs .v-tab--selected').text()).toBe('1 year');
+        expect(wrapper.find('.index-price-chart-line').exists()).toBe(true);
+        expect(wrapper.get('.index-price-chart-line').classes()).toContain('index-price-chart-line--negative');
+        expect(wrapper.findAll('.index-price-chart-point')).toHaveLength(0);
         expect(deleteIndexAction.attributes('disabled')).toBeUndefined();
 
         await deleteIndexAction.trigger('click');

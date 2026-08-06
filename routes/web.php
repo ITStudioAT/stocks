@@ -19,6 +19,7 @@ use App\Http\Controllers\AdminUiPreferencesController;
 use App\Http\Controllers\AdminUserController;
 use App\Http\Controllers\AdminV2IndexEodhdSyncController;
 use App\Http\Controllers\AdminV2IndexEodhdSyncSettingsController;
+use App\Http\Controllers\AdminV2IndexRealtimeSyncController;
 use App\Models\Depot;
 use App\Models\DepotTransaction;
 use App\Models\IndexWatchItem;
@@ -181,6 +182,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::get('/admin/v2/indices/eodhd-sync/{indexEodhdSyncRun}', [AdminV2IndexEodhdSyncController::class, 'show'])->name('admin.v2.indices.eodhdSync.show');
     Route::get('/admin/v2/indices/eodhd-sync-settings', [AdminV2IndexEodhdSyncSettingsController::class, 'show'])->name('admin.v2.indices.eodhdSyncSettings.show');
     Route::patch('/admin/v2/indices/eodhd-sync-settings', [AdminV2IndexEodhdSyncSettingsController::class, 'update'])->name('admin.v2.indices.eodhdSyncSettings.update');
+    Route::post('/admin/v2/indices/realtime-sync', [AdminV2IndexRealtimeSyncController::class, 'store'])->name('admin.v2.indices.realtimeSync.store');
     Route::post('/admin/watchlist/holdings/refresh-prices', [AdminDepotHoldingController::class, 'refreshPrices'])->name('admin.watchlist.holdings.refresh-prices');
     Route::get('/admin/watchlist/holdings/refresh-prices/{refreshId}', [AdminDepotHoldingController::class, 'refreshPriceStatus'])->name('admin.watchlist.holdings.refresh-prices.status');
     Route::get('/admin/queue/status', [AdminQueueStatusController::class, 'show'])->name('admin.queue.status');

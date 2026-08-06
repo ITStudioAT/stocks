@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\IndexWatchItem;
 use App\Models\IndexWatchItemPrice;
+use App\Models\IndexWatchItemRealtimePrice;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -199,10 +200,83 @@ class AdminIndexWatchItemTest extends TestCase
                 ->assertOk()
                 ->assertJsonPath('range', 'intraday')
                 ->assertJsonCount(1, 'index.recent_prices')
+                ->assertJsonCount(1, 'index.realtime_prices')
                 ->assertJsonPath('index.recent_prices.0.trading_date', '2026-07-03')
-                ->assertJsonPath('index.recent_prices.0.actual_price', '6497.140100');
+                ->assertJsonPath('index.recent_prices.0.actual_price', '6497.140100')
+                ->assertJsonPath('index.realtime_prices.0.price', '6497.140100')
+                ->assertJsonPath('index.realtime_prices.0.as_of', '2026-07-03T17:30:00+02:00')
+                ->assertJsonPath('index.latest_price_as_of', '2026-07-03T17:30:00+02:00')
+                ->assertJsonPath('index.trading_times', 'Monday-Friday 09:00:00-17:30:00 Europe/Vienna');
 
             Http::assertSent(fn ($request): bool => str_contains($request->url(), '/api/real-time/ATX.INDX'));
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_index_realtime_refreshes_retain_distinct_quotes_and_deduplicate_provider_timestamps(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-08-06 15:57:00', 'Europe/Vienna'));
+
+        try {
+            config(['services.eodhd.key' => 'test-token']);
+            Http::fake([
+                'eodhd.com/api/real-time/ATX.INDX*' => Http::sequence()
+                    ->push([
+                        'code' => 'ATX.INDX',
+                        'timestamp' => Carbon::parse('2026-08-06 13:21:00', 'UTC')->timestamp,
+                        'open' => 6704.05,
+                        'close' => 6735.11,
+                        'previousClose' => 6703.90,
+                        'change_p' => 0.47,
+                        'currency' => 'EUR',
+                    ])
+                    ->push([
+                        'code' => 'ATX.INDX',
+                        'timestamp' => Carbon::parse('2026-08-06 13:41:00', 'UTC')->timestamp,
+                        'open' => 6704.05,
+                        'close' => 6745.64,
+                        'previousClose' => 6703.90,
+                        'change_p' => 0.62,
+                        'currency' => 'EUR',
+                    ])
+                    ->push([
+                        'code' => 'ATX.INDX',
+                        'timestamp' => Carbon::parse('2026-08-06 13:41:00', 'UTC')->timestamp,
+                        'open' => 6704.05,
+                        'close' => 6746.00,
+                        'previousClose' => 6703.90,
+                        'change_p' => 0.63,
+                        'currency' => 'EUR',
+                    ]),
+            ]);
+            $index = IndexWatchItem::factory()->create([
+                'symbol' => 'ATX',
+                'exchange' => 'INDX',
+                'mic_code' => null,
+                'country' => 'Austria',
+            ]);
+            $admin = $this->adminUser();
+
+            $this->actingAs($admin)->postJson("/admin/index-watch-items/{$index->id}/prices/ensure?range=intraday")->assertOk();
+            $this->actingAs($admin)->postJson("/admin/index-watch-items/{$index->id}/prices/ensure?range=intraday")->assertOk();
+            $response = $this->actingAs($admin)
+                ->postJson("/admin/index-watch-items/{$index->id}/prices/ensure?range=intraday")
+                ->assertOk()
+                ->assertJsonCount(2, 'index.realtime_prices')
+                ->assertJsonPath('index.realtime_prices.0.price', '6746.000000')
+                ->assertJsonPath('index.realtime_prices.0.as_of', '2026-08-06T15:41:00+02:00')
+                ->assertJsonPath('index.realtime_prices.1.price', '6735.110000')
+                ->assertJsonPath('index.realtime_prices.1.as_of', '2026-08-06T15:21:00+02:00')
+                ->assertJsonPath('index.latest_price_as_of', '2026-08-06T15:41:00+02:00')
+                ->assertJsonPath('index.trading_times', 'Monday-Friday 09:00:00-17:30:00 Europe/Vienna');
+
+            $this->assertDatabaseCount('index_watch_item_prices', 1);
+            $this->assertDatabaseCount('index_watch_item_realtime_prices', 2);
+            $latestRealtimePrice = IndexWatchItemRealtimePrice::query()->latest('as_of')->firstOrFail();
+
+            $this->assertSame('2026-08-06 13:41:00', $latestRealtimePrice->getRawOriginal('as_of'));
+            $this->assertSame('6746.000000', $response->json('index.realtime_prices.0.price'));
         } finally {
             Carbon::setTestNow();
         }

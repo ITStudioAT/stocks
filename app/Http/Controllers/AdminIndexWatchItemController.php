@@ -4,9 +4,11 @@ namespace App\Http\Controllers;
 
 use App\Models\IndexWatchItem;
 use App\Models\IndexWatchItemPrice;
+use App\Models\IndexWatchItemRealtimePrice;
 use App\Services\EodhdApiUsage;
 use App\Services\IndexWatchItemPriceRefresher;
 use App\Services\KnownInstrumentMetadataCorrections;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
@@ -164,7 +166,7 @@ class AdminIndexWatchItemController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, eodhd_code: string, start_price: ?string, latest_price: ?string, last_price: ?string, latest_price_change_pct: ?string, latest_price_as_of: ?string, latest_price_source: ?string, trading_times: ?string, recent_prices: array<int, array{trading_date: ?string, start_price: ?string, actual_price: ?string, last_price: ?string, actual_price_as_of: ?string, last_price_as_of: ?string}>, created_at: ?string}
+     * @return array{id: int, symbol: string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, eodhd_code: string, start_price: ?string, latest_price: ?string, last_price: ?string, latest_price_change_pct: ?string, latest_price_as_of: ?string, latest_price_source: ?string, trading_times: ?string, recent_prices: array<int, array{trading_date: ?string, start_price: ?string, actual_price: ?string, last_price: ?string, actual_price_as_of: ?string, last_price_as_of: ?string}>, realtime_prices: array<int, array{trading_date: ?string, price: ?string, as_of: ?string}>, created_at: ?string}
      */
     private function indexWatchItemPayload(
         IndexWatchItem $item,
@@ -174,6 +176,16 @@ class AdminIndexWatchItemController extends Controller
             ->orderByDesc('trading_date')
             ->limit($priceLimit)
             ->get();
+        $latestRealtimeTradingDate = $item->realtimePrices()
+            ->orderByDesc('trading_date')
+            ->value('trading_date');
+        $realtimePrices = $latestRealtimeTradingDate
+            ? $item->realtimePrices()
+                ->whereDate('trading_date', $latestRealtimeTradingDate)
+                ->orderByDesc('as_of')
+                ->orderByDesc('id')
+                ->get(['id', 'trading_date', 'price', 'as_of'])
+            : collect();
 
         return [
             'id' => $item->id,
@@ -191,7 +203,7 @@ class AdminIndexWatchItemController extends Controller
             'latest_price' => $this->pricePayload($item->latest_price),
             'last_price' => $this->pricePayload($item->last_price),
             'latest_price_change_pct' => $this->percentPayload($this->latestPriceChangePercent($item, $recentPrices)),
-            'latest_price_as_of' => $item->latest_price_as_of?->toIso8601String(),
+            'latest_price_as_of' => $this->storedUtcTimestamp($item, 'latest_price_as_of'),
             'latest_price_source' => $item->latest_price_source,
             'trading_times' => $item->trading_times,
             'recent_prices' => $recentPrices
@@ -200,12 +212,37 @@ class AdminIndexWatchItemController extends Controller
                     'start_price' => $this->pricePayload($price->start_price),
                     'actual_price' => $this->pricePayload($price->actual_price),
                     'last_price' => $this->pricePayload($price->actual_price ?? $price->last_price),
-                    'actual_price_as_of' => $price->actual_price_as_of?->toIso8601String(),
-                    'last_price_as_of' => ($price->actual_price_as_of ?? $price->last_price_as_of)?->toIso8601String(),
+                    'actual_price_as_of' => $this->storedUtcTimestamp($price, 'actual_price_as_of'),
+                    'last_price_as_of' => $this->storedUtcTimestamp(
+                        $price,
+                        $price->getRawOriginal('actual_price_as_of') !== null
+                            ? 'actual_price_as_of'
+                            : 'last_price_as_of',
+                    ),
+                ])
+                ->all(),
+            'realtime_prices' => $realtimePrices
+                ->map(fn (IndexWatchItemRealtimePrice $price): array => [
+                    'trading_date' => $price->trading_date?->toDateString(),
+                    'price' => $this->pricePayload($price->price),
+                    'as_of' => $this->storedUtcTimestamp($price, 'as_of'),
                 ])
                 ->all(),
             'created_at' => $item->created_at?->toIso8601String(),
         ];
+    }
+
+    private function storedUtcTimestamp(Model $model, string $column): ?string
+    {
+        $value = $model->getRawOriginal($column);
+
+        if ($value === null || trim((string) $value) === '') {
+            return null;
+        }
+
+        return Carbon::parse((string) $value, 'UTC')
+            ->setTimezone(config('app.timezone', 'UTC'))
+            ->toIso8601String();
     }
 
     private function eodhdCode(IndexWatchItem $item): string

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\IndexWatchItem;
 use App\Models\IndexWatchItemPrice;
+use App\Models\IndexWatchItemRealtimePrice;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
@@ -79,6 +80,18 @@ class IndexWatchItemPriceRefresher
             'raw_payload' => $payload,
         ]);
 
+        $this->storeRealtimePrice(
+            $item,
+            $tradingDate,
+            $actualPrice ?? $lastPrice,
+            $startPrice,
+            $lastPrice,
+            $changePercent,
+            $this->stringOrNull(Arr::get($payload, 'currency')) ?? $item->currency,
+            $asOf,
+            $payload,
+        );
+
         $referencePrice = $lastPrice ?? $startPrice;
 
         $item->update([
@@ -101,10 +114,33 @@ class IndexWatchItemPriceRefresher
      */
     public function refreshAll(): array
     {
+        return $this->refreshItems(IndexWatchItem::query()->orderBy('id')->cursor());
+    }
+
+    /**
+     * @param  array<int, int>  $indexWatchItemIds
+     * @return array{requested_count: int, refreshed_count: int, failed_count: int}
+     */
+    public function refreshIds(array $indexWatchItemIds): array
+    {
+        return $this->refreshItems(
+            IndexWatchItem::query()
+                ->whereKey($indexWatchItemIds)
+                ->orderBy('id')
+                ->cursor(),
+        );
+    }
+
+    /**
+     * @param  iterable<int, IndexWatchItem>  $items
+     * @return array{requested_count: int, refreshed_count: int, failed_count: int}
+     */
+    private function refreshItems(iterable $items): array
+    {
         $requestedCount = 0;
         $refreshedCount = 0;
 
-        foreach (IndexWatchItem::query()->orderBy('id')->cursor() as $item) {
+        foreach ($items as $item) {
             $requestedCount++;
 
             if ($this->refresh($item)) {
@@ -237,6 +273,38 @@ class IndexWatchItemPriceRefresher
 
     /**
      * @param  array<string, mixed>  $payload
+     */
+    private function storeRealtimePrice(
+        IndexWatchItem $item,
+        string $tradingDate,
+        string $price,
+        ?string $startPrice,
+        ?string $previousClose,
+        ?string $changePercent,
+        ?string $currency,
+        Carbon $asOf,
+        array $payload,
+    ): void {
+        IndexWatchItemRealtimePrice::query()->updateOrCreate(
+            [
+                'index_watch_item_id' => $item->id,
+                'as_of' => $asOf->copy()->utc(),
+            ],
+            [
+                'trading_date' => $tradingDate,
+                'price' => $price,
+                'start_price' => $startPrice,
+                'previous_close' => $previousClose,
+                'change_percent' => $changePercent,
+                'currency' => $currency,
+                'source_name' => 'EODHD real-time',
+                'raw_payload' => $payload,
+            ],
+        );
+    }
+
+    /**
+     * @param  array<string, mixed>  $payload
      * @return array{trading_date: string, start_price: ?string, actual_price: ?string, last_price: ?string, actual_price_as_of: Carbon, last_price_as_of: Carbon, raw_payload: array<string, mixed>}|null
      */
     private function historicalDailyPriceData(array $payload, string $timezone): ?array
@@ -316,18 +384,14 @@ class IndexWatchItemPriceRefresher
 
     private function exchangeTimezone(IndexWatchItem $item): string
     {
-        $details = $this->marketData->exchangeDetailsForCode(
-            $this->marketData->exchangeCodeForIndexWatchItem($item),
-        );
+        $details = $this->marketData->exchangeDetailsForIndexWatchItem($item);
 
         return $details['timezone'] ?? config('app.timezone', 'UTC');
     }
 
     private function tradingTimes(IndexWatchItem $item): ?string
     {
-        $details = $this->marketData->exchangeDetailsForCode(
-            $this->marketData->exchangeCodeForIndexWatchItem($item),
-        );
+        $details = $this->marketData->exchangeDetailsForIndexWatchItem($item);
 
         if (! $details['open'] || ! $details['close']) {
             return $item->trading_times;

@@ -134,6 +134,84 @@ class V2IndexEodhdSyncScheduleTest extends TestCase
         Queue::assertPushed(SyncV2IndexRealtimeData::class, 1);
     }
 
+    public function test_admin_can_immediately_queue_an_overdue_v2_index_realtime_sync_once(): void
+    {
+        Queue::fake();
+        $this->travelTo(Carbon::parse('2026-08-05 10:01:00', 'Europe/Vienna'));
+        IndexWatchItem::factory()->create([
+            'trading_times' => '09:00 - 17:30 Europe/Vienna',
+        ]);
+        AppConfig::query()->create([
+            'key' => 'v2_index_realtime.schedule',
+            'value' => [
+                'trading_interval_minutes' => 5,
+                'trading_starts_before_minutes' => 0,
+                'trading_ends_after_minutes' => 0,
+                'closed_refresh_enabled' => false,
+                'closed_interval_minutes' => 60,
+                'timezone' => 'Europe/Vienna',
+                'last_dispatched_at' => '2026-08-05T09:55:00+02:00',
+                'last_refreshed_at' => '2026-08-05T09:55:00+02:00',
+                'last_finished_at' => '2026-08-05T09:55:00+02:00',
+                'last_error' => null,
+                'next_refresh_at' => '2026-08-05T10:00:00+02:00',
+            ],
+        ]);
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->postJson('/admin/v2/indices/realtime-sync')
+            ->assertAccepted()
+            ->assertJsonPath('queued', true)
+            ->assertJsonPath('index_eodhd_sync_settings.realtime.status', 'updating')
+            ->assertJsonPath('index_eodhd_sync_settings.realtime.next_refresh_at', '2026-08-05T10:06:00+02:00');
+
+        $this->actingAs($admin)
+            ->postJson('/admin/v2/indices/realtime-sync')
+            ->assertOk()
+            ->assertJsonPath('queued', false);
+
+        Queue::assertPushed(SyncV2IndexRealtimeData::class, 1);
+
+        $settings = AppConfig::query()->where('key', 'v2_index_realtime.schedule')->firstOrFail()->value;
+
+        $this->assertSame('2026-08-05T10:01:00+02:00', $settings['last_dispatched_at']);
+        $this->assertSame('2026-08-05T10:06:00+02:00', $settings['next_refresh_at']);
+    }
+
+    public function test_admin_cannot_queue_a_v2_index_realtime_sync_before_it_is_due(): void
+    {
+        Queue::fake();
+        $this->travelTo(Carbon::parse('2026-08-05 10:01:00', 'Europe/Vienna'));
+        IndexWatchItem::factory()->create([
+            'trading_times' => '09:00 - 17:30 Europe/Vienna',
+        ]);
+        AppConfig::query()->create([
+            'key' => 'v2_index_realtime.schedule',
+            'value' => [
+                'trading_interval_minutes' => 5,
+                'trading_starts_before_minutes' => 0,
+                'trading_ends_after_minutes' => 0,
+                'closed_refresh_enabled' => false,
+                'closed_interval_minutes' => 60,
+                'timezone' => 'Europe/Vienna',
+                'last_dispatched_at' => '2026-08-05T10:00:00+02:00',
+                'last_refreshed_at' => '2026-08-05T10:00:00+02:00',
+                'last_finished_at' => '2026-08-05T10:00:00+02:00',
+                'last_error' => null,
+                'next_refresh_at' => '2026-08-05T10:05:00+02:00',
+            ],
+        ]);
+
+        $this->actingAs($this->adminUser())
+            ->postJson('/admin/v2/indices/realtime-sync')
+            ->assertOk()
+            ->assertJsonPath('queued', false)
+            ->assertJsonPath('index_eodhd_sync_settings.realtime.status', 'scheduled');
+
+        Queue::assertNothingPushed();
+    }
+
     public function test_v2_index_realtime_status_explains_when_markets_are_closed(): void
     {
         $this->travelTo(Carbon::parse('2026-08-05 20:00:00', 'Europe/Vienna'));
@@ -147,6 +225,130 @@ class V2IndexEodhdSyncScheduleTest extends TestCase
             ->assertJsonPath('index_eodhd_sync_settings.realtime.status', 'market_closed')
             ->assertJsonPath('index_eodhd_sync_settings.realtime.status_label', 'Market closed')
             ->assertJsonPath('index_eodhd_sync_settings.realtime.status_detail', 'Closed-market refreshes are off; updates resume in the next trading window.');
+    }
+
+    public function test_v2_index_realtime_schedule_uses_the_us_market_timezone_after_europe_closes(): void
+    {
+        $this->travelTo(Carbon::parse('2026-08-06 18:40:00', 'Europe/Vienna'));
+        IndexWatchItem::factory()->create([
+            'symbol' => 'ATX',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
+        ]);
+        IndexWatchItem::factory()->create([
+            'symbol' => 'DJI',
+            'trading_times' => 'Monday-Friday 09:30-16:00 America/New_York',
+        ]);
+        AppConfig::query()->create([
+            'key' => 'v2_index_realtime.schedule',
+            'value' => [
+                'trading_interval_minutes' => 20,
+                'trading_starts_before_minutes' => 60,
+                'trading_ends_after_minutes' => 60,
+                'closed_refresh_enabled' => false,
+                'closed_interval_minutes' => 60,
+                'timezone' => 'Europe/Vienna',
+                'last_dispatched_at' => '2026-08-06T18:26:04+02:00',
+                'last_refreshed_at' => '2026-08-06T18:26:14+02:00',
+                'last_finished_at' => '2026-08-06T18:26:14+02:00',
+                'last_error' => null,
+                'next_refresh_at' => '2026-08-07T08:00:00+02:00',
+            ],
+        ]);
+
+        $payload = app(V2IndexRealtimeScheduler::class)->payload();
+
+        $this->assertTrue($payload['is_trading_time']);
+        $this->assertSame('scheduled', $payload['status']);
+        $this->assertSame('2026-08-06T18:46:14+02:00', $payload['next_refresh_at']);
+    }
+
+    public function test_v2_index_realtime_schedule_uses_the_earliest_asian_market_window(): void
+    {
+        $this->travelTo(Carbon::parse('2026-08-06 23:30:00', 'Europe/Vienna'));
+        IndexWatchItem::factory()->create([
+            'symbol' => 'ATX',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
+        ]);
+        IndexWatchItem::factory()->create([
+            'symbol' => '000001',
+            'trading_times' => 'Monday-Friday 09:30-15:00 Asia/Shanghai',
+        ]);
+        IndexWatchItem::factory()->create([
+            'symbol' => 'N225',
+            'trading_times' => 'Monday-Friday 09:00-15:30 Asia/Tokyo',
+        ]);
+        AppConfig::query()->create([
+            'key' => 'v2_index_realtime.schedule',
+            'value' => [
+                'trading_interval_minutes' => 20,
+                'trading_starts_before_minutes' => 60,
+                'trading_ends_after_minutes' => 60,
+                'closed_refresh_enabled' => false,
+                'closed_interval_minutes' => 60,
+                'timezone' => 'Europe/Vienna',
+                'last_dispatched_at' => '2026-08-06T18:26:04+02:00',
+                'last_refreshed_at' => '2026-08-06T18:26:14+02:00',
+                'last_finished_at' => '2026-08-06T18:26:14+02:00',
+                'last_error' => null,
+                'next_refresh_at' => '2026-08-07T08:00:00+02:00',
+            ],
+        ]);
+
+        $payload = app(V2IndexRealtimeScheduler::class)->payload();
+
+        $this->assertFalse($payload['is_trading_time']);
+        $this->assertSame('market_closed', $payload['status']);
+        $this->assertSame('2026-08-07T01:00:00+02:00', $payload['next_refresh_at']);
+    }
+
+    public function test_v2_index_realtime_sync_refreshes_only_indices_in_their_own_market_window(): void
+    {
+        $this->travelTo(Carbon::parse('2026-08-06 18:40:00', 'Europe/Vienna'));
+        IndexWatchItem::factory()->create([
+            'symbol' => 'ATX',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
+        ]);
+        $usIndex = IndexWatchItem::factory()->create([
+            'symbol' => 'DJI',
+            'trading_times' => 'Monday-Friday 09:30-16:00 America/New_York',
+        ]);
+        IndexWatchItem::factory()->create([
+            'symbol' => 'N225',
+            'trading_times' => 'Monday-Friday 09:00-15:30 Asia/Tokyo',
+        ]);
+        AppConfig::query()->create([
+            'key' => 'v2_index_realtime.schedule',
+            'value' => [
+                'trading_interval_minutes' => 20,
+                'trading_starts_before_minutes' => 60,
+                'trading_ends_after_minutes' => 60,
+                'closed_refresh_enabled' => false,
+                'closed_interval_minutes' => 60,
+                'timezone' => 'Europe/Vienna',
+                'last_dispatched_at' => null,
+                'last_refreshed_at' => null,
+                'last_finished_at' => null,
+                'last_error' => null,
+                'next_refresh_at' => '2026-08-06T18:40:00+02:00',
+            ],
+        ]);
+        $this->mock(IndexWatchItemPriceRefresher::class)
+            ->expects('refreshIds')
+            ->once()
+            ->with([$usIndex->id])
+            ->andReturn([
+                'requested_count' => 1,
+                'refreshed_count' => 1,
+                'failed_count' => 0,
+            ]);
+
+        $result = app(V2IndexRealtimeScheduler::class)->syncNow();
+
+        $this->assertSame([
+            'requested_count' => 1,
+            'refreshed_count' => 1,
+            'failed_count' => 0,
+        ], $result);
     }
 
     public function test_v2_index_realtime_status_explains_a_scheduled_refresh(): void
@@ -217,7 +419,7 @@ class V2IndexEodhdSyncScheduleTest extends TestCase
     {
         config()->set('queue.default', 'sync');
         $this->travelTo(Carbon::parse('2026-08-05 10:00:00', 'Europe/Vienna'));
-        IndexWatchItem::factory()->create([
+        $index = IndexWatchItem::factory()->create([
             'trading_times' => '09:00 - 17:30 Europe/Vienna',
         ]);
         AppConfig::query()->create([
@@ -237,8 +439,9 @@ class V2IndexEodhdSyncScheduleTest extends TestCase
             ],
         ]);
         $this->mock(IndexWatchItemPriceRefresher::class)
-            ->expects('refreshAll')
+            ->expects('refreshIds')
             ->once()
+            ->with([$index->id])
             ->andReturn([
                 'requested_count' => 1,
                 'refreshed_count' => 1,
@@ -354,6 +557,7 @@ class V2IndexEodhdSyncScheduleTest extends TestCase
     {
         $this->getJson('/admin/v2/indices/eodhd-sync-settings')->assertUnauthorized();
         $this->patchJson('/admin/v2/indices/eodhd-sync-settings', ['times' => ['08:00']])->assertUnauthorized();
+        $this->postJson('/admin/v2/indices/realtime-sync')->assertUnauthorized();
     }
 
     /**

@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\SyncIndexEodhdData;
+use App\Models\EodhdExchange;
 use App\Models\IndexEodhdSyncRun;
 use App\Models\IndexWatchItem;
 use App\Models\IndexWatchItemIntradayCandle;
@@ -523,7 +524,156 @@ class AdminV2IndexEodhdSyncTest extends TestCase
         }
     }
 
-    public function test_existing_history_with_one_empty_historical_gap_is_partial_not_unavailable(): void
+    public function test_official_exchange_holidays_are_excluded_from_intraday_coverage(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-04-08 21:00:00', 'Europe/Vienna'));
+        config(['services.eodhd.key' => 'test-token']);
+
+        try {
+            $index = IndexWatchItem::factory()->create([
+                'symbol' => 'IBEX',
+                'exchange' => 'INDX',
+                'country' => 'Spain',
+                'instrument_type' => 'INDEX',
+            ]);
+            EodhdExchange::query()->create([
+                'code' => 'MC',
+                'detail_code' => 'BMEX',
+                'name' => 'Madrid Exchange',
+                'country' => 'Spain',
+                'operating_mic' => 'BMEX',
+                'holidays' => [
+                    '2026-04-03' => [
+                        'Holiday' => 'Good Friday',
+                        'Type' => 'Official',
+                    ],
+                ],
+                'synced_at' => now(),
+            ]);
+
+            foreach (['2026-04-02', '2026-04-07'] as $tradingDate) {
+                IndexWatchItemPrice::query()->create([
+                    'index_watch_item_id' => $index->id,
+                    'trading_date' => $tradingDate,
+                    'start_price' => 13000,
+                    'actual_price' => 13100,
+                    'last_price' => 13100,
+                    'raw_payload' => ['volume' => 1000],
+                    'intraday_sync_status' => 'complete',
+                    'intraday_candle_count' => 1,
+                    'intraday_checked_at' => now(),
+                ]);
+                IndexWatchItemIntradayCandle::query()->create([
+                    'index_watch_item_id' => $index->id,
+                    'trading_date' => $tradingDate,
+                    'interval' => '5m',
+                    'as_of' => "{$tradingDate} 08:00:00",
+                    'timestamp' => Carbon::parse("{$tradingDate} 08:00:00", 'UTC')->timestamp,
+                    'open' => 13000,
+                    'high' => 13100,
+                    'low' => 12900,
+                    'close' => 13050,
+                ]);
+            }
+
+            Http::fake([
+                'eodhd.com/api/eod/IBEX.INDX*' => Http::response([
+                    ['date' => '2026-04-02', 'open' => 13000, 'close' => 13100, 'adjusted_close' => 13100, 'volume' => 1000],
+                    ['date' => '2026-04-03', 'open' => 13100, 'close' => 13100, 'adjusted_close' => 13100, 'volume' => 0],
+                    ['date' => '2026-04-07', 'open' => 13100, 'close' => 13200, 'adjusted_close' => 13200, 'volume' => 1000],
+                ]),
+                'eodhd.com/api/intraday/IBEX.INDX*' => Http::response([]),
+            ]);
+
+            $syncService = app(V2IndexEodhdSyncService::class);
+            $run = $syncService->createRun();
+            $syncService->run($run->id);
+            $run->refresh();
+
+            $this->assertSame('finished', $run->status, json_encode($run->summary));
+            $this->assertSame(0, $run->intraday_missing_count);
+            $this->assertSame(1, $run->summary['intraday']['market_closed_dates']);
+            $this->assertSame(2, $run->summary['indices'][0]['intraday']['expected_dates']);
+            $this->assertSame(2, $run->summary['indices'][0]['intraday']['verified_dates']);
+            $this->assertSame('market_closed', IndexWatchItemPrice::query()
+                ->whereDate('trading_date', '2026-04-03')
+                ->value('intraday_sync_status'));
+            $this->assertSame(
+                'Official exchange holiday; excluded from expected intraday trading dates.',
+                IndexWatchItemPrice::query()
+                    ->whereDate('trading_date', '2026-04-03')
+                    ->value('intraday_sync_message'),
+            );
+            $this->assertCount(
+                0,
+                Http::recorded(fn (Request $request): bool => str_contains($request->url(), '/intraday/IBEX.INDX')),
+            );
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_early_close_dates_remain_required_intraday_trading_dates(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-12-29 21:00:00', 'Europe/Vienna'));
+        config(['services.eodhd.key' => 'test-token']);
+
+        try {
+            $index = IndexWatchItem::factory()->create([
+                'symbol' => 'IBEX',
+                'exchange' => 'INDX',
+                'country' => 'Spain',
+                'instrument_type' => 'INDEX',
+            ]);
+            EodhdExchange::query()->create([
+                'code' => 'MC',
+                'detail_code' => 'BMEX',
+                'name' => 'Madrid Exchange',
+                'country' => 'Spain',
+                'operating_mic' => 'BMEX',
+                'holidays' => [
+                    '2026-12-24' => [
+                        'Holiday' => 'Christmas Eve',
+                        'Type' => 'EarlyClose',
+                        'EarlyClose' => '14:00:00',
+                    ],
+                ],
+                'synced_at' => now(),
+            ]);
+            $this->storeCompleteIntradayDate($index, '2026-12-23');
+            $this->storeCompleteIntradayDate($index, '2026-12-28');
+
+            Http::fake([
+                'eodhd.com/api/eod/IBEX.INDX*' => Http::response([
+                    ['date' => '2026-12-23', 'open' => 13000, 'close' => 13100, 'adjusted_close' => 13100, 'volume' => 1000],
+                    ['date' => '2026-12-24', 'open' => 13100, 'close' => 13150, 'adjusted_close' => 13150, 'volume' => 0],
+                    ['date' => '2026-12-28', 'open' => 13150, 'close' => 13200, 'adjusted_close' => 13200, 'volume' => 1000],
+                ]),
+                'eodhd.com/api/intraday/IBEX.INDX*' => Http::response([]),
+            ]);
+
+            $syncService = app(V2IndexEodhdSyncService::class);
+            $run = $syncService->createRun();
+            $syncService->run($run->id);
+            $run->refresh();
+
+            $this->assertSame('partial', $run->status);
+            $this->assertSame(1, $run->intraday_missing_count);
+            $this->assertSame(0, $run->summary['intraday']['market_closed_dates']);
+            $this->assertSame(['2026-12-24'], $run->summary['indices'][0]['intraday']['no_data_dates']);
+            $this->assertSame('no_data', IndexWatchItemPrice::query()
+                ->whereDate('trading_date', '2026-12-24')
+                ->value('intraday_sync_status'));
+            $this->assertCount(
+                3,
+                Http::recorded(fn (Request $request): bool => str_contains($request->url(), '/intraday/IBEX.INDX')),
+            );
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_existing_history_with_one_empty_zero_volume_date_is_treated_as_market_closure_in_the_same_run(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-08-05 21:00:00', 'Europe/Vienna'));
         config(['services.eodhd.key' => 'test-token']);
@@ -591,33 +741,19 @@ class AdminV2IndexEodhdSyncTest extends TestCase
             $syncService->run($run->id);
             $run->refresh();
 
-            $this->assertSame('partial', $run->status);
-            $this->assertSame(1, $run->intraday_missing_count);
+            $this->assertSame('finished', $run->status, json_encode($run->summary));
+            $this->assertSame(0, $run->intraday_missing_count);
             $this->assertSame(0, $run->unsupported_intraday_count);
-            $this->assertSame(1, $run->summary['intraday']['partial_indices']);
+            $this->assertSame(0, $run->summary['intraday']['partial_indices']);
             $this->assertSame(0, $run->summary['intraday']['no_data_indices']);
-            $this->assertSame('partial', $run->summary['indices'][0]['intraday']['status']);
-            $this->assertSame(['2026-02-23'], $run->summary['indices'][0]['intraday']['no_data_dates']);
-            $this->assertSame('partial', $run->index_progress[0]['intraday_sync']['status']);
-            $this->assertStringContainsString('Existing data was preserved', $run->index_progress[0]['intraday_sync']['message']);
-            $this->assertCount(
-                3,
-                Http::recorded(fn (Request $request): bool => str_contains($request->url(), '/intraday/N225.INDX')),
-            );
-
-            $secondRun = $syncService->createRun();
-            $syncService->run($secondRun->id);
-            $secondRun->refresh();
-
-            $this->assertSame('finished', $secondRun->status, json_encode([
-                'error' => $secondRun->error,
-                'message' => $secondRun->message,
-                'summary' => $secondRun->summary,
-            ]));
-            $this->assertSame(0, $secondRun->intraday_missing_count);
-            $this->assertSame(1, $secondRun->summary['intraday']['market_closed_dates']);
-            $this->assertSame(2, $secondRun->summary['indices'][0]['intraday']['expected_dates']);
-            $this->assertSame(2, $secondRun->summary['indices'][0]['intraday']['verified_dates']);
+            $this->assertSame(1, $run->summary['intraday']['market_closed_dates']);
+            $this->assertSame('finished', $run->summary['indices'][0]['intraday']['status']);
+            $this->assertSame(2, $run->summary['indices'][0]['intraday']['expected_dates']);
+            $this->assertSame(2, $run->summary['indices'][0]['intraday']['verified_dates']);
+            $this->assertSame('finished', $run->summary['indices'][0]['intraday']['blocks'][0]['status']);
+            $this->assertSame([], $run->summary['indices'][0]['intraday']['blocks'][0]['missing_dates']);
+            $this->assertSame('finished', $run->index_progress[0]['intraday_sync']['status']);
+            $this->assertSame('finished', $run->index_progress[0]['intraday_blocks'][0]['status']);
             $this->assertSame('market_closed', IndexWatchItemPrice::query()
                 ->whereDate('trading_date', '2026-02-23')
                 ->value('intraday_sync_status'));
@@ -988,6 +1124,32 @@ class AdminV2IndexEodhdSyncTest extends TestCase
         $user->assignRole('admin');
 
         return $user;
+    }
+
+    private function storeCompleteIntradayDate(IndexWatchItem $index, string $tradingDate): void
+    {
+        IndexWatchItemPrice::query()->create([
+            'index_watch_item_id' => $index->id,
+            'trading_date' => $tradingDate,
+            'start_price' => 13000,
+            'actual_price' => 13100,
+            'last_price' => 13100,
+            'raw_payload' => ['volume' => 1000],
+            'intraday_sync_status' => 'complete',
+            'intraday_candle_count' => 1,
+            'intraday_checked_at' => now(),
+        ]);
+        IndexWatchItemIntradayCandle::query()->create([
+            'index_watch_item_id' => $index->id,
+            'trading_date' => $tradingDate,
+            'interval' => '5m',
+            'as_of' => "{$tradingDate} 08:00:00",
+            'timestamp' => Carbon::parse("{$tradingDate} 08:00:00", 'UTC')->timestamp,
+            'open' => 13000,
+            'high' => 13100,
+            'low' => 12900,
+            'close' => 13050,
+        ]);
     }
 
     /**

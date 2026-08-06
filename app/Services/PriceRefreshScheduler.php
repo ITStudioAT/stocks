@@ -12,6 +12,12 @@ class PriceRefreshScheduler
 {
     private const ConfigKey = 'price_refresh.schedule';
 
+    private const UsTradingTimes = 'Monday-Friday 09:30-16:00 America/New_York';
+
+    private const UsExchangeCodes = ['US', 'NASDAQ', 'NYSE', 'AMEX'];
+
+    private const UsMicCodes = ['XNAS', 'XNYS', 'XASE', 'ARCX', 'BATS'];
+
     public function __construct(
         private DepotHoldingPriceRefreshDispatcher $dispatcher,
         private DepotHoldingPriceRefreshProgress $refreshProgress,
@@ -277,8 +283,14 @@ class PriceRefreshScheduler
     {
         $nextTradingStartsAt = null;
 
-        foreach (StockHolding::query()->whereNotNull('trading_times')->cursor() as $holding) {
-            $holdingTradingStartsAt = $this->nextTradingStartsAt((string) $holding->trading_times, $from, $settings);
+        foreach (StockHolding::query()->cursor() as $holding) {
+            $tradingTimes = $this->tradingTimesForHolding($holding);
+
+            if ($tradingTimes === null) {
+                continue;
+            }
+
+            $holdingTradingStartsAt = $this->nextTradingStartsAt($tradingTimes, $from, $settings);
 
             if ($holdingTradingStartsAt === null) {
                 continue;
@@ -339,9 +351,12 @@ class PriceRefreshScheduler
         $settings ??= $this->settings();
 
         return StockHolding::query()
-            ->whereNotNull('trading_times')
             ->cursor()
-            ->contains(fn (StockHolding $holding): bool => $this->isTradingTime((string) $holding->trading_times, $now, $settings));
+            ->contains(function (StockHolding $holding) use ($now, $settings): bool {
+                $tradingTimes = $this->tradingTimesForHolding($holding);
+
+                return $tradingTimes !== null && $this->isTradingTime($tradingTimes, $now, $settings);
+            });
     }
 
     /**
@@ -384,8 +399,9 @@ class PriceRefreshScheduler
             return null;
         }
 
-        $timezone = preg_match('/\bEurope\/[A-Za-z_]+\b/', $tradingTimes, $timezoneMatches)
-            ? $timezoneMatches[0]
+        $timezone = preg_match('/\b(?<timezone>[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+)+)\b/', $tradingTimes, $timezoneMatches)
+            && in_array($timezoneMatches['timezone'], timezone_identifiers_list(), true)
+            ? $timezoneMatches['timezone']
             : config('app.timezone', 'UTC');
 
         return [
@@ -393,6 +409,24 @@ class PriceRefreshScheduler
             'open_minute' => (((int) $matches['open_hour'] * 60) + (int) $matches['open_minute']) - $settings['trading_starts_before_minutes'],
             'close_minute' => (((int) $matches['close_hour'] * 60) + (int) $matches['close_minute']) + $settings['trading_ends_after_minutes'],
         ];
+    }
+
+    private function tradingTimesForHolding(StockHolding $holding): ?string
+    {
+        $tradingTimes = trim((string) $holding->trading_times);
+
+        if ($tradingTimes !== '') {
+            return $tradingTimes;
+        }
+
+        $exchange = strtoupper(trim((string) $holding->exchange));
+        $micCode = strtoupper(trim((string) $holding->mic_code));
+
+        if (in_array($exchange, self::UsExchangeCodes, true) || in_array($micCode, self::UsMicCodes, true)) {
+            return self::UsTradingTimes;
+        }
+
+        return null;
     }
 
     /**

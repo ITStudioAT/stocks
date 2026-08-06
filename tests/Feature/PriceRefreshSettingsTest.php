@@ -347,6 +347,51 @@ class PriceRefreshSettingsTest extends TestCase
             ->assertJsonPath('price_refresh_settings.next_refresh_at', '2026-06-05T08:00:00+02:00');
     }
 
+    public function test_us_holding_without_stored_trading_times_keeps_global_refresh_active(): void
+    {
+        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-08-06 18:34:00', 'Europe/Vienna'));
+        StockHolding::factory()->create([
+            'symbol' => 'AMES',
+            'exchange' => 'XETRA',
+            'mic_code' => 'XETR',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
+        ]);
+        StockHolding::factory()->create([
+            'symbol' => 'ARGT',
+            'exchange' => 'US',
+            'mic_code' => null,
+            'trading_times' => null,
+        ]);
+        AppConfig::query()->create([
+            'key' => 'price_refresh.schedule',
+            'value' => [
+                'trading_interval_minutes' => 10,
+                'trading_starts_before_minutes' => 60,
+                'trading_ends_after_minutes' => 60,
+                'closed_refresh_enabled' => false,
+                'closed_interval_minutes' => 120,
+                'last_refreshed_at' => '2026-08-06T18:29:00+02:00',
+                'next_refresh_at' => '2026-08-06T18:39:00+02:00',
+            ],
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/price-refresh-settings')
+            ->assertOk()
+            ->assertJsonPath('price_refresh_settings.is_trading_time', true)
+            ->assertJsonPath('price_refresh_settings.current_interval_minutes', 10)
+            ->assertJsonPath('price_refresh_settings.next_refresh_at', '2026-08-06T18:39:00+02:00');
+
+        $this->travelTo(Carbon::parse('2026-08-06 23:01:00', 'Europe/Vienna'));
+
+        $this->actingAs($admin)
+            ->getJson('/admin/price-refresh-settings')
+            ->assertOk()
+            ->assertJsonPath('price_refresh_settings.is_trading_time', false)
+            ->assertJsonPath('price_refresh_settings.next_refresh_at', '2026-08-07T08:00:00+02:00');
+    }
+
     public function test_due_price_refresh_command_runs_the_watchlist_realtime_sync(): void
     {
         config(['services.eodhd.key' => 'test-token']);

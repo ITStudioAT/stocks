@@ -700,6 +700,14 @@ export const useDepotStore = defineStore('depots', {
 
             return data;
         },
+        async dispatchDueIndexRealtimeSync() {
+            const data = await request('/admin/v2/indices/realtime-sync', {
+                method: 'POST',
+            });
+            this.indexEodhdSyncSettings = data.index_eodhd_sync_settings ?? this.indexEodhdSyncSettings;
+
+            return data;
+        },
         async updateIndexEodhdSyncSettings(payload) {
             const data = await request('/admin/v2/indices/eodhd-sync-settings', {
                 method: 'PATCH',
