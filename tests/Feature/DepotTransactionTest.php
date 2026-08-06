@@ -77,6 +77,7 @@ class DepotTransactionTest extends TestCase
         ]);
         $holding = StockHolding::factory()->create([
             'name' => 'iShares ETF',
+            'subtitle' => 'Distributing share class',
             'isin' => 'DE000A0D8Q23',
         ]);
 
@@ -91,7 +92,7 @@ class DepotTransactionTest extends TestCase
             ->assertCreated()
             ->assertJsonPath('transaction.type', 'dividend')
             ->assertJsonPath('transaction.stock_holding_id', $holding->id)
-            ->assertJsonPath('transaction.stock_label', 'iShares ETF')
+            ->assertJsonPath('transaction.stock_label', 'iShares ETF · Distributing share class')
             ->assertJsonPath('transaction.stock_isin', 'DE000A0D8Q23')
             ->assertJsonPath('transaction.cash_delta', '123.45')
             ->assertJsonPath('transaction.is_external_cashflow', false)
@@ -856,6 +857,7 @@ class DepotTransactionTest extends TestCase
         $ownedHolding = StockHolding::factory()->create([
             'symbol' => 'AAPL',
             'name' => 'Apple Inc.',
+            'subtitle' => 'Core technology holding',
             'isin' => 'US0378331005',
             'currency' => 'USD',
             'latest_price' => '191.500000',
@@ -924,6 +926,7 @@ class DepotTransactionTest extends TestCase
             ->assertJsonCount(1, 'depot_holdings')
             ->assertJsonPath('depot_holdings.0.symbol', 'AAPL')
             ->assertJsonPath('depot_holdings.0.name', 'Apple Inc.')
+            ->assertJsonPath('depot_holdings.0.subtitle', 'Core technology holding')
             ->assertJsonPath('depot_holdings.0.isin', 'US0378331005')
             ->assertJsonPath('depot_holdings.0.latest_price', '191.500000')
             ->assertJsonPath('depot_holdings.0.previous_day_price', '188.00000000')

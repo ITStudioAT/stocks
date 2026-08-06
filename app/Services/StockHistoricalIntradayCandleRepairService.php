@@ -64,7 +64,7 @@ class StockHistoricalIntradayCandleRepairService
             return [
                 'stock' => [
                     'id' => $holding->id,
-                    'label' => collect([$holding->symbol, $holding->name])->filter()->implode(' - '),
+                    'label' => collect([$holding->symbol, $holding->name, $holding->subtitle])->filter()->implode(' - '),
                 ],
                 'stored_candles_count' => 0,
             ];
@@ -77,7 +77,7 @@ class StockHistoricalIntradayCandleRepairService
         return [
             'stock' => [
                 'id' => $holding->id,
-                'label' => collect([$holding->symbol, $holding->name])->filter()->implode(' - '),
+                'label' => collect([$holding->symbol, $holding->name, $holding->subtitle])->filter()->implode(' - '),
             ],
             'stored_candles_count' => $storedCount,
         ];
@@ -100,7 +100,7 @@ class StockHistoricalIntradayCandleRepairService
 
         return StockHolding::query()
             ->orderBy('id')
-            ->get(['id', 'name', 'symbol', 'exchange', 'mic_code', 'currency'])
+            ->get(['id', 'name', 'subtitle', 'symbol', 'exchange', 'mic_code', 'currency'])
             ->filter(fn (StockHolding $holding): bool => ! $coveredHoldingIds->has($holding->id))
             ->values();
     }

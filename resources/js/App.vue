@@ -59,6 +59,7 @@ const {
     holdings,
     indexWatchItems,
     indexEodhdSync,
+    stockEodhdSync,
     indexEodhdSyncSettings,
     depotHoldings,
     depotValuations,
@@ -146,7 +147,8 @@ const infoTablesError = ref('');
 const infoTableSearch = ref('');
 const activeInfoSubsection = ref('eodhd');
 const activeAnalyzeSubsection = ref('overview');
-const activeDataSubsection = ref('overview');
+const activeDataSubsection = ref('indices');
+const activeDataType = ref('live-data');
 const selectedAnalyzeHistoryRange = ref('1y');
 const selectedAnalyzeHistoryWindowOffset = ref(0);
 const selectedAnalyzeHoldingId = ref(null);
@@ -167,6 +169,7 @@ const isAnalyzeTrendMaxInvestAmountDialogOpen = ref(false);
 const isAnalyzeTrendMaxInvestAmountSaving = ref(false);
 const selectedTestStockId = ref(null);
 const selectedDataIntradayStockId = ref(null);
+const selectedDataIndexId = ref(null);
 const selectedDataHistoricStockId = ref(null);
 const expandedDataIntradayDays = ref({});
 const expandedAnalyzeIntradayDays = ref({});
@@ -199,6 +202,7 @@ const depotForm = ref(emptyDepotForm());
 const depotMessage = ref('');
 const depotError = ref('');
 const isHoldingDialogOpen = ref(false);
+const isEditHoldingDialogOpen = ref(false);
 const isIndexDialogOpen = ref(false);
 const isIndexPriceChartLoading = ref(false);
 const isDeleteIndexDialogOpen = ref(false);
@@ -215,6 +219,8 @@ const selectedIndexPriceRange = ref('intraday');
 const selectedIndexWatchItemForRemoval = ref(null);
 const transactionHolding = ref(null);
 const holdingSearchQuery = ref('');
+const holdingSubtitle = ref('');
+const holdingForm = ref(emptyHoldingForm());
 const indexSearchQuery = ref('');
 const holdingSearchInput = ref(null);
 const indexSearchInput = ref(null);
@@ -226,6 +232,7 @@ const indexMessage = ref('');
 const indexError = ref('');
 const indexPriceChartError = ref('');
 const indexEodhdSyncError = ref('');
+const stockEodhdSyncError = ref('');
 const indexEodhdSyncScheduleMessage = ref('');
 const indexEodhdSyncScheduleError = ref('');
 const indexEodhdSyncScheduleForm = ref(emptyIndexEodhdSyncScheduleForm());
@@ -281,6 +288,9 @@ const selectedDataHistoricalLatestEntriesError = ref('');
 const selectedDataEndOfDayLatestEntries = ref(null);
 const selectedDataEndOfDayLatestEntriesLoading = ref(false);
 const selectedDataEndOfDayLatestEntriesError = ref('');
+const selectedDataDateRange = ref(null);
+const selectedDataDateRangeLoading = ref(false);
+const selectedDataDateRangeError = ref('');
 const isLiveDataUpdateDialogOpen = ref(false);
 const isHistoricalDataUpdateDialogOpen = ref(false);
 const isEndOfDayDataUpdateDialogOpen = ref(false);
@@ -300,6 +310,7 @@ const dataHistoricalPriceError = ref('');
 const dataExchangeReloadTimer = ref(null);
 const dataIntradayReloadTimer = ref(null);
 const indexEodhdSyncTimer = ref(null);
+const stockEodhdSyncTimer = ref(null);
 const indexRealtimeOverdueTimer = ref(null);
 const isIndexRealtimeDueDispatching = ref(false);
 const nextIndexRealtimeDispatchAttemptAt = ref(0);
@@ -323,6 +334,7 @@ let selectedDataLiveLatestEntriesRequestId = 0;
 let dataRealtimeLatestPricesRequestId = 0;
 let selectedDataHistoricalLatestEntriesRequestId = 0;
 let selectedDataEndOfDayLatestEntriesRequestId = 0;
+let selectedDataDateRangeRequestId = 0;
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
@@ -412,6 +424,16 @@ const selectedDataHistoricStock = computed(() => {
     const selectedStock = holdings.find((stock) => stock.id === selectedStockId);
 
     return selectedStock ?? holdings[0] ?? null;
+});
+const selectedDataRangeInstrumentId = computed(() => activeDataSubsection.value === 'indices'
+    ? selectedDataIndexId.value
+    : selectedDataHistoricStockId.value);
+const selectedDataRangeInstrument = computed(() => {
+    const instruments = activeDataSubsection.value === 'indices'
+        ? indexWatchItems.value
+        : holdings.value;
+
+    return instruments.find((instrument) => instrument.id === selectedDataRangeInstrumentId.value) ?? null;
 });
 const selectedDataLiveLatestRows = computed(() => {
     const entries = selectedDataLiveLatestEntries.value?.entries ?? [];
@@ -754,6 +776,12 @@ const stockExchangeRefreshSchedules = computed(() => {
     return [...schedulesByExchange.values()];
 });
 const isIndexEodhdSyncRunning = computed(() => ['queued', 'running'].includes(indexEodhdSync.value?.status));
+const isStockEodhdSyncRunning = computed(() => ['queued', 'running'].includes(stockEodhdSync.value?.status));
+const stockEodhdSyncProgress = computed(() => stockEodhdSync.value?.progress ?? {
+    completed: 0,
+    total: 0,
+    percent: 0,
+});
 const indexEodhdSyncProgress = computed(() => indexEodhdSync.value?.progress ?? {
     completed: 0,
     total: 0,
@@ -779,7 +807,7 @@ const cashTransactionStockOptions = computed(() => {
         }
 
         const label = [
-            holding.name || holding.symbol || `Stock ${holding.id}`,
+            stockDisplayLabel(holding, `Stock ${holding.id}`),
             holding.isin,
         ].filter(Boolean).join(' · ');
 
@@ -797,9 +825,7 @@ const selectedAnalyzeScopeLabel = computed(() => {
         return 'ALL';
     }
 
-    return selectedAnalyzeHolding.value?.name
-        || selectedAnalyzeHolding.value?.symbol
-        || `Stock ${selectedAnalyzeHoldingId.value}`;
+    return stockDisplayLabel(selectedAnalyzeHolding.value, `Stock ${selectedAnalyzeHoldingId.value}`);
 });
 const selectedAnalyzeChartSource = computed(() => analyzeOverviewChartSource(
     selectedAnalyzeHolding.value,
@@ -1232,7 +1258,7 @@ function buildAnalyzeTrendHoldingStats(holdingTrendRows) {
 
     const holdingStats = holdingTrendRows.map(({ holding, rows }) => ({
         holdingId: holding.id,
-        label: holding.name || holding.symbol || '',
+        label: stockDisplayLabel(holding, ''),
         winAmount: analyzeTrendWinAmount(rows),
     }));
 
@@ -2484,34 +2510,31 @@ const analyzeSubmenuItems = [
 ];
 const dataSubmenuItems = [
     {
-        key: 'overview',
-        label: 'Overview',
-        icon: 'mdi-view-dashboard-outline',
+        key: 'indices',
+        label: 'Indizes',
+        icon: 'mdi-chart-areaspline',
     },
     {
+        key: 'stocks',
+        label: 'Stocks',
+        icon: 'mdi-finance',
+    },
+];
+const dataTypeSubmenuItems = [
+    {
         key: 'live-data',
-        label: 'Live Data',
+        label: 'Live-Daten',
+        icon: 'mdi-access-point',
+    },
+    {
+        key: 'intraday-data',
+        label: 'Intraday-Daten',
         icon: 'mdi-chart-timeline-variant',
     },
     {
-        key: 'historical-data',
-        label: 'Historical Data',
-        icon: 'mdi-history',
-    },
-    {
         key: 'eod-data',
-        label: 'EOD-Data',
-        icon: 'mdi-calendar-end',
-    },
-    {
-        key: 'exchanges',
-        label: 'Exchanges',
-        icon: 'mdi-swap-horizontal',
-    },
-    {
-        key: 'repair',
-        label: 'Repair',
-        icon: 'mdi-wrench-outline',
+        label: 'EOD-Daten',
+        icon: 'mdi-calendar-today',
     },
 ];
 const infoSubmenuItems = [
@@ -2839,22 +2862,16 @@ watch(
                 .catch(() => {});
         }
 
-        if (section === 'data' && dataSubsection === 'exchanges') {
-            depotsStore.loadDataExchanges()
-                .then((data) => {
-                    if (['queued', 'running'].includes(data.refresh?.status)) {
-                        startDataExchangeReloadPolling(data.refresh.refresh_id);
-                    }
-                })
-                .catch(() => {});
+        if (section === 'data' && dataSubsection === 'indices') {
+            depotsStore.loadIndexWatchItems().catch(() => {});
         }
 
-        if (section === 'data' && ['overview', 'live-data', 'historical-data', 'eod-data'].includes(dataSubsection)) {
-            loadDataHistoricalPriceCoverage().catch(() => {});
+        if (section === 'data' && dataSubsection === 'stocks') {
+            depotsStore.loadWatchlistHoldings(1, { allHoldings: true }).catch(() => {});
         }
 
-        if (section === 'data' && dataSubsection === 'repair') {
-            depotsStore.loadDataRepair().catch(() => {});
+        if (section === 'stocks') {
+            restoreStockEodhdSync().catch(() => {});
         }
 
         if (section === 'infos' && infoTables.value.length === 0 && infoMethods.value.length === 0) {
@@ -2899,6 +2916,13 @@ watch(
         if (dataSubsection === 'eod-data') {
             loadSelectedDataEndOfDayLatestEntries(selectedStockId).catch(() => {});
         }
+    },
+);
+
+watch(
+    [activeSection, activeDataSubsection, activeDataType, selectedDataIndexId, selectedDataHistoricStockId],
+    () => {
+        loadSelectedDataDateRange().catch(() => {});
     },
 );
 
@@ -2953,6 +2977,9 @@ onMounted(async () => {
         activeSection.value === 'indices'
             ? depotsStore.loadIndexEodhdSyncSettings().catch(() => {})
             : Promise.resolve(),
+        activeSection.value === 'stocks'
+            ? restoreStockEodhdSync().catch(() => {})
+            : Promise.resolve(),
     ]);
 
     ensureAnalyzeDetailIntradayCandles();
@@ -2980,6 +3007,7 @@ onBeforeUnmount(() => {
     stopDataExchangeReloadPolling();
     stopDataIntradayReloadPolling();
     stopIndexEodhdSyncPolling();
+    stopStockEodhdSyncPolling();
     stopIndexRealtimeOverdueMonitoring();
     stopHoldingDialogKeyboardShortcuts();
     clearAnalyzeIsinCopiedTimer();
@@ -3135,7 +3163,7 @@ function navigateSection(section) {
     }
 
     if (section === 'data' && !isDataSubsection(activeDataSubsection.value)) {
-        activeDataSubsection.value = 'overview';
+        activeDataSubsection.value = 'indices';
     }
 
     if (section === 'infos' && !isInfoSubsection(activeInfoSubsection.value)) {
@@ -3281,7 +3309,8 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
     const shouldIncludeCharts = shouldIncludeDashboardTrendCharts || shouldIncludeAnalyzeCharts || shouldIncludeStockChart;
     const shouldIncludeAllChartHoldings = shouldIncludeDashboardTrendCharts
         || (shouldIncludeAnalyzeCharts && activeAnalyzeSubsection.value === 'trend');
-    const shouldIncludeAllHoldings = ['dashboard', 'stocks'].includes(activeSection.value);
+    const shouldIncludeAllHoldings = ['dashboard', 'stocks'].includes(activeSection.value)
+        || (activeSection.value === 'data' && activeDataSubsection.value === 'stocks');
 
     return depotsStore.loadWatchlistHoldings(page, {
         ...options,
@@ -3535,6 +3564,17 @@ function navigateDataSubsection(subsection) {
     }
 
     activeDataSubsection.value = subsection;
+    activeSection.value = 'data';
+    clearSectionMessages();
+    updateUrlPath();
+}
+
+function navigateDataType(dataType) {
+    if (!isDataType(dataType) || activeDataType.value === dataType) {
+        return;
+    }
+
+    activeDataType.value = dataType;
     activeSection.value = 'data';
     clearSectionMessages();
     updateUrlPath();
@@ -3811,7 +3851,7 @@ function applyRouteFromPath() {
     }
 
     if (path.startsWith('/admin/menu/')) {
-        const [sectionSegment, subsectionSegment] = path
+        const [sectionSegment, subsectionSegment, dataTypeSegment] = path
             .replace('/admin/menu/', '')
             .split('/')
             .map((segment) => decodeURIComponent(segment));
@@ -3829,14 +3869,13 @@ function applyRouteFromPath() {
         }
 
         if (normalizedSection === 'data') {
-            const dataSubsection = subsectionSegment === 'historic'
-                ? 'overview'
-                : subsectionSegment;
-
             activeSection.value = 'data';
-            activeDataSubsection.value = isDataSubsection(dataSubsection)
-                ? dataSubsection
-                : 'overview';
+            activeDataSubsection.value = isDataSubsection(subsectionSegment)
+                ? subsectionSegment
+                : 'indices';
+            activeDataType.value = isDataType(dataTypeSegment)
+                ? dataTypeSegment
+                : 'live-data';
             updateUrlPath({ replace: true });
 
             return;
@@ -3872,7 +3911,7 @@ function updateUrlPath(options = {}) {
             : activeSection.value === 'analyze'
                 ? `/admin/menu/analyze/${activeAnalyzeSubsection.value}`
                 : activeSection.value === 'data'
-                    ? `/admin/menu/data/${activeDataSubsection.value}`
+                    ? `/admin/menu/data/${activeDataSubsection.value}/${activeDataType.value}`
                     : activeSection.value === 'infos'
                         ? `/admin/menu/infos/${activeInfoSubsection.value}`
                         : `/admin/menu/${activeSection.value}`;
@@ -3924,6 +3963,10 @@ function ensureAnalyzeHoldingSelection(currentHoldings = holdings.value) {
 
 function isDataSubsection(subsection) {
     return dataSubmenuItems.some((item) => item.key === subsection);
+}
+
+function isDataType(dataType) {
+    return dataTypeSubmenuItems.some((item) => item.key === dataType);
 }
 
 function isInfoSubsection(subsection) {
@@ -4228,6 +4271,7 @@ async function activateDepot(depot) {
 
 function openHoldingDialog() {
     holdingSearchQuery.value = '';
+    holdingSubtitle.value = '';
     depotsStore.stockSearchResults = [];
     depotsStore.stockSearchError = '';
     holdingError.value = '';
@@ -4235,6 +4279,35 @@ function openHoldingDialog() {
     isHoldingDialogOpen.value = true;
     startHoldingDialogKeyboardShortcuts();
     focusHoldingSearchInput();
+}
+
+function openEditHoldingDialog(holding = selectedStockWatchItem.value) {
+    if (!holding) {
+        return;
+    }
+
+    selectedHolding.value = holding;
+    holdingForm.value = {
+        symbol: holding.symbol ?? '',
+        name: holding.name ?? '',
+        subtitle: holding.subtitle ?? '',
+        isin: holding.isin ?? '',
+        wkn: holding.wkn ?? '',
+        exchange: holding.exchange ?? '',
+        mic_code: holding.mic_code ?? '',
+        instrument_type: holding.instrument_type ?? '',
+        country: holding.country ?? '',
+        currency: holding.currency ?? '',
+    };
+    holdingError.value = '';
+    holdingMessage.value = '';
+    isEditHoldingDialogOpen.value = true;
+}
+
+function abortEditHoldingDialog() {
+    isEditHoldingDialogOpen.value = false;
+    selectedHolding.value = null;
+    holdingForm.value = emptyHoldingForm();
 }
 
 function abortHoldingDialog() {
@@ -4304,6 +4377,71 @@ async function loadSelectedIndexPrices() {
             isIndexPriceChartLoading.value = false;
         }
     }
+}
+
+async function restoreStockEodhdSync() {
+    stockEodhdSyncError.value = '';
+
+    try {
+        const data = await depotsStore.loadLatestStockEodhdSync();
+
+        if (data.refresh?.refresh_id && ['queued', 'running'].includes(data.refresh.status)) {
+            startStockEodhdSyncPolling(data.refresh.refresh_id);
+        } else {
+            stopStockEodhdSyncPolling();
+        }
+    } catch (error) {
+        stockEodhdSyncError.value = error.message;
+        throw error;
+    }
+}
+
+async function startStockEodhdSync() {
+    stockEodhdSyncError.value = '';
+
+    try {
+        const data = await depotsStore.startStockEodhdSync();
+
+        if (data.refresh?.refresh_id && ['queued', 'running'].includes(data.refresh.status)) {
+            startStockEodhdSyncPolling(data.refresh.refresh_id);
+        }
+    } catch (error) {
+        stockEodhdSyncError.value = error.message;
+    }
+}
+
+function startStockEodhdSyncPolling(refreshId) {
+    stopStockEodhdSyncPolling();
+    stockEodhdSyncTimer.value = window.setInterval(() => pollStockEodhdSync(refreshId), 2000);
+}
+
+function stopStockEodhdSyncPolling() {
+    if (!stockEodhdSyncTimer.value) {
+        return;
+    }
+
+    window.clearInterval(stockEodhdSyncTimer.value);
+    stockEodhdSyncTimer.value = null;
+}
+
+async function pollStockEodhdSync(refreshId) {
+    try {
+        const data = await depotsStore.loadStockEodhdSync(refreshId);
+
+        if (!['queued', 'running'].includes(data.refresh?.status)) {
+            stopStockEodhdSyncPolling();
+            await loadWatchlistHoldingsForActiveSection(1);
+        }
+    } catch (error) {
+        stockEodhdSyncError.value = error.message;
+        stopStockEodhdSyncPolling();
+    }
+}
+
+function closeStockEodhdSyncResult() {
+    stopStockEodhdSyncPolling();
+    stockEodhdSyncError.value = '';
+    depotsStore.clearStockEodhdSync();
 }
 
 async function startIndexEodhdSync() {
@@ -4622,10 +4760,31 @@ async function saveHolding(result) {
     holdingMessage.value = '';
 
     try {
-        const data = await depotsStore.createWatchlistHolding(result);
+        const data = await depotsStore.createWatchlistHolding({
+            ...result,
+            subtitle: holdingSubtitle.value.trim() || null,
+        });
         holdingMessage.value = data.message;
         isHoldingDialogOpen.value = false;
         stopHoldingDialogKeyboardShortcuts();
+        await loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page);
+    } catch (err) {
+        holdingError.value = err.message;
+    }
+}
+
+async function saveEditedHolding() {
+    if (!selectedHolding.value) {
+        return;
+    }
+
+    holdingError.value = '';
+    holdingMessage.value = '';
+
+    try {
+        const data = await depotsStore.updateWatchlistHolding(selectedHolding.value.id, holdingForm.value);
+        holdingMessage.value = data.message;
+        abortEditHoldingDialog();
         await loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page);
     } catch (err) {
         holdingError.value = err.message;
@@ -5513,6 +5672,60 @@ async function repairStocksSequentially(stocks, currentStockRef, progressRef, re
 
 function selectDataHistoricStock(stockId) {
     selectedDataHistoricStockId.value = stockId;
+}
+
+function toggleDataIndexSelection(indexId) {
+    selectedDataIndexId.value = selectedDataIndexId.value === indexId ? null : indexId;
+}
+
+function toggleDataStockSelection(stockId) {
+    selectedDataHistoricStockId.value = selectedDataHistoricStockId.value === stockId ? null : stockId;
+}
+
+async function loadSelectedDataDateRange() {
+    const requestId = ++selectedDataDateRangeRequestId;
+    const instrumentId = Number(selectedDataRangeInstrumentId.value);
+
+    if (activeSection.value !== 'data' || Number.isNaN(instrumentId) || instrumentId <= 0) {
+        selectedDataDateRange.value = null;
+        selectedDataDateRangeLoading.value = false;
+        selectedDataDateRangeError.value = '';
+
+        return null;
+    }
+
+    const instrumentType = activeDataSubsection.value === 'indices' ? 'indices' : 'stocks';
+    selectedDataDateRange.value = null;
+    selectedDataDateRangeLoading.value = true;
+    selectedDataDateRangeError.value = '';
+
+    try {
+        const data = await request(
+            `/admin/data/${instrumentType}/${instrumentId}/${activeDataType.value}/date-range`,
+        );
+
+        if (requestId === selectedDataDateRangeRequestId) {
+            selectedDataDateRange.value = data.range ?? null;
+
+            return data;
+        }
+    } catch (error) {
+        if (requestId === selectedDataDateRangeRequestId) {
+            selectedDataDateRangeError.value = error.message;
+        }
+
+        throw error;
+    } finally {
+        if (requestId === selectedDataDateRangeRequestId) {
+            selectedDataDateRangeLoading.value = false;
+        }
+    }
+
+    return null;
+}
+
+function dataTypeLabel(dataType) {
+    return dataTypeSubmenuItems.find((item) => item.key === dataType)?.label ?? dataType;
 }
 
 async function ensureAnalyzeDetailIntradayCandles() {
@@ -6456,6 +6669,17 @@ function abortFlatexPriceEdit() {
     editingFlatexHoldingId.value = null;
     flatexPriceEditValue.value = '';
     flatexPriceEditInput.value = null;
+}
+
+function stockDisplayName(stock, fallback = '-') {
+    return stock?.name || stock?.symbol || fallback;
+}
+
+function stockDisplayLabel(stock, fallback = '-') {
+    const name = stockDisplayName(stock, fallback);
+    const subtitle = stock?.subtitle || stock?.stock_subtitle;
+
+    return subtitle ? `${name} · ${subtitle}` : name;
 }
 
 async function saveFlatexPriceEdit(holding) {
@@ -10420,7 +10644,7 @@ function stockHoldingTradingTimes(holding) {
 
 function parseStockTradingWindow(tradingTimes) {
     const match = String(tradingTimes).match(
-        /^(?<days>.*?)\s+(?<open>\d{1,2}:\d{2})(?::\d{2})?\s*(?:-|to|until|bis)\s*(?<close>\d{1,2}:\d{2})(?::\d{2})?\s+(?<timezone>[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+)+)\s*$/i,
+        /^(?<days>.*?)\s+(?<open>\d{1,2}:\d{2})(?::\d{2})?\s*(?:-|to|until|bis)\s*(?<close>\d{1,2}:\d{2})(?::\d{2})?\s+(?<timezone>UTC|[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+)+)\s*$/i,
     );
 
     return match?.groups
@@ -10736,6 +10960,21 @@ function emptyDepotForm() {
     return {
         name: '',
         account_balance: '0.00',
+    };
+}
+
+function emptyHoldingForm() {
+    return {
+        symbol: '',
+        name: '',
+        subtitle: '',
+        isin: '',
+        wkn: '',
+        exchange: '',
+        mic_code: '',
+        instrument_type: '',
+        country: '',
+        currency: '',
     };
 }
 
@@ -11070,11 +11309,13 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <v-btn
                                         class="dashboard-action-button"
                                         color="secondary"
-                                        disabled
                                         prepend-icon="mdi-cloud-sync-outline"
-                                        title="The stock EODHD sync will be defined later."
+                                        title="Synchronize EOD and intraday data from EODHD."
                                         type="button"
                                         variant="outlined"
+                                        :disabled="isStockEodhdSyncRunning"
+                                        :loading="isStockEodhdSyncRunning"
+                                        @click="startStockEodhdSync"
                                     >
                                         EODHD Sync
                                     </v-btn>
@@ -11090,6 +11331,16 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </v-btn>
                                     <v-btn
                                         class="dashboard-action-button"
+                                        prepend-icon="mdi-pencil-outline"
+                                        type="button"
+                                        variant="outlined"
+                                        :disabled="!selectedStockWatchItem || holdingsLoading"
+                                        @click="openEditHoldingDialog(selectedStockWatchItem)"
+                                    >
+                                        Edit stock
+                                    </v-btn>
+                                    <v-btn
+                                        class="dashboard-action-button"
                                         color="error"
                                         prepend-icon="mdi-delete-outline"
                                         type="button"
@@ -11101,6 +11352,108 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </v-btn>
                                 </div>
                             </div>
+
+                            <v-alert
+                                v-if="stockEodhdSyncError"
+                                class="mb-6"
+                                density="compact"
+                                type="error"
+                                variant="tonal"
+                            >
+                                {{ stockEodhdSyncError }}
+                            </v-alert>
+
+                            <v-card
+                                v-if="stockEodhdSync"
+                                class="stock-eodhd-sync-card mb-6"
+                                variant="outlined"
+                                aria-label="Stock EODHD synchronization status"
+                            >
+                                <v-card-title class="d-flex flex-wrap align-center justify-space-between ga-2">
+                                    <span>Stock EODHD synchronization</span>
+                                    <div class="d-flex align-center ga-2">
+                                        <v-chip
+                                            :color="indexEodhdSyncStatusColor(stockEodhdSync.status)"
+                                            size="small"
+                                            variant="tonal"
+                                        >
+                                            {{ indexEodhdSyncStatusLabel(stockEodhdSync.status) }}
+                                        </v-chip>
+                                        <v-btn
+                                            v-if="!isStockEodhdSyncRunning"
+                                            aria-label="Close stock EODHD synchronization result"
+                                            icon="mdi-close"
+                                            size="small"
+                                            title="Close result"
+                                            variant="text"
+                                            @click="closeStockEodhdSyncResult"
+                                        />
+                                    </div>
+                                </v-card-title>
+                                <v-card-text>
+                                    <div class="text-body-2 text-medium-emphasis mb-3">
+                                        Stored-data window: {{ formatIndexHistoryDate(stockEodhdSync.date_from) }} –
+                                        {{ formatIndexHistoryDate(stockEodhdSync.date_to) }}
+                                    </div>
+                                    <v-progress-linear
+                                        v-if="isStockEodhdSyncRunning"
+                                        class="mb-4"
+                                        color="primary"
+                                        height="7"
+                                        :model-value="stockEodhdSyncProgress.percent"
+                                        rounded
+                                    />
+                                    <div v-if="stockEodhdSyncProgress.total > 0" class="text-body-2 mb-3">
+                                        <strong>
+                                            {{ stockEodhdSyncProgress.completed }} / {{ stockEodhdSyncProgress.total }} processed
+                                        </strong>
+                                    </div>
+                                    <div v-if="stockEodhdSync.current" class="text-body-2 mb-3">
+                                        Currently running: {{ stockEodhdSync.current }}
+                                    </div>
+                                    <v-list density="compact">
+                                        <v-list-item
+                                            v-for="step in stockEodhdSync.steps"
+                                            :key="step.key"
+                                            :aria-label="`${step.label}: ${indexEodhdSyncChecklistStatusLabel(step.status)}`"
+                                        >
+                                            <template #prepend>
+                                                <v-icon
+                                                    :class="{ 'mdi-spin': step.status === 'running' }"
+                                                    :color="indexEodhdSyncStepColor(step.status)"
+                                                    :icon="indexEodhdSyncStepIcon(step.status)"
+                                                />
+                                            </template>
+                                            <v-list-item-title>{{ step.label }}</v-list-item-title>
+                                            <v-list-item-subtitle>{{ step.message }}</v-list-item-subtitle>
+                                        </v-list-item>
+                                    </v-list>
+                                    <div v-if="!isStockEodhdSyncRunning" class="d-flex flex-wrap ga-2 mt-4">
+                                        <v-chip color="primary" variant="tonal">
+                                            EOD: {{ stockEodhdSync.eod?.stored_count ?? 0 }} records
+                                        </v-chip>
+                                        <v-chip color="secondary" variant="tonal">
+                                            Intraday: {{ stockEodhdSync.intraday?.stored_count ?? 0 }} candles
+                                        </v-chip>
+                                        <v-chip
+                                            v-if="(stockEodhdSync.eod?.failed_count ?? 0) + (stockEodhdSync.intraday?.failed_count ?? 0) > 0"
+                                            color="warning"
+                                            variant="tonal"
+                                        >
+                                            {{ (stockEodhdSync.eod?.failed_count ?? 0) + (stockEodhdSync.intraday?.failed_count ?? 0) }} failures
+                                        </v-chip>
+                                    </div>
+                                    <v-alert
+                                        v-if="stockEodhdSync.error"
+                                        class="mt-4"
+                                        density="compact"
+                                        type="warning"
+                                        variant="tonal"
+                                    >
+                                        {{ stockEodhdSync.error }}
+                                    </v-alert>
+                                </v-card-text>
+                            </v-card>
 
                             <v-card class="mb-6" variant="outlined" aria-label="Automatic stock EODHD updates">
                                 <v-card-text>
@@ -11799,7 +12152,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                         @keydown.space.prevent="activeSection === 'stocks' && toggleStockWatchItemSelection(holding)"
                                     >
                                     <div class="mobile-stock-name">
-                                        {{ holding.name || holding.symbol || '-' }}
+                                        {{ stockDisplayName(holding) }}
+                                    </div>
+                                    <div v-if="holding.subtitle" class="text-caption text-medium-emphasis">
+                                        {{ holding.subtitle }}
                                     </div>
                                     <div class="mobile-stock-position">
                                         Pieces: {{ formatPositionPieces(holding) }}
@@ -11956,7 +12312,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                             </div>
                                         </td>
                                         <td class="watch-list-content-cell">
-                                            <div>{{ holding.name || '-' }}</div>
+                                            <div>{{ stockDisplayName(holding) }}</div>
+                                            <div v-if="holding.subtitle" class="text-caption text-medium-emphasis">
+                                                {{ holding.subtitle }}
+                                            </div>
                                             <div
                                                 v-if="isCompactWatchListTable"
                                                 class="text-caption text-medium-emphasis"
@@ -12178,7 +12537,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         class="holding-intraday-chart"
                                                         :viewBox="`0 0 ${expandedHoldingIntradayChart(holding).width} ${expandedHoldingIntradayChart(holding).height}`"
                                                         role="img"
-                                                        :aria-label="`${holding.symbol || holding.name || 'Stock'} intraday close chart`"
+                                                        :aria-label="`${stockDisplayLabel(holding, 'Stock')} intraday close chart`"
                                                     >
                                                         <line
                                                             v-for="(gridLine, index) in expandedHoldingIntradayChart(holding).horizontalGridLines"
@@ -12359,7 +12718,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </span>
                                 </span>
                                 <span class="index-price-dialog-name">
-                                    {{ selectedStockWatchItem.name || 'Stock' }}
+                                    {{ stockDisplayName(selectedStockWatchItem, 'Stock') }}
+                                </span>
+                                <span v-if="selectedStockWatchItem.subtitle" class="index-price-dialog-code">
+                                    {{ selectedStockWatchItem.subtitle }}
                                 </span>
                                 <span v-if="selectedStockWatchItem.isin" class="index-price-dialog-code">
                                     {{ selectedStockWatchItem.isin }}
@@ -12436,7 +12798,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         class="stock-price-chart index-price-chart"
                                         :viewBox="`0 0 ${selectedStockChart.width} ${selectedStockChart.height}`"
                                         role="img"
-                                        :aria-label="`${selectedStockWatchItem.symbol || selectedStockWatchItem.name || 'Stock'} price evolution`"
+                                        :aria-label="`${stockDisplayLabel(selectedStockWatchItem, 'Stock')} price evolution`"
                                     >
                                         <line
                                             v-for="(gridLine, index) in selectedStockChart.horizontalGridLines"
@@ -12585,6 +12947,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </v-btn>
                                     </form>
 
+                                    <v-text-field
+                                        v-model="holdingSubtitle"
+                                        class="mb-4"
+                                        counter="255"
+                                        label="Subtitle"
+                                        maxlength="255"
+                                    />
+
                                     <v-alert v-if="stockSearchError" type="error" variant="tonal" density="compact" class="mb-4">
                                         {{ stockSearchError }}
                                     </v-alert>
@@ -12630,6 +13000,71 @@ function formatIndexDataUpdateSchedule(settings) {
                                         Cancel
                                     </v-btn>
                                 </v-card-actions>
+                            </v-card>
+                        </v-dialog>
+
+                        <v-dialog
+                            v-if="activeSection === 'stocks'"
+                            v-model="isEditHoldingDialogOpen"
+                            max-width="720"
+                            persistent
+                        >
+                            <v-card>
+                                <v-card-title>Edit stock</v-card-title>
+                                <v-form @submit.prevent="saveEditedHolding">
+                                    <v-card-text>
+                                        <v-alert
+                                            v-if="holdingError"
+                                            class="mb-4"
+                                            density="compact"
+                                            type="error"
+                                            variant="tonal"
+                                        >
+                                            {{ holdingError }}
+                                        </v-alert>
+                                        <v-row>
+                                            <v-col cols="12" sm="4">
+                                                <v-text-field v-model="holdingForm.symbol" label="Symbol" maxlength="32" required />
+                                            </v-col>
+                                            <v-col cols="12" sm="8">
+                                                <v-text-field v-model="holdingForm.name" label="Name" maxlength="255" />
+                                            </v-col>
+                                            <v-col cols="12">
+                                                <v-text-field v-model="holdingForm.subtitle" counter="255" label="Subtitle" maxlength="255" />
+                                            </v-col>
+                                            <v-col cols="12" sm="6">
+                                                <v-text-field v-model="holdingForm.isin" label="ISIN" maxlength="12" />
+                                            </v-col>
+                                            <v-col cols="12" sm="6">
+                                                <v-text-field v-model="holdingForm.wkn" label="WKN / Valor" maxlength="6" />
+                                            </v-col>
+                                            <v-col cols="12" sm="6">
+                                                <v-text-field v-model="holdingForm.exchange" label="Exchange" maxlength="255" />
+                                            </v-col>
+                                            <v-col cols="12" sm="6">
+                                                <v-text-field v-model="holdingForm.mic_code" label="MIC code" maxlength="32" />
+                                            </v-col>
+                                            <v-col cols="12" sm="4">
+                                                <v-text-field v-model="holdingForm.instrument_type" label="Instrument type" maxlength="255" />
+                                            </v-col>
+                                            <v-col cols="12" sm="4">
+                                                <v-text-field v-model="holdingForm.country" label="Country" maxlength="255" />
+                                            </v-col>
+                                            <v-col cols="12" sm="4">
+                                                <v-text-field v-model="holdingForm.currency" label="Currency" maxlength="8" />
+                                            </v-col>
+                                        </v-row>
+                                    </v-card-text>
+                                    <v-card-actions>
+                                        <v-spacer />
+                                        <v-btn type="button" variant="text" :disabled="holdingsLoading" @click="abortEditHoldingDialog">
+                                            Cancel
+                                        </v-btn>
+                                        <v-btn color="primary" type="submit" variant="flat" :loading="holdingsLoading">
+                                            Save
+                                        </v-btn>
+                                    </v-card-actions>
+                                </v-form>
                             </v-card>
                         </v-dialog>
 
@@ -13097,7 +13532,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                 <v-card-title>Confirm delete</v-card-title>
                                 <v-card-text>
                                     <div>
-                                        Delete {{ selectedHolding?.name || selectedHolding?.symbol }}?
+                                        Delete {{ stockDisplayLabel(selectedHolding, 'stock') }}?
                                     </div>
                                 </v-card-text>
                                 <v-card-actions>
@@ -13204,7 +13639,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </span>
                                     </span>
                                     <span class="index-watch-card-label analyze-holding-card-name">
-                                        {{ holding.name || holding.symbol || '-' }}
+                                        {{ stockDisplayLabel(holding) }}
                                     </span>
                                     <span class="index-watch-card-price analyze-holding-card-price">
                                         {{ formatHoldingCardPrice(holding) }}
@@ -13260,7 +13695,7 @@ function formatIndexDataUpdateSchedule(settings) {
                             >
                                 <div class="analyze-sparkline-header">
                                     <span class="analyze-sparkline-name">
-                                        {{ selectedAnalyzeHolding.name || selectedAnalyzeHolding.symbol || '-' }}
+                                        {{ stockDisplayLabel(selectedAnalyzeHolding) }}
                                     </span>
                                     <span class="analyze-sparkline-meta">
                                         {{ formatAnalyzeSparklineDate(selectedAnalyzeSparkline.first) }}
@@ -13276,7 +13711,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     class="analyze-sparkline"
                                     :viewBox="`0 0 ${selectedAnalyzeSparkline.width} ${selectedAnalyzeSparkline.height}`"
                                     role="img"
-                                    :aria-label="`${selectedAnalyzeHolding.name || selectedAnalyzeHolding.symbol || 'Stock'} price history`"
+                                    :aria-label="`${stockDisplayLabel(selectedAnalyzeHolding, 'Stock')} price history`"
                                 >
                                     <defs>
                                         <linearGradient id="analyze-sparkline-area-fill" x1="0" x2="0" y1="0" y2="1">
@@ -13550,7 +13985,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </span>
                                     </span>
                                     <span class="index-watch-card-label analyze-holding-card-name">
-                                        {{ holding.name || holding.symbol || '-' }}
+                                        {{ stockDisplayLabel(holding) }}
                                     </span>
                                     <span class="index-watch-card-price analyze-holding-card-price">
                                         {{ formatHoldingCardPrice(holding) }}
@@ -13694,7 +14129,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </span>
                                     </span>
                                     <span class="index-watch-card-label analyze-holding-card-name">
-                                        {{ holding.name || holding.symbol || '-' }}
+                                        {{ stockDisplayLabel(holding) }}
                                     </span>
                                     <span class="index-watch-card-price analyze-holding-card-price">
                                         {{ formatHoldingCardPrice(holding) }}
@@ -13909,8 +14344,8 @@ function formatIndexDataUpdateSchedule(settings) {
                                         :class="{ 'analyze-trend-include-toggle--active': isAnalyzeTrendHoldingIncluded(holding.id) }"
                                         :aria-pressed="isAnalyzeTrendHoldingIncluded(holding.id)"
                                         :aria-label="isAnalyzeTrendHoldingIncluded(holding.id)
-                                            ? `Exclude ${holding.name || holding.symbol || 'stock'} from All amount`
-                                            : `Include ${holding.name || holding.symbol || 'stock'} in All amount`"
+                                            ? `Exclude ${stockDisplayLabel(holding, 'stock')} from All amount`
+                                            : `Include ${stockDisplayLabel(holding, 'stock')} in All amount`"
                                         @click="toggleAnalyzeTrendHoldingInclusion(holding.id)"
                                     >
                                         <v-icon
@@ -13937,7 +14372,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             </span>
                                         </span>
                                         <span class="index-watch-card-label analyze-holding-card-name">
-                                            {{ holding.name || holding.symbol || '-' }}
+                                            {{ stockDisplayLabel(holding) }}
                                         </span>
                                         <span class="index-watch-card-price analyze-holding-card-price">
                                             {{ formatHoldingCardPrice(holding) }}
@@ -14323,11 +14758,11 @@ function formatIndexDataUpdateSchedule(settings) {
                                             class="tests-chip"
                                             :class="{ 'tests-chip--active': selectedTestStockId === stock.id }"
                                             :aria-pressed="selectedTestStockId === stock.id"
-                                            :title="stock.name"
+                                            :title="stockDisplayLabel(stock, '')"
                                             @click="selectedTestStockId = stock.id"
                                         >
                                             <span class="tests-chip-symbol">{{ stock.symbol || '-' }}</span>
-                                            <span class="tests-chip-name">{{ stock.name || stock.symbol || `Stock ${stock.id}` }}</span>
+                                            <span class="tests-chip-name">{{ stockDisplayLabel(stock, `Stock ${stock.id}`) }}</span>
                                         </button>
                                         <span v-if="!testOptionsLoading && testOptions.stocks.length === 0" class="tests-chip-empty">
                                             No stocks.
@@ -14346,7 +14781,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <div class="test-selected-stock-summary">
                                         <div class="tests-chip-heading">Selected stock</div>
                                         <h3 class="test-selected-stock-title">
-                                            {{ selectedTestStock.name || selectedTestStock.symbol || `Stock ${selectedTestStock.id}` }}
+                                            {{ stockDisplayLabel(selectedTestStock, `Stock ${selectedTestStock.id}`) }}
                                         </h3>
                                         <div class="test-selected-stock-meta">
                                             <span>{{ selectedTestStock.symbol || '-' }}</span>
@@ -14553,7 +14988,7 @@ function formatIndexDataUpdateSchedule(settings) {
                             </v-card-title>
                             <v-card-text>
                                 <div class="mb-4">
-                                    <div class="font-weight-medium">{{ transactionHolding?.name || transactionHolding?.symbol }}</div>
+                                    <div class="font-weight-medium">{{ stockDisplayLabel(transactionHolding, '') }}</div>
                                     <div class="text-caption text-medium-emphasis">
                                         {{ transactionHolding?.isin || '-' }} · Pieces: {{ transactionHolding ? formatPositionPieces(transactionHolding) : '0' }}
                                     </div>
@@ -14618,7 +15053,7 @@ function formatIndexDataUpdateSchedule(settings) {
                         <v-tabs
                             :model-value="activeDataSubsection"
                             color="primary"
-                            class="mb-6"
+                            class="mb-2"
                             @update:model-value="navigateDataSubsection"
                         >
                             <v-tab
@@ -14630,6 +15065,122 @@ function formatIndexDataUpdateSchedule(settings) {
                                 {{ item.label }}
                             </v-tab>
                         </v-tabs>
+
+                        <v-tabs
+                            :model-value="activeDataType"
+                            :aria-label="`Data ${activeDataSubsection} data types`"
+                            color="primary"
+                            class="mb-6"
+                            density="compact"
+                            @update:model-value="navigateDataType"
+                        >
+                            <v-tab
+                                v-for="item in dataTypeSubmenuItems"
+                                :key="item.key"
+                                :value="item.key"
+                                :prepend-icon="item.icon"
+                            >
+                                {{ item.label }}
+                            </v-tab>
+                        </v-tabs>
+
+                        <section v-if="activeDataSubsection === 'indices'" aria-label="Data indices">
+                            <h2 class="text-h5 mb-4">Indizes</h2>
+                            <div class="tests-chip-list" aria-label="All indices">
+                                <button
+                                    v-for="index in indexWatchItems"
+                                    :key="`data-index-${index.id}`"
+                                    type="button"
+                                    class="tests-chip"
+                                    :class="{ 'tests-chip--active': selectedDataIndexId === index.id }"
+                                    :aria-pressed="selectedDataIndexId === index.id"
+                                    @click="toggleDataIndexSelection(index.id)"
+                                >
+                                    <span class="tests-chip-symbol">{{ index.symbol || '-' }}</span>
+                                    <span class="tests-chip-name">{{ index.name || index.symbol || `Index ${index.id}` }}</span>
+                                </button>
+                                <span v-if="indexWatchItems.length === 0" class="tests-chip-empty">
+                                    No indices stored.
+                                </span>
+                            </div>
+                        </section>
+
+                        <section v-if="activeDataSubsection === 'stocks'" aria-label="Data stocks">
+                            <h2 class="text-h5 mb-4">Stocks</h2>
+                            <div class="tests-chip-list" aria-label="All stocks">
+                                <button
+                                    v-for="holding in holdings"
+                                    :key="`data-stock-${holding.id}`"
+                                    type="button"
+                                    class="tests-chip data-stock-selection-card"
+                                    :class="{ 'tests-chip--active': selectedDataHistoricStockId === holding.id }"
+                                    :aria-pressed="selectedDataHistoricStockId === holding.id"
+                                    @click="toggleDataStockSelection(holding.id)"
+                                >
+                                    <span class="tests-chip-symbol">{{ holding.symbol || '-' }}</span>
+                                    <span class="data-stock-selection-copy">
+                                        <span class="tests-chip-name">{{ stockDisplayName(holding, `Stock ${holding.id}`) }}</span>
+                                        <span v-if="holding.subtitle" class="data-stock-selection-subtitle">
+                                            {{ holding.subtitle }}
+                                        </span>
+                                    </span>
+                                </button>
+                                <span v-if="!holdingsLoading && holdings.length === 0" class="tests-chip-empty">
+                                    No stocks stored.
+                                </span>
+                            </div>
+                        </section>
+
+                        <v-alert
+                            v-if="!selectedDataRangeInstrument"
+                            class="mt-6"
+                            type="info"
+                            variant="tonal"
+                        >
+                            Wähle {{ activeDataSubsection === 'indices' ? 'einen Index' : 'einen Stock' }}, um den gespeicherten Zeitraum zu sehen.
+                        </v-alert>
+
+                        <v-card
+                            v-else
+                            class="data-date-range-card mt-6"
+                            variant="outlined"
+                            aria-label="Stored data date range"
+                        >
+                            <v-card-title class="text-subtitle-1 font-weight-bold">
+                                {{ selectedDataRangeInstrument.symbol || selectedDataRangeInstrument.name }} · {{ dataTypeLabel(activeDataType) }}
+                            </v-card-title>
+                            <v-card-subtitle>Gespeicherter Zeitraum</v-card-subtitle>
+                            <v-progress-linear
+                                v-if="selectedDataDateRangeLoading"
+                                class="mt-4"
+                                color="primary"
+                                indeterminate
+                            />
+                            <v-card-text v-else-if="selectedDataDateRangeError">
+                                <v-alert type="error" variant="tonal" density="compact">
+                                    {{ selectedDataDateRangeError }}
+                                </v-alert>
+                            </v-card-text>
+                            <v-card-text v-else-if="Number(selectedDataDateRange?.row_count ?? 0) > 0">
+                                <div class="data-date-range-grid">
+                                    <div class="data-date-range-item">
+                                        <span>Von</span>
+                                        <strong>{{ formatIndexHistoryDate(selectedDataDateRange.date_from) }}</strong>
+                                    </div>
+                                    <div class="data-date-range-item">
+                                        <span>Bis</span>
+                                        <strong>{{ formatIndexHistoryDate(selectedDataDateRange.date_to) }}</strong>
+                                    </div>
+                                    <div class="data-date-range-item">
+                                        <span>Datensätze</span>
+                                        <strong>{{ formatInteger(selectedDataDateRange.row_count) }}</strong>
+                                    </div>
+                                </div>
+                            </v-card-text>
+                            <v-card-text v-else>
+                                Keine gespeicherten {{ dataTypeLabel(activeDataType) }} für diese Auswahl.
+                            </v-card-text>
+                        </v-card>
 
                         <section
                             v-if="activeDataSubsection === 'exchanges'"
@@ -14820,7 +15371,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         @click="selectDataHistoricStock(stock.id)"
                                     >
                                         <span class="tests-chip-symbol">{{ stock.symbol || '-' }}</span>
-                                        <span class="tests-chip-name">{{ stock.name || stock.symbol || `Stock ${stock.id}` }}</span>
+                                        <span class="tests-chip-name">{{ stockDisplayLabel(stock, `Stock ${stock.id}`) }}</span>
                                     </button>
                                     <span v-if="!dataHistoricalPriceLoading && dataHistoricalPriceHoldings.length === 0" class="tests-chip-empty">
                                         No stocks stored for historical coverage.
@@ -14831,7 +15382,7 @@ function formatIndexDataUpdateSchedule(settings) {
                             <section v-if="selectedDataHistoricStock" class="test-selected-stock-card">
                                 <div class="test-selected-stock-card-header">
                                     <div class="test-selected-stock-summary">
-                                        <h3 class="test-selected-stock-title">{{ selectedDataHistoricStock.name || selectedDataHistoricStock.symbol || `Stock ${selectedDataHistoricStock.id}` }}</h3>
+                                        <h3 class="test-selected-stock-title">{{ stockDisplayLabel(selectedDataHistoricStock, `Stock ${selectedDataHistoricStock.id}`) }}</h3>
                                         <div class="test-selected-stock-meta">
                                             <span>Symbol: {{ selectedDataHistoricStock.symbol || '-' }}</span>
                                             <span>Exchange: {{ selectedDataHistoricStock.exchange || '-' }}</span>
@@ -15596,7 +16147,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             @click="selectDataHistoricStock(stock.id)"
                                         >
                                             <span class="tests-chip-symbol">{{ stock.symbol || '-' }}</span>
-                                            <span class="tests-chip-name">{{ stock.name || stock.symbol || `Stock ${stock.id}` }}</span>
+                                            <span class="tests-chip-name">{{ stockDisplayLabel(stock, `Stock ${stock.id}`) }}</span>
                                         </button>
                                         <span v-if="!dataHistoricalPriceLoading && dataHistoricalPriceHoldings.length === 0" class="tests-chip-empty">
                                             No stocks stored for {{ dataStandaloneStockPageTitle(activeDataSubsection) }}.
@@ -15607,7 +16158,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                 <section v-if="selectedDataHistoricStock" class="test-selected-stock-card">
                                     <div class="test-selected-stock-card-header">
                                         <div class="test-selected-stock-summary">
-                                            <h3 class="test-selected-stock-title">{{ selectedDataHistoricStock.name || selectedDataHistoricStock.symbol || `Stock ${selectedDataHistoricStock.id}` }}</h3>
+                                            <h3 class="test-selected-stock-title">{{ stockDisplayLabel(selectedDataHistoricStock, `Stock ${selectedDataHistoricStock.id}`) }}</h3>
                                             <div class="test-selected-stock-meta">
                                                 <span>Symbol: {{ selectedDataHistoricStock.symbol || '-' }}</span>
                                                 <span>Exchange: {{ selectedDataHistoricStock.exchange || '-' }}</span>
@@ -16563,7 +17114,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     class="mobile-depot-stock-card"
                                 >
                                     <div class="mobile-depot-stock-name">
-                                        <div>{{ holding.name || '-' }}</div>
+                                        <div>{{ stockDisplayLabel(holding) }}</div>
                                         <div class="mobile-depot-stock-isin">{{ holding.isin || '-' }}</div>
                                     </div>
                                     <div class="mobile-depot-stock-row mobile-depot-stock-row--prices">
@@ -16649,7 +17200,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <tr v-for="holding in depotHoldings" :key="holding.id" :class="depotHoldingRowClass(holding)">
                                         <td v-if="!isCompactDepotStocksTable">{{ holding.symbol || '-' }}</td>
                                         <td>
-                                            <div>{{ holding.name || '-' }}</div>
+                                            <div>{{ stockDisplayLabel(holding) }}</div>
                                             <div class="depot-stock-isin">{{ holding.isin || '-' }}</div>
                                         </td>
                                         <td class="text-right">{{ formatPositionPieces(holding) }}</td>
@@ -18795,6 +19346,66 @@ function formatIndexDataUpdateSchedule(settings) {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.data-stock-selection-card {
+    height: auto;
+    min-height: 46px;
+    padding-block: 7px;
+}
+
+.data-stock-selection-copy {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    text-align: left;
+}
+
+.data-stock-selection-subtitle {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    font-size: 0.7rem;
+    line-height: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.data-date-range-card {
+    max-width: 680px;
+}
+
+.data-date-range-grid {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.data-date-range-item {
+    background: rgba(var(--v-theme-primary), 0.05);
+    border: 1px solid rgba(var(--v-theme-primary), 0.16);
+    border-radius: 6px;
+    display: grid;
+    gap: 4px;
+    padding: 12px;
+}
+
+.data-date-range-item span {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+.data-date-range-item strong {
+    font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 600px) {
+    .data-date-range-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 .tests-chip-empty {

@@ -37,6 +37,7 @@ class AdminTestsOptionsTest extends TestCase
         StockHolding::factory()->create([
             'symbol' => 'AAPL',
             'name' => 'Apple',
+            'subtitle' => 'Core technology holding',
         ]);
         StockHolding::factory()->create([
             'symbol' => 'MSFT',
@@ -53,6 +54,7 @@ class AdminTestsOptionsTest extends TestCase
             ->assertJsonPath('indices.1.name', 'S&P 500')
             ->assertJsonPath('indices.1.symbol', 'SPX')
             ->assertJsonPath('stocks.0.name', 'Apple')
+            ->assertJsonPath('stocks.0.subtitle', 'Core technology holding')
             ->assertJsonPath('stocks.0.symbol', 'AAPL')
             ->assertJsonPath('stocks.1.name', 'MSFT')
             ->assertJsonPath('stocks.1.symbol', 'MSFT');

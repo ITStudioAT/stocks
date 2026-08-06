@@ -34,7 +34,6 @@ class EodhdExchangeDataImporterTest extends TestCase
                     'Name' => 'Buenos Aires Exchange',
                     'Country' => 'Argentina',
                     'Currency' => 'ARS',
-                    'Timezone' => 'America/Argentina/Buenos_Aires',
                     'OperatingMIC' => 'XBUE',
                 ],
                 [
@@ -103,6 +102,7 @@ class EodhdExchangeDataImporterTest extends TestCase
         $nasdaq = EodhdExchange::query()->where('code', 'NASDAQ')->firstOrFail();
 
         $this->assertSame('XBUE', $buenosAires->detail_code);
+        $this->assertSame('America/Argentina/Buenos_Aires', $buenosAires->timezone);
         $this->assertSame('11:00:00', $buenosAires->trading_hours['Open']);
         $this->assertSame('10:00:00', $buenosAires->trading_hours['PreMarketOpen']);
         $this->assertSame('New Year\'s Day', $buenosAires->holidays['2026-01-01']['Holiday']);

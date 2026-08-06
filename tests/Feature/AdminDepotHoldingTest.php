@@ -51,6 +51,7 @@ class AdminDepotHoldingTest extends TestCase
                         'id',
                         'symbol',
                         'name',
+                        'subtitle',
                         'isin',
                         'wkn',
                         'exchange',
@@ -2126,6 +2127,7 @@ class AdminDepotHoldingTest extends TestCase
             ->postJson('/admin/watchlist/holdings', [
                 'symbol' => 'aapl',
                 'name' => 'Vanguard S&P 500 ETF',
+                'subtitle' => 'Long-term core holding',
                 'isin' => 'us9229083632',
                 'wkn' => 'A1JX53',
                 'exchange' => 'NASDAQ',
@@ -2137,6 +2139,7 @@ class AdminDepotHoldingTest extends TestCase
             ->assertCreated()
             ->assertJsonPath('holding.symbol', 'AAPL')
             ->assertJsonPath('holding.name', 'Vanguard S&P 500 ETF')
+            ->assertJsonPath('holding.subtitle', 'Long-term core holding')
             ->assertJsonPath('holding.isin', 'US9229083632')
             ->assertJsonPath('holding.wkn', 'A1JX53')
             ->assertJsonPath('holding.mic_code', 'XNAS')
@@ -2153,6 +2156,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->assertDatabaseHas('stock_holdings', [
             'symbol' => 'AAPL',
             'name' => 'Vanguard S&P 500 ETF',
+            'subtitle' => 'Long-term core holding',
             'isin' => 'US9229083632',
             'wkn' => 'A1JX53',
             'exchange' => 'NASDAQ',
@@ -2613,6 +2617,68 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonValidationErrors('symbol');
     }
 
+    public function test_admin_can_edit_every_stock_field_including_the_subtitle(): void
+    {
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'OLD',
+            'name' => 'Old name',
+            'subtitle' => null,
+        ]);
+
+        $this->actingAs($admin)
+            ->patchJson("/admin/watchlist/holdings/{$holding->id}", [
+                'symbol' => ' new ',
+                'name' => ' New name ',
+                'subtitle' => ' Income position ',
+                'isin' => $holding->isin,
+                'wkn' => $holding->wkn,
+                'exchange' => ' Vienna ',
+                'mic_code' => ' xwbo ',
+                'instrument_type' => ' Stock ',
+                'country' => ' Austria ',
+                'currency' => ' eur ',
+            ])
+            ->assertOk()
+            ->assertJsonPath('message', 'Stock updated.')
+            ->assertJsonPath('holding.symbol', 'NEW')
+            ->assertJsonPath('holding.name', 'New name')
+            ->assertJsonPath('holding.subtitle', 'Income position')
+            ->assertJsonPath('holding.isin', $holding->isin)
+            ->assertJsonPath('holding.wkn', $holding->wkn)
+            ->assertJsonPath('holding.exchange', 'Vienna')
+            ->assertJsonPath('holding.mic_code', 'XWBO')
+            ->assertJsonPath('holding.instrument_type', 'Stock')
+            ->assertJsonPath('holding.country', 'Austria')
+            ->assertJsonPath('holding.currency', 'EUR');
+
+        $this->assertDatabaseHas('stock_holdings', [
+            'id' => $holding->id,
+            'symbol' => 'NEW',
+            'name' => 'New name',
+            'subtitle' => 'Income position',
+            'exchange' => 'Vienna',
+            'mic_code' => 'XWBO',
+            'currency' => 'EUR',
+        ]);
+    }
+
+    public function test_admin_cannot_save_an_overlong_stock_subtitle(): void
+    {
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create();
+
+        $this->actingAs($admin)
+            ->patchJson("/admin/watchlist/holdings/{$holding->id}", [
+                'symbol' => $holding->symbol,
+                'subtitle' => str_repeat('x', 256),
+                'isin' => $holding->isin,
+                'wkn' => $holding->wkn,
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('subtitle');
+    }
+
     public function test_admin_can_update_a_holding_flatex_price(): void
     {
         $admin = $this->adminUser();
@@ -2755,6 +2821,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->getJson('/admin/watchlist/holdings/1/end-of-day-prices/latest-days')->assertUnauthorized();
         $this->getJson('/admin/watchlist/holdings/pdf')->assertUnauthorized();
         $this->postJson('/admin/watchlist/holdings', ['symbol' => 'AAPL'])->assertUnauthorized();
+        $this->patchJson('/admin/watchlist/holdings/1', ['symbol' => 'AAPL'])->assertUnauthorized();
         $this->postJson('/admin/watchlist/holdings/refresh-prices')->assertUnauthorized();
         $this->getJson('/admin/watchlist/holdings/refresh-prices/example')->assertUnauthorized();
         $this->patchJson('/admin/watchlist/holdings/1/flatex-price', ['flatex_price' => '180.25'])->assertUnauthorized();

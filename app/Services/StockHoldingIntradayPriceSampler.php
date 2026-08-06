@@ -9,6 +9,9 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
+/**
+ * @deprecated Legacy v1 writer. Do not add new usages; v2 persists StockHoldingIntradayCandle records.
+ */
 class StockHoldingIntradayPriceSampler
 {
     /**

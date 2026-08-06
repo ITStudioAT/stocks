@@ -126,6 +126,7 @@ class AdminStockHistoricalPriceTest extends TestCase
         $this->travelTo(Carbon::parse('2026-06-27 12:00:00', 'Europe/Vienna'));
         $admin = $this->adminUser();
         $holding = $this->xetraHolding();
+        $holding->update(['subtitle' => 'Accumulating share class']);
 
         $this->createHistoricalStockPrice($holding, '2026-06-25', '100.00000000');
 
@@ -135,6 +136,7 @@ class AdminStockHistoricalPriceTest extends TestCase
             ->getJson('/admin/watchlist/holdings/historical-prices/coverage')
             ->assertOk()
             ->assertJsonPath('coverage.holdings.0.id', $holding->id)
+            ->assertJsonPath('coverage.holdings.0.subtitle', 'Accumulating share class')
             ->assertJsonPath('coverage.holdings.0.end_of_day_last_date', '2026-06-25')
             ->assertJsonPath('refresh', null);
 

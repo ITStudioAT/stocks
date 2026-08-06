@@ -33,6 +33,7 @@ class AdminIndexWatchItemTest extends TestCase
             'last_price' => '6096.16990000',
             'latest_price_change_pct' => '0.333979',
             'latest_price_as_of' => '2026-06-04 15:13:00',
+            'trading_times' => 'Monday-Friday 00:00:00-23:59:00 UTC',
             'created_at' => $now,
         ]);
 
@@ -67,11 +68,17 @@ class AdminIndexWatchItemTest extends TestCase
             ->assertJsonPath('indexes.0.latest_price', '6116.529800')
             ->assertJsonPath('indexes.0.last_price', '6096.169900')
             ->assertJsonPath('indexes.0.latest_price_change_pct', '0.33')
+            ->assertJsonPath('indexes.0.trading_times', 'Monday-Friday 09:00:00-17:30:00 Europe/Vienna')
             ->assertJsonCount(30, 'indexes.0.recent_prices')
             ->assertJsonPath('indexes.0.recent_prices.0.trading_date', $now->toDateString())
             ->assertJsonPath('indexes.0.recent_prices.0.actual_price', '6110.000000')
             ->assertJsonPath('indexes.0.recent_prices.29.trading_date', $now->copy()->subDays(29)->toDateString())
             ->assertJsonPath('indexes.1.symbol', 'DAX');
+
+        $this->assertSame(
+            'Monday-Friday 00:00:00-23:59:00 UTC',
+            $atx->refresh()->trading_times,
+        );
     }
 
     public function test_admin_can_load_missing_index_prices_from_eodhd(): void
@@ -468,6 +475,31 @@ class AdminIndexWatchItemTest extends TestCase
             'country' => 'United States',
             'currency' => 'USD',
         ]);
+    }
+
+    public function test_supported_index_is_created_with_canonical_trading_times_when_price_refresh_fails(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            '*' => Http::response([], 503),
+        ]);
+
+        $this->actingAs($this->adminUser())
+            ->postJson('/admin/index-watch-items', [
+                'symbol' => 'ATX',
+                'name' => 'Austrian Traded Index',
+                'exchange' => 'INDX',
+                'instrument_type' => 'INDEX',
+                'country' => 'Austria',
+                'currency' => 'EUR',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('index.trading_times', 'Monday-Friday 09:00:00-17:30:00 Europe/Vienna');
+
+        $this->assertSame(
+            'Monday-Friday 09:00:00-17:30:00 Europe/Vienna',
+            IndexWatchItem::query()->where('symbol', 'ATX')->firstOrFail()->trading_times,
+        );
     }
 
     public function test_admin_cannot_add_a_non_index_watch_item(): void

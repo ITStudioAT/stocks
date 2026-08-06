@@ -3,6 +3,7 @@
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminCloudwaysController;
 use App\Http\Controllers\AdminDataController;
+use App\Http\Controllers\AdminDataRangeController;
 use App\Http\Controllers\AdminDepotController;
 use App\Http\Controllers\AdminDepotHoldingController;
 use App\Http\Controllers\AdminDepotTransactionController;
@@ -20,6 +21,7 @@ use App\Http\Controllers\AdminUserController;
 use App\Http\Controllers\AdminV2IndexEodhdSyncController;
 use App\Http\Controllers\AdminV2IndexEodhdSyncSettingsController;
 use App\Http\Controllers\AdminV2IndexRealtimeSyncController;
+use App\Http\Controllers\AdminV2StockEodhdSyncController;
 use App\Models\Depot;
 use App\Models\DepotTransaction;
 use App\Models\IndexWatchItem;
@@ -138,10 +140,11 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
         ->middleware('role:super_admin')
         ->name('admin.menu.cloudways');
     Route::view('/admin/menu/depots', 'app')->name('admin.menu.depots');
-    Route::view('/admin/menu/{adminSection}/{adminSubSection?}', 'app')
+    Route::view('/admin/menu/{adminSection}/{adminSubSection?}/{adminDataType?}', 'app')
         ->where([
             'adminSection' => '(?!updates$)[A-Za-z0-9_-]+',
             'adminSubSection' => '[A-Za-z0-9_-]+',
+            'adminDataType' => '[A-Za-z0-9_-]+',
         ])
         ->name('admin.menu');
     Route::get('/admin/me', [AdminAuthController::class, 'me'])->name('admin.me');
@@ -183,6 +186,9 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::get('/admin/v2/indices/eodhd-sync-settings', [AdminV2IndexEodhdSyncSettingsController::class, 'show'])->name('admin.v2.indices.eodhdSyncSettings.show');
     Route::patch('/admin/v2/indices/eodhd-sync-settings', [AdminV2IndexEodhdSyncSettingsController::class, 'update'])->name('admin.v2.indices.eodhdSyncSettings.update');
     Route::post('/admin/v2/indices/realtime-sync', [AdminV2IndexRealtimeSyncController::class, 'store'])->name('admin.v2.indices.realtimeSync.store');
+    Route::get('/admin/v2/stocks/eodhd-sync', [AdminV2StockEodhdSyncController::class, 'index'])->name('admin.v2.stocks.eodhdSync.index');
+    Route::post('/admin/v2/stocks/eodhd-sync', [AdminV2StockEodhdSyncController::class, 'store'])->name('admin.v2.stocks.eodhdSync.store');
+    Route::get('/admin/v2/stocks/eodhd-sync/{stockEodhdSyncRun}', [AdminV2StockEodhdSyncController::class, 'show'])->name('admin.v2.stocks.eodhdSync.show');
     Route::post('/admin/watchlist/holdings/refresh-prices', [AdminDepotHoldingController::class, 'refreshPrices'])->name('admin.watchlist.holdings.refresh-prices');
     Route::get('/admin/watchlist/holdings/refresh-prices/{refreshId}', [AdminDepotHoldingController::class, 'refreshPriceStatus'])->name('admin.watchlist.holdings.refresh-prices.status');
     Route::get('/admin/queue/status', [AdminQueueStatusController::class, 'show'])->name('admin.queue.status');
@@ -195,6 +201,8 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::post('/admin/data/exchanges/reload', [AdminDataController::class, 'reload'])->name('admin.data.exchanges.reload');
     Route::get('/admin/data/exchanges/reload/{refreshId}', [AdminDataController::class, 'reloadStatus'])->name('admin.data.exchanges.reload.status');
     Route::get('/admin/data/realtime/latest', [AdminDataController::class, 'latestRealtimePrices'])->name('admin.data.realtime.latest');
+    Route::get('/admin/data/indices/{indexWatchItem}/{dataType}/date-range', [AdminDataRangeController::class, 'index'])->name('admin.data.indices.dateRange');
+    Route::get('/admin/data/stocks/{holding}/{dataType}/date-range', [AdminDataRangeController::class, 'stock'])->name('admin.data.stocks.dateRange');
     Route::post('/admin/data/realtime/sync', [AdminDataController::class, 'syncRealtime'])->name('admin.data.realtime.sync');
     Route::post('/admin/data/end-of-day/sync', [AdminDataController::class, 'syncEndOfDay'])->name('admin.data.endOfDay.sync');
     Route::post('/admin/data/indices/sync', [AdminDataController::class, 'syncIndices'])->name('admin.data.indices.sync');
@@ -210,6 +218,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::post('/admin/data/repair/historical-data/{holding}', [AdminDataController::class, 'repairHistoricalDataStock'])->name('admin.data.repair.historicalData.stock');
     Route::get('/admin/watchlist/holdings/historical-prices/coverage', [AdminStockHistoricalPriceController::class, 'coverage'])->name('admin.watchlist.holdings.historical-prices.coverage');
     Route::post('/admin/watchlist/holdings/historical-prices/ensure', [AdminStockHistoricalPriceController::class, 'ensure'])->name('admin.watchlist.holdings.historical-prices.ensure');
+    Route::patch('/admin/watchlist/holdings/{holding}', [AdminDepotHoldingController::class, 'update'])->name('admin.watchlist.holdings.update');
     Route::patch('/admin/watchlist/holdings/{holding}/flatex-price', [AdminDepotHoldingController::class, 'updateFlatexPrice'])->name('admin.watchlist.holdings.flatex-price');
     Route::delete('/admin/watchlist/holdings/{holding}', [AdminDepotHoldingController::class, 'destroy'])->name('admin.watchlist.holdings.destroy');
     Route::get('/admin/active-depot/holdings', [AdminDepotHoldingController::class, 'index'])->name('admin.active-depot.holdings.index');

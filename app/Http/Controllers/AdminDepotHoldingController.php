@@ -185,6 +185,7 @@ class AdminDepotHoldingController extends Controller
                 'id' => $holding->id,
                 'symbol' => $holding->symbol,
                 'name' => $holding->name,
+                'subtitle' => $holding->subtitle,
                 'currency' => $holding->currency,
             ],
             'intraday' => $intradayDays[0] ?? null,
@@ -208,6 +209,7 @@ class AdminDepotHoldingController extends Controller
                     'id' => $holding->id,
                     'symbol' => $holding->symbol,
                     'name' => $holding->name,
+                    'subtitle' => $holding->subtitle,
                     'currency' => $holding->currency,
                 ],
                 'date' => null,
@@ -225,6 +227,7 @@ class AdminDepotHoldingController extends Controller
                     'id' => $holding->id,
                     'symbol' => $holding->symbol,
                     'name' => $holding->name,
+                    'subtitle' => $holding->subtitle,
                     'currency' => $holding->currency,
                 ],
                 'date' => null,
@@ -258,6 +261,7 @@ class AdminDepotHoldingController extends Controller
                 'id' => $holding->id,
                 'symbol' => $holding->symbol,
                 'name' => $holding->name,
+                'subtitle' => $holding->subtitle,
                 'currency' => $holding->currency,
             ],
             'date' => $latestTradingDate,
@@ -285,6 +289,7 @@ class AdminDepotHoldingController extends Controller
                     'id' => $holding->id,
                     'symbol' => $holding->symbol,
                     'name' => $holding->name,
+                    'subtitle' => $holding->subtitle,
                     'currency' => $holding->currency,
                 ],
                 'dates' => [],
@@ -319,6 +324,7 @@ class AdminDepotHoldingController extends Controller
                 'id' => $holding->id,
                 'symbol' => $holding->symbol,
                 'name' => $holding->name,
+                'subtitle' => $holding->subtitle,
                 'currency' => $holding->currency,
             ],
             'dates' => $latestTradingDates->all(),
@@ -353,6 +359,7 @@ class AdminDepotHoldingController extends Controller
                 'id' => $holding->id,
                 'symbol' => $holding->symbol,
                 'name' => $holding->name,
+                'subtitle' => $holding->subtitle,
                 'currency' => $holding->currency,
             ],
             'entries' => $entries,
@@ -393,6 +400,7 @@ class AdminDepotHoldingController extends Controller
         $holding = StockHolding::query()->create([
             'symbol' => $validated['symbol'],
             'name' => $validated['name'] ?? null,
+            'subtitle' => $validated['subtitle'] ?? null,
             'isin' => $validated['isin'] ?? null,
             'wkn' => $validated['wkn'] ?? null,
             'exchange' => $validated['exchange'] ?? null,
@@ -418,6 +426,29 @@ class AdminDepotHoldingController extends Controller
             'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
             'holding' => $this->holdingPayload($holding, $this->activeDepot()),
         ], 201);
+    }
+
+    public function update(Request $request, StockHolding $holding): JsonResponse
+    {
+        $validated = $this->validatedHoldingData($request, $holding);
+
+        $holding->update([
+            'symbol' => $validated['symbol'],
+            'name' => $validated['name'] ?? null,
+            'subtitle' => $validated['subtitle'] ?? null,
+            'isin' => $validated['isin'] ?? null,
+            'wkn' => $validated['wkn'] ?? null,
+            'exchange' => $validated['exchange'] ?? null,
+            'mic_code' => $validated['mic_code'] ?? null,
+            'instrument_type' => $validated['instrument_type'] ?? null,
+            'country' => $validated['country'] ?? null,
+            'currency' => $validated['currency'] ?? null,
+        ]);
+
+        return response()->json([
+            'message' => 'Stock updated.',
+            'holding' => $this->holdingPayload($holding->refresh(), $this->activeDepot()),
+        ]);
     }
 
     public function refreshPrices(Request $request): JsonResponse
@@ -558,7 +589,7 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, end_price_24: ?string, end_price_48: ?string, start_price_date: ?string, end_price_date: ?string, end_price_24_date: ?string, end_price_48_date: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, recent_prices_are_fallback: bool, intraday_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, intraday_candles: array<int, array{id: int, trading_date: string, price: string, currency: ?string, as_of: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, volume: ?int, currency: ?string}>, depot_transactions: array<int, array{id: int, type: string, pieces: ?string, total_amount: string, currency: ?string, booked_at: ?string}>, validation_errors: array<int, string>, created_at: ?string}
+     * @return array{id: int, symbol: ?string, name: ?string, subtitle: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_price: ?string, flatex_price: ?string, start_price: ?string, end_price: ?string, end_price_24: ?string, end_price_48: ?string, start_price_date: ?string, end_price_date: ?string, end_price_24_date: ?string, end_price_48_date: ?string, historical_prices_fetching: bool, position_pieces: string, latest_price_trend: ?string, latest_price_change_pct: ?string, latest_price_tick_trend: ?string, latest_price_status: string, price_status: ?string, latest_price_fetched_at: ?string, latest_price_source: ?string, latest_price_source_url: ?string, latest_price_as_of: ?string, trading_times: ?string, venue: ?string, price_type: ?string, price_spread_pct: ?string, recent_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, recent_prices_are_fallback: bool, intraday_prices: array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>, intraday_candles: array<int, array{id: int, trading_date: string, price: string, currency: ?string, as_of: ?string}>, daily_prices: array<int, array{trading_date: string, price: string, volume: ?int, currency: ?string}>, depot_transactions: array<int, array{id: int, type: string, pieces: ?string, total_amount: string, currency: ?string, booked_at: ?string}>, validation_errors: array<int, string>, created_at: ?string}
      */
     private function holdingPayload(
         StockHolding $holding,
@@ -590,6 +621,7 @@ class AdminDepotHoldingController extends Controller
             'id' => $holding->id,
             'symbol' => $holding->symbol,
             'name' => $holding->name,
+            'subtitle' => $holding->subtitle,
             'isin' => $holding->isin,
             'wkn' => $holding->wkn,
             'exchange' => $holding->exchange,
@@ -1980,13 +2012,14 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array{symbol: string, name?: string, isin?: string, wkn?: string, exchange?: string, mic_code?: string, instrument_type?: string, country?: string, currency?: string}
+     * @return array{symbol: string, name?: string, subtitle?: string, isin?: string, wkn?: string, exchange?: string, mic_code?: string, instrument_type?: string, country?: string, currency?: string}
      */
-    private function validatedHoldingData(Request $request): array
+    private function validatedHoldingData(Request $request, ?StockHolding $holding = null): array
     {
         $request->merge([
             'symbol' => $request->filled('symbol') ? Str::upper(trim((string) $request->input('symbol'))) : null,
             'name' => $request->filled('name') ? trim((string) $request->input('name')) : null,
+            'subtitle' => $request->filled('subtitle') ? trim((string) $request->input('subtitle')) : null,
             'isin' => $request->filled('isin') ? Str::upper(trim((string) $request->input('isin'))) : null,
             'wkn' => $request->filled('wkn') ? Str::upper(trim((string) $request->input('wkn'))) : null,
             'exchange' => $request->filled('exchange') ? trim((string) $request->input('exchange')) : null,
@@ -2001,17 +2034,18 @@ class AdminDepotHoldingController extends Controller
         return $request->validate([
             'symbol' => ['required', 'string', 'max:32'],
             'name' => ['nullable', 'string', 'max:255'],
+            'subtitle' => ['nullable', 'string', 'max:255'],
             'isin' => [
                 'nullable',
                 'string',
                 'size:12',
-                Rule::unique(StockHolding::class, 'isin'),
+                Rule::unique(StockHolding::class, 'isin')->ignore($holding),
             ],
             'wkn' => [
                 'nullable',
                 'string',
                 'size:6',
-                Rule::unique(StockHolding::class, 'wkn'),
+                Rule::unique(StockHolding::class, 'wkn')->ignore($holding),
             ],
             'exchange' => ['nullable', 'string', 'max:255'],
             'mic_code' => ['nullable', 'string', 'max:32'],

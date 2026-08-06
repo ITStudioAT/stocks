@@ -33,6 +33,7 @@ class StockHistoricalPriceService
             ->get([
                 'id',
                 'name',
+                'subtitle',
                 'symbol',
                 'isin',
                 'exchange',
@@ -180,6 +181,7 @@ class StockHistoricalPriceService
         return [
             'id' => $holding->id,
             'name' => $holding->name,
+            'subtitle' => $holding->subtitle,
             'symbol' => $holding->symbol,
             'isin' => $holding->isin,
             'exchange' => $holding->exchange,

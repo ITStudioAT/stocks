@@ -20,6 +20,22 @@ class V2IndexEodhdSyncScheduleTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_realtime_scheduler_uses_canonical_trading_times_without_mutating_stored_value(): void
+    {
+        $this->travelTo(Carbon::parse('2026-08-06 10:00:00', 'Europe/Vienna'));
+        $index = IndexWatchItem::factory()->create([
+            'symbol' => 'ATX',
+            'exchange' => 'INDX',
+            'trading_times' => 'Monday-Friday 00:00:00-23:59:00 UTC',
+        ]);
+
+        $payload = app(V2IndexRealtimeScheduler::class)->payload();
+
+        $this->assertSame('Monday-Friday 00:00:00-23:59:00 UTC', $index->refresh()->trading_times);
+        $this->assertTrue($payload['is_trading_time']);
+        $this->assertSame('due', $payload['status']);
+    }
+
     public function test_admin_can_view_and_update_the_independent_v2_index_schedule(): void
     {
         $this->travelTo(Carbon::parse('2026-08-05 10:15:00', 'Europe/Vienna'));

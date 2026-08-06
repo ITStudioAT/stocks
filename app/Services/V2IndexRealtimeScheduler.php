@@ -23,6 +23,7 @@ class V2IndexRealtimeScheduler
 
     public function __construct(
         private IndexWatchItemPriceRefresher $priceRefresher,
+        private IndexMarketHours $indexMarketHours,
     ) {}
 
     /**
@@ -329,12 +330,18 @@ class V2IndexRealtimeScheduler
         $nextTradingStartsAt = null;
         $hasRegularTradingWindow = $this->hasRegularTradingWindow($settings);
 
-        foreach (IndexWatchItem::query()->whereNotNull('trading_times')->cursor() as $item) {
-            if ($hasRegularTradingWindow && $this->isFullDayTradingWindow((string) $item->trading_times, $settings)) {
+        foreach (IndexWatchItem::query()->cursor() as $item) {
+            $tradingTimes = $this->indexMarketHours->effectiveTradingTimes($item);
+
+            if ($tradingTimes === null) {
                 continue;
             }
 
-            $candidate = $this->nextTradingStartsAt((string) $item->trading_times, $from, $settings);
+            if ($hasRegularTradingWindow && $this->isFullDayTradingWindow($tradingTimes, $settings)) {
+                continue;
+            }
+
+            $candidate = $this->nextTradingStartsAt($tradingTimes, $from, $settings);
 
             if ($candidate !== null && ($nextTradingStartsAt === null || $candidate->lessThan($nextTradingStartsAt))) {
                 $nextTradingStartsAt = $candidate;
@@ -394,11 +401,18 @@ class V2IndexRealtimeScheduler
         $hasRegularTradingWindow = $this->hasRegularTradingWindow($settings);
 
         return IndexWatchItem::query()
-            ->whereNotNull('trading_times')
             ->orderBy('id')
             ->cursor()
-            ->filter(fn (IndexWatchItem $item): bool => (! $hasRegularTradingWindow || ! $this->isFullDayTradingWindow((string) $item->trading_times, $settings))
-                && $this->isTradingTime((string) $item->trading_times, $at, $settings))
+            ->filter(function (IndexWatchItem $item) use ($at, $hasRegularTradingWindow, $settings): bool {
+                $tradingTimes = $this->indexMarketHours->effectiveTradingTimes($item);
+
+                if ($tradingTimes === null) {
+                    return false;
+                }
+
+                return (! $hasRegularTradingWindow || ! $this->isFullDayTradingWindow($tradingTimes, $settings))
+                    && $this->isTradingTime($tradingTimes, $at, $settings);
+            })
             ->map(fn (IndexWatchItem $item): int => (int) $item->getKey())
             ->values()
             ->all();
@@ -410,9 +424,12 @@ class V2IndexRealtimeScheduler
     private function hasRegularTradingWindow(array $settings): bool
     {
         return IndexWatchItem::query()
-            ->whereNotNull('trading_times')
             ->cursor()
-            ->contains(fn (IndexWatchItem $item): bool => ! $this->isFullDayTradingWindow((string) $item->trading_times, $settings));
+            ->contains(function (IndexWatchItem $item) use ($settings): bool {
+                $tradingTimes = $this->indexMarketHours->effectiveTradingTimes($item);
+
+                return $tradingTimes !== null && ! $this->isFullDayTradingWindow($tradingTimes, $settings);
+            });
     }
 
     /**

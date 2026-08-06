@@ -25,20 +25,6 @@ class EodhdMarketData
 {
     private const IntradayDetailTradingDayCount = 7;
 
-    private const IndexMarketProfiles = [
-        '000001' => ['timezone' => 'Asia/Shanghai', 'open' => '09:30:00', 'close' => '15:00:00'],
-        'ATG' => ['timezone' => 'Europe/Athens', 'open' => '10:15:00', 'close' => '17:20:00'],
-        'ATX' => ['timezone' => 'Europe/Vienna', 'open' => '09:00:00', 'close' => '17:30:00'],
-        'DJI' => ['timezone' => 'America/New_York', 'open' => '09:30:00', 'close' => '16:00:00'],
-        'GDAXI' => ['timezone' => 'Europe/Berlin', 'open' => '09:00:00', 'close' => '17:30:00'],
-        'IBEX' => ['timezone' => 'Europe/Madrid', 'open' => '09:00:00', 'close' => '17:30:00'],
-        'KS11' => ['timezone' => 'Asia/Seoul', 'open' => '09:00:00', 'close' => '15:30:00'],
-        'N225' => ['timezone' => 'Asia/Tokyo', 'open' => '09:00:00', 'close' => '15:30:00'],
-        'NDX' => ['timezone' => 'America/New_York', 'open' => '09:30:00', 'close' => '16:00:00'],
-        'OEX' => ['timezone' => 'America/New_York', 'open' => '09:30:00', 'close' => '16:00:00'],
-        'SSMI' => ['timezone' => 'Europe/Zurich', 'open' => '09:00:00', 'close' => '17:30:00'],
-    ];
-
     /**
      * @var array<int, string>
      */
@@ -56,6 +42,7 @@ class EodhdMarketData
         private WebQuoteValidator $validator,
         private MarketHours $marketHours,
         private EodhdApiClient $apiClient,
+        private IndexMarketHours $indexMarketHours,
     ) {}
 
     public function refreshSessionPriceFields(StockHolding $holding, ?ValidatedQuote $latestQuote = null): void
@@ -306,7 +293,7 @@ class EodhdMarketData
      */
     public function exchangeDetailsForIndexWatchItem(IndexWatchItem $item): array
     {
-        $profile = self::IndexMarketProfiles[Str::upper(trim((string) $item->symbol))] ?? null;
+        $profile = $this->indexMarketHours->profile($item);
         $exchange = $this->storedMarketExchangeForIndexWatchItem($item);
         $details = $exchange
             ? $this->storedExchangeDetails($exchange->code)

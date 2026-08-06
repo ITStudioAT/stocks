@@ -2,9 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\BackfillMissingStockHoldingIntradayCandles;
 use App\Jobs\RefreshDepotHoldingPrices;
 use App\Jobs\ReloadEodhdExchanges;
 use App\Jobs\ReloadStockHoldingIntradayData;
+use App\Jobs\SyncStockEodhdData;
 use App\Models\StockPriceRefreshRun;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Carbon;
@@ -92,9 +94,11 @@ class AdminQueueStatusController extends Controller
     private function maxJobTimeout(): int
     {
         return max([
+            (new BackfillMissingStockHoldingIntradayCandles('queue-status-check'))->timeout,
             (new RefreshDepotHoldingPrices('queue-status-check'))->timeout,
             (new ReloadEodhdExchanges('queue-status-check'))->timeout,
             (new ReloadStockHoldingIntradayData('queue-status-check'))->timeout,
+            (new SyncStockEodhdData('queue-status-check'))->timeout,
         ]);
     }
 

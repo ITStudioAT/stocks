@@ -16,7 +16,7 @@ class AdminQueueStatusTest extends TestCase
     public function test_admin_can_view_queue_status(): void
     {
         Config::set('queue.default', 'sync');
-        Config::set('queue.connections.sync.retry_after', 2100);
+        Config::set('queue.connections.sync.retry_after', 7500);
 
         $this->actingAs($this->adminUser())
             ->getJson('/admin/queue/status')
@@ -24,8 +24,8 @@ class AdminQueueStatusTest extends TestCase
             ->assertJsonPath('queue.status', 'ok')
             ->assertJsonPath('queue.connection', 'sync')
             ->assertJsonPath('queue.name', 'default')
-            ->assertJsonPath('queue.retry_after', 2100)
-            ->assertJsonPath('queue.max_job_timeout', 1800)
+            ->assertJsonPath('queue.retry_after', 7500)
+            ->assertJsonPath('queue.max_job_timeout', 7200)
             ->assertJsonPath('queue.pending', 0)
             ->assertJsonPath('queue.delayed', 0)
             ->assertJsonPath('queue.reserved', 0)
@@ -44,14 +44,14 @@ class AdminQueueStatusTest extends TestCase
             ->assertOk()
             ->assertJsonPath('queue.status', 'check')
             ->assertJsonPath('queue.retry_after', 60)
-            ->assertJsonPath('queue.issues.0', 'retry_after (60s) must be greater than max job timeout (1800s)');
+            ->assertJsonPath('queue.issues.0', 'retry_after (60s) must be greater than max job timeout (7200s)');
     }
 
     public function test_queue_status_warns_when_queue_size_cannot_be_checked(): void
     {
         Config::set('queue.default', 'missing');
         Config::set('queue.connections.missing.queue', 'default');
-        Config::set('queue.connections.missing.retry_after', 2100);
+        Config::set('queue.connections.missing.retry_after', 7500);
 
         $this->actingAs($this->adminUser())
             ->getJson('/admin/queue/status')
@@ -67,7 +67,7 @@ class AdminQueueStatusTest extends TestCase
     public function test_queue_status_shows_waiting_when_jobs_are_pending_without_a_reserved_worker(): void
     {
         Config::set('queue.default', 'database');
-        Config::set('queue.connections.database.retry_after', 2100);
+        Config::set('queue.connections.database.retry_after', 7500);
         Config::set('queue.connections.database.queue', 'default');
 
         DB::table('jobs')->insert([
@@ -101,7 +101,7 @@ class AdminQueueStatusTest extends TestCase
     public function test_queue_status_does_not_warn_for_a_currently_reserved_job(): void
     {
         Config::set('queue.default', 'database');
-        Config::set('queue.connections.database.retry_after', 2100);
+        Config::set('queue.connections.database.retry_after', 7500);
         Config::set('queue.connections.database.queue', 'default');
 
         DB::table('jobs')->insert([

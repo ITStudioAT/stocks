@@ -6,6 +6,7 @@ use App\Models\IndexWatchItem;
 use App\Models\IndexWatchItemPrice;
 use App\Models\IndexWatchItemRealtimePrice;
 use App\Services\EodhdApiUsage;
+use App\Services\IndexMarketHours;
 use App\Services\IndexWatchItemPriceRefresher;
 use App\Services\KnownInstrumentMetadataCorrections;
 use Illuminate\Database\Eloquent\Model;
@@ -31,6 +32,7 @@ class AdminIndexWatchItemController extends Controller
         private IndexWatchItemPriceRefresher $priceRefresher,
         private EodhdApiUsage $eodhdApiUsage,
         private KnownInstrumentMetadataCorrections $metadataCorrections,
+        private IndexMarketHours $indexMarketHours,
     ) {}
 
     public function index(): JsonResponse
@@ -38,11 +40,10 @@ class AdminIndexWatchItemController extends Controller
         $items = IndexWatchItem::query()
             ->orderBy('symbol')
             ->orderBy('id')
-            ->get()
-            ->map(fn (IndexWatchItem $item): array => $this->indexWatchItemPayload($item));
+            ->get();
 
         return response()->json([
-            'indexes' => $items,
+            'indexes' => $items->map(fn (IndexWatchItem $item): array => $this->indexWatchItemPayload($item)),
         ]);
     }
 
@@ -52,6 +53,7 @@ class AdminIndexWatchItemController extends Controller
 
         $item = IndexWatchItem::query()->create([
             ...$validated,
+            'trading_times' => $this->indexMarketHours->canonicalTradingTimesForSymbol($validated['symbol']),
             'raw_payload' => Arr::only($request->all(), [
                 'symbol',
                 'name',
@@ -205,7 +207,7 @@ class AdminIndexWatchItemController extends Controller
             'latest_price_change_pct' => $this->percentPayload($this->latestPriceChangePercent($item, $recentPrices)),
             'latest_price_as_of' => $this->storedUtcTimestamp($item, 'latest_price_as_of'),
             'latest_price_source' => $item->latest_price_source,
-            'trading_times' => $item->trading_times,
+            'trading_times' => $this->indexMarketHours->effectiveTradingTimes($item),
             'recent_prices' => $recentPrices
                 ->map(fn (IndexWatchItemPrice $price): array => [
                     'trading_date' => $price->trading_date?->toDateString(),

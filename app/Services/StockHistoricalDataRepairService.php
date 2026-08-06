@@ -73,14 +73,14 @@ class StockHistoricalDataRepairService
         return StockHolding::query()
             ->orderBy('name')
             ->orderBy('symbol')
-            ->get(['id', 'name', 'symbol'])
+            ->get(['id', 'name', 'subtitle', 'symbol'])
             ->filter(fn (StockHolding $holding): bool => ! $this->isCovered($coverageByHoldingId->get($holding->id), $minimumDate, $lastTradingDay))
             ->map(function (StockHolding $holding) use ($coverageByHoldingId, $minimumDate, $lastTradingDay): array {
                 $coverage = $coverageByHoldingId->get($holding->id);
 
                 return [
                     'id' => $holding->id,
-                    'label' => collect([$holding->symbol, $holding->name])->filter()->implode(' - '),
+                    'label' => collect([$holding->symbol, $holding->name, $holding->subtitle])->filter()->implode(' - '),
                     'db_minimum_date' => $this->coverageDate($coverage?->first_date),
                     'db_last_trading_day' => $this->coverageDate($coverage?->last_date),
                     'missing_ranges' => $this->missingRanges($coverage, $minimumDate, $lastTradingDay),

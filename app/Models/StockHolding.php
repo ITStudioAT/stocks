@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['symbol', 'name', 'isin', 'wkn', 'exchange', 'mic_code', 'instrument_type', 'country', 'currency', 'latest_price', 'flatex_price', 'start_price', 'end_price', 'end_price_24', 'end_price_48', 'latest_price_fetched_at', 'latest_price_source', 'latest_price_source_url', 'latest_price_as_of', 'trading_times', 'preferred_venue', 'preferred_mic', 'preferred_source_key', 'latest_stock_price_id', 'latest_realtime_price_id', 'price_status', 'latest_price_type', 'price_spread_pct', 'source_verified_at'])]
+#[Fillable(['symbol', 'name', 'subtitle', 'isin', 'wkn', 'exchange', 'mic_code', 'instrument_type', 'country', 'currency', 'latest_price', 'flatex_price', 'start_price', 'end_price', 'end_price_24', 'end_price_48', 'latest_price_fetched_at', 'latest_price_source', 'latest_price_source_url', 'latest_price_as_of', 'trading_times', 'preferred_venue', 'preferred_mic', 'preferred_source_key', 'latest_stock_price_id', 'latest_realtime_price_id', 'price_status', 'latest_price_type', 'price_spread_pct', 'source_verified_at'])]
 class StockHolding extends Model
 {
     /** @use HasFactory<StockHoldingFactory> */
@@ -74,6 +74,10 @@ class StockHolding extends Model
     }
 
     /**
+     * Legacy v1 relationship retained temporarily for compatibility reads and migration.
+     *
+     * @deprecated Use intradayCandles(). Remove this relation with the legacy table after fallback reads are retired.
+     *
      * @return HasMany<StockHoldingIntradayPrice, $this>
      */
     public function intradayPrices(): HasMany

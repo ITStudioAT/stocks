@@ -22,6 +22,7 @@ class StockHoldingFactory extends Factory
         return [
             'symbol' => strtoupper($this->faker->unique()->bothify('???')),
             'name' => $this->faker->company(),
+            'subtitle' => null,
             'isin' => strtoupper($this->faker->unique()->bothify('??##########')),
             'wkn' => strtoupper($this->faker->unique()->bothify('???###')),
             'exchange' => 'NASDAQ',

@@ -381,7 +381,7 @@ class AdminDepotTransactionController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, isin: ?string, currency: ?string, latest_price: ?string, previous_day_price: ?string, previous_day_price_date: ?string, previous_day_change_percent: ?string, flatex_price: ?string, year_start_price: ?string, latest_price_fetched_at: ?string, latest_price_status: string, position_pieces: string}
+     * @return array{id: int, symbol: ?string, name: ?string, subtitle: ?string, isin: ?string, currency: ?string, latest_price: ?string, previous_day_price: ?string, previous_day_price_date: ?string, previous_day_change_percent: ?string, flatex_price: ?string, year_start_price: ?string, latest_price_fetched_at: ?string, latest_price_status: string, position_pieces: string}
      */
     private function depotHoldingPayload(
         StockHolding $holding,
@@ -397,6 +397,7 @@ class AdminDepotTransactionController extends Controller
             'id' => $holding->id,
             'symbol' => $holding->symbol,
             'name' => $holding->name,
+            'subtitle' => $holding->subtitle,
             'isin' => $holding->isin,
             'currency' => $latestStoredPrice?->currency ?? $holding->currency,
             'latest_price' => $latestPrice,
@@ -1035,7 +1036,9 @@ class AdminDepotTransactionController extends Controller
             'id' => $transaction->id,
             'type' => $transaction->type,
             'stock_holding_id' => $transaction->stock_holding_id,
-            'stock_label' => $holding?->name ?? $holding?->symbol,
+            'stock_label' => $holding === null
+                ? null
+                : collect([$holding->name ?? $holding->symbol, $holding->subtitle])->filter()->implode(' · '),
             'stock_isin' => $holding?->isin,
             'pieces' => $transaction->pieces,
             'total_amount' => $transaction->total_amount,

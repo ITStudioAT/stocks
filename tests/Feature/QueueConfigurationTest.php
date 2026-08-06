@@ -2,9 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\BackfillMissingStockHoldingIntradayCandles;
 use App\Jobs\RefreshDepotHoldingPrices;
 use App\Jobs\ReloadEodhdExchanges;
 use App\Jobs\ReloadStockHoldingIntradayData;
+use App\Jobs\SyncStockEodhdData;
 use Tests\TestCase;
 
 class QueueConfigurationTest extends TestCase
@@ -13,8 +15,10 @@ class QueueConfigurationTest extends TestCase
     {
         $longestJobTimeout = max([
             (new RefreshDepotHoldingPrices('test-refresh'))->timeout,
+            (new BackfillMissingStockHoldingIntradayCandles('test-refresh'))->timeout,
             (new ReloadEodhdExchanges('test-refresh'))->timeout,
             (new ReloadStockHoldingIntradayData('test-refresh'))->timeout,
+            (new SyncStockEodhdData('test-refresh'))->timeout,
         ]);
 
         foreach (['database', 'redis'] as $connection) {

@@ -16,7 +16,7 @@ class AdminQueueClearTest extends TestCase
     public function test_admin_can_clear_queue_jobs_and_failed_job_records(): void
     {
         Config::set('queue.default', 'database');
-        Config::set('queue.connections.database.retry_after', 2100);
+        Config::set('queue.connections.database.retry_after', 7500);
         Config::set('queue.connections.database.queue', 'default');
 
         DB::table('jobs')->insert([

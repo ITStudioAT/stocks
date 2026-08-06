@@ -8,6 +8,7 @@ export const useDepotStore = defineStore('depots', {
         holdings: [],
         indexWatchItems: [],
         indexEodhdSync: null,
+        stockEodhdSync: null,
         indexEodhdSyncSettings: null,
         depotHoldings: [],
         depotValuations: {},
@@ -601,6 +602,32 @@ export const useDepotStore = defineStore('depots', {
         async createActiveDepotHolding(payload) {
             return await this.createWatchlistHolding(payload);
         },
+        async updateWatchlistHolding(id, payload) {
+            this.holdingsLoading = true;
+            this.holdingsError = '';
+
+            try {
+                const data = await request(`/admin/watchlist/holdings/${id}`, {
+                    method: 'PATCH',
+                    body: JSON.stringify(payload),
+                });
+
+                if (data.holding) {
+                    this.holdings = this.holdings.map((holding) => holding.id === id ? data.holding : holding);
+                    this.depotHoldings = this.depotHoldings.map((holding) => holding.id === id ? {
+                        ...holding,
+                        ...data.holding,
+                    } : holding);
+                }
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            } finally {
+                this.holdingsLoading = false;
+            }
+        },
         async createIndexWatchItem(payload) {
             this.holdingsLoading = true;
             this.holdingsError = '';
@@ -693,6 +720,37 @@ export const useDepotStore = defineStore('depots', {
         },
         clearIndexEodhdSync() {
             this.indexEodhdSync = null;
+        },
+        async loadLatestStockEodhdSync() {
+            const data = await request('/admin/v2/stocks/eodhd-sync');
+            this.stockEodhdSync = data.refresh ?? null;
+            this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+            return data;
+        },
+        async startStockEodhdSync() {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/v2/stocks/eodhd-sync', { method: 'POST' });
+                this.stockEodhdSync = data.refresh ?? null;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async loadStockEodhdSync(refreshId) {
+            const data = await request(`/admin/v2/stocks/eodhd-sync/${refreshId}`);
+            this.stockEodhdSync = data.refresh ?? null;
+            this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+            return data;
+        },
+        clearStockEodhdSync() {
+            this.stockEodhdSync = null;
         },
         async loadIndexEodhdSyncSettings() {
             const data = await request('/admin/v2/indices/eodhd-sync-settings');

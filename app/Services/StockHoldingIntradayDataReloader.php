@@ -30,16 +30,17 @@ class StockHoldingIntradayDataReloader
     ) {}
 
     /**
-     * @return array<int, array{id: int, symbol: ?string, name: string}>
+     * @return array<int, array{id: int, symbol: ?string, name: string, subtitle: ?string}>
      */
     public function stockOptions(): array
     {
         return StockHolding::query()
-            ->get(['id', 'name', 'symbol'])
+            ->get(['id', 'name', 'subtitle', 'symbol'])
             ->map(fn (StockHolding $holding): array => [
                 'id' => $holding->id,
                 'symbol' => $holding->symbol,
                 'name' => $holding->name ?: ($holding->symbol ?: "Stock {$holding->id}"),
+                'subtitle' => $holding->subtitle,
             ])
             ->sortBy('name', SORT_NATURAL | SORT_FLAG_CASE)
             ->values()
@@ -385,9 +386,9 @@ class StockHoldingIntradayDataReloader
         ]);
     }
 
-    public function createMissingYearRun(): StockHoldingIntradayReloadRun
+    public function createMissingYearRun(?Carbon $targetDate = null): StockHoldingIntradayReloadRun
     {
-        $date = now('Europe/Vienna')->startOfDay();
+        $date = ($targetDate ?? now('Europe/Vienna'))->copy()->startOfDay();
 
         return StockHoldingIntradayReloadRun::query()->create([
             'id' => 'intraday-missing-'.Str::uuid()->toString(),

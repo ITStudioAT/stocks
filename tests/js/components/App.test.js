@@ -3722,6 +3722,8 @@ describe('App', () => {
         window.history.pushState({}, '', '/admin/dashboard');
         let currentPriceRefreshSettings = priceRefreshSettings();
         let indexChartDirection = 'up';
+        let appleSubtitle = 'Core technology holding';
+        let currentStockEodhdSync = null;
         const currentIndexPriceRefreshSettings = indexPriceRefreshSettings({
             last_refreshed_at: '2026-06-02T13:00:00+00:00',
             next_refresh_at: '2026-06-02T13:30:00+00:00',
@@ -3818,6 +3820,7 @@ describe('App', () => {
                             id: 1,
                             symbol: 'AAPL',
                             name: 'Apple',
+                            subtitle: appleSubtitle,
                             isin: 'US0378331005',
                             wkn: '865985',
                             exchange: 'NASDAQ',
@@ -4217,12 +4220,15 @@ describe('App', () => {
             }
 
             if (path === '/admin/watchlist/holdings') {
+                const payload = JSON.parse(options.body);
+
                 return Promise.resolve(jsonResponse({
                     message: 'Stock added to watch-list.',
                     holding: {
                         id: 2,
                         symbol: 'MSFT',
                         name: 'Microsoft',
+                        subtitle: payload.subtitle,
                         exchange: 'NASDAQ',
                         currency: 'USD',
                         latest_price: '415.250000',
@@ -4304,6 +4310,51 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({
                     index_eodhd_sync_settings: currentIndexEodhdSyncSettings,
                 }));
+            }
+
+            if (path === '/admin/v2/stocks/eodhd-sync' && options?.method === 'POST') {
+                currentStockEodhdSync = {
+                    refresh_id: 'stock-eodhd-test',
+                    status: 'queued',
+                    stage: 'eod',
+                    date_from: '2025-08-06',
+                    date_to: '2026-08-06',
+                    current: 'Synchronizing missing EOD data...',
+                    steps: [
+                        { key: 'eod', label: 'EOD-Daten', status: 'running', message: 'Synchronizing EOD data.' },
+                        { key: 'intraday', label: 'Intraday-Daten', status: 'pending', message: 'Waiting for EOD data.' },
+                    ],
+                    progress: { completed: 0, total: 7, percent: 0 },
+                    eod: { stored_count: 0, failed_count: 0 },
+                    intraday: { stored_count: 0, failed_count: 0 },
+                    message: 'Stock EODHD sync queued.',
+                    error: null,
+                };
+
+                return Promise.resolve(jsonResponse({ refresh: currentStockEodhdSync }));
+            }
+
+            if (path === '/admin/v2/stocks/eodhd-sync' && (!options?.method || options.method === 'GET')) {
+                return Promise.resolve(jsonResponse({ refresh: currentStockEodhdSync }));
+            }
+
+            if (path === '/admin/v2/stocks/eodhd-sync/stock-eodhd-test') {
+                currentStockEodhdSync = {
+                    ...currentStockEodhdSync,
+                    status: 'finished',
+                    stage: 'intraday',
+                    current: null,
+                    steps: [
+                        { key: 'eod', label: 'EOD-Daten', status: 'finished', message: '40 EOD records loaded/updated.' },
+                        { key: 'intraday', label: 'Intraday-Daten', status: 'finished', message: '900 candles loaded/updated.' },
+                    ],
+                    progress: { completed: 7, total: 7, percent: 100 },
+                    eod: { stored_count: 40, failed_count: 0 },
+                    intraday: { stored_count: 900, failed_count: 0 },
+                    message: 'Stock EODHD sync finished.',
+                };
+
+                return Promise.resolve(jsonResponse({ refresh: currentStockEodhdSync }));
             }
 
             if (path === '/admin/v2/indices/eodhd-sync' && options?.method === 'POST') {
@@ -4611,6 +4662,19 @@ describe('App', () => {
                         started_at: '2026-06-02T12:15:00+00:00',
                         finished_at: '2026-06-02T12:20:00+00:00',
                         error: null,
+                    },
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/1' && options?.method === 'PATCH') {
+                const payload = JSON.parse(options.body);
+                appleSubtitle = payload.subtitle;
+
+                return Promise.resolve(jsonResponse({
+                    message: 'Stock updated.',
+                    holding: {
+                        id: 1,
+                        ...payload,
                     },
                 }));
             }
@@ -4929,6 +4993,10 @@ describe('App', () => {
         holdingSearchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
         await flushPromises();
 
+        const addSubtitleInput = document.body.querySelector('input[maxlength="255"]');
+        addSubtitleInput.value = 'Cloud platform leader';
+        addSubtitleInput.dispatchEvent(new Event('input', { bubbles: true }));
+
         expect(document.body.textContent).toContain('Microsoft Corporation');
         expect(document.body.textContent).toContain('US5949181045');
         expect(document.body.textContent).toContain('NASDAQ');
@@ -4939,19 +5007,20 @@ describe('App', () => {
         addButton.click();
         await flushPromises();
 
-        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings', expect.objectContaining({
-            method: 'POST',
-            body: JSON.stringify({
-                symbol: 'MSFT',
-                name: 'Microsoft Corporation',
-                isin: 'US5949181045',
-                exchange: 'NASDAQ',
-                mic_code: 'XNAS',
-                instrument_type: 'Common Stock',
-                country: 'United States',
-                currency: 'USD',
-            }),
-        }));
+        const createHoldingCall = fetchMock.mock.calls.find(([path, options]) => (
+            path === '/admin/watchlist/holdings' && options?.method === 'POST'
+        ));
+        expect(JSON.parse(createHoldingCall[1].body)).toEqual({
+            symbol: 'MSFT',
+            name: 'Microsoft Corporation',
+            isin: 'US5949181045',
+            exchange: 'NASDAQ',
+            mic_code: 'XNAS',
+            instrument_type: 'Common Stock',
+            country: 'United States',
+            currency: 'USD',
+            subtitle: 'Cloud platform leader',
+        });
 
         const topLevelMenuKeys = wrapper.vm.menuItems.map((item) => item.key);
         expect(topLevelMenuKeys.indexOf('stocks')).toBe(topLevelMenuKeys.indexOf('indices') + 1);
@@ -4972,15 +5041,37 @@ describe('App', () => {
         const stocksDashboardButtons = stocksDashboard.findAll('button');
         const stockEodhdSyncButton = stocksDashboardButtons.find((button) => button.text() === 'EODHD Sync');
         const stocksAddButton = stocksDashboardButtons.find((button) => button.text() === 'Add stock');
+        const stocksEditButton = stocksDashboardButtons.find((button) => button.text() === 'Edit stock');
         const stocksDeleteButton = stocksDashboardButtons.find((button) => button.text() === 'Delete stock');
-        expect(stockEodhdSyncButton.attributes('disabled')).toBeDefined();
+        expect(stockEodhdSyncButton.attributes('disabled')).toBeUndefined();
         expect(stocksAddButton.exists()).toBe(true);
+        expect(stocksEditButton.exists()).toBe(true);
+        expect(stocksEditButton.attributes('disabled')).toBeDefined();
         expect(stocksDeleteButton.exists()).toBe(true);
         expect(stocksDeleteButton.attributes('disabled')).toBeDefined();
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings?page=1&all=1', expect.any(Object));
+        expect(fetchMock).toHaveBeenCalledWith('/admin/v2/stocks/eodhd-sync', expect.any(Object));
         expect(wrapper.get('.watch-list-section').text()).toContain('Apple');
+        expect(wrapper.get('.watch-list-section').text()).toContain('Core technology holding');
         expect(wrapper.find('[aria-label="Buy stock"]').exists()).toBe(false);
         expect(wrapper.find('[aria-label="Sell stock"]').exists()).toBe(false);
+
+        await stockEodhdSyncButton.trigger('click');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/v2/stocks/eodhd-sync', expect.objectContaining({ method: 'POST' }));
+        expect(stocksDashboard.get('[aria-label="Stock EODHD synchronization status"]').text()).toContain('EOD-Daten');
+        expect(stocksDashboard.get('[aria-label="Stock EODHD synchronization status"]').text()).toContain('Intraday-Daten');
+        expect(stocksDashboard.get('[aria-label="Stock EODHD synchronization status"]').text()).toContain('Currently running: Synchronizing missing EOD data...');
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/data/realtime/sync')).toBe(false);
+
+        await wrapper.vm.pollStockEodhdSync('stock-eodhd-test');
+        await flushPromises();
+
+        const completedStockSync = stocksDashboard.get('[aria-label="Stock EODHD synchronization status"]');
+        expect(completedStockSync.text()).toContain('completed');
+        expect(completedStockSync.text()).toContain('EOD: 40 records');
+        expect(completedStockSync.text()).toContain('Intraday: 900 candles');
 
         const stocksTable = wrapper.get('.desktop-watch-list-table');
         expect(stocksTable.findAll('.watch-list-live-badge')).toHaveLength(1);
@@ -5020,10 +5111,41 @@ describe('App', () => {
         expect(appleStockRow.attributes('aria-selected')).toBe('true');
         expect(appleStockRow.classes()).toContain('stock-holding-row--selected');
         expect(stocksDeleteButton.attributes('disabled')).toBeUndefined();
+        expect(stocksEditButton.attributes('disabled')).toBeUndefined();
         expect(fetchMock).toHaveBeenCalledWith(
             '/admin/watchlist/holdings?page=1&include_charts=1&all=1&chart_stock_id=1&chart_range=today',
             expect.any(Object),
         );
+
+        await stocksEditButton.trigger('click');
+        await flushPromises();
+
+        const editDialog = Array.from(document.body.querySelectorAll('.v-overlay'))
+            .find((dialog) => dialog.textContent.includes('Edit stock'));
+        const editSubtitleLabel = Array.from(editDialog.querySelectorAll('label'))
+            .find((label) => label.textContent.trim() === 'Subtitle');
+        const editSubtitleInput = editDialog.querySelector(`#${editSubtitleLabel.getAttribute('for')}`);
+        editSubtitleInput.value = 'Growth position';
+        editSubtitleInput.dispatchEvent(new Event('input', { bubbles: true }));
+        const saveEditButton = Array.from(editDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.trim() === 'Save');
+        saveEditButton.click();
+        await flushPromises();
+
+        const updateCall = fetchMock.mock.calls.find(([path, options]) => (
+            path === '/admin/watchlist/holdings/1' && options?.method === 'PATCH'
+        ));
+        expect(JSON.parse(updateCall[1].body)).toMatchObject({
+            symbol: 'AAPL',
+            name: 'Apple',
+            subtitle: 'Growth position',
+            isin: 'US0378331005',
+            wkn: '865985',
+            exchange: 'NASDAQ',
+            currency: 'EUR',
+        });
+        expect(wrapper.get('.watch-list-section').text()).toContain('Growth position');
+
         const stockPriceCard = wrapper.get('.stock-price-inline-card');
         const appleStockChartRow = appleStockRow.element.nextElementSibling;
         expect(appleStockChartRow).not.toBeNull();
@@ -5193,7 +5315,7 @@ describe('App', () => {
         await stocksDeleteButton.trigger('click');
         await flushPromises();
         expect(wrapper.vm.isDeleteHoldingDialogOpen).toBe(true);
-        expect(document.body.textContent).toContain('Delete Apple?');
+        expect(document.body.textContent).toContain('Delete Apple · Growth position?');
         wrapper.vm.abortDeleteHoldingDialog();
         await flushPromises();
 
@@ -5398,21 +5520,36 @@ describe('App', () => {
             latest_price_change_pct: '0.20',
             recent_prices: [],
         });
+        wrapper.vm.indexWatchItems.push({
+            id: 3,
+            symbol: 'UTCX',
+            name: 'UTC Index',
+            exchange: 'INDX',
+            country: 'Global',
+            trading_times: 'Monday-Friday 00:00:00-23:59:00 UTC',
+            latest_price: '100.00',
+            latest_price_change_pct: '0.00',
+            recent_prices: [],
+        });
         await wrapper.vm.$nextTick();
 
         const daxIndexCard = wrapper.findAll('.index-watch-card')
             .find((card) => card.text().includes('DAX Index'));
         const djiIndexCard = wrapper.findAll('.index-watch-card')
             .find((card) => card.text().includes('Dow Jones Industrial Average'));
+        const utcIndexCard = wrapper.findAll('.index-watch-card')
+            .find((card) => card.text().includes('UTC Index'));
         expect(daxIndexCard.get('[aria-label="DAX live update schedule status"]').text()).toBe('Waiting');
         expect(daxIndexCard.get('[aria-label="DAX live update activity status"]').text()).toBe('Inactive');
         expect(daxIndexCard.get('[aria-label="DAX live update activity status"]').classes()).toContain('text-error');
         expect(djiIndexCard.get('[aria-label="DJI live update schedule status"]').text()).toBe('Scheduled');
         expect(djiIndexCard.get('[aria-label="DJI live update activity status"]').text()).toBe('Active');
         expect(djiIndexCard.get('[aria-label="DJI live update activity status"]').classes()).toContain('text-success');
+        expect(utcIndexCard.get('[aria-label="UTCX live update schedule status"]').text()).toBe('Scheduled');
+        expect(utcIndexCard.get('[aria-label="UTCX live update activity status"]').text()).toBe('Active');
         wrapper.vm.indexWatchItems.splice(
             wrapper.vm.indexWatchItems.findIndex((indexItem) => indexItem.id === 2),
-            1,
+            2,
         );
         await wrapper.vm.$nextTick();
         expect(wrapper.find('.index-watch-card').text()).not.toContain('2026-06-07');
@@ -5555,7 +5692,7 @@ describe('App', () => {
         await flushPromises();
 
         expect(document.body.textContent).toContain('Confirm delete');
-        expect(document.body.textContent).toContain('Delete Apple?');
+        expect(document.body.textContent).toContain('Delete Apple · Growth position?');
 
         const deleteButton = Array.from(document.body.querySelectorAll('button'))
             .filter((button) => button.textContent.trim() === 'Confirm')
@@ -6146,8 +6283,11 @@ describe('App', () => {
             if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
-                    holdings: [],
-                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null },
+                    holdings: [
+                        { id: 7, symbol: 'AMES', name: 'Amundi IBEX 35', subtitle: 'Accumulating' },
+                        { id: 8, symbol: 'AAPL', name: 'Apple', subtitle: null },
+                    ],
+                    meta: { current_page: 1, last_page: 1, per_page: 2, total: 2, from: 1, to: 2 },
                     price_refresh_settings: priceRefreshSettings(),
                     index_data_update_settings: mockedIndexDataUpdateSettings,
                 }));
@@ -6169,7 +6309,12 @@ describe('App', () => {
             }
 
             if (path === '/admin/index-watch-items') {
-                return Promise.resolve(jsonResponse({ indexes: [] }));
+                return Promise.resolve(jsonResponse({
+                    indexes: [
+                        { id: 4, symbol: 'GDAXI', name: 'DAX Index' },
+                        { id: 5, symbol: 'NDX', name: 'Nasdaq 100' },
+                    ],
+                }));
             }
 
             if (path === '/admin/data/exchanges') {
@@ -6522,6 +6667,28 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/data/indices/4/intraday-data/date-range') {
+                return Promise.resolve(jsonResponse({
+                    data_type: 'intraday-data',
+                    range: {
+                        date_from: '2025-08-04',
+                        date_to: '2026-08-05',
+                        row_count: 12045,
+                    },
+                }));
+            }
+
+            if (path === '/admin/data/stocks/7/eod-data/date-range') {
+                return Promise.resolve(jsonResponse({
+                    data_type: 'eod-data',
+                    range: {
+                        date_from: '2025-06-05',
+                        date_to: '2026-06-17',
+                        row_count: 257,
+                    },
+                }));
+            }
+
             if (path === '/admin/watchlist/holdings/7/end-of-day-prices/latest-days') {
                 return Promise.resolve(jsonResponse({
                     holding: {
@@ -6829,6 +6996,82 @@ describe('App', () => {
             .find((item) => item.text().includes('Data'));
         await dataMenuItem.trigger('click');
         await flushPromises();
+
+        const dataTabs = wrapper.findAll('.v-tab').map((tab) => tab.text());
+        expect(dataTabs).toEqual(['Indizes', 'Stocks', 'Live-Daten', 'Intraday-Daten', 'EOD-Daten']);
+        expect(window.location.pathname).toBe('/admin/menu/data/indices/live-data');
+        const indexDataTypeTabs = wrapper.get('[aria-label="Data indices data types"]');
+        expect(indexDataTypeTabs.text()).toContain('Live-Daten');
+        expect(indexDataTypeTabs.text()).toContain('Intraday-Daten');
+        expect(indexDataTypeTabs.text()).toContain('EOD-Daten');
+        expect(wrapper.get('[aria-label="Data indices"]').text()).toContain('GDAXI');
+        expect(wrapper.get('[aria-label="Data indices"]').text()).toContain('Nasdaq 100');
+        expect(wrapper.text()).not.toContain('Exchanges');
+        expect(wrapper.text()).not.toContain('Repair');
+
+        const indexIntradayDataTab = indexDataTypeTabs.findAll('.v-tab')
+            .find((tab) => tab.text() === 'Intraday-Daten');
+        await indexIntradayDataTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/data/indices/intraday-data');
+
+        const indexButtons = wrapper.get('[aria-label="Data indices"]').findAll('button');
+        expect(indexButtons[0].attributes('aria-pressed')).toBe('false');
+        await indexButtons[0].trigger('click');
+        await flushPromises();
+        expect(indexButtons[0].attributes('aria-pressed')).toBe('true');
+        const indexDataRange = wrapper.get('[aria-label="Stored data date range"]');
+        expect(indexDataRange.text()).toContain('GDAXI · Intraday-Daten');
+        expect(indexDataRange.text()).toContain('04.08.2025');
+        expect(indexDataRange.text()).toContain('05.08.2026');
+        expect(indexDataRange.text().replace(/\s/g, '')).toContain('12045');
+        await indexButtons[0].trigger('click');
+        await flushPromises();
+        expect(indexButtons[0].attributes('aria-pressed')).toBe('false');
+        expect(wrapper.find('[aria-label="Stored data date range"]').exists()).toBe(false);
+
+        const stocksTab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Stocks');
+        await stocksTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/data/stocks/intraday-data');
+        const stockDataTypeTabs = wrapper.get('[aria-label="Data stocks data types"]');
+        expect(stockDataTypeTabs.text()).toContain('Live-Daten');
+        expect(stockDataTypeTabs.text()).toContain('Intraday-Daten');
+        expect(stockDataTypeTabs.text()).toContain('EOD-Daten');
+
+        const stockEodDataTab = stockDataTypeTabs.findAll('.v-tab')
+            .find((tab) => tab.text() === 'EOD-Daten');
+        await stockEodDataTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/data/stocks/eod-data');
+        const dataStocks = wrapper.get('[aria-label="Data stocks"]');
+        const stockButtons = dataStocks.findAll('button');
+        expect(stockButtons).toHaveLength(2);
+        expect(dataStocks.text()).toContain('AMES');
+        expect(stockButtons[0].get('.tests-chip-name').text()).toBe('Amundi IBEX 35');
+        expect(stockButtons[0].get('.data-stock-selection-subtitle').text()).toBe('Accumulating');
+        expect(stockButtons[1].find('.data-stock-selection-subtitle').exists()).toBe(false);
+        expect(stockButtons[0].attributes('aria-pressed')).toBe('false');
+
+        await stockButtons[0].trigger('click');
+        await flushPromises();
+
+        expect(stockButtons[0].attributes('aria-pressed')).toBe('true');
+        const stockDataRange = wrapper.get('[aria-label="Stored data date range"]');
+        expect(stockDataRange.text()).toContain('AMES · EOD-Daten');
+        expect(stockDataRange.text()).toContain('05.06.2025');
+        expect(stockDataRange.text()).toContain('17.06.2026');
+        expect(stockDataRange.text()).toContain('257');
+        expect(dataStocks.find('.test-selected-stock-card').exists()).toBe(false);
+        await stockButtons[0].trigger('click');
+        await flushPromises();
+        expect(stockButtons[0].attributes('aria-pressed')).toBe('false');
+        localStorage.removeItem('data_intraday_refresh_info_dismissed');
+
+        return;
 
         const liveDataTab = wrapper.findAll('.v-tab').find((tab) => tab.text().includes('Live Data'));
         expect(liveDataTab).toBeTruthy();
@@ -7411,7 +7654,7 @@ describe('App', () => {
         localStorage.removeItem('data_intraday_refresh_info_dismissed');
     });
 
-    it('refreshes Historical Data repair info after repairing from the data repair page', async () => {
+    it('redirects removed Data subpages to the Indizes list', async () => {
         window.history.pushState({}, '', '/admin/menu/data/repair');
         const repairSummaries = [
             {
@@ -7533,6 +7776,14 @@ describe('App', () => {
 
         const wrapper = mountApp();
         await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/data/indices/live-data');
+        expect(wrapper.find('[aria-label="Data indices"]').exists()).toBe(true);
+        expect(wrapper.text()).not.toContain('Historical Data');
+        expect(wrapper.text()).not.toContain('Repair');
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/data/repair')).toBe(false);
+
+        return;
 
         expect(window.location.pathname).toBe('/admin/menu/data/repair');
         expect(wrapper.text()).toContain('Historical Data');

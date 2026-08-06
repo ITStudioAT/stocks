@@ -155,7 +155,7 @@ class StockEndOfDayRepairService
     {
         return StockHolding::query()
             ->orderBy('id')
-            ->get(['id', 'name', 'isin', 'wkn', 'symbol', 'exchange', 'mic_code', 'currency', 'trading_times']);
+            ->get(['id', 'name', 'subtitle', 'isin', 'wkn', 'symbol', 'exchange', 'mic_code', 'currency', 'trading_times']);
     }
 
     private function isMissing(StockHolding $holding): bool
@@ -168,7 +168,7 @@ class StockEndOfDayRepairService
 
     private function holdingLabel(StockHolding $holding): string
     {
-        return collect([$holding->symbol, $holding->name])->filter()->implode(' - ');
+        return collect([$holding->symbol, $holding->name, $holding->subtitle])->filter()->implode(' - ');
     }
 
     /**

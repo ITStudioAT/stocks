@@ -259,7 +259,13 @@ class EodhdExchangeDataImporter
                 'name' => $this->stringValue($exchange['Name'] ?? $exchange['name'] ?? null),
                 'country' => $this->stringValue($exchange['Country'] ?? $exchange['country'] ?? null),
                 'currency' => $this->stringValue($exchange['Currency'] ?? $exchange['currency'] ?? null),
-                'timezone' => $this->stringValue($exchange['Timezone'] ?? $exchange['timezone'] ?? null),
+                'timezone' => $this->stringValue(
+                    $details['Timezone']
+                        ?? $details['timezone']
+                        ?? $exchange['Timezone']
+                        ?? $exchange['timezone']
+                        ?? null,
+                ),
                 'operating_mic' => $this->stringValue(
                     $exchange['OperatingMIC']
                         ?? $exchange['OperatingMic']

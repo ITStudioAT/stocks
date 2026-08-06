@@ -108,13 +108,14 @@ class AdminStockHistoricalPriceController extends Controller
                     ->where('stock_holding_intraday_candles.interval', '5m')
                     ->where('stock_holding_intraday_candles.source_key', 'eodhd_intraday');
             })
-            ->groupBy('stock_holdings.id', 'stock_holdings.symbol', 'stock_holdings.name')
+            ->groupBy('stock_holdings.id', 'stock_holdings.symbol', 'stock_holdings.name', 'stock_holdings.subtitle')
             ->orderBy('stock_holdings.name')
             ->orderBy('stock_holdings.symbol')
             ->select([
                 'stock_holdings.id',
                 'stock_holdings.symbol',
                 'stock_holdings.name',
+                'stock_holdings.subtitle',
             ])
             ->selectRaw('MAX(stock_holding_intraday_candles.trading_date) as latest_date')
             ->get()
@@ -129,7 +130,7 @@ class AdminStockHistoricalPriceController extends Controller
 
                 return [
                     'id' => $holding->id,
-                    'label' => collect([$holding->symbol, $holding->name])->filter()->implode(' - '),
+                    'label' => collect([$holding->symbol, $holding->name, $holding->subtitle])->filter()->implode(' - '),
                     'db_last_date' => $lastDate,
                 ];
             })

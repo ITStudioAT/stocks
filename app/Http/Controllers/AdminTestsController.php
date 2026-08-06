@@ -29,7 +29,7 @@ class AdminTestsController extends Controller
                 ->values()
                 ->all(),
             'stocks' => StockHolding::query()
-                ->get(['id', 'name', 'symbol', 'currency', 'exchange', 'mic_code', 'latest_price', 'latest_price_as_of'])
+                ->get(['id', 'name', 'subtitle', 'symbol', 'currency', 'exchange', 'mic_code', 'latest_price', 'latest_price_as_of'])
                 ->map(fn (StockHolding $holding): array => $this->stockPayload($holding))
                 ->sortBy('name', SORT_NATURAL | SORT_FLAG_CASE)
                 ->values()
@@ -188,7 +188,7 @@ class AdminTestsController extends Controller
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, currency: ?string, exchange: ?string, mic_code: ?string, latest_price: ?string, latest_price_as_of: ?string}
+     * @return array{id: int, symbol: ?string, name: ?string, subtitle: ?string, currency: ?string, exchange: ?string, mic_code: ?string, latest_price: ?string, latest_price_as_of: ?string}
      */
     private function stockPayload(StockHolding $holding): array
     {
@@ -196,6 +196,7 @@ class AdminTestsController extends Controller
             'id' => $holding->id,
             'symbol' => $holding->symbol,
             'name' => $holding->name ?: $holding->symbol,
+            'subtitle' => $holding->subtitle,
             'currency' => $holding->currency,
             'exchange' => $holding->exchange,
             'mic_code' => $holding->mic_code,

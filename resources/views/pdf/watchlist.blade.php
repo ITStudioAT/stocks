@@ -347,6 +347,9 @@
                             &nbsp;<span class="status-pill">{{ $statusLabel }}</span>
                         @endif
                         <div class="name">{{ $holding['name'] ?: '—' }}</div>
+                        @if ($holding['subtitle'])
+                            <div class="name">{{ $holding['subtitle'] }}</div>
+                        @endif
                         <div class="ids">
                             ISIN: {{ $holding['isin'] ?: '–' }} &nbsp;·&nbsp;
                             WKN: {{ $holding['wkn'] ?: '–' }}
