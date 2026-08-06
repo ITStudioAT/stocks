@@ -7,6 +7,8 @@ export const useDepotStore = defineStore('depots', {
         depots: [],
         holdings: [],
         indexWatchItems: [],
+        indexEodhdSync: null,
+        indexEodhdSyncSettings: null,
         depotHoldings: [],
         depotValuations: {},
         depotPerformanceSeries: [],
@@ -621,11 +623,12 @@ export const useDepotStore = defineStore('depots', {
                 this.holdingsLoading = false;
             }
         },
-        async ensureIndexWatchItemPrices(id) {
+        async ensureIndexWatchItemPrices(id, range = null) {
             this.holdingsError = '';
 
             try {
-                const data = await request(`/admin/index-watch-items/${id}/prices/ensure`, {
+                const query = range ? `?range=${encodeURIComponent(range)}` : '';
+                const data = await request(`/admin/index-watch-items/${id}/prices/ensure${query}`, {
                     method: 'POST',
                 });
 
@@ -646,6 +649,65 @@ export const useDepotStore = defineStore('depots', {
                 this.holdingsError = error.message;
                 throw error;
             }
+        },
+        async deleteIndexWatchItem(id) {
+            this.holdingsLoading = true;
+            this.holdingsError = '';
+
+            try {
+                const data = await request(`/admin/index-watch-items/${id}`, {
+                    method: 'DELETE',
+                });
+                this.indexWatchItems = this.indexWatchItems.filter((item) => item.id !== id);
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            } finally {
+                this.holdingsLoading = false;
+            }
+        },
+        async startIndexEodhdSync() {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/v2/indices/eodhd-sync', { method: 'POST' });
+                this.indexEodhdSync = data.refresh ?? null;
+                this.indexEodhdSyncSettings = data.index_eodhd_sync_settings ?? this.indexEodhdSyncSettings;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async loadIndexEodhdSync(refreshId) {
+            const data = await request(`/admin/v2/indices/eodhd-sync/${refreshId}`);
+            this.indexEodhdSync = data.refresh ?? null;
+            this.indexEodhdSyncSettings = data.index_eodhd_sync_settings ?? this.indexEodhdSyncSettings;
+            this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+            return data;
+        },
+        clearIndexEodhdSync() {
+            this.indexEodhdSync = null;
+        },
+        async loadIndexEodhdSyncSettings() {
+            const data = await request('/admin/v2/indices/eodhd-sync-settings');
+            this.indexEodhdSyncSettings = data.index_eodhd_sync_settings ?? null;
+
+            return data;
+        },
+        async updateIndexEodhdSyncSettings(payload) {
+            const data = await request('/admin/v2/indices/eodhd-sync-settings', {
+                method: 'PATCH',
+                body: JSON.stringify(payload),
+            });
+            this.indexEodhdSyncSettings = data.index_eodhd_sync_settings ?? this.indexEodhdSyncSettings;
+
+            return data;
         },
         async deleteWatchlistHolding(id) {
             this.holdingsLoading = true;

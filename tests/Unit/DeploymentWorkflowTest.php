@@ -35,6 +35,32 @@ class DeploymentWorkflowTest extends TestCase
         );
     }
 
+    public function test_composer_exposes_the_local_queue_worker_command(): void
+    {
+        $composer = json_decode(
+            file_get_contents($this->projectPath('composer.json')),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+
+        $this->assertSame([
+            'Composer\\Config::disableProcessTimeout',
+            '@php artisan queue:listen redis --queue=default --sleep=1 --tries=1 --timeout=0',
+        ], $composer['scripts']['queues:local']);
+    }
+
+    public function test_composer_development_process_runs_the_scheduler(): void
+    {
+        $composer = json_decode(
+            file_get_contents($this->projectPath('composer.json')),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+
+        $this->assertStringContainsString('php artisan schedule:work', $composer['scripts']['dev'][1]);
+        $this->assertStringContainsString('--names=server,queue,scheduler,logs,vite', $composer['scripts']['dev'][1]);
+    }
+
     public function test_cloudways_deployment_uses_the_verified_artifact_and_stock_update_flags(): void
     {
         $deployment = file_get_contents($this->projectPath('scripts/deploy_cloudways.sh'));

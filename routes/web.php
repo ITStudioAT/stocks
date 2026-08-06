@@ -7,6 +7,7 @@ use App\Http\Controllers\AdminDepotController;
 use App\Http\Controllers\AdminDepotHoldingController;
 use App\Http\Controllers\AdminDepotTransactionController;
 use App\Http\Controllers\AdminIndexWatchItemController;
+use App\Http\Controllers\AdminInfoController;
 use App\Http\Controllers\AdminPriceRefreshSettingsController;
 use App\Http\Controllers\AdminProfileController;
 use App\Http\Controllers\AdminQueueStatusController;
@@ -16,6 +17,8 @@ use App\Http\Controllers\AdminStockSearchController;
 use App\Http\Controllers\AdminTestsController;
 use App\Http\Controllers\AdminUiPreferencesController;
 use App\Http\Controllers\AdminUserController;
+use App\Http\Controllers\AdminV2IndexEodhdSyncController;
+use App\Http\Controllers\AdminV2IndexEodhdSyncSettingsController;
 use App\Models\Depot;
 use App\Models\DepotTransaction;
 use App\Models\IndexWatchItem;
@@ -141,6 +144,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
         ])
         ->name('admin.menu');
     Route::get('/admin/me', [AdminAuthController::class, 'me'])->name('admin.me');
+    Route::get('/admin/infos', [AdminInfoController::class, 'show'])->name('admin.infos.show');
     Route::get('/admin/depots', [AdminDepotController::class, 'index'])->name('admin.depots.index');
     Route::get('/admin/depots/active', [AdminDepotController::class, 'active'])->name('admin.depots.active');
     Route::get('/admin/price-refresh-settings', [AdminPriceRefreshSettingsController::class, 'show'])->name('admin.price-refresh-settings.show');
@@ -172,6 +176,11 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::post('/admin/index-watch-items/{indexWatchItem}/prices/ensure', [AdminIndexWatchItemController::class, 'ensurePrices'])->name('admin.index-watch-items.prices.ensure');
     Route::post('/admin/watchlist/holdings', [AdminDepotHoldingController::class, 'store'])->name('admin.watchlist.holdings.store');
     Route::post('/admin/index-watch-items', [AdminIndexWatchItemController::class, 'store'])->name('admin.index-watch-items.store');
+    Route::delete('/admin/index-watch-items/{indexWatchItem}', [AdminIndexWatchItemController::class, 'destroy'])->name('admin.index-watch-items.destroy');
+    Route::post('/admin/v2/indices/eodhd-sync', [AdminV2IndexEodhdSyncController::class, 'store'])->name('admin.v2.indices.eodhdSync.store');
+    Route::get('/admin/v2/indices/eodhd-sync/{indexEodhdSyncRun}', [AdminV2IndexEodhdSyncController::class, 'show'])->name('admin.v2.indices.eodhdSync.show');
+    Route::get('/admin/v2/indices/eodhd-sync-settings', [AdminV2IndexEodhdSyncSettingsController::class, 'show'])->name('admin.v2.indices.eodhdSyncSettings.show');
+    Route::patch('/admin/v2/indices/eodhd-sync-settings', [AdminV2IndexEodhdSyncSettingsController::class, 'update'])->name('admin.v2.indices.eodhdSyncSettings.update');
     Route::post('/admin/watchlist/holdings/refresh-prices', [AdminDepotHoldingController::class, 'refreshPrices'])->name('admin.watchlist.holdings.refresh-prices');
     Route::get('/admin/watchlist/holdings/refresh-prices/{refreshId}', [AdminDepotHoldingController::class, 'refreshPriceStatus'])->name('admin.watchlist.holdings.refresh-prices.status');
     Route::get('/admin/queue/status', [AdminQueueStatusController::class, 'show'])->name('admin.queue.status');

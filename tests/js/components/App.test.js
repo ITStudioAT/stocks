@@ -564,10 +564,11 @@ describe('App', () => {
 
         expect(wrapper.find('.dashboard-navigation-drawer').classes()).toContain('dashboard-navigation-drawer--compact');
         expect(wrapper.findComponent({ name: 'VNavigationDrawer' }).props('width')).toBe(64);
-        expect(wrapper.findAll('.dashboard-compact-menu-item')).toHaveLength(6);
+        expect(wrapper.findAll('.dashboard-compact-menu-item')).toHaveLength(8);
         expect(wrapper.find('.dashboard-compact-menu-item--active').exists()).toBe(true);
         expect(wrapper.find('[aria-label="Enhance dashboard menu"]').exists()).toBe(true);
         expect(wrapper.find('.dashboard-navigation-drawer').text()).not.toContain('Stocks');
+        expect(wrapper.find('[aria-label="Indices"]').exists()).toBe(true);
         expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
 
         const dashboardHeading = wrapper.get('.dashboard-heading');
@@ -1483,7 +1484,9 @@ describe('App', () => {
         await flushPromises();
 
         const drawerText = wrapper.find('.dashboard-navigation-drawer').text();
-        expect(drawerText.indexOf('Dashboard')).toBeLessThan(drawerText.indexOf('Analyze'));
+        expect(drawerText.indexOf('Dashboard')).toBeLessThan(drawerText.indexOf('Infos'));
+        expect(drawerText.indexOf('Infos')).toBeLessThan(drawerText.indexOf('Indices'));
+        expect(drawerText.indexOf('Indices')).toBeLessThan(drawerText.indexOf('Analyze'));
         expect(drawerText.indexOf('Analyze')).toBeLessThan(drawerText.indexOf('Depot'));
         expect(wrapper.find('[aria-label="Analyze detail"]').exists()).toBe(true);
         expect(window.location.pathname).toBe('/admin/menu/analyze/detail');
@@ -3594,13 +3597,36 @@ describe('App', () => {
         wrapper.unmount();
     });
 
-    it('shows the watch-list stocks on the dashboard', async () => {
+    it('shows the dedicated Stocks and Indices dashboard pages', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
         let currentPriceRefreshSettings = priceRefreshSettings();
         const currentIndexPriceRefreshSettings = indexPriceRefreshSettings({
             last_refreshed_at: '2026-06-02T13:00:00+00:00',
             next_refresh_at: '2026-06-02T13:30:00+00:00',
         });
+        let currentIndexEodhdSyncSettings = {
+            times: ['02:00', '18:30'],
+            timezone: 'Europe/Vienna',
+            last_dispatched_at: '2026-08-05T02:00:00+02:00',
+            next_update_at: '2026-08-05T18:30:00+02:00',
+            latest_update_at: '2026-08-05T09:45:00+02:00',
+            status: 'waiting',
+            status_label: 'Waiting',
+            realtime: {
+                trading_interval_minutes: 30,
+                trading_starts_before_minutes: 15,
+                trading_ends_after_minutes: 20,
+                closed_refresh_enabled: false,
+                closed_interval_minutes: 90,
+                timezone: 'Europe/Vienna',
+                latest_update_at: '2026-08-05T10:00:00+02:00',
+                next_refresh_at: '2026-08-05T10:30:00+02:00',
+                status: 'scheduled',
+                status_label: 'Scheduled',
+                status_detail: 'No job is running; the next refresh starts at the time shown below.',
+                last_error: null,
+            },
+        };
         const currentBerlinDate = localDateKey('Europe/Berlin');
         const nextHolidayDate = '2099-12-25';
         const fetchMock = vi.fn((path, options) => {
@@ -4123,9 +4149,261 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/index-watch-items/1/prices/ensure' && options?.method === 'POST') {
+            if (path === '/admin/v2/indices/eodhd-sync-settings' && options?.method === 'PATCH') {
+                const payload = JSON.parse(options.body);
+
+                if (payload.times) {
+                    currentIndexEodhdSyncSettings = {
+                        ...currentIndexEodhdSyncSettings,
+                        times: payload.times,
+                        next_update_at: '2026-08-05T21:15:00+02:00',
+                    };
+                }
+
+                if (payload.realtime) {
+                    currentIndexEodhdSyncSettings = {
+                        ...currentIndexEodhdSyncSettings,
+                        realtime: {
+                            ...currentIndexEodhdSyncSettings.realtime,
+                            ...payload.realtime,
+                            next_refresh_at: '2026-08-05T10:05:00+02:00',
+                        },
+                    };
+                }
+
+                return Promise.resolve(jsonResponse({
+                    message: payload.realtime
+                        ? 'Automatic index realtime schedule saved.'
+                        : 'Automatic index update times saved.',
+                    index_eodhd_sync_settings: currentIndexEodhdSyncSettings,
+                }));
+            }
+
+            if (path === '/admin/v2/indices/eodhd-sync-settings') {
+                return Promise.resolve(jsonResponse({
+                    index_eodhd_sync_settings: currentIndexEodhdSyncSettings,
+                }));
+            }
+
+            if (path === '/admin/v2/indices/eodhd-sync' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Index EODHD sync queued.',
+                    refresh: {
+                        refresh_id: 'index-eodhd-test',
+                        status: 'queued',
+                        stage: 'check_indices',
+                        processed: 0,
+                        total: 0,
+                        current: null,
+                        date_from: '2025-08-05',
+                        date_to: '2026-08-04',
+                        steps: [
+                            { key: 'check_indices', label: 'Check all indices', status: 'pending', message: null },
+                            { key: 'check_eod', label: 'Check EOD data', status: 'pending', message: null },
+                            { key: 'sync_eod', label: 'Sync missing EOD data', status: 'pending', message: null },
+                            { key: 'check_intraday', label: 'Check intraday data', status: 'pending', message: null },
+                            { key: 'sync_intraday', label: 'Sync missing intraday data', status: 'pending', message: null },
+                            { key: 'summary', label: 'Create summary', status: 'pending', message: null },
+                        ],
+                        index_progress: [
+                            {
+                                id: 1,
+                                symbol: 'ATX',
+                                name: 'Austrian Traded Index',
+                                eod_check: { status: 'finished', message: '250 available, 0 missing.' },
+                                eod_sync: { status: 'finished', message: '0 records synced.' },
+                                intraday_check: { status: 'finished', message: 'No intraday data available.' },
+                                intraday_sync: {
+                                    status: 'not_found',
+                                    message: 'EODHD returned HTTP 404 after 3 attempts; this does not prove that the index has no intraday data.',
+                                },
+                                intraday_blocks: [],
+                            },
+                            {
+                                id: 2,
+                                symbol: 'GDAXI',
+                                name: 'DAX Index',
+                                eod_check: { status: 'finished', message: '250 available, 0 missing.' },
+                                eod_sync: { status: 'finished', message: '0 records synced.' },
+                                intraday_check: { status: 'running', message: 'Intraday data is being checked.' },
+                                intraday_sync: { status: 'pending', message: null },
+                                intraday_blocks: [],
+                            },
+                        ],
+                        progress: {
+                            completed: 6,
+                            total: 8,
+                            successful: 5,
+                            deferred: 0,
+                            issues: 1,
+                            percent: 75,
+                            estimated_remaining_seconds: 75,
+                        },
+                        summary: null,
+                        error: null,
+                    },
+                    index_eodhd_sync_settings: {
+                        ...currentIndexEodhdSyncSettings,
+                        status: 'updating',
+                        status_label: 'Updating indices',
+                    },
+                }, 202));
+            }
+
+            if (path === '/admin/v2/indices/eodhd-sync/index-eodhd-test') {
+                currentIndexEodhdSyncSettings = {
+                    ...currentIndexEodhdSyncSettings,
+                    latest_update_at: '2026-08-05T10:30:00+02:00',
+                    status: 'waiting',
+                    status_label: 'Waiting',
+                };
+
+                return Promise.resolve(jsonResponse({
+                    refresh: {
+                        refresh_id: 'index-eodhd-test',
+                        status: 'partial',
+                        stage: 'summary',
+                        processed: 1,
+                        total: 1,
+                        current: null,
+                        date_from: '2025-08-05',
+                        date_to: '2026-08-04',
+                        steps: [
+                            { key: 'check_indices', label: 'Check all indices', status: 'finished', message: '1 index found.' },
+                            { key: 'check_eod', label: 'Check EOD data', status: 'finished', message: '2 missing EOD records found.' },
+                            { key: 'sync_eod', label: 'Sync missing EOD data', status: 'finished', message: '2 EOD records synced.' },
+                            { key: 'check_intraday', label: 'Check intraday data', status: 'finished', message: '0 missing intraday candles found.' },
+                            { key: 'sync_intraday', label: 'Sync missing intraday data', status: 'finished', message: '0 intraday candles synced.' },
+                            { key: 'summary', label: 'Create summary', status: 'finished', message: 'Synchronization summary ready.' },
+                        ],
+                        index_progress: [
+                            {
+                                id: 1,
+                                symbol: 'ATX',
+                                name: 'Austrian Traded Index',
+                                eod_check: { status: 'finished', message: '250 available, 2 missing.' },
+                                eod_sync: { status: 'finished', message: '2 records synced.' },
+                                intraday_check: { status: 'finished', message: '4 missing periods found.' },
+                                intraday_sync: { status: 'timeout', message: 'EODHD intraday timed out after 3 attempts.' },
+                                intraday_blocks: [
+                                    {
+                                        position: 1,
+                                        total: 4,
+                                        date_from: '2026-07-01',
+                                        date_to: '2026-07-30',
+                                        status: 'timeout',
+                                        attempts: 3,
+                                        records: 0,
+                                        synced: 0,
+                                        missing_dates: ['2026-07-01'],
+                                        message: 'EODHD intraday timed out after 3 attempts.',
+                                    },
+                                ],
+                            },
+                            {
+                                id: 2,
+                                symbol: 'ATG',
+                                name: 'Athens General Composite',
+                                eod_check: { status: 'finished', message: '246 available, 0 missing.' },
+                                eod_sync: { status: 'finished', message: '0 records synced.' },
+                                intraday_check: { status: 'finished', message: '12 missing periods found.' },
+                                intraday_sync: { status: 'no_data', message: 'EODHD returned HTTP 200 but no intraday data.' },
+                                intraday_blocks: [
+                                    {
+                                        position: 1,
+                                        total: 12,
+                                        date_from: '2026-07-01',
+                                        date_to: '2026-07-30',
+                                        status: 'no_data',
+                                        attempts: 3,
+                                        records: 0,
+                                        synced: 0,
+                                        missing_dates: ['2026-07-01'],
+                                        message: '1 date still has no EODHD data.',
+                                    },
+                                ],
+                            },
+                            {
+                                id: 3,
+                                symbol: 'BROKEN',
+                                name: 'Broken Index',
+                                eod_check: { status: 'failed', message: 'EOD check failed.' },
+                                eod_sync: { status: 'skipped', message: 'Not run because the EOD check failed.' },
+                                intraday_check: { status: 'finished', message: 'No missing periods.' },
+                                intraday_sync: { status: 'finished', message: 'No missing periods to sync.' },
+                                intraday_blocks: [],
+                            },
+                        ],
+                        progress: {
+                            completed: 12,
+                            total: 12,
+                            successful: 8,
+                            deferred: 0,
+                            issues: 4,
+                            percent: 100,
+                            estimated_remaining_seconds: 0,
+                        },
+                        summary: {
+                            eod: { available: 5, already_present: 3, missing: 2, synced: 2, new_rows: 2 },
+                            intraday: {
+                                available: 0,
+                                already_present: 0,
+                                missing: 12,
+                                synced: 0,
+                                new_candles: 0,
+                                stored_candles: 10000,
+                                no_data_indices: 1,
+                                partial_indices: 0,
+                                unsupported_indices: 0,
+                                access_denied_indices: 0,
+                                deferred_dates: 1,
+                            },
+                            indices: [
+                                {
+                                    id: 1,
+                                    symbol: 'ATX',
+                                    eod: { synced: 2, status: 'finished' },
+                                    intraday: {
+                                        synced: 0,
+                                        new_candles: 0,
+                                        stored_candles: 10000,
+                                        status: 'timeout',
+                                        expected_dates: 250,
+                                        verified_dates: 246,
+                                        deferred_dates: 1,
+                                    },
+                                },
+                                {
+                                    id: 2,
+                                    symbol: 'ATG',
+                                    eod: { synced: 0, status: 'finished' },
+                                    intraday: {
+                                        synced: 0,
+                                        new_candles: 0,
+                                        stored_candles: 0,
+                                        status: 'no_data',
+                                        expected_dates: 246,
+                                        verified_dates: 0,
+                                        deferred_dates: 0,
+                                    },
+                                },
+                            ],
+                            errors: [
+                                { symbol: 'ATX', stage: 'intraday', status: 'timeout', message: 'Timed out after 3 attempts.' },
+                            ],
+                        },
+                        error: null,
+                    },
+                    index_eodhd_sync_settings: currentIndexEodhdSyncSettings,
+                }));
+            }
+
+            if (path.startsWith('/admin/index-watch-items/1/prices/ensure?range=') && options?.method === 'POST') {
+                const range = new URL(path, 'http://localhost').searchParams.get('range');
+
                 return Promise.resolve(jsonResponse({
                     message: 'Index prices loaded.',
+                    range,
                     index: {
                         id: 1,
                         symbol: 'DAX',
@@ -4141,6 +4419,12 @@ describe('App', () => {
                         latest_price_change_pct: '0.33',
                         recent_prices: indexMonthPrices(),
                     },
+                }));
+            }
+
+            if (path === '/admin/index-watch-items/1' && options?.method === 'DELETE') {
+                return Promise.resolve(jsonResponse({
+                    message: 'Index removed.',
                 }));
             }
 
@@ -4318,6 +4602,8 @@ describe('App', () => {
         expect(wrapper.find('thead th.watch-list-actions-cell').exists()).toBe(true);
         expect(wrapper.get('.app-bar-row').text()).not.toContain('Stocks Last:');
         expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
+        expect(wrapper.find('[aria-label="Indices"]').exists()).toBe(false);
+        expect(wrapper.find('.index-watch-strip').exists()).toBe(false);
         expect(fetchMock).toHaveBeenCalledWith(dashboardWatchlistHoldingsPath, expect.any(Object));
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
@@ -4540,7 +4826,197 @@ describe('App', () => {
             }),
         }));
 
-        const addIndexButton = wrapper.findAll('button').find((button) => button.text().includes('INDEX'));
+        const topLevelMenuKeys = wrapper.vm.menuItems.map((item) => item.key);
+        expect(topLevelMenuKeys.indexOf('stocks')).toBe(topLevelMenuKeys.indexOf('indices') + 1);
+
+        wrapper.vm.navigateSection('stocks');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/stocks');
+        const stocksDashboard = wrapper.get('[aria-label="Stocks dashboard"]');
+        expect(stocksDashboard.text()).toContain('View and manage all saved stocks.');
+        const stocksDashboardButtons = stocksDashboard.findAll('button');
+        const stockEodhdSyncButton = stocksDashboardButtons.find((button) => button.text() === 'EODHD Sync');
+        const stocksAddButton = stocksDashboardButtons.find((button) => button.text() === 'Add stock');
+        const stocksDeleteButton = stocksDashboardButtons.find((button) => button.text() === 'Delete stock');
+        expect(stockEodhdSyncButton.attributes('disabled')).toBeDefined();
+        expect(stocksAddButton.exists()).toBe(true);
+        expect(stocksDeleteButton.exists()).toBe(true);
+        expect(stocksDeleteButton.attributes('disabled')).toBeDefined();
+        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings?page=1&all=1', expect.any(Object));
+        expect(wrapper.get('.watch-list-section').text()).toContain('Apple');
+        expect(wrapper.find('[aria-label="Buy stock"]').exists()).toBe(false);
+        expect(wrapper.find('[aria-label="Sell stock"]').exists()).toBe(false);
+
+        const stocksTable = wrapper.get('.desktop-watch-list-table');
+        const stockRows = stocksTable.findAll('tbody tr.stock-holding-row');
+        const appleStockRow = stockRows[0];
+        expect(stocksTable.findAll('thead th').map((heading) => heading.text())).not.toContain('Actions');
+        expect(stocksTable.find('[aria-label="Delete stock"]').exists()).toBe(false);
+        expect(appleStockRow.attributes('aria-selected')).toBe('false');
+        expect(appleStockRow.classes()).not.toContain('stock-holding-row--selected');
+
+        await appleStockRow.trigger('click');
+        await flushPromises();
+
+        expect(appleStockRow.attributes('aria-selected')).toBe('true');
+        expect(appleStockRow.classes()).toContain('stock-holding-row--selected');
+        expect(stocksDeleteButton.attributes('disabled')).toBeUndefined();
+
+        await appleStockRow.trigger('click');
+        await flushPromises();
+
+        expect(appleStockRow.attributes('aria-selected')).toBe('false');
+        expect(appleStockRow.classes()).not.toContain('stock-holding-row--selected');
+        expect(stocksDeleteButton.attributes('disabled')).toBeDefined();
+
+        await appleStockRow.trigger('click');
+        await flushPromises();
+
+        const automaticStockUpdates = wrapper.get('[aria-label="Automatic stock EODHD updates"]');
+        expect(automaticStockUpdates.text()).toContain('Current stock update schedule');
+        expect(automaticStockUpdates.text()).toContain('Latest update');
+        expect(automaticStockUpdates.text()).toContain('02.06.2026');
+        expect(automaticStockUpdates.text()).toContain('14:20');
+        expect(automaticStockUpdates.text()).toContain('Next automatic update');
+        expect(automaticStockUpdates.text()).toContain('Stored schedule');
+        expect(automaticStockUpdates.text()).toContain('20 min');
+
+        await stocksAddButton.trigger('click');
+        await flushPromises();
+        expect(wrapper.vm.isHoldingDialogOpen).toBe(true);
+        wrapper.vm.abortHoldingDialog();
+        await flushPromises();
+
+        await stocksDeleteButton.trigger('click');
+        await flushPromises();
+        expect(wrapper.vm.isDeleteHoldingDialogOpen).toBe(true);
+        expect(document.body.textContent).toContain('Delete Apple?');
+        wrapper.vm.abortDeleteHoldingDialog();
+        await flushPromises();
+
+        wrapper.vm.navigateSection('indices');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/indices');
+        expect(wrapper.find('[aria-label="Indices"]').exists()).toBe(true);
+        expect(wrapper.find('.watch-list-section').exists()).toBe(false);
+        const automaticUpdatesCard = wrapper.get('[aria-label="Automatic v2 index updates"]');
+        expect(automaticUpdatesCard.text()).toContain('V2 schedules for daily, intraday, and live index data');
+        expect(automaticUpdatesCard.text()).toContain('EOD + 5-minute intraday run times');
+        expect(automaticUpdatesCard.text()).toContain('Live/realtime prices');
+        expect(automaticUpdatesCard.text()).toContain('Scheduled');
+        expect(automaticUpdatesCard.text()).toContain('No job is running; the next refresh starts at the time shown below.');
+        expect(automaticUpdatesCard.text()).toContain('start 15 min before trading until 20 min after trading · 30 min · closed: off');
+        expect(automaticUpdatesCard.text()).toContain('Latest update');
+        expect(automaticUpdatesCard.text()).toContain('05.08.2026');
+        expect(automaticUpdatesCard.text()).toContain('09:45');
+        expect(automaticUpdatesCard.text()).toContain('02:00');
+        expect(automaticUpdatesCard.text()).toContain('18:30');
+
+        const editEodTimesButton = automaticUpdatesCard.findAll('button')
+            .find((button) => button.text() === 'Edit EOD + intraday times');
+        await editEodTimesButton.trigger('click');
+        await flushPromises();
+
+        expect(document.body.textContent).toContain('Edit automatic update times');
+        wrapper.vm.indexEodhdSyncScheduleForm.times = ['06:30', '21:15'];
+        await flushPromises();
+
+        const saveTimesButton = Array.from(document.body.querySelectorAll('button'))
+            .find((button) => button.textContent.trim() === 'Save times');
+        saveTimesButton.click();
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/v2/indices/eodhd-sync-settings', expect.objectContaining({
+            method: 'PATCH',
+            body: JSON.stringify({ times: ['06:30', '21:15'] }),
+        }));
+        expect(automaticUpdatesCard.text()).toContain('06:30');
+        expect(automaticUpdatesCard.text()).toContain('21:15');
+        expect(automaticUpdatesCard.text()).toContain('Automatic index update times saved.');
+
+        const editLivePeriodButton = automaticUpdatesCard.findAll('button')
+            .find((button) => button.text() === 'Edit live period');
+        await editLivePeriodButton.trigger('click');
+        await flushPromises();
+
+        expect(document.body.textContent).toContain('Edit live/realtime update period');
+        wrapper.vm.indexV2RealtimeScheduleForm.trading_interval_minutes = 5;
+        wrapper.vm.indexV2RealtimeScheduleForm.trading_starts_before_minutes = 10;
+        wrapper.vm.indexV2RealtimeScheduleForm.trading_ends_after_minutes = 25;
+        wrapper.vm.indexV2RealtimeScheduleForm.closed_refresh_enabled = true;
+        wrapper.vm.indexV2RealtimeScheduleForm.closed_interval_minutes = 120;
+        await wrapper.vm.$nextTick();
+
+        const saveLiveScheduleButton = Array.from(document.body.querySelectorAll('button'))
+            .find((button) => button.textContent.trim() === 'Save live schedule');
+        saveLiveScheduleButton.click();
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/v2/indices/eodhd-sync-settings', expect.objectContaining({
+            method: 'PATCH',
+            body: JSON.stringify({
+                realtime: {
+                    trading_interval_minutes: 5,
+                    trading_starts_before_minutes: 10,
+                    trading_ends_after_minutes: 25,
+                    closed_refresh_enabled: true,
+                    closed_interval_minutes: 120,
+                },
+            }),
+        }));
+        expect(automaticUpdatesCard.text()).toContain('start 10 min before trading until 25 min after trading · 5 min · closed: every 120 min');
+        expect(automaticUpdatesCard.text()).toContain('Automatic index realtime schedule saved.');
+
+        const eodhdSyncButton = wrapper.findAll('button').find((button) => button.text() === 'EODHD Sync');
+        await eodhdSyncButton.trigger('click');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/v2/indices/eodhd-sync', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(wrapper.get('.index-eodhd-sync-card').text()).toContain('Check all indices');
+        expect(wrapper.get('.index-eodhd-sync-card').text()).toContain('Sync missing intraday data');
+        expect(wrapper.get('.index-eodhd-sync-checklist').text()).toContain('ATX');
+        expect(wrapper.get('.index-eodhd-sync-checklist').text()).toContain('GDAXI');
+        expect(wrapper.get('.index-eodhd-sync-checklist').text()).toContain('HTTP 404');
+        expect(wrapper.get('.index-eodhd-sync-checklist').text()).toContain('checking');
+        expect(wrapper.get('.index-eodhd-sync-card').text()).toContain('6 / 8 steps processed');
+        expect(wrapper.get('.index-eodhd-sync-card').text()).toContain('Estimated remaining: about 2 minutes');
+
+        await wrapper.vm.pollIndexEodhdSync('index-eodhd-test');
+        await flushPromises();
+
+        const syncCard = wrapper.get('.index-eodhd-sync-card');
+        expect(fetchMock).toHaveBeenCalledWith('/admin/v2/indices/eodhd-sync/index-eodhd-test', expect.any(Object));
+        expect(syncCard.text()).toContain('Synchronization summary');
+        expect(syncCard.text()).toContain('completed with gaps');
+        expect(syncCard.text()).toContain('12 / 12 steps processed');
+        expect(syncCard.text()).toContain('8 successful · 0 waiting · 4 with gaps or errors');
+        expect(syncCard.text()).not.toContain('Estimated remaining: completed');
+        expect(syncCard.text()).toContain('EOD: 2 new rows');
+        expect(syncCard.text()).toContain('Intraday: 0 new candles');
+        expect(syncCard.text()).toContain('Stored intraday: 10000 candles');
+        expect(syncCard.text()).toContain('No EODHD data: 1');
+        expect(syncCard.text()).toContain('Deferred dates: 1');
+        expect(syncCard.text()).toContain('ATX');
+        expect(syncCard.text()).toContain('Timeout');
+        expect(syncCard.text()).toContain('EODHD intraday timed out after 3 attempts.');
+        expect(syncCard.text()).toContain('EODHD returned HTTP 200 but no intraday data.');
+        expect(syncCard.text()).toContain('Not run because the EOD check failed.');
+        expect(syncCard.text()).toContain('no EODHD data');
+        expect(syncCard.text()).toContain('ATX intraday blocks');
+        expect(syncCard.text()).toContain('Block 1/4: 2026-07-01 – 2026-07-30');
+        expect(syncCard.text()).toContain('3 attempt(s), 0 returned, 0 new');
+        expect(automaticUpdatesCard.text()).toContain('10:30');
+
+        await wrapper.get('[aria-label="Close EODHD synchronization result"]').trigger('click');
+        await flushPromises();
+
+        expect(wrapper.find('.index-eodhd-sync-card').exists()).toBe(false);
+
+        const addIndexButton = wrapper.findAll('button').find((button) => button.text() === 'Index hinzufügen');
         await addIndexButton.trigger('click');
         await flushPromises();
 
@@ -4579,7 +5055,7 @@ describe('App', () => {
                 currency: 'EUR',
             }),
         }));
-        expect(wrapper.vm.holdingMessage).toBe('Index added.');
+        expect(wrapper.vm.indexMessage).toBe('Index added.');
         expect(fetchMock).toHaveBeenCalledWith('/admin/index-watch-items', expect.any(Object));
 
         const indexWatchStrip = wrapper.find('.index-watch-strip');
@@ -4590,51 +5066,102 @@ describe('App', () => {
         expect(indexWatchStrip.text()).toContain('6,116.53');
         expect(wrapper.find('.index-watch-card').text()).not.toContain('2026-06-07');
         expect(wrapper.find('.index-watch-card').text()).not.toContain('DE0008469008');
-        expect(indexWatchStrip.text().indexOf('DAX')).toBeLessThan(indexWatchStrip.text().indexOf('+INDEX'));
+        expect(wrapper.find('.index-add-tile').exists()).toBe(false);
+        expect(wrapper.find('[aria-label="Index DAX entfernen"]').exists()).toBe(false);
+
+        const deleteIndexAction = wrapper.findAll('button')
+            .find((button) => button.text() === 'Index löschen');
+        expect(deleteIndexAction.attributes('disabled')).toBeDefined();
 
         await wrapper.find('.index-watch-card').trigger('click');
         await flushPromises();
 
-        expect(fetchMock).toHaveBeenCalledWith('/admin/index-watch-items/1/prices/ensure', expect.objectContaining({
+        expect(fetchMock).toHaveBeenCalledWith('/admin/index-watch-items/1/prices/ensure?range=intraday', expect.objectContaining({
             method: 'POST',
         }));
-        expect(document.body.textContent).toContain('Actual price');
-        expect(document.body.textContent).toContain('Last');
-        expect(document.body.textContent).toContain('Evolution');
-        expect(document.body.textContent).toContain('07.06.2026');
-        expect(document.body.textContent).toContain('09.05.2026');
-        expect(document.body.textContent).toContain('6,116.53');
-        expect(document.body.querySelectorAll('.index-price-history-table tbody tr')).toHaveLength(30);
-        expect(Array.from(document.body.querySelectorAll('.index-price-history-table th')).map((heading) => heading.textContent.trim())).toEqual([
-            'Date',
-            'Start',
-            'Last',
+        expect(wrapper.find('.index-price-inline-card').exists()).toBe(true);
+        expect(wrapper.findAll('.index-price-range-tabs .v-tab').map((tab) => tab.text())).toEqual([
+            'Intraday',
+            '1 week',
+            '1 month',
+            '6 month',
+            '1 year',
         ]);
-        expect(document.body.querySelector('.index-price-chart-line')).not.toBeNull();
-        expect(document.body.querySelector('.index-price-chart-trend-line')).not.toBeNull();
-        expect(Number(document.body.querySelector('.index-price-chart-trend-line').getAttribute('x2'))).toBeGreaterThan(
-            Number(document.body.querySelector('.index-price-chart-trend-line').getAttribute('x1')),
-        );
-        expect(document.body.querySelectorAll('.index-price-chart-point')).toHaveLength(30);
-        expect(document.body.querySelectorAll('.index-price-chart-grid-line')).toHaveLength(12);
-        expect(document.body.querySelectorAll('.index-price-chart-y-label')).toHaveLength(5);
-        expect(document.body.querySelectorAll('.index-price-chart-x-label')).toHaveLength(7);
-        expect(document.body.querySelectorAll('.index-price-chart-endpoint-label')).toHaveLength(2);
-        expect(document.body.querySelector('.index-price-chart-endpoint-label--start').textContent.trim()).toMatch(/^Start /);
-        expect(document.body.querySelector('.index-price-chart-endpoint-label--latest').textContent.trim()).toMatch(/^End /);
-        expect(Number(document.body.querySelector('.index-price-chart-endpoint-label--start').getAttribute('y'))).toBeGreaterThan(220);
-        expect(Number(document.body.querySelector('.index-price-chart-endpoint-label--latest').getAttribute('y'))).toBeLessThan(70);
-        expect(document.body.textContent).toContain('6,116.53');
-        expect(document.body.textContent).toContain('09.05');
+        expect(wrapper.find('.index-price-range-tabs .v-tab--selected').text()).toBe('Intraday');
+        expect(wrapper.find('.index-price-inline-card').text()).toContain('Actual price');
+        expect(wrapper.find('.index-price-inline-card').text()).toContain('Evolution');
+        expect(wrapper.find('.index-price-inline-card').text()).toContain('Current day: opening price to latest available price.');
+        expect(wrapper.find('.index-price-chart-date-range').text()).toBe('07.06.2026');
+        expect(wrapper.find('.index-price-chart-date-range').classes()).toContain('text-h6');
+        expect(wrapper.findAll('.index-price-chart-point')).toHaveLength(2);
+        expect(wrapper.findAll('.index-price-chart-x-label').map((label) => label.text())).toEqual(['Start', 'Latest']);
 
-        const closeIndexPriceButton = Array.from(document.body.querySelectorAll('button'))
-            .find((button) => button.textContent.trim() === 'Close');
-        closeIndexPriceButton.click();
+        const intradayRequestCount = fetchMock.mock.calls
+            .filter(([path]) => path === '/admin/index-watch-items/1/prices/ensure?range=intraday').length;
+        await wrapper.find('.index-watch-card').trigger('click');
         await flushPromises();
 
-        expect(wrapper.vm.isIndexPriceDialogOpen).toBe(false);
+        expect(wrapper.vm.selectedIndexWatchItem).toBeNull();
+        expect(wrapper.find('.index-watch-card').attributes('aria-pressed')).toBe('false');
+        expect(wrapper.find('.index-price-inline-card').exists()).toBe(false);
+        expect(deleteIndexAction.attributes('disabled')).toBeDefined();
+        expect(fetchMock.mock.calls
+            .filter(([path]) => path === '/admin/index-watch-items/1/prices/ensure?range=intraday')).toHaveLength(intradayRequestCount);
 
-        await addStockButton.trigger('click');
+        await wrapper.find('.index-watch-card').trigger('click');
+        await flushPromises();
+
+        const oneMonthTab = wrapper.findAll('.index-price-range-tabs .v-tab')
+            .find((tab) => tab.text() === '1 month');
+        await oneMonthTab.trigger('click');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/index-watch-items/1/prices/ensure?range=1m', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(wrapper.find('.index-price-range-tabs .v-tab--selected').text()).toBe('1 month');
+        expect(wrapper.find('.index-price-chart-date-range').text()).toBe('09.05.2026 – 07.06.2026');
+        expect(wrapper.find('.index-price-chart-line').exists()).toBe(true);
+        expect(wrapper.find('.index-price-chart-trend-line').exists()).toBe(true);
+        expect(Number(wrapper.find('.index-price-chart-trend-line').attributes('x2'))).toBeGreaterThan(
+            Number(wrapper.find('.index-price-chart-trend-line').attributes('x1')),
+        );
+        expect(wrapper.findAll('.index-price-chart-point')).toHaveLength(30);
+        expect(wrapper.findAll('.index-price-chart-grid-line')).toHaveLength(12);
+        expect(wrapper.findAll('.index-price-chart-y-label')).toHaveLength(5);
+        expect(wrapper.findAll('.index-price-chart-x-label')).toHaveLength(7);
+        expect(wrapper.findAll('.index-price-chart-endpoint-label')).toHaveLength(2);
+        expect(wrapper.find('.index-price-chart-endpoint-label--start').text()).toMatch(/^Start /);
+        expect(wrapper.find('.index-price-chart-endpoint-label--latest').text()).toMatch(/^End /);
+        expect(Number(wrapper.find('.index-price-chart-endpoint-label--start').attributes('y'))).toBeGreaterThan(220);
+        expect(Number(wrapper.find('.index-price-chart-endpoint-label--latest').attributes('y'))).toBeLessThan(70);
+        expect(wrapper.find('.index-price-inline-card').text()).toContain('6,116.53');
+        expect(wrapper.find('.index-price-inline-card').text()).toContain('09.05');
+        expect(deleteIndexAction.attributes('disabled')).toBeUndefined();
+
+        await deleteIndexAction.trigger('click');
+        await flushPromises();
+
+        expect(wrapper.vm.isDeleteIndexDialogOpen).toBe(true);
+        expect(document.body.textContent).toContain('Index löschen');
+        expect(document.body.textContent).toContain('DAX Index wirklich löschen?');
+
+        const removeIndexButton = Array.from(document.body.querySelectorAll('button'))
+            .find((button) => button.textContent.trim() === 'Löschen');
+        removeIndexButton.click();
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/index-watch-items/1', expect.objectContaining({
+            method: 'DELETE',
+        }));
+        expect(wrapper.vm.indexMessage).toBe('Index removed.');
+        expect(wrapper.findAll('.index-watch-card')).toHaveLength(0);
+
+        wrapper.vm.navigateSection('dashboard');
+        await flushPromises();
+
+        const reopenedAddStockButton = wrapper.findAll('button').find((button) => button.text().includes('Add stock'));
+        await reopenedAddStockButton.trigger('click');
         await flushPromises();
 
         expect(wrapper.vm.isHoldingDialogOpen).toBe(true);
@@ -4660,7 +5187,7 @@ describe('App', () => {
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/1', expect.objectContaining({
             method: 'DELETE',
         }));
-    });
+    }, 10000);
 
     it('reloads the dashboard info without starting update requests', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
@@ -8306,5 +8833,236 @@ describe('App', () => {
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it('shows EODHD table and Laravel method information on the Infos subpages', async () => {
+        window.history.pushState({}, '', '/admin/menu/infos/eodhd');
+
+        const emptyPagination = {
+            current_page: 1,
+            last_page: 1,
+            per_page: 10,
+            total: 0,
+            from: null,
+            to: null,
+        };
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    holdings: [],
+                    meta: emptyPagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [],
+                    meta: emptyPagination,
+                }));
+            }
+
+            if (path === '/admin/infos') {
+                return Promise.resolve(jsonResponse({
+                    tables: [
+                        {
+                            name: 'stock_realtime_prices',
+                            category: 'Market data',
+                            purpose: 'Canonical live stock prices.',
+                            purpose_de: 'Kanonische Live-Aktienkurse.',
+                            eodhd: {
+                                mode: 'direct',
+                                endpoint: 'real-time/{symbol}',
+                                access: 'Direct EODHD responses.',
+                                documentation: [
+                                    {
+                                        label: 'Live prices',
+                                        url: 'https://eodhd.com/financial-apis/live-ohlcv-stocks-api',
+                                    },
+                                ],
+                            },
+                            cadence: 'Every 20 min during trading',
+                            queue: {
+                                used: true,
+                                name: 'default',
+                                job: 'App\\Jobs\\RefreshDepotHoldingPrices',
+                                mode: 'Dispatched by the scheduler.',
+                            },
+                        },
+                        {
+                            name: 'stock_prices',
+                            category: 'Market data',
+                            purpose: 'Canonical end-of-day prices.',
+                            purpose_de: 'Kanonische Schlusskurse.',
+                            eodhd: {
+                                mode: 'direct',
+                                endpoint: 'eod/{symbol.exchange}',
+                                access: 'Direct EODHD responses.',
+                                documentation: [
+                                    {
+                                        label: 'EOD prices',
+                                        url: 'https://eodhd.com/financial-apis/api-for-historical-data-and-volumes',
+                                    },
+                                ],
+                            },
+                            cadence: 'Weekdays at 18:30',
+                            queue: {
+                                used: false,
+                                name: null,
+                                job: null,
+                                mode: 'Synchronous scheduled command or manual action.',
+                            },
+                        },
+                        {
+                            name: 'index_watch_items',
+                            category: 'Index live data',
+                            purpose: 'Watched index metadata and latest live values.',
+                            purpose_de: 'Metadaten und aktuelle Live-Werte für beobachtete Indizes.',
+                            eodhd: {
+                                mode: 'direct',
+                                endpoint: 'real-time/{index-symbol}',
+                                access: 'Direct EODHD responses.',
+                                documentation: [
+                                    {
+                                        label: 'Live prices',
+                                        url: 'https://eodhd.com/financial-apis/live-ohlcv-stocks-api',
+                                    },
+                                ],
+                            },
+                            cadence: 'Every 20 min during trading',
+                            queue: {
+                                used: false,
+                                name: null,
+                                job: null,
+                                mode: 'Synchronous scheduled command or manual action.',
+                            },
+                        },
+                    ],
+                    methods: [
+                        {
+                            key: 'stock-realtime',
+                            title: 'Aktien-Livekurse',
+                            access: 'real-time/{symbol} + s={additional-symbols}',
+                            description: 'Lädt Aktienkurse in Batches und aktualisiert die Holdings.',
+                            triggers: [
+                                'Scheduler jede Minute: price-refresh:dispatch-due',
+                                'HTTP POST /admin/data/realtime/sync',
+                            ],
+                            execution: {
+                                mode: 'mixed',
+                                scheduled: true,
+                                queue: 'default',
+                                description: 'Automatisch queued; manuell synchron.',
+                            },
+                            laravel_methods: [
+                                {
+                                    layer: 'Service',
+                                    class: 'App\\Services\\EodhdBatchRealtimePriceService',
+                                    method: 'syncAll',
+                                },
+                                {
+                                    layer: 'EODHD client',
+                                    class: 'App\\Services\\EodhdApiClient',
+                                    method: 'get',
+                                },
+                            ],
+                            tables: ['stock_realtime_prices', 'stock_holdings'],
+                            note: 'Der Scheduler prüft jede Minute, ruft EODHD aber nur bei Fälligkeit auf.',
+                        },
+                        {
+                            key: 'index-realtime',
+                            title: 'Index-Livekurse',
+                            access: 'real-time/{index-symbol}',
+                            description: 'Aktualisiert beobachtete Indizes.',
+                            triggers: ['HTTP POST /admin/data/indices/sync'],
+                            execution: {
+                                mode: 'synchronous',
+                                scheduled: false,
+                                queue: null,
+                                description: 'Manuell und synchron.',
+                            },
+                            laravel_methods: [
+                                {
+                                    layer: 'Service',
+                                    class: 'App\\Services\\IndexWatchItemPriceRefresher',
+                                    method: 'refreshAll',
+                                },
+                            ],
+                            tables: ['index_watch_items', 'index_watch_item_prices'],
+                            note: 'Kein automatischer Index-Live-Job ist registriert.',
+                        },
+                    ],
+                }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const infoPage = wrapper.get('[aria-label="Infos"]');
+        expect(window.location.pathname).toBe('/admin/menu/infos/eodhd');
+        expect(infoPage.text()).toContain('EODHD');
+        expect(infoPage.text()).toContain('Methoden');
+        expect(infoPage.find('[aria-label="Infos EODHD"]').exists()).toBe(true);
+        expect(infoPage.text()).toContain('Stock & index data flows');
+        expect(infoPage.text()).toContain('Active GKStocks market-data tables');
+        expect(infoPage.text()).toContain('Purpose / Zweck');
+        expect(infoPage.text()).toContain('Kanonische Live-Aktienkurse.');
+        const documentationLinks = infoPage.findAll('a.info-documentation-link');
+        expect(documentationLinks).toHaveLength(3);
+        expect(documentationLinks[0].attributes('href')).toBe('https://eodhd.com/financial-apis/live-ohlcv-stocks-api');
+        expect(documentationLinks[0].attributes('target')).toBe('_blank');
+        expect(documentationLinks[0].attributes('rel')).toBe('noopener noreferrer');
+        expect(infoPage.text()).toContain('stock_realtime_prices');
+        expect(infoPage.text()).toContain('real-time/{symbol}');
+        expect(infoPage.text()).toContain('Queued · default');
+        expect(infoPage.text()).toContain('Synchronous');
+        expect(infoPage.findAll('tbody tr')).toHaveLength(3);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/infos')).toBe(true);
+
+        const infoRequestCount = fetchMock.mock.calls.filter(([path]) => path === '/admin/infos').length;
+        const methodsTab = infoPage.findAll('[role="tab"]').find((tab) => tab.text().includes('Methoden'));
+        await methodsTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/infos/methoden');
+        expect(infoPage.find('[aria-label="Infos Methoden"]').exists()).toBe(true);
+        expect(infoPage.find('[aria-label="Infos EODHD"]').exists()).toBe(false);
+        expect(infoPage.text()).toContain('EODHD in Laravel');
+        expect(infoPage.text()).toContain('Aktien-Livekurse');
+        expect(infoPage.text()).toContain('EodhdBatchRealtimePriceService::syncAll()');
+        expect(infoPage.text()).toContain('Scheduler jede Minute: price-refresh:dispatch-due');
+        expect(infoPage.text()).toContain('stock_realtime_prices');
+        expect(infoPage.text()).toContain('Kein automatischer Index-Live-Job ist registriert.');
+        expect(infoPage.findAll('.info-method-card')).toHaveLength(2);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/infos')).toHaveLength(infoRequestCount);
     });
 });

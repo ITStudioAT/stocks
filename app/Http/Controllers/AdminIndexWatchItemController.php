@@ -17,6 +17,14 @@ use Illuminate\Validation\Rule;
 
 class AdminIndexWatchItemController extends Controller
 {
+    private const PriceRangeLimits = [
+        'intraday' => 1,
+        '1w' => 7,
+        '1m' => 30,
+        '6m' => 132,
+        '1y' => 264,
+    ];
+
     public function __construct(
         private IndexWatchItemPriceRefresher $priceRefresher,
         private EodhdApiUsage $eodhdApiUsage,
@@ -26,7 +34,7 @@ class AdminIndexWatchItemController extends Controller
     public function index(): JsonResponse
     {
         $items = IndexWatchItem::query()
-            ->orderBy('created_at')
+            ->orderBy('symbol')
             ->orderBy('id')
             ->get()
             ->map(fn (IndexWatchItem $item): array => $this->indexWatchItemPayload($item));
@@ -65,16 +73,24 @@ class AdminIndexWatchItemController extends Controller
         ], 201);
     }
 
-    public function ensurePrices(IndexWatchItem $indexWatchItem): JsonResponse
+    public function ensurePrices(Request $request, IndexWatchItem $indexWatchItem): JsonResponse
     {
-        $hasPrices = $this->priceRefresher->ensureRecentPrices($indexWatchItem);
+        $validated = $request->validate([
+            'range' => ['nullable', Rule::in(array_keys(self::PriceRangeLimits))],
+        ]);
+        $range = $validated['range'] ?? null;
+        $priceLimit = self::PriceRangeLimits[$range] ?? IndexWatchItemPriceRefresher::RecentPriceLimit;
+        $hasPrices = $range === 'intraday'
+            ? $this->refreshIntradayPrice($indexWatchItem)
+            : $this->priceRefresher->ensureRecentPrices($indexWatchItem, $priceLimit);
         $indexWatchItem->refresh();
-        $payload = $this->indexWatchItemPayload($indexWatchItem);
+        $payload = $this->indexWatchItemPayload($indexWatchItem, $priceLimit);
 
         if (! $hasPrices && count($payload['recent_prices']) === 0) {
             return response()->json([
                 'message' => 'Index prices could not be retrieved from EODHD.',
                 'index' => $payload,
+                'range' => $range,
                 'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
             ], 422);
         }
@@ -82,8 +98,27 @@ class AdminIndexWatchItemController extends Controller
         return response()->json([
             'message' => 'Index prices loaded.',
             'index' => $payload,
+            'range' => $range,
             'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
         ]);
+    }
+
+    public function destroy(IndexWatchItem $indexWatchItem): JsonResponse
+    {
+        $indexWatchItem->delete();
+
+        return response()->json([
+            'message' => 'Index removed.',
+        ]);
+    }
+
+    private function refreshIntradayPrice(IndexWatchItem $indexWatchItem): bool
+    {
+        if ($this->priceRefresher->refresh($indexWatchItem)) {
+            return true;
+        }
+
+        return $indexWatchItem->prices()->exists();
     }
 
     /**
@@ -131,11 +166,13 @@ class AdminIndexWatchItemController extends Controller
     /**
      * @return array{id: int, symbol: string, name: ?string, isin: ?string, wkn: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, eodhd_code: string, start_price: ?string, latest_price: ?string, last_price: ?string, latest_price_change_pct: ?string, latest_price_as_of: ?string, latest_price_source: ?string, trading_times: ?string, recent_prices: array<int, array{trading_date: ?string, start_price: ?string, actual_price: ?string, last_price: ?string, actual_price_as_of: ?string, last_price_as_of: ?string}>, created_at: ?string}
      */
-    private function indexWatchItemPayload(IndexWatchItem $item): array
-    {
+    private function indexWatchItemPayload(
+        IndexWatchItem $item,
+        int $priceLimit = IndexWatchItemPriceRefresher::RecentPriceLimit,
+    ): array {
         $recentPrices = $item->prices()
             ->orderByDesc('trading_date')
-            ->limit(IndexWatchItemPriceRefresher::RecentPriceLimit)
+            ->limit($priceLimit)
             ->get();
 
         return [

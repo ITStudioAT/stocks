@@ -32,7 +32,7 @@ class AdminIndexWatchItemTest extends TestCase
             'last_price' => '6096.16990000',
             'latest_price_change_pct' => '0.333979',
             'latest_price_as_of' => '2026-06-04 15:13:00',
-            'created_at' => $now->copy()->subMinute(),
+            'created_at' => $now,
         ]);
 
         collect(range(0, 31))->each(fn (int $daysAgo): IndexWatchItemPrice => IndexWatchItemPrice::query()->create([
@@ -53,6 +53,7 @@ class AdminIndexWatchItemTest extends TestCase
             'instrument_type' => 'INDEX',
             'country' => 'Germany',
             'currency' => 'EUR',
+            'created_at' => $now->copy()->subMinute(),
         ]);
 
         $this->actingAs($admin)
@@ -140,6 +141,81 @@ class AdminIndexWatchItemTest extends TestCase
         } finally {
             Carbon::setTestNow();
         }
+    }
+
+    public function test_admin_can_load_a_year_of_stored_index_prices(): void
+    {
+        $admin = $this->adminUser();
+        $index = IndexWatchItem::factory()->create();
+        $latestDate = Carbon::parse('2026-07-03');
+
+        collect(range(0, 263))->each(fn (int $daysAgo): IndexWatchItemPrice => IndexWatchItemPrice::query()->create([
+            'index_watch_item_id' => $index->id,
+            'trading_date' => $latestDate->copy()->subDays($daysAgo)->toDateString(),
+            'start_price' => 6000 + $daysAgo,
+            'actual_price' => 6010 + $daysAgo,
+            'last_price' => 6005 + $daysAgo,
+        ]));
+
+        $this->actingAs($admin)
+            ->postJson("/admin/index-watch-items/{$index->id}/prices/ensure?range=1y")
+            ->assertOk()
+            ->assertJsonPath('range', '1y')
+            ->assertJsonCount(264, 'index.recent_prices')
+            ->assertJsonPath('index.recent_prices.0.trading_date', '2026-07-03')
+            ->assertJsonPath('index.recent_prices.263.trading_date', $latestDate->copy()->subDays(263)->toDateString());
+    }
+
+    public function test_intraday_range_refreshes_the_latest_index_snapshot(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-07-03 18:00:00', 'Europe/Vienna'));
+
+        try {
+            config(['services.eodhd.key' => 'test-token']);
+            Http::fake([
+                'eodhd.com/api/real-time/ATX.INDX*' => Http::response([
+                    'code' => 'ATX.INDX',
+                    'timestamp' => Carbon::parse('2026-07-03 15:30:00', 'UTC')->timestamp,
+                    'open' => 6400.00,
+                    'close' => 6497.1401,
+                    'previousClose' => 6386.8101,
+                    'change_p' => 1.727466,
+                    'currency' => 'EUR',
+                ]),
+            ]);
+            $index = IndexWatchItem::factory()->create([
+                'symbol' => 'ATX',
+                'exchange' => 'INDX',
+                'instrument_type' => 'INDEX',
+            ]);
+            IndexWatchItemPrice::query()->create([
+                'index_watch_item_id' => $index->id,
+                'trading_date' => '2026-07-02',
+                'actual_price' => '6386.81010000',
+            ]);
+
+            $this->actingAs($this->adminUser())
+                ->postJson("/admin/index-watch-items/{$index->id}/prices/ensure?range=intraday")
+                ->assertOk()
+                ->assertJsonPath('range', 'intraday')
+                ->assertJsonCount(1, 'index.recent_prices')
+                ->assertJsonPath('index.recent_prices.0.trading_date', '2026-07-03')
+                ->assertJsonPath('index.recent_prices.0.actual_price', '6497.140100');
+
+            Http::assertSent(fn ($request): bool => str_contains($request->url(), '/api/real-time/ATX.INDX'));
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_admin_cannot_load_an_unknown_index_price_range(): void
+    {
+        $index = IndexWatchItem::factory()->create();
+
+        $this->actingAs($this->adminUser())
+            ->postJson("/admin/index-watch-items/{$index->id}/prices/ensure?range=5y")
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('range');
     }
 
     public function test_austrian_index_prices_are_loaded_from_the_index_exchange(): void
@@ -337,6 +413,42 @@ class AdminIndexWatchItemTest extends TestCase
             ])
             ->assertUnprocessable()
             ->assertJsonValidationErrors('instrument_type');
+    }
+
+    public function test_admin_can_remove_an_index_watch_item_and_its_prices(): void
+    {
+        $admin = $this->adminUser();
+        $index = IndexWatchItem::factory()->create();
+        $price = IndexWatchItemPrice::query()->create([
+            'index_watch_item_id' => $index->id,
+            'trading_date' => '2026-06-05',
+            'actual_price' => '6116.52980000',
+        ]);
+
+        $this->actingAs($admin)
+            ->deleteJson("/admin/index-watch-items/{$index->id}")
+            ->assertOk()
+            ->assertJsonPath('message', 'Index removed.');
+
+        $this->assertModelMissing($index);
+        $this->assertModelMissing($price);
+    }
+
+    public function test_admin_can_open_the_indices_dashboard_item(): void
+    {
+        $this->actingAs($this->adminUser())
+            ->get('/admin/menu/indices')
+            ->assertOk();
+    }
+
+    public function test_guest_cannot_remove_an_index_watch_item(): void
+    {
+        $index = IndexWatchItem::factory()->create();
+
+        $this->deleteJson("/admin/index-watch-items/{$index->id}")
+            ->assertUnauthorized();
+
+        $this->assertModelExists($index);
     }
 
     public function test_guest_cannot_add_index_watch_items(): void

@@ -8,12 +8,18 @@ import { useRoleStore } from './stores/roles';
 import { useUserStore } from './stores/users';
 import { formatAdaptiveNumber, formatPriceValue } from './utils/numberFormatters';
 
-const indexRecentPriceLimit = 30;
 const logoMarkUrl = '/images/gkstocks-logo-mark.png';
 const displayTimeZone = 'Europe/Vienna';
 const kestTaxRate = 0.275;
 const defaultAnalyzeTrendRowLimit = 200;
 const maxAnalyzeTrendRowLimit = 2000;
+const indexPriceRangeItems = [
+    { key: 'intraday', label: 'Intraday' },
+    { key: '1w', label: '1 week' },
+    { key: '1m', label: '1 month' },
+    { key: '6m', label: '6 month' },
+    { key: '1y', label: '1 year' },
+];
 const defaultAnalyzeTrendTradeAmounts = [7000, 5000, 3000];
 const maxAnalyzeTrendTradeAmount = 1000000;
 const defaultAnalyzeTrendMaxInvestAmount = 0;
@@ -50,6 +56,8 @@ const {
     depots,
     holdings,
     indexWatchItems,
+    indexEodhdSync,
+    indexEodhdSyncSettings,
     depotHoldings,
     depotValuations,
     depotPerformanceSeries,
@@ -129,6 +137,12 @@ const loginPassword = ref('');
 const loginMode = ref('password');
 const localError = ref('');
 const activeSection = ref('dashboard');
+const infoTables = ref([]);
+const infoMethods = ref([]);
+const infoTablesLoading = ref(false);
+const infoTablesError = ref('');
+const infoTableSearch = ref('');
+const activeInfoSubsection = ref('eodhd');
 const activeAnalyzeSubsection = ref('overview');
 const activeDataSubsection = ref('overview');
 const selectedAnalyzeHistoryRange = ref('1y');
@@ -184,13 +198,16 @@ const depotMessage = ref('');
 const depotError = ref('');
 const isHoldingDialogOpen = ref(false);
 const isIndexDialogOpen = ref(false);
-const isIndexPriceDialogOpen = ref(false);
-const isIndexPriceDialogLoading = ref(false);
+const isIndexPriceChartLoading = ref(false);
+const isDeleteIndexDialogOpen = ref(false);
 const isDeleteHoldingDialogOpen = ref(false);
 const isCashTransactionDialogOpen = ref(false);
 const isStockTransactionDialogOpen = ref(false);
 const selectedHolding = ref(null);
+const selectedStockWatchItem = ref(null);
 const selectedIndexWatchItem = ref(null);
+const selectedIndexPriceRange = ref('intraday');
+const selectedIndexWatchItemForRemoval = ref(null);
 const transactionHolding = ref(null);
 const holdingSearchQuery = ref('');
 const indexSearchQuery = ref('');
@@ -202,7 +219,17 @@ const isDashboardInfoReloading = ref(false);
 const isDashboardAutoReloading = ref(false);
 const indexMessage = ref('');
 const indexError = ref('');
-const indexPriceDialogError = ref('');
+const indexPriceChartError = ref('');
+const indexEodhdSyncError = ref('');
+const indexEodhdSyncScheduleMessage = ref('');
+const indexEodhdSyncScheduleError = ref('');
+const indexEodhdSyncScheduleForm = ref(emptyIndexEodhdSyncScheduleForm());
+const isIndexEodhdSyncScheduleDialogOpen = ref(false);
+const isIndexEodhdSyncScheduleSaving = ref(false);
+const indexV2RealtimeScheduleForm = ref(emptyIndexV2RealtimeScheduleForm());
+const indexV2RealtimeScheduleError = ref('');
+const isIndexV2RealtimeScheduleDialogOpen = ref(false);
+const isIndexV2RealtimeScheduleSaving = ref(false);
 const expandedHoldingIds = ref([]);
 const priceRefreshScheduleForm = ref(emptyPriceRefreshScheduleForm());
 const indexPriceRefreshScheduleForm = ref(emptyPriceRefreshScheduleForm());
@@ -267,6 +294,7 @@ const dataHistoricalPriceLoading = ref(false);
 const dataHistoricalPriceError = ref('');
 const dataExchangeReloadTimer = ref(null);
 const dataIntradayReloadTimer = ref(null);
+const indexEodhdSyncTimer = ref(null);
 const isDashboardMenuCompact = ref(smAndDown.value);
 const viewportWidth = ref(window.visualViewport?.width ?? window.innerWidth);
 const viewportHeight = ref(window.visualViewport?.height ?? window.innerHeight);
@@ -303,11 +331,11 @@ const isHandsetLandscape = computed(() => viewportWidth.value <= 960
 const isCompactDepotStocksTable = computed(() => isHandsetLandscape.value);
 const isCompactCashLedgerTable = computed(() => isHandsetLandscape.value);
 const watchListTableColumnCount = computed(() => {
-    if (isHandsetLandscape.value) {
-        return 5;
-    }
+    const columnCount = isHandsetLandscape.value
+        ? 5
+        : (isCompactWatchListTable.value ? 5 : 7);
 
-    return isCompactWatchListTable.value ? 5 : 7;
+    return activeSection.value === 'stocks' ? columnCount - 1 : columnCount;
 });
 const dashboardTrendRecommendations = computed(() => new Map(holdings.value.map((holding) => [
     holding.id,
@@ -615,8 +643,44 @@ const sessionHeaderDates = computed(() => {
         lastDay: formatSessionHeaderDateValue(datedHolding?.end_price_24_date) ?? formatSessionHeaderDate(1),
     };
 });
-const selectedIndexRecentPrices = computed(() => selectedIndexWatchItem.value?.recent_prices ?? []);
-const selectedIndexChart = computed(() => buildIndexPriceChart(selectedIndexRecentPrices.value));
+const selectedIndexRecentPrices = computed(() => indexPricesForRange(
+    selectedIndexWatchItem.value?.recent_prices ?? [],
+    selectedIndexPriceRange.value,
+));
+const sortedIndexWatchItems = computed(() => [...indexWatchItems.value].sort((firstIndex, secondIndex) => {
+    const symbolComparison = String(firstIndex.symbol ?? '')
+        .localeCompare(String(secondIndex.symbol ?? ''), undefined, { sensitivity: 'base' });
+
+    return symbolComparison || firstIndex.id - secondIndex.id;
+}));
+const selectedIndexChartPrices = computed(() => selectedIndexPriceRange.value === 'intraday'
+    ? indexIntradayChartPrices(selectedIndexRecentPrices.value)
+    : selectedIndexRecentPrices.value);
+const selectedIndexChart = computed(() => buildIndexPriceChart(selectedIndexChartPrices.value));
+const selectedIndexPriceDateRange = computed(() => {
+    if (selectedIndexRecentPrices.value.length === 0) {
+        return '';
+    }
+
+    const latestDate = selectedIndexRecentPrices.value[0].trading_date;
+    const earliestDate = selectedIndexRecentPrices.value.at(-1).trading_date;
+
+    if (selectedIndexPriceRange.value === 'intraday' || earliestDate === latestDate) {
+        return formatIndexHistoryDate(latestDate);
+    }
+
+    return `${formatIndexHistoryDate(earliestDate)} – ${formatIndexHistoryDate(latestDate)}`;
+});
+const isIndexEodhdSyncRunning = computed(() => ['queued', 'running'].includes(indexEodhdSync.value?.status));
+const indexEodhdSyncProgress = computed(() => indexEodhdSync.value?.progress ?? {
+    completed: 0,
+    total: 0,
+    successful: 0,
+    deferred: 0,
+    issues: 0,
+    percent: 0,
+    estimated_remaining_seconds: null,
+});
 const depotPerformanceChart = computed(() => buildDepotPerformanceChart(depotPerformanceSeries?.value ?? []));
 const cashLedgerPageCount = computed(() => Math.max(Math.ceil(transactions.value.length / cashLedgerPageSize), 1));
 const paginatedCashLedgerTransactions = computed(() => {
@@ -2368,6 +2432,18 @@ const dataSubmenuItems = [
         icon: 'mdi-wrench-outline',
     },
 ];
+const infoSubmenuItems = [
+    {
+        key: 'eodhd',
+        label: 'EODHD',
+        icon: 'mdi-database-arrow-down-outline',
+    },
+    {
+        key: 'methoden',
+        label: 'Methoden',
+        icon: 'mdi-function-variant',
+    },
+];
 const analyzeHistoryRangeItems = [
     {
         key: '1y',
@@ -2415,11 +2491,55 @@ const analyzeHistoryRangeDays = {
     'today-1': 0,
 };
 
+const filteredInfoTables = computed(() => {
+    const search = infoTableSearch.value.trim().toLowerCase();
+
+    if (search === '') {
+        return infoTables.value;
+    }
+
+    return infoTables.value.filter((table) => [
+        table.name,
+        table.category,
+        table.purpose,
+        table.purpose_de,
+        table.eodhd?.endpoint,
+        table.eodhd?.access,
+        ...(table.eodhd?.documentation ?? []).flatMap((link) => [link.label, link.url]),
+        table.cadence,
+        table.queue?.job,
+        table.queue?.mode,
+    ].some((value) => String(value ?? '').toLowerCase().includes(search)));
+});
+const directEodhdTableCount = computed(() => infoTables.value.filter((table) => table.eodhd.mode === 'direct').length);
+const queuedInfoTableCount = computed(() => infoTables.value.filter((table) => table.queue.used).length);
+const synchronousInfoTableCount = computed(() => infoTables.value.filter((table) => infoQueueKind(table.queue) === 'synchronous').length);
+const scheduledInfoMethodCount = computed(() => infoMethods.value.filter((method) => method.execution.scheduled).length);
+const queuedInfoMethodCount = computed(() => infoMethods.value.filter((method) => ['queued', 'mixed'].includes(method.execution.mode)).length);
+const synchronousInfoMethodCount = computed(() => infoMethods.value.filter((method) => ['synchronous', 'mixed'].includes(method.execution.mode)).length);
+
 const menuItems = computed(() => [
     {
         key: 'dashboard',
         label: 'Dashboard',
         icon: 'mdi-view-dashboard-outline',
+    },
+    ...(canManageDashboardAdmin.value ? [
+        {
+            key: 'infos',
+            label: 'Infos',
+            icon: 'mdi-information-outline',
+        },
+    ] : []),
+    {
+        key: 'indices',
+        label: 'Indices',
+        icon: 'mdi-chart-areaspline',
+    },
+    {
+        key: 'stocks',
+        label: 'Stocks',
+        icon: 'mdi-finance',
     },
     ...(canManageDashboardAdmin.value ? [
         {
@@ -2513,6 +2633,30 @@ watch(
 );
 
 watch(
+    indexEodhdSyncSettings,
+    (settings) => {
+        if (isIndexEodhdSyncScheduleDialogOpen.value) {
+            return;
+        }
+
+        indexEodhdSyncScheduleForm.value = indexEodhdSyncScheduleFormFromSettings(settings);
+    },
+    { immediate: true },
+);
+
+watch(
+    indexEodhdSyncSettings,
+    (settings) => {
+        if (isIndexV2RealtimeScheduleDialogOpen.value) {
+            return;
+        }
+
+        indexV2RealtimeScheduleForm.value = indexV2RealtimeScheduleFormFromSettings(settings?.realtime);
+    },
+    { immediate: true },
+);
+
+watch(
     intradayBackfillSettings,
     (settings) => {
         if (isIntradayBackfillScheduleEditing.value) {
@@ -2559,6 +2703,12 @@ watch(
 watch(
     holdings,
     (currentHoldings) => {
+        if (selectedStockWatchItem.value) {
+            selectedStockWatchItem.value = currentHoldings.find(
+                (holding) => holding.id === selectedStockWatchItem.value.id,
+            ) ?? null;
+        }
+
         const currentHoldingIds = new Set(currentHoldings.map((holding) => holding.id));
         excludedAnalyzeTrendHoldingIds.value = excludedAnalyzeTrendHoldingIds.value
             .filter((holdingId) => currentHoldingIds.has(holdingId));
@@ -2592,7 +2742,7 @@ watch(
 );
 
 watch(
-    [activeSection, activeAnalyzeSubsection, activeDataSubsection],
+    [activeSection, activeAnalyzeSubsection, activeDataSubsection, activeInfoSubsection],
     ([section, subsection, dataSubsection]) => {
         ensureAnalyzeHoldingSelection();
 
@@ -2618,6 +2768,10 @@ watch(
 
         if (section === 'data' && dataSubsection === 'repair') {
             depotsStore.loadDataRepair().catch(() => {});
+        }
+
+        if (section === 'infos' && infoTables.value.length === 0 && infoMethods.value.length === 0) {
+            loadInfoData();
         }
 
         syncUpdateStatusPolling();
@@ -2709,6 +2863,9 @@ onMounted(async () => {
     await Promise.all([
         loadWatchlistHoldingsForActiveSection().catch(() => {}),
         depotsStore.loadIndexWatchItems().catch(() => {}),
+        activeSection.value === 'indices'
+            ? depotsStore.loadIndexEodhdSyncSettings().catch(() => {})
+            : Promise.resolve(),
     ]);
 
     ensureAnalyzeDetailIntradayCandles();
@@ -2735,6 +2892,7 @@ onBeforeUnmount(() => {
     stopDashboardAutoReload();
     stopDataExchangeReloadPolling();
     stopDataIntradayReloadPolling();
+    stopIndexEodhdSyncPolling();
     stopHoldingDialogKeyboardShortcuts();
     clearAnalyzeIsinCopiedTimer();
     clearDataHistoricIsinCopiedTimer();
@@ -2775,7 +2933,7 @@ async function loadSelectedTestIntraday() {
 }
 
 function navigateSection(section) {
-    const knownSections = ['dashboard', 'profile', 'analyze', 'data', 'depot', 'depots', 'users', 'roles', 'cloudways'];
+    const knownSections = ['dashboard', 'indices', 'stocks', 'profile', 'analyze', 'data', 'infos', 'depot', 'depots', 'users', 'roles', 'cloudways'];
 
     if (!knownSections.includes(section)) {
         activeSection.value = 'dashboard';
@@ -2795,6 +2953,10 @@ function navigateSection(section) {
 
     if (section === 'data' && !isDataSubsection(activeDataSubsection.value)) {
         activeDataSubsection.value = 'overview';
+    }
+
+    if (section === 'infos' && !isInfoSubsection(activeInfoSubsection.value)) {
+        activeInfoSubsection.value = 'eodhd';
     }
 
     clearSectionMessages();
@@ -2821,8 +2983,98 @@ function navigateSection(section) {
         loadWatchlistHoldingsForActiveSection();
     }
 
+    if (section === 'indices') {
+        Promise.all([
+            depotsStore.loadIndexWatchItems(),
+            depotsStore.loadIndexEodhdSyncSettings(),
+        ]).catch(() => {});
+    }
+
+    if (section === 'stocks') {
+        loadWatchlistHoldingsForActiveSection(1).catch(() => {});
+    }
+
     syncUpdateStatusPolling();
     syncDashboardAutoReload();
+}
+
+async function loadInfoData() {
+    infoTablesLoading.value = true;
+    infoTablesError.value = '';
+
+    try {
+        const data = await request('/admin/infos');
+        infoTables.value = data.tables ?? [];
+        infoMethods.value = data.methods ?? [];
+    } catch (error) {
+        infoTablesError.value = error.message;
+    } finally {
+        infoTablesLoading.value = false;
+    }
+}
+
+function infoEodhdModeLabel(mode) {
+    return {
+        direct: 'Direct',
+        indirect: 'Indirect',
+        none: 'None',
+    }[mode] ?? 'None';
+}
+
+function infoEodhdModeColor(mode) {
+    return {
+        direct: 'primary',
+        indirect: 'warning',
+        none: 'default',
+    }[mode] ?? 'default';
+}
+
+function infoQueueKind(queue) {
+    if (queue?.used) {
+        return 'queued';
+    }
+
+    if (queue?.mode?.startsWith('Synchronous')) {
+        return 'synchronous';
+    }
+
+    return 'none';
+}
+
+function infoQueueLabel(queue) {
+    return {
+        queued: `Queued · ${queue.name}`,
+        synchronous: 'Synchronous',
+        none: 'No queue',
+    }[infoQueueKind(queue)];
+}
+
+function infoQueueColor(queue) {
+    return {
+        queued: 'success',
+        synchronous: 'info',
+        none: 'default',
+    }[infoQueueKind(queue)];
+}
+
+function infoExecutionModeLabel(mode) {
+    return {
+        queued: 'Queued',
+        synchronous: 'Synchronous',
+        mixed: 'Queued + synchronous',
+    }[mode] ?? mode;
+}
+
+function infoExecutionModeColor(mode) {
+    return {
+        queued: 'success',
+        synchronous: 'info',
+        mixed: 'warning',
+    }[mode] ?? 'default';
+}
+
+function infoMethodClassName(className) {
+    return String(className ?? '').split('\\').pop();
 }
 
 function syncUpdateStatusPolling() {
@@ -2845,7 +3097,7 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
     const shouldIncludeCharts = shouldIncludeDashboardTrendCharts || shouldIncludeAnalyzeCharts;
     const shouldIncludeAllChartHoldings = shouldIncludeDashboardTrendCharts
         || (shouldIncludeAnalyzeCharts && activeAnalyzeSubsection.value === 'trend');
-    const shouldIncludeAllHoldings = activeSection.value === 'dashboard';
+    const shouldIncludeAllHoldings = ['dashboard', 'stocks'].includes(activeSection.value);
 
     return depotsStore.loadWatchlistHoldings(page, {
         ...options,
@@ -3094,6 +3346,17 @@ function navigateDataSubsection(subsection) {
 
     activeDataSubsection.value = subsection;
     activeSection.value = 'data';
+    clearSectionMessages();
+    updateUrlPath();
+}
+
+function navigateInfoSubsection(subsection) {
+    if (!isInfoSubsection(subsection) || activeInfoSubsection.value === subsection) {
+        return;
+    }
+
+    activeInfoSubsection.value = subsection;
+    activeSection.value = 'infos';
     clearSectionMessages();
     updateUrlPath();
 }
@@ -3389,6 +3652,16 @@ function applyRouteFromPath() {
             return;
         }
 
+        if (normalizedSection === 'infos') {
+            activeSection.value = 'infos';
+            activeInfoSubsection.value = isInfoSubsection(subsectionSegment)
+                ? subsectionSegment
+                : 'eodhd';
+            updateUrlPath({ replace: true });
+
+            return;
+        }
+
         const isTopLevel = menuItems.value.some((item) => item.key === normalizedSection);
         const isChild = menuItems.value.flatMap((item) => item.children ?? []).some((child) => child.key === normalizedSection);
         activeSection.value = (isTopLevel || isChild) ? normalizedSection : 'dashboard';
@@ -3410,7 +3683,9 @@ function updateUrlPath(options = {}) {
                 ? `/admin/menu/analyze/${activeAnalyzeSubsection.value}`
                 : activeSection.value === 'data'
                     ? `/admin/menu/data/${activeDataSubsection.value}`
-                    : `/admin/menu/${activeSection.value}`;
+                    : activeSection.value === 'infos'
+                        ? `/admin/menu/infos/${activeInfoSubsection.value}`
+                        : `/admin/menu/${activeSection.value}`;
     const target = activeSection.value === 'analyze'
         ? `${path}?stock=${selectedAnalyzeHoldingId.value === null ? 'all' : encodeURIComponent(String(selectedAnalyzeHoldingId.value))}`
         : path;
@@ -3459,6 +3734,10 @@ function ensureAnalyzeHoldingSelection(currentHoldings = holdings.value) {
 
 function isDataSubsection(subsection) {
     return dataSubmenuItems.some((item) => item.key === subsection);
+}
+
+function isInfoSubsection(subsection) {
+    return infoSubmenuItems.some((item) => item.key === subsection);
 }
 
 function applyAnalyzeSelectionFromQuery(searchParams) {
@@ -3787,32 +4066,298 @@ function abortIndexDialog() {
     isIndexDialogOpen.value = false;
 }
 
-async function openIndexPriceDialog(indexItem) {
-    selectedIndexWatchItem.value = indexItem;
-    indexPriceDialogError.value = '';
-    isIndexPriceDialogOpen.value = true;
+async function selectIndexWatchItem(indexItem) {
+    if (selectedIndexWatchItem.value?.id === indexItem.id) {
+        selectedIndexWatchItem.value = null;
+        selectedIndexPriceRange.value = 'intraday';
+        indexPriceChartError.value = '';
+        isIndexPriceChartLoading.value = false;
 
-    if (hasEnoughIndexRecentPrices(indexItem)) {
         return;
     }
 
-    isIndexPriceDialogLoading.value = true;
+    selectedIndexWatchItem.value = indexItem;
+    selectedIndexPriceRange.value = 'intraday';
+    await loadSelectedIndexPrices();
+}
+
+async function selectIndexPriceRange(range) {
+    selectedIndexPriceRange.value = range;
+    await loadSelectedIndexPrices();
+}
+
+async function loadSelectedIndexPrices() {
+    if (!selectedIndexWatchItem.value) {
+        return;
+    }
+
+    indexPriceChartError.value = '';
+    isIndexPriceChartLoading.value = true;
+    const indexWatchItemId = selectedIndexWatchItem.value.id;
+    const priceRange = selectedIndexPriceRange.value;
 
     try {
-        const data = await depotsStore.ensureIndexWatchItemPrices(indexItem.id);
-        selectedIndexWatchItem.value = data.index ?? indexItem;
-    } catch (err) {
-        indexPriceDialogError.value = err.message;
+        const data = await depotsStore.ensureIndexWatchItemPrices(
+            indexWatchItemId,
+            priceRange,
+        );
+
+        if (selectedIndexWatchItem.value?.id === indexWatchItemId && selectedIndexPriceRange.value === priceRange) {
+            selectedIndexWatchItem.value = data.index ?? selectedIndexWatchItem.value;
+        }
+    } catch (error) {
+        if (selectedIndexWatchItem.value?.id === indexWatchItemId && selectedIndexPriceRange.value === priceRange) {
+            indexPriceChartError.value = error.message;
+        }
     } finally {
-        isIndexPriceDialogLoading.value = false;
+        if (selectedIndexWatchItem.value?.id === indexWatchItemId && selectedIndexPriceRange.value === priceRange) {
+            isIndexPriceChartLoading.value = false;
+        }
     }
 }
 
-function closeIndexPriceDialog() {
-    isIndexPriceDialogOpen.value = false;
-    isIndexPriceDialogLoading.value = false;
-    indexPriceDialogError.value = '';
-    selectedIndexWatchItem.value = null;
+async function startIndexEodhdSync() {
+    indexEodhdSyncError.value = '';
+
+    try {
+        const data = await depotsStore.startIndexEodhdSync();
+
+        if (data.refresh?.refresh_id && isIndexEodhdSyncRunning.value) {
+            startIndexEodhdSyncPolling(data.refresh.refresh_id);
+        }
+    } catch (error) {
+        indexEodhdSyncError.value = error.message;
+    }
+}
+
+function openIndexEodhdSyncScheduleDialog() {
+    indexEodhdSyncScheduleForm.value = indexEodhdSyncScheduleFormFromSettings(indexEodhdSyncSettings.value);
+    indexEodhdSyncScheduleError.value = '';
+    isIndexEodhdSyncScheduleDialogOpen.value = true;
+}
+
+function closeIndexEodhdSyncScheduleDialog() {
+    isIndexEodhdSyncScheduleDialogOpen.value = false;
+    indexEodhdSyncScheduleError.value = '';
+}
+
+function addIndexEodhdSyncScheduleTime() {
+    if (indexEodhdSyncScheduleForm.value.times.length >= 8) {
+        return;
+    }
+
+    indexEodhdSyncScheduleForm.value.times.push('12:00');
+}
+
+function removeIndexEodhdSyncScheduleTime(index) {
+    if (indexEodhdSyncScheduleForm.value.times.length <= 1) {
+        return;
+    }
+
+    indexEodhdSyncScheduleForm.value.times.splice(index, 1);
+}
+
+async function saveIndexEodhdSyncSchedule() {
+    isIndexEodhdSyncScheduleSaving.value = true;
+    indexEodhdSyncScheduleError.value = '';
+    indexEodhdSyncScheduleMessage.value = '';
+
+    try {
+        const data = await depotsStore.updateIndexEodhdSyncSettings({
+            times: indexEodhdSyncScheduleForm.value.times,
+        });
+        indexEodhdSyncScheduleMessage.value = data.message;
+        isIndexEodhdSyncScheduleDialogOpen.value = false;
+    } catch (error) {
+        indexEodhdSyncScheduleError.value = error.message;
+    } finally {
+        isIndexEodhdSyncScheduleSaving.value = false;
+    }
+}
+
+function openIndexV2RealtimeScheduleDialog() {
+    indexV2RealtimeScheduleForm.value = indexV2RealtimeScheduleFormFromSettings(
+        indexEodhdSyncSettings.value?.realtime,
+    );
+    indexV2RealtimeScheduleError.value = '';
+    isIndexV2RealtimeScheduleDialogOpen.value = true;
+}
+
+function closeIndexV2RealtimeScheduleDialog() {
+    isIndexV2RealtimeScheduleDialogOpen.value = false;
+    indexV2RealtimeScheduleError.value = '';
+}
+
+async function saveIndexV2RealtimeSchedule() {
+    isIndexV2RealtimeScheduleSaving.value = true;
+    indexV2RealtimeScheduleError.value = '';
+    indexEodhdSyncScheduleMessage.value = '';
+
+    try {
+        const form = indexV2RealtimeScheduleForm.value;
+        const data = await depotsStore.updateIndexEodhdSyncSettings({
+            realtime: {
+                trading_interval_minutes: Number(form.trading_interval_minutes),
+                trading_starts_before_minutes: Number(form.trading_starts_before_minutes),
+                trading_ends_after_minutes: Number(form.trading_ends_after_minutes),
+                closed_refresh_enabled: Boolean(form.closed_refresh_enabled),
+                closed_interval_minutes: Number(form.closed_interval_minutes),
+            },
+        });
+        indexEodhdSyncScheduleMessage.value = data.message;
+        isIndexV2RealtimeScheduleDialogOpen.value = false;
+    } catch (error) {
+        indexV2RealtimeScheduleError.value = error.message;
+    } finally {
+        isIndexV2RealtimeScheduleSaving.value = false;
+    }
+}
+
+function startIndexEodhdSyncPolling(refreshId) {
+    stopIndexEodhdSyncPolling();
+    indexEodhdSyncTimer.value = window.setInterval(() => pollIndexEodhdSync(refreshId), 2000);
+}
+
+function stopIndexEodhdSyncPolling() {
+    if (!indexEodhdSyncTimer.value) {
+        return;
+    }
+
+    window.clearInterval(indexEodhdSyncTimer.value);
+    indexEodhdSyncTimer.value = null;
+}
+
+function closeIndexEodhdSyncResult() {
+    stopIndexEodhdSyncPolling();
+    indexEodhdSyncError.value = '';
+    depotsStore.clearIndexEodhdSync();
+}
+
+async function pollIndexEodhdSync(refreshId) {
+    try {
+        const data = await depotsStore.loadIndexEodhdSync(refreshId);
+
+        if (!['queued', 'running'].includes(data.refresh?.status)) {
+            stopIndexEodhdSyncPolling();
+            await Promise.all([
+                depotsStore.loadIndexWatchItems(),
+                depotsStore.loadIndexEodhdSyncSettings(),
+            ]);
+        }
+    } catch (error) {
+        indexEodhdSyncError.value = error.message;
+        stopIndexEodhdSyncPolling();
+    }
+}
+
+function indexEodhdSyncStepIcon(status) {
+    return {
+        pending: 'mdi-circle-outline',
+        running: 'mdi-loading',
+        finished: 'mdi-check-circle',
+        partial: 'mdi-alert-circle',
+        no_data: 'mdi-database-alert',
+        deferred: 'mdi-clock',
+        market_closed: 'mdi-calendar-remove',
+        timeout: 'mdi-timer-alert',
+        rate_limited: 'mdi-speedometer-slow',
+        access_denied: 'mdi-lock-alert',
+        not_found: 'mdi-cloud-alert',
+        unavailable: 'mdi-alert-circle',
+        skipped: 'mdi-skip-next-circle',
+        failed: 'mdi-alert-circle',
+    }[status] ?? 'mdi-circle-outline';
+}
+
+function indexEodhdSyncStepColor(status) {
+    return {
+        running: 'primary',
+        finished: 'success',
+        partial: 'warning',
+        no_data: 'warning',
+        deferred: 'info',
+        market_closed: 'info',
+        timeout: 'error',
+        rate_limited: 'warning',
+        access_denied: 'error',
+        not_found: 'warning',
+        unavailable: 'warning',
+        skipped: 'medium-emphasis',
+        failed: 'error',
+    }[status] ?? 'medium-emphasis';
+}
+
+function indexEodhdSyncChecklistStatusLabel(status) {
+    return {
+        pending: 'pending',
+        running: 'checking',
+        finished: 'done',
+        partial: 'incomplete',
+        no_data: 'no EODHD data',
+        deferred: 'waiting',
+        market_closed: 'market closed',
+        timeout: 'Timeout',
+        rate_limited: 'rate limited',
+        access_denied: 'access denied',
+        not_found: 'HTTP 404',
+        unavailable: 'unavailable',
+        skipped: 'skipped',
+        failed: 'failed',
+    }[status] ?? status;
+}
+
+function indexEodhdSyncShowsStatusMessage(status) {
+    return [
+        'partial',
+        'no_data',
+        'deferred',
+        'market_closed',
+        'timeout',
+        'rate_limited',
+        'access_denied',
+        'not_found',
+        'unavailable',
+        'skipped',
+        'failed',
+    ].includes(status);
+}
+
+function formatIndexEodhdSyncRemaining(seconds) {
+    if (seconds === null || seconds === undefined) {
+        return '';
+    }
+
+    if (seconds === 0) {
+        return 'completed';
+    }
+
+    if (seconds < 60) {
+        return 'less than 1 minute';
+    }
+
+    const minutes = Math.ceil(seconds / 60);
+
+    return `about ${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
+function indexEodhdSyncStatusColor(status) {
+    return {
+        queued: 'primary',
+        running: 'primary',
+        partial: 'warning',
+        finished: 'success',
+        failed: 'error',
+    }[status] ?? 'medium-emphasis';
+}
+
+function indexEodhdSyncStatusLabel(status) {
+    return {
+        queued: 'queued',
+        running: 'running',
+        partial: 'completed with gaps',
+        finished: 'completed',
+        failed: 'failed',
+    }[status] ?? status;
 }
 
 async function focusHoldingSearchInput() {
@@ -3904,7 +4449,6 @@ async function saveIndexWatchItem(result) {
     try {
         const data = await depotsStore.createIndexWatchItem(result);
         indexMessage.value = data.message;
-        holdingMessage.value = data.message;
         isIndexDialogOpen.value = false;
     } catch (err) {
         indexError.value = err.message;
@@ -4892,6 +5436,7 @@ async function pollDataExchangeReload(refreshId) {
 
 function startDataIntradayReloadPolling(refreshId) {
     stopDataIntradayReloadPolling();
+    stopIndexEodhdSyncPolling();
     pollDataIntradayReload(refreshId);
     dataIntradayReloadTimer.value = window.setInterval(() => pollDataIntradayReload(refreshId), 3000);
 }
@@ -4978,6 +5523,26 @@ function openDeleteHoldingDialog(holding) {
     isDeleteHoldingDialogOpen.value = true;
 }
 
+function toggleStockWatchItemSelection(holding) {
+    if (selectedStockWatchItem.value?.id === holding.id) {
+        selectedStockWatchItem.value = null;
+
+        return;
+    }
+
+    selectedStockWatchItem.value = holding;
+}
+
+function handleStockHoldingRowClick(holding) {
+    if (activeSection.value === 'stocks') {
+        toggleStockWatchItemSelection(holding);
+
+        return;
+    }
+
+    toggleHoldingDetails(holding);
+}
+
 function abortDeleteHoldingDialog() {
     isDeleteHoldingDialogOpen.value = false;
     selectedHolding.value = null;
@@ -4987,13 +5552,57 @@ async function deleteHolding() {
     holdingError.value = '';
     holdingMessage.value = '';
 
+    if (!selectedHolding.value) {
+        return;
+    }
+
     try {
         const data = await depotsStore.deleteWatchlistHolding(selectedHolding.value.id);
         holdingMessage.value = data.message;
+
+        if (selectedStockWatchItem.value?.id === selectedHolding.value.id) {
+            selectedStockWatchItem.value = null;
+        }
+
         abortDeleteHoldingDialog();
         await loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page);
     } catch (err) {
         holdingError.value = err.message;
+    }
+}
+
+function openDeleteIndexDialog() {
+    if (!selectedIndexWatchItem.value) {
+        return;
+    }
+
+    selectedIndexWatchItemForRemoval.value = selectedIndexWatchItem.value;
+    indexError.value = '';
+    indexMessage.value = '';
+    isDeleteIndexDialogOpen.value = true;
+}
+
+function abortDeleteIndexDialog() {
+    isDeleteIndexDialogOpen.value = false;
+    selectedIndexWatchItemForRemoval.value = null;
+}
+
+async function deleteIndexWatchItem() {
+    indexError.value = '';
+    indexMessage.value = '';
+
+    try {
+        const data = await depotsStore.deleteIndexWatchItem(selectedIndexWatchItemForRemoval.value.id);
+        indexMessage.value = data.message;
+
+        if (selectedIndexWatchItem.value?.id === selectedIndexWatchItemForRemoval.value.id) {
+            selectedIndexWatchItem.value = null;
+            selectedIndexPriceRange.value = 'intraday';
+        }
+
+        abortDeleteIndexDialog();
+    } catch (error) {
+        indexError.value = error.message;
     }
 }
 
@@ -5816,10 +6425,6 @@ function formatIndexDialogActualPrice(indexItem) {
     return formatIndexPrice(indexItem);
 }
 
-function hasEnoughIndexRecentPrices(indexItem) {
-    return Array.isArray(indexItem?.recent_prices) && indexItem.recent_prices.length >= indexRecentPriceLimit;
-}
-
 function formatIndexHistoryPrice(value, indexItem) {
     if (value === null || value === undefined || value === '') {
         return '-';
@@ -5854,6 +6459,55 @@ function indexHistoryChartPrice(price) {
     }
 
     return Number(value);
+}
+
+function indexPricesForRange(prices, range) {
+    const orderedPrices = [...prices]
+        .filter((price) => price?.trading_date)
+        .sort((first, second) => second.trading_date.localeCompare(first.trading_date));
+
+    if (range === 'intraday') {
+        return orderedPrices.slice(0, 1);
+    }
+
+    const rangeDays = {
+        '1w': 7,
+        '1m': 31,
+        '6m': 183,
+        '1y': 366,
+    }[range];
+
+    if (!rangeDays || orderedPrices.length === 0) {
+        return orderedPrices;
+    }
+
+    const latestDate = new Date(`${orderedPrices[0].trading_date}T00:00:00Z`);
+    const cutoffDate = new Date(latestDate);
+    cutoffDate.setUTCDate(cutoffDate.getUTCDate() - rangeDays);
+    const cutoff = cutoffDate.toISOString().slice(0, 10);
+
+    return orderedPrices.filter((price) => price.trading_date >= cutoff);
+}
+
+function indexIntradayChartPrices(prices) {
+    const latestPrice = prices[0];
+
+    if (!latestPrice) {
+        return [];
+    }
+
+    return [
+        {
+            ...latestPrice,
+            actual_price: latestPrice.actual_price ?? latestPrice.last_price,
+            chart_label: 'Latest',
+        },
+        {
+            ...latestPrice,
+            actual_price: latestPrice.start_price,
+            chart_label: 'Start',
+        },
+    ].filter((price) => indexHistoryActualPrice(price) !== null && indexHistoryActualPrice(price) !== undefined);
 }
 
 function formatIndexChartDate(value) {
@@ -5970,7 +6624,7 @@ function buildIndexPriceChart(prices) {
             ...price,
             x,
             y,
-            label: formatIndexChartDate(price.trading_date),
+            label: price.chart_label ?? formatIndexChartDate(price.trading_date),
         };
     });
 
@@ -9277,15 +9931,34 @@ function formatLiveDataUpdateSchedule(settings) {
     const interval = settings?.trading_interval_minutes ?? 20;
     const startTime = settings?.trading_start_time;
     const endTime = settings?.trading_end_time;
+    const closedSchedule = settings?.closed_refresh_enabled
+        ? `closed: every ${settings?.closed_interval_minutes ?? 60} min`
+        : 'closed: off';
 
     if (startTime && endTime) {
-        return `Mo-Fr ${startTime}-${endTime} · ${interval} min`;
+        return `Mo-Fr ${startTime}-${endTime} · ${interval} min · ${closedSchedule}`;
     }
 
     const startOffset = settings?.trading_starts_before_minutes ?? 0;
     const endOffset = settings?.trading_ends_after_minutes ?? 0;
 
-    return `Mo-Fr start ${startOffset} min before trading until ${endOffset} min after trading · ${interval} min`;
+    return `Mo-Fr start ${startOffset} min before trading until ${endOffset} min after trading · ${interval} min · ${closedSchedule}`;
+}
+
+function indexV2RealtimeStatusColor(settings) {
+    if (settings?.status === 'updating') {
+        return 'primary';
+    }
+
+    if (settings?.status === 'scheduled') {
+        return 'success';
+    }
+
+    if (settings?.status === 'due' || settings?.status === 'retry_scheduled') {
+        return 'warning';
+    }
+
+    return 'default';
 }
 
 function formatHistoricalDataUpdateSchedule(settings) {
@@ -9422,6 +10095,8 @@ function clearSectionMessages() {
     depotError.value = '';
     holdingMessage.value = '';
     holdingError.value = '';
+    indexMessage.value = '';
+    indexError.value = '';
     priceRefreshScheduleMessage.value = '';
     priceRefreshScheduleError.value = '';
     dataHistoricalPriceError.value = '';
@@ -9495,6 +10170,37 @@ function emptyPriceRefreshScheduleForm() {
         trading_end_time: null,
         closed_refresh_enabled: true,
         closed_interval_minutes: 60,
+    };
+}
+
+function emptyIndexEodhdSyncScheduleForm() {
+    return {
+        times: ['02:00'],
+    };
+}
+
+function emptyIndexV2RealtimeScheduleForm() {
+    return {
+        trading_interval_minutes: 20,
+        trading_starts_before_minutes: 0,
+        trading_ends_after_minutes: 0,
+        closed_refresh_enabled: false,
+        closed_interval_minutes: 60,
+    };
+}
+
+function indexV2RealtimeScheduleFormFromSettings(settings) {
+    return {
+        ...emptyIndexV2RealtimeScheduleForm(),
+        ...settings,
+    };
+}
+
+function indexEodhdSyncScheduleFormFromSettings(settings) {
+    return {
+        times: Array.isArray(settings?.times) && settings.times.length > 0
+            ? [...settings.times]
+            : ['02:00'],
     };
 }
 
@@ -9715,8 +10421,8 @@ function formatIndexDataUpdateSchedule(settings) {
 
             <v-main>
                 <v-container class="py-8" :fluid="lgAndDown">
-                    <section v-if="activeSection === 'dashboard'">
-                        <div class="dashboard-heading mb-6">
+                    <section v-if="['dashboard', 'indices', 'stocks'].includes(activeSection)">
+                        <div v-if="activeSection === 'dashboard'" class="dashboard-heading mb-6">
                             <div>
                                 <p class="text-overline text-primary mb-1">Dashboard</p>
                                 <h1 class="text-h4">Watch-list</h1>
@@ -9744,36 +10450,598 @@ function formatIndexDataUpdateSchedule(settings) {
                             </div>
                         </div>
 
-                        <v-alert v-if="visibleHoldingMessage" type="success" variant="tonal" density="compact" class="mb-4">
+                        <div v-if="activeSection === 'stocks'" aria-label="Stocks dashboard">
+                            <div class="dashboard-heading mb-6">
+                                <div>
+                                    <p class="text-overline text-primary mb-1">Dashboard</p>
+                                    <h1 class="text-h4">Stocks</h1>
+                                    <p class="text-body-2 text-medium-emphasis mt-2">
+                                        View and manage all saved stocks.
+                                    </p>
+                                </div>
+                                <div class="dashboard-actions">
+                                    <v-btn
+                                        class="dashboard-action-button"
+                                        color="secondary"
+                                        disabled
+                                        prepend-icon="mdi-cloud-sync-outline"
+                                        title="The stock EODHD sync will be defined later."
+                                        type="button"
+                                        variant="outlined"
+                                    >
+                                        EODHD Sync
+                                    </v-btn>
+                                    <v-btn
+                                        class="dashboard-action-button"
+                                        color="primary"
+                                        prepend-icon="mdi-plus"
+                                        type="button"
+                                        variant="flat"
+                                        @click="openHoldingDialog"
+                                    >
+                                        Add stock
+                                    </v-btn>
+                                    <v-btn
+                                        class="dashboard-action-button"
+                                        color="error"
+                                        prepend-icon="mdi-delete-outline"
+                                        type="button"
+                                        variant="outlined"
+                                        :disabled="!selectedStockWatchItem || hasPositionPieces(selectedStockWatchItem) || holdingsLoading"
+                                        @click="openDeleteHoldingDialog(selectedStockWatchItem)"
+                                    >
+                                        Delete stock
+                                    </v-btn>
+                                </div>
+                            </div>
+
+                            <v-card class="mb-6" variant="outlined" aria-label="Automatic stock EODHD updates">
+                                <v-card-title class="d-flex flex-wrap align-center justify-space-between ga-3">
+                                    <div>
+                                        <div>Automatic EODHD updates</div>
+                                        <div class="text-caption text-medium-emphasis">
+                                            Current stock update schedule
+                                        </div>
+                                    </div>
+                                    <v-chip
+                                        :color="priceRefreshSettings?.status === 'updating' ? 'primary' : 'default'"
+                                        size="small"
+                                        variant="tonal"
+                                    >
+                                        {{ priceRefreshSettings?.status_label ?? 'Waiting' }}
+                                    </v-chip>
+                                </v-card-title>
+                                <v-card-text>
+                                    <v-row>
+                                        <v-col cols="12" md="4">
+                                            <div class="text-caption text-medium-emphasis">Latest update</div>
+                                            <div class="text-body-1 font-weight-medium">
+                                                {{ priceRefreshSettings?.last_refreshed_at
+                                                    ? formatDateTime(priceRefreshSettings.last_refreshed_at)
+                                                    : 'Never' }}
+                                            </div>
+                                        </v-col>
+                                        <v-col cols="12" md="4">
+                                            <div class="text-caption text-medium-emphasis">Next automatic update</div>
+                                            <div class="text-body-1 font-weight-medium">
+                                                {{ priceRefreshSettings?.next_refresh_at
+                                                    ? formatDateTime(priceRefreshSettings.next_refresh_at)
+                                                    : '-' }}
+                                            </div>
+                                        </v-col>
+                                        <v-col cols="12" md="4">
+                                            <div class="text-caption text-medium-emphasis">Stored schedule</div>
+                                            <div class="text-body-1 font-weight-medium">
+                                                {{ formatLiveDataUpdateSchedule(priceRefreshSettings) }}
+                                            </div>
+                                        </v-col>
+                                    </v-row>
+                                </v-card-text>
+                            </v-card>
+                        </div>
+
+                        <div v-if="activeSection === 'indices'" aria-label="Indices">
+                            <div class="dashboard-heading mb-6">
+                                <div>
+                                    <p class="text-overline text-primary mb-1">Dashboard</p>
+                                    <h1 class="text-h4">Indices</h1>
+                                    <p class="text-body-2 text-medium-emphasis mt-2">
+                                        Alle gespeicherten Indizes verwalten und ihre Kursdaten öffnen.
+                                    </p>
+                                </div>
+                                <div class="dashboard-actions">
+                                    <v-btn
+                                        class="dashboard-action-button"
+                                        color="secondary"
+                                        prepend-icon="mdi-cloud-sync-outline"
+                                        type="button"
+                                        variant="outlined"
+                                        :disabled="isIndexEodhdSyncRunning"
+                                        :loading="isIndexEodhdSyncRunning"
+                                        @click="startIndexEodhdSync"
+                                    >
+                                        EODHD Sync
+                                    </v-btn>
+                                    <v-btn
+                                        class="dashboard-action-button"
+                                        color="primary"
+                                        prepend-icon="mdi-plus"
+                                        variant="flat"
+                                        @click="openIndexDialog"
+                                    >
+                                        Index hinzufügen
+                                    </v-btn>
+                                    <v-btn
+                                        class="dashboard-action-button"
+                                        color="error"
+                                        prepend-icon="mdi-delete-outline"
+                                        variant="outlined"
+                                        :disabled="!selectedIndexWatchItem || holdingsLoading"
+                                        @click="openDeleteIndexDialog"
+                                    >
+                                        Index löschen
+                                    </v-btn>
+                                </div>
+                            </div>
+
+                            <v-alert
+                                v-if="indexEodhdSyncError"
+                                class="mb-4"
+                                density="compact"
+                                type="error"
+                                variant="tonal"
+                            >
+                                {{ indexEodhdSyncError }}
+                            </v-alert>
+
+                            <v-card class="mb-6" variant="outlined" aria-label="Automatic v2 index updates">
+                                <v-card-title class="d-flex flex-wrap align-center justify-space-between ga-3">
+                                    <div>
+                                        <div>Automatic EODHD updates</div>
+                                        <div class="text-caption text-medium-emphasis">
+                                            V2 schedules for daily, intraday, and live index data
+                                        </div>
+                                    </div>
+                                    <div class="d-flex flex-wrap align-center ga-2">
+                                        <v-chip
+                                            :color="indexEodhdSyncSettings?.status === 'updating' ? 'primary' : 'default'"
+                                            size="small"
+                                            variant="tonal"
+                                        >
+                                            {{ indexEodhdSyncSettings?.status_label ?? 'Waiting' }}
+                                        </v-chip>
+                                        <v-btn
+                                            prepend-icon="mdi-clock-edit-outline"
+                                            type="button"
+                                            variant="tonal"
+                                            @click="openIndexEodhdSyncScheduleDialog"
+                                        >
+                                            Edit EOD + intraday times
+                                        </v-btn>
+                                    </div>
+                                </v-card-title>
+                                <v-card-text>
+                                    <v-row>
+                                        <v-col cols="12" md="4">
+                                            <div class="text-caption text-medium-emphasis">Latest update</div>
+                                            <div class="text-body-1 font-weight-medium">
+                                                {{ indexEodhdSyncSettings?.latest_update_at
+                                                    ? formatDateTime(indexEodhdSyncSettings.latest_update_at)
+                                                    : 'Never' }}
+                                            </div>
+                                        </v-col>
+                                        <v-col cols="12" md="4">
+                                            <div class="text-caption text-medium-emphasis">Next automatic update</div>
+                                            <div class="text-body-1 font-weight-medium">
+                                                {{ indexEodhdSyncSettings?.next_update_at
+                                                    ? formatDateTime(indexEodhdSyncSettings.next_update_at)
+                                                    : '-' }}
+                                            </div>
+                                        </v-col>
+                                        <v-col cols="12" md="4">
+                                            <div class="text-caption text-medium-emphasis mb-1">
+                                                EOD + 5-minute intraday run times · {{ indexEodhdSyncSettings?.timezone ?? 'Europe/Vienna' }}
+                                            </div>
+                                            <div class="d-flex flex-wrap ga-2">
+                                                <v-chip
+                                                    v-for="time in indexEodhdSyncSettings?.times ?? []"
+                                                    :key="time"
+                                                    color="primary"
+                                                    size="small"
+                                                    variant="tonal"
+                                                >
+                                                    {{ time }}
+                                                </v-chip>
+                                                <span
+                                                    v-if="!indexEodhdSyncSettings?.times?.length"
+                                                    class="text-body-2 text-medium-emphasis"
+                                                >
+                                                    Loading…
+                                                </span>
+                                            </div>
+                                        </v-col>
+                                    </v-row>
+                                    <v-divider class="my-4" />
+                                    <div
+                                        class="d-flex flex-wrap align-center justify-space-between ga-3"
+                                        aria-label="V2 index realtime schedule"
+                                    >
+                                        <div class="flex-grow-1">
+                                            <div class="d-flex flex-wrap align-center ga-2">
+                                                <span class="text-body-2 font-weight-bold">Live/realtime prices</span>
+                                                <v-chip
+                                                    :color="indexV2RealtimeStatusColor(indexEodhdSyncSettings?.realtime)"
+                                                    size="x-small"
+                                                    variant="tonal"
+                                                >
+                                                    {{ indexEodhdSyncSettings?.realtime?.status_label ?? 'Loading' }}
+                                                </v-chip>
+                                            </div>
+                                            <div class="text-body-2">
+                                                {{ formatLiveDataUpdateSchedule(indexEodhdSyncSettings?.realtime) }}
+                                            </div>
+                                            <div class="text-caption text-medium-emphasis">
+                                                {{ indexEodhdSyncSettings?.realtime?.status_detail
+                                                    ?? 'The next refresh starts at the time shown below.' }}
+                                            </div>
+                                            <div class="text-caption text-medium-emphasis">
+                                                Latest {{ indexEodhdSyncSettings?.realtime?.latest_update_at
+                                                    ? formatDateTime(indexEodhdSyncSettings.realtime.latest_update_at)
+                                                    : 'never' }}
+                                                · Next {{ indexEodhdSyncSettings?.realtime?.next_refresh_at
+                                                    ? formatDateTime(indexEodhdSyncSettings.realtime.next_refresh_at)
+                                                    : '-' }}
+                                                · {{ indexEodhdSyncSettings?.realtime?.timezone ?? 'Europe/Vienna' }}
+                                            </div>
+                                        </div>
+                                        <v-btn
+                                            prepend-icon="mdi-timer-edit-outline"
+                                            size="small"
+                                            type="button"
+                                            variant="text"
+                                            @click="openIndexV2RealtimeScheduleDialog"
+                                        >
+                                            Edit live period
+                                        </v-btn>
+                                    </div>
+                                    <v-alert
+                                        v-if="indexEodhdSyncSettings?.realtime?.last_error"
+                                        class="mt-3"
+                                        density="compact"
+                                        type="warning"
+                                        variant="tonal"
+                                    >
+                                        {{ indexEodhdSyncSettings.realtime.last_error }}
+                                    </v-alert>
+                                    <v-alert
+                                        v-if="indexEodhdSyncScheduleMessage"
+                                        class="mt-4"
+                                        density="compact"
+                                        type="success"
+                                        variant="tonal"
+                                    >
+                                        {{ indexEodhdSyncScheduleMessage }}
+                                    </v-alert>
+                                </v-card-text>
+                            </v-card>
+
+                            <v-card v-if="indexEodhdSync" class="index-eodhd-sync-card mb-6" variant="outlined">
+                                <v-card-title class="d-flex flex-wrap align-center justify-space-between ga-2">
+                                    <span>EODHD index synchronization</span>
+                                    <div class="d-flex align-center ga-2">
+                                        <v-chip
+                                            :color="indexEodhdSyncStatusColor(indexEodhdSync.status)"
+                                            size="small"
+                                            variant="tonal"
+                                        >
+                                            {{ indexEodhdSyncStatusLabel(indexEodhdSync.status) }}
+                                        </v-chip>
+                                        <v-btn
+                                            v-if="!isIndexEodhdSyncRunning"
+                                            aria-label="Close EODHD synchronization result"
+                                            icon="mdi-close"
+                                            size="small"
+                                            title="Close result"
+                                            variant="text"
+                                            @click="closeIndexEodhdSyncResult"
+                                        />
+                                    </div>
+                                </v-card-title>
+                                <v-card-text>
+                                    <div class="text-body-2 text-medium-emphasis mb-3">
+                                        {{ formatIndexHistoryDate(indexEodhdSync.date_from) }} –
+                                        {{ formatIndexHistoryDate(indexEodhdSync.date_to) }}
+                                    </div>
+                                    <v-progress-linear
+                                        v-if="isIndexEodhdSyncRunning"
+                                        class="mb-4"
+                                        color="primary"
+                                        height="7"
+                                        :model-value="indexEodhdSyncProgress.percent"
+                                        rounded
+                                    />
+                                    <div
+                                        v-if="indexEodhdSyncProgress.total > 0"
+                                        class="d-flex flex-wrap justify-space-between ga-2 text-body-2 mb-3"
+                                    >
+                                        <strong>
+                                            {{ indexEodhdSyncProgress.completed }} / {{ indexEodhdSyncProgress.total }} steps processed
+                                        </strong>
+                                        <span
+                                            v-if="isIndexEodhdSyncRunning && indexEodhdSyncProgress.estimated_remaining_seconds !== null"
+                                            class="text-medium-emphasis"
+                                        >
+                                            Estimated remaining: {{ formatIndexEodhdSyncRemaining(indexEodhdSyncProgress.estimated_remaining_seconds) }}
+                                        </span>
+                                        <span v-else-if="!isIndexEodhdSyncRunning" class="text-medium-emphasis">
+                                            {{ indexEodhdSyncProgress.successful }} successful ·
+                                            {{ indexEodhdSyncProgress.deferred }} waiting ·
+                                            {{ indexEodhdSyncProgress.issues }} with gaps or errors
+                                        </span>
+                                    </div>
+                                    <div v-if="indexEodhdSync.current" class="text-body-2 mb-3">
+                                        {{ indexEodhdSync.current }}
+                                    </div>
+                                    <div v-if="indexEodhdSync.index_progress?.length" class="mb-5">
+                                        <h3 class="text-subtitle-1 font-weight-bold mb-2">
+                                            {{ isIndexEodhdSyncRunning ? 'Indices being checked' : 'Checked indices' }}
+                                        </h3>
+                                        <v-table class="index-eodhd-sync-checklist" density="compact">
+                                            <thead>
+                                                <tr>
+                                                    <th>Index</th>
+                                                    <th class="text-center">EOD check</th>
+                                                    <th class="text-center">EOD sync</th>
+                                                    <th class="text-center">Intraday check</th>
+                                                    <th class="text-center">Intraday sync</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr
+                                                    v-for="indexProgress in indexEodhdSync.index_progress"
+                                                    :key="indexProgress.id"
+                                                >
+                                                    <td>
+                                                        <strong>{{ indexProgress.symbol }}</strong>
+                                                        <div class="text-caption text-medium-emphasis">{{ indexProgress.name }}</div>
+                                                    </td>
+                                                    <td
+                                                        v-for="stageKey in ['eod_check', 'eod_sync', 'intraday_check', 'intraday_sync']"
+                                                        :key="stageKey"
+                                                        class="text-center"
+                                                        :title="indexProgress[stageKey]?.message ?? ''"
+                                                    >
+                                                        <v-icon
+                                                            :class="{ 'mdi-spin': indexProgress[stageKey]?.status === 'running' }"
+                                                            :color="indexEodhdSyncStepColor(indexProgress[stageKey]?.status)"
+                                                            :icon="indexEodhdSyncStepIcon(indexProgress[stageKey]?.status)"
+                                                            size="small"
+                                                        />
+                                                        <div class="text-caption">
+                                                            {{ indexEodhdSyncChecklistStatusLabel(indexProgress[stageKey]?.status) }}
+                                                        </div>
+                                                        <div
+                                                            v-if="indexEodhdSyncShowsStatusMessage(indexProgress[stageKey]?.status)"
+                                                            class="text-caption text-medium-emphasis"
+                                                        >
+                                                            {{ indexProgress[stageKey]?.message }}
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </v-table>
+                                        <template
+                                            v-for="indexProgress in indexEodhdSync.index_progress"
+                                            :key="`intraday-blocks-${indexProgress.id}`"
+                                        >
+                                            <div
+                                                v-if="indexProgress.intraday_blocks?.length"
+                                                class="mt-3 rounded border pa-3"
+                                            >
+                                                <div class="text-subtitle-2 font-weight-bold mb-2">
+                                                    {{ indexProgress.symbol }} intraday blocks
+                                                </div>
+                                                <v-list density="compact" lines="two">
+                                                    <v-list-item
+                                                        v-for="block in indexProgress.intraday_blocks"
+                                                        :key="`${indexProgress.id}-${block.position}`"
+                                                    >
+                                                        <template #prepend>
+                                                            <v-icon
+                                                                :class="{ 'mdi-spin': block.status === 'running' }"
+                                                                :color="indexEodhdSyncStepColor(block.status)"
+                                                                :icon="indexEodhdSyncStepIcon(block.status)"
+                                                                size="small"
+                                                            />
+                                                        </template>
+                                                        <v-list-item-title>
+                                                            Block {{ block.position }}/{{ block.total }}:
+                                                            {{ block.date_from }} – {{ block.date_to }}
+                                                            · {{ indexEodhdSyncChecklistStatusLabel(block.status) }}
+                                                        </v-list-item-title>
+                                                        <v-list-item-subtitle>
+                                                            {{ block.attempts }} attempt(s), {{ block.records }} returned,
+                                                            {{ block.synced }} new. {{ block.message }}
+                                                        </v-list-item-subtitle>
+                                                    </v-list-item>
+                                                </v-list>
+                                            </div>
+                                        </template>
+                                    </div>
+                                    <v-list class="index-eodhd-sync-steps" density="compact">
+                                        <v-list-item
+                                            v-for="step in indexEodhdSync.steps"
+                                            :key="step.key"
+                                            :class="`index-eodhd-sync-step index-eodhd-sync-step--${step.status}`"
+                                        >
+                                            <template #prepend>
+                                                <v-icon
+                                                    :class="{ 'mdi-spin': step.status === 'running' }"
+                                                    :color="indexEodhdSyncStepColor(step.status)"
+                                                    :icon="indexEodhdSyncStepIcon(step.status)"
+                                                />
+                                            </template>
+                                            <v-list-item-title>{{ step.label }}</v-list-item-title>
+                                            <v-list-item-subtitle v-if="step.message">
+                                                {{ step.message }}
+                                            </v-list-item-subtitle>
+                                        </v-list-item>
+                                    </v-list>
+
+                                    <div v-if="indexEodhdSync.summary" class="index-eodhd-sync-summary mt-5">
+                                        <h3 class="text-h6 mb-3">Synchronization summary</h3>
+                                        <v-alert class="mb-4" density="compact" type="info" variant="tonal">
+                                            “New” means inserted by this run. Existing stored candles remain available and are shown separately.
+                                            A date is verified when stored EODHD 5-minute candles exist; this does not claim every possible session slot is present.
+                                        </v-alert>
+                                        <div class="d-flex flex-wrap ga-3 mb-4">
+                                            <v-chip color="primary" variant="tonal">
+                                                EOD: {{ indexEodhdSync.summary.eod.new_rows ?? indexEodhdSync.summary.eod.synced }} new rows
+                                            </v-chip>
+                                            <v-chip color="primary" variant="tonal">
+                                                Intraday: {{ indexEodhdSync.summary.intraday.new_candles ?? indexEodhdSync.summary.intraday.synced }} new candles
+                                            </v-chip>
+                                            <v-chip color="secondary" variant="tonal">
+                                                Stored intraday: {{ indexEodhdSync.summary.intraday.stored_candles ?? 0 }} candles
+                                            </v-chip>
+                                            <v-chip
+                                                v-if="indexEodhdSync.summary.intraday.no_data_indices"
+                                                color="warning"
+                                                variant="tonal"
+                                            >
+                                                No EODHD data: {{ indexEodhdSync.summary.intraday.no_data_indices }}
+                                            </v-chip>
+                                            <v-chip
+                                                v-if="indexEodhdSync.summary.intraday.partial_indices"
+                                                color="warning"
+                                                variant="tonal"
+                                            >
+                                                Partial gaps: {{ indexEodhdSync.summary.intraday.partial_indices }}
+                                            </v-chip>
+                                            <v-chip
+                                                v-if="indexEodhdSync.summary.intraday.not_found_indices ?? indexEodhdSync.summary.intraday.unsupported_indices"
+                                                color="warning"
+                                                variant="tonal"
+                                            >
+                                                HTTP 404: {{ indexEodhdSync.summary.intraday.not_found_indices ?? indexEodhdSync.summary.intraday.unsupported_indices }}
+                                            </v-chip>
+                                            <v-chip
+                                                v-if="indexEodhdSync.summary.intraday.access_denied_indices"
+                                                color="error"
+                                                variant="tonal"
+                                            >
+                                                Access denied: {{ indexEodhdSync.summary.intraday.access_denied_indices }}
+                                            </v-chip>
+                                            <v-chip
+                                                v-if="indexEodhdSync.summary.intraday.deferred_dates"
+                                                color="info"
+                                                variant="tonal"
+                                            >
+                                                Deferred dates: {{ indexEodhdSync.summary.intraday.deferred_dates }}
+                                            </v-chip>
+                                            <v-chip
+                                                v-if="indexEodhdSync.summary.intraday.market_closed_dates"
+                                                color="info"
+                                                variant="tonal"
+                                            >
+                                                Non-trading dates: {{ indexEodhdSync.summary.intraday.market_closed_dates }}
+                                            </v-chip>
+                                            <v-chip
+                                                v-if="indexEodhdSync.summary.intraday.retry_later_dates"
+                                                color="warning"
+                                                variant="tonal"
+                                            >
+                                                Waiting for retry: {{ indexEodhdSync.summary.intraday.retry_later_dates }} dates
+                                            </v-chip>
+                                        </div>
+                                        <v-table density="compact">
+                                            <thead>
+                                                <tr>
+                                                    <th>Index</th>
+                                                    <th class="text-right">New EOD rows</th>
+                                                    <th class="text-right">New candles</th>
+                                                    <th class="text-right">Stored candles</th>
+                                                    <th class="text-right">Verified</th>
+                                                    <th class="text-right">Deferred</th>
+                                                    <th>Intraday status</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="indexSummary in indexEodhdSync.summary.indices" :key="indexSummary.id">
+                                                    <td>{{ indexSummary.symbol }}</td>
+                                                    <td class="text-right">{{ indexSummary.eod?.new_rows ?? indexSummary.eod?.synced ?? 0 }}</td>
+                                                    <td class="text-right">{{ indexSummary.intraday?.new_candles ?? indexSummary.intraday?.synced ?? 0 }}</td>
+                                                    <td class="text-right">{{ indexSummary.intraday?.stored_candles ?? 0 }}</td>
+                                                    <td class="text-right">
+                                                        {{ indexSummary.intraday?.verified_dates ?? 0 }}/{{ indexSummary.intraday?.expected_dates ?? 0 }}
+                                                    </td>
+                                                    <td class="text-right">{{ indexSummary.intraday?.deferred_dates ?? 0 }}</td>
+                                                    <td>
+                                                        {{ indexEodhdSyncChecklistStatusLabel(indexSummary.intraday?.status ?? 'not checked') }}
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </v-table>
+                                    </div>
+                                </v-card-text>
+                            </v-card>
+
+                            <v-alert v-if="indexMessage" type="success" variant="tonal" density="compact" class="mb-4">
+                                {{ indexMessage }}
+                            </v-alert>
+                            <v-alert v-if="indexError || holdingsError" type="error" variant="tonal" density="compact" class="mb-4">
+                                {{ indexError || holdingsError }}
+                            </v-alert>
+
+                            <v-alert
+                                v-if="!holdingsLoading && indexWatchItems.length === 0"
+                                class="mb-4"
+                                type="info"
+                                variant="tonal"
+                            >
+                                Noch keine Indizes gespeichert.
+                            </v-alert>
+
+                            <div class="index-watch-strip mb-4">
+                                <div
+                                    v-for="indexItem in sortedIndexWatchItems"
+                                    :key="indexItem.id"
+                                    class="index-watch-item"
+                                >
+                                    <button
+                                        type="button"
+                                        class="index-watch-card"
+                                        :class="{ 'index-watch-card--active': selectedIndexWatchItem?.id === indexItem.id }"
+                                        :aria-pressed="selectedIndexWatchItem?.id === indexItem.id"
+                                        @click="selectIndexWatchItem(indexItem)"
+                                    >
+                                        <span class="index-watch-card-header">
+                                            <span class="index-watch-card-symbol">{{ indexItem.symbol }}</span>
+                                            <span class="index-watch-card-country">{{ indexItem.country || '-' }}</span>
+                                        </span>
+                                        <span class="index-watch-card-label">{{ indexItem.name || 'Index' }}</span>
+                                        <span class="index-watch-card-price" :class="indexChangeClass(indexItem)">
+                                            <span v-if="formatIndexChangePercent(indexItem)">
+                                                {{ formatIndexChangePercent(indexItem) }}
+                                            </span>
+                                            <span>{{ formatIndexPrice(indexItem) }}</span>
+                                        </span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <v-alert
+                            v-if="['dashboard', 'stocks'].includes(activeSection) && visibleHoldingMessage"
+                            type="success"
+                            variant="tonal"
+                            density="compact"
+                            class="mb-4"
+                        >
                             {{ visibleHoldingMessage }}
                         </v-alert>
-                        <div class="index-watch-strip mb-4">
-                            <button
-                                v-for="indexItem in indexWatchItems"
-                                :key="indexItem.id"
-                                type="button"
-                                class="index-watch-card"
-                                @click="openIndexPriceDialog(indexItem)"
-                            >
-                                <span class="index-watch-card-header">
-                                    <span class="index-watch-card-symbol">{{ indexItem.symbol }}</span>
-                                    <span class="index-watch-card-country">{{ indexItem.country || '-' }}</span>
-                                </span>
-                                <span class="index-watch-card-label">{{ indexItem.name || 'Index' }}</span>
-                                <span class="index-watch-card-price" :class="indexChangeClass(indexItem)">
-                                    <span v-if="formatIndexChangePercent(indexItem)">
-                                        {{ formatIndexChangePercent(indexItem) }}
-                                    </span>
-                                    <span>{{ formatIndexPrice(indexItem) }}</span>
-                                </span>
-                            </button>
-                            <button type="button" class="index-add-tile" @click="openIndexDialog">
-                                <span class="index-add-tile-plus">+</span>
-                                <span class="index-add-tile-label">INDEX</span>
-                            </button>
-                        </div>
                         <v-alert
-                            v-if="isPriceRefreshRunning"
+                            v-if="activeSection === 'dashboard' && isPriceRefreshRunning"
                             type="info"
                             variant="tonal"
                             density="compact"
@@ -9792,10 +11060,16 @@ function formatIndexDataUpdateSchedule(settings) {
                                 :model-value="priceRefreshProgressValue"
                             />
                         </v-alert>
-                        <v-alert v-if="holdingError || holdingsError" type="error" variant="tonal" density="compact" class="mb-4">
+                        <v-alert
+                            v-if="['dashboard', 'stocks'].includes(activeSection) && (holdingError || holdingsError)"
+                            type="error"
+                            variant="tonal"
+                            density="compact"
+                            class="mb-4"
+                        >
                             {{ holdingError || holdingsError }}
                         </v-alert>
-                        <section class="watch-list-section mb-4" aria-label="Stocks">
+                        <section v-if="['dashboard', 'stocks'].includes(activeSection)" class="watch-list-section mb-4" aria-label="Stocks">
                             <div class="watch-list-section-header">
                                 <div>
                                     <div class="watch-list-section-eyebrow">Watch-list</div>
@@ -9816,6 +11090,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                     v-for="holding in holdings"
                                     :key="`mobile-holding-${holding.id}`"
                                     class="mobile-stock-card"
+                                    :class="{
+                                        'mobile-stock-card--selected': activeSection === 'stocks'
+                                            && selectedStockWatchItem?.id === holding.id,
+                                    }"
+                                    :aria-selected="activeSection === 'stocks'
+                                        ? selectedStockWatchItem?.id === holding.id
+                                        : undefined"
+                                    :tabindex="activeSection === 'stocks' ? 0 : undefined"
+                                    @click="activeSection === 'stocks' && toggleStockWatchItemSelection(holding)"
+                                    @keydown.enter.prevent="activeSection === 'stocks' && toggleStockWatchItemSelection(holding)"
+                                    @keydown.space.prevent="activeSection === 'stocks' && toggleStockWatchItemSelection(holding)"
                                 >
                                     <div class="mobile-stock-name">
                                         {{ holding.name || holding.symbol || '-' }}
@@ -9857,7 +11142,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             {{ dashboardTrendRecommendationLabel(holding) }}
                                         </span>
                                     </div>
-                                    <div class="mobile-stock-actions">
+                                    <div v-if="activeSection === 'dashboard'" class="mobile-stock-actions">
                                         <v-btn
                                             aria-label="Add"
                                             color="success"
@@ -9912,7 +11197,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </span>
                                     </th>
                                     <th v-if="!isCompactWatchListTable" class="watch-list-source-time-cell">Source time</th>
-                                    <th class="text-right watch-list-actions-cell">Actions</th>
+                                    <th v-if="activeSection === 'dashboard'" class="text-right watch-list-actions-cell">
+                                        Actions
+                                    </th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -9922,11 +11209,18 @@ function formatIndexDataUpdateSchedule(settings) {
                                 <template v-for="holding in holdings" :key="holding.id">
                                     <tr
                                         class="stock-holding-row"
+                                        :class="{
+                                            'stock-holding-row--selected': activeSection === 'stocks'
+                                                && selectedStockWatchItem?.id === holding.id,
+                                        }"
                                         :aria-expanded="isHoldingExpanded(holding)"
+                                        :aria-selected="activeSection === 'stocks'
+                                            ? selectedStockWatchItem?.id === holding.id
+                                            : undefined"
                                         tabindex="0"
-                                        @click="toggleHoldingDetails(holding)"
-                                        @keydown.enter.prevent="toggleHoldingDetails(holding)"
-                                        @keydown.space.prevent="toggleHoldingDetails(holding)"
+                                        @click="handleStockHoldingRowClick(holding)"
+                                        @keydown.enter.prevent="handleStockHoldingRowClick(holding)"
+                                        @keydown.space.prevent="handleStockHoldingRowClick(holding)"
                                     >
                                         <td v-if="!isCompactWatchListTable" class="watch-list-content-cell">
                                             <div>{{ holding.symbol || '-' }}</div>
@@ -10073,7 +11367,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 {{ dashboardTrendRecommendationLabel(holding) }}
                                             </span>
                                         </td>
-                                        <td class="text-right watch-list-actions-cell">
+                                        <td v-if="activeSection === 'dashboard'" class="text-right watch-list-actions-cell">
                                             <v-btn
                                                 icon
                                                 variant="text"
@@ -10303,17 +11597,27 @@ function formatIndexDataUpdateSchedule(settings) {
                             </v-table>
                         </section>
 
-                        <v-progress-linear v-if="holdingsLoading" indeterminate color="primary" class="mt-4" />
+                        <v-progress-linear
+                            v-if="['dashboard', 'stocks'].includes(activeSection) && holdingsLoading"
+                            indeterminate
+                            color="primary"
+                            class="mt-4"
+                        />
 
                         <v-pagination
-                            v-if="activeSection !== 'dashboard' && holdingsPagination.last_page > 1"
+                            v-if="['dashboard', 'stocks'].includes(activeSection) && holdingsPagination.last_page > 1"
                             v-model="holdingsPagination.current_page"
                             class="mt-6"
                             :length="holdingsPagination.last_page"
                             @update:model-value="loadWatchlistHoldingsForActiveSection"
                         />
 
-                        <v-dialog v-model="isHoldingDialogOpen" persistent max-width="900">
+                        <v-dialog
+                            v-if="['dashboard', 'stocks'].includes(activeSection)"
+                            v-model="isHoldingDialogOpen"
+                            persistent
+                            max-width="900"
+                        >
                             <v-card>
                                 <v-card-title>Add stock</v-card-title>
                                 <v-card-text>
@@ -10384,7 +11688,182 @@ function formatIndexDataUpdateSchedule(settings) {
                             </v-card>
                         </v-dialog>
 
-                        <v-dialog v-model="isIndexDialogOpen" persistent max-width="900">
+                        <v-dialog
+                            v-if="activeSection === 'indices'"
+                            v-model="isIndexEodhdSyncScheduleDialogOpen"
+                            max-width="560"
+                            persistent
+                        >
+                            <v-card>
+                                <v-card-title>Edit automatic update times</v-card-title>
+                                <v-card-subtitle>
+                                    The independent v2 EODHD sync runs at each stored Vienna time.
+                                </v-card-subtitle>
+                                <v-form @submit.prevent="saveIndexEodhdSyncSchedule">
+                                    <v-card-text>
+                                        <v-alert
+                                            v-if="indexEodhdSyncScheduleError"
+                                            class="mb-4"
+                                            density="compact"
+                                            type="error"
+                                            variant="tonal"
+                                        >
+                                            {{ indexEodhdSyncScheduleError }}
+                                        </v-alert>
+                                        <div class="d-flex flex-column ga-3">
+                                            <div
+                                                v-for="(time, index) in indexEodhdSyncScheduleForm.times"
+                                                :key="index"
+                                                class="d-flex align-center ga-2"
+                                            >
+                                                <v-text-field
+                                                    v-model="indexEodhdSyncScheduleForm.times[index]"
+                                                    :label="`Update time ${index + 1}`"
+                                                    density="comfortable"
+                                                    hide-details="auto"
+                                                    required
+                                                    type="time"
+                                                />
+                                                <v-btn
+                                                    :aria-label="`Remove update time ${index + 1}`"
+                                                    color="error"
+                                                    icon="mdi-delete-outline"
+                                                    size="small"
+                                                    type="button"
+                                                    variant="text"
+                                                    :disabled="indexEodhdSyncScheduleForm.times.length <= 1"
+                                                    @click="removeIndexEodhdSyncScheduleTime(index)"
+                                                />
+                                            </div>
+                                            <v-btn
+                                                class="align-self-start"
+                                                prepend-icon="mdi-plus"
+                                                type="button"
+                                                variant="text"
+                                                :disabled="indexEodhdSyncScheduleForm.times.length >= 8"
+                                                @click="addIndexEodhdSyncScheduleTime"
+                                            >
+                                                Add time
+                                            </v-btn>
+                                        </div>
+                                    </v-card-text>
+                                    <v-card-actions>
+                                        <v-spacer />
+                                        <v-btn
+                                            type="button"
+                                            :disabled="isIndexEodhdSyncScheduleSaving"
+                                            @click="closeIndexEodhdSyncScheduleDialog"
+                                        >
+                                            Cancel
+                                        </v-btn>
+                                        <v-btn
+                                            color="primary"
+                                            type="submit"
+                                            variant="flat"
+                                            :loading="isIndexEodhdSyncScheduleSaving"
+                                        >
+                                            Save times
+                                        </v-btn>
+                                    </v-card-actions>
+                                </v-form>
+                            </v-card>
+                        </v-dialog>
+
+                        <v-dialog
+                            v-if="activeSection === 'indices'"
+                            v-model="isIndexV2RealtimeScheduleDialogOpen"
+                            max-width="620"
+                            persistent
+                        >
+                            <v-card>
+                                <v-card-title>Edit live/realtime update period</v-card-title>
+                                <v-card-subtitle>
+                                    V2 refreshes each index from EODHD around its stored trading hours.
+                                </v-card-subtitle>
+                                <v-form @submit.prevent="saveIndexV2RealtimeSchedule">
+                                    <v-card-text>
+                                        <v-alert
+                                            v-if="indexV2RealtimeScheduleError"
+                                            class="mb-4"
+                                            density="compact"
+                                            type="error"
+                                            variant="tonal"
+                                        >
+                                            {{ indexV2RealtimeScheduleError }}
+                                        </v-alert>
+                                        <v-row density="compact">
+                                            <v-col cols="12" sm="4">
+                                                <v-text-field
+                                                    v-model="indexV2RealtimeScheduleForm.trading_interval_minutes"
+                                                    label="Every (minutes)"
+                                                    min="1"
+                                                    max="1440"
+                                                    required
+                                                    type="number"
+                                                />
+                                            </v-col>
+                                            <v-col cols="12" sm="4">
+                                                <v-text-field
+                                                    v-model="indexV2RealtimeScheduleForm.trading_starts_before_minutes"
+                                                    label="Start before (minutes)"
+                                                    min="0"
+                                                    max="720"
+                                                    required
+                                                    type="number"
+                                                />
+                                            </v-col>
+                                            <v-col cols="12" sm="4">
+                                                <v-text-field
+                                                    v-model="indexV2RealtimeScheduleForm.trading_ends_after_minutes"
+                                                    label="End after (minutes)"
+                                                    min="0"
+                                                    max="720"
+                                                    required
+                                                    type="number"
+                                                />
+                                            </v-col>
+                                        </v-row>
+                                        <v-switch
+                                            v-model="indexV2RealtimeScheduleForm.closed_refresh_enabled"
+                                            color="primary"
+                                            density="compact"
+                                            hide-details
+                                            label="Also refresh while markets are closed"
+                                        />
+                                        <v-text-field
+                                            v-if="indexV2RealtimeScheduleForm.closed_refresh_enabled"
+                                            v-model="indexV2RealtimeScheduleForm.closed_interval_minutes"
+                                            class="mt-3"
+                                            label="Closed-market interval (minutes)"
+                                            min="1"
+                                            max="10080"
+                                            required
+                                            type="number"
+                                        />
+                                    </v-card-text>
+                                    <v-card-actions>
+                                        <v-spacer />
+                                        <v-btn
+                                            type="button"
+                                            :disabled="isIndexV2RealtimeScheduleSaving"
+                                            @click="closeIndexV2RealtimeScheduleDialog"
+                                        >
+                                            Cancel
+                                        </v-btn>
+                                        <v-btn
+                                            color="primary"
+                                            type="submit"
+                                            variant="flat"
+                                            :loading="isIndexV2RealtimeScheduleSaving"
+                                        >
+                                            Save live schedule
+                                        </v-btn>
+                                    </v-card-actions>
+                                </v-form>
+                            </v-card>
+                        </v-dialog>
+
+                        <v-dialog v-if="activeSection === 'indices'" v-model="isIndexDialogOpen" persistent max-width="900">
                             <v-card>
                                 <v-card-title>Add index</v-card-title>
                                 <v-card-text>
@@ -10458,8 +11937,11 @@ function formatIndexDataUpdateSchedule(settings) {
                             </v-card>
                         </v-dialog>
 
-                        <v-dialog v-model="isIndexPriceDialogOpen" persistent max-width="1280">
-                            <v-card v-if="selectedIndexWatchItem">
+                        <v-card
+                            v-if="activeSection === 'indices' && selectedIndexWatchItem"
+                            class="index-price-inline-card mt-6"
+                            variant="outlined"
+                        >
                                 <v-card-title class="index-price-dialog-title">
                                     <span>
                                         <span class="index-price-dialog-symbol">
@@ -10485,20 +11967,35 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </span>
                                 </v-card-title>
                                 <v-card-text>
+                                    <v-tabs
+                                        :model-value="selectedIndexPriceRange"
+                                        class="index-price-range-tabs mb-4"
+                                        color="primary"
+                                        show-arrows
+                                        @update:model-value="selectIndexPriceRange"
+                                    >
+                                        <v-tab
+                                            v-for="range in indexPriceRangeItems"
+                                            :key="range.key"
+                                            :value="range.key"
+                                        >
+                                            {{ range.label }}
+                                        </v-tab>
+                                    </v-tabs>
                                     <v-progress-linear
-                                        v-if="isIndexPriceDialogLoading"
+                                        v-if="isIndexPriceChartLoading"
                                         class="mb-4"
                                         color="primary"
                                         indeterminate
                                     />
                                     <v-alert
-                                        v-if="indexPriceDialogError"
+                                        v-if="indexPriceChartError"
                                         class="mb-4"
                                         type="error"
                                         variant="tonal"
                                         density="compact"
                                     >
-                                        {{ indexPriceDialogError }}
+                                        {{ indexPriceChartError }}
                                     </v-alert>
                                     <div class="index-price-current mb-4">
                                         <span class="text-caption text-medium-emphasis">Actual price</span>
@@ -10510,39 +12007,8 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </span>
                                     </div>
 
-                                    <div
-                                        v-if="selectedIndexRecentPrices.length"
-                                        class="index-price-history-table-wrap"
-                                    >
-                                        <v-table
-                                            class="index-price-history-table"
-                                            density="compact"
-                                        >
-                                            <thead>
-                                                <tr>
-                                                    <th>Date</th>
-                                                    <th class="text-right">Start</th>
-                                                    <th class="text-right">Last</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                <tr
-                                                    v-for="(price, index) in selectedIndexRecentPrices"
-                                                    :key="`price-${price.trading_date || index}`"
-                                                >
-                                                    <td>{{ formatIndexHistoryDate(price.trading_date) }}</td>
-                                                    <td class="text-right">
-                                                        {{ formatIndexHistoryPrice(price.start_price, selectedIndexWatchItem) }}
-                                                    </td>
-                                                    <td class="text-right">
-                                                        {{ formatIndexHistoryPrice(price.last_price, selectedIndexWatchItem) }}
-                                                    </td>
-                                                </tr>
-                                            </tbody>
-                                        </v-table>
-                                    </div>
                                     <v-alert
-                                        v-else-if="!isIndexPriceDialogLoading"
+                                        v-if="!selectedIndexRecentPrices.length && !isIndexPriceChartLoading"
                                         type="info"
                                         variant="tonal"
                                         density="compact"
@@ -10551,7 +12017,21 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </v-alert>
 
                                     <div class="index-price-chart-panel mt-5">
-                                        <div class="text-caption text-medium-emphasis mb-2">Evolution</div>
+                                        <div class="d-flex flex-wrap align-center justify-space-between ga-2 mb-2">
+                                            <span class="text-caption text-medium-emphasis">Evolution</span>
+                                            <span
+                                                v-if="selectedIndexPriceDateRange"
+                                                class="index-price-chart-date-range text-h6 font-weight-bold text-primary"
+                                            >
+                                                {{ selectedIndexPriceDateRange }}
+                                            </span>
+                                        </div>
+                                        <div
+                                            v-if="selectedIndexPriceRange === 'intraday'"
+                                            class="text-caption text-medium-emphasis mb-2"
+                                        >
+                                            Current day: opening price to latest available price.
+                                        </div>
                                         <svg
                                             v-if="selectedIndexChart.points.length"
                                             class="index-price-chart"
@@ -10656,25 +12136,20 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </div>
                                     </div>
                                 </v-card-text>
-                                <v-card-actions>
-                                    <v-spacer />
-                                    <v-btn
-                                        type="button"
-                                        variant="text"
-                                        :disabled="isIndexPriceDialogLoading"
-                                        @click="closeIndexPriceDialog"
-                                    >
-                                        Close
-                                    </v-btn>
-                                </v-card-actions>
-                            </v-card>
-                        </v-dialog>
+                        </v-card>
 
-                        <v-dialog v-model="isDeleteHoldingDialogOpen" persistent max-width="440">
+                        <v-dialog
+                            v-if="['dashboard', 'stocks'].includes(activeSection)"
+                            v-model="isDeleteHoldingDialogOpen"
+                            persistent
+                            max-width="440"
+                        >
                             <v-card>
                                 <v-card-title>Confirm delete</v-card-title>
                                 <v-card-text>
-                                    Delete {{ selectedHolding?.name || selectedHolding?.symbol }}?
+                                    <div>
+                                        Delete {{ selectedHolding?.name || selectedHolding?.symbol }}?
+                                    </div>
                                 </v-card-text>
                                 <v-card-actions>
                                     <v-spacer />
@@ -10686,9 +12161,35 @@ function formatIndexDataUpdateSchedule(settings) {
                                         color="error"
                                         variant="flat"
                                         :loading="holdingsLoading"
+                                        :disabled="!selectedHolding"
                                         @click="deleteHolding"
                                     >
                                         Confirm
+                                    </v-btn>
+                                </v-card-actions>
+                            </v-card>
+                        </v-dialog>
+
+                        <v-dialog v-if="activeSection === 'indices'" v-model="isDeleteIndexDialogOpen" persistent max-width="440">
+                            <v-card>
+                                <v-card-title>Index löschen</v-card-title>
+                                <v-card-text>
+                                    {{ selectedIndexWatchItemForRemoval?.name || selectedIndexWatchItemForRemoval?.symbol }} wirklich löschen?
+                                    Alle gespeicherten Kursdaten dieses Index werden ebenfalls gelöscht.
+                                </v-card-text>
+                                <v-card-actions>
+                                    <v-spacer />
+                                    <v-btn type="button" variant="text" :disabled="holdingsLoading" @click="abortDeleteIndexDialog">
+                                        Abbrechen
+                                    </v-btn>
+                                    <v-btn
+                                        type="button"
+                                        color="error"
+                                        variant="flat"
+                                        :loading="holdingsLoading"
+                                        @click="deleteIndexWatchItem"
+                                    >
+                                        Löschen
                                     </v-btn>
                                 </v-card-actions>
                             </v-card>
@@ -13623,6 +15124,349 @@ function formatIndexDataUpdateSchedule(settings) {
                         </section>
                     </section>
 
+                    <section
+                        v-if="activeSection === 'infos' && canManageDashboardAdmin"
+                        class="info-page"
+                        aria-label="Infos"
+                    >
+                        <v-tabs
+                            :model-value="activeInfoSubsection"
+                            class="mb-6"
+                            color="primary"
+                            @update:model-value="navigateInfoSubsection"
+                        >
+                            <v-tab
+                                v-for="item in infoSubmenuItems"
+                                :key="item.key"
+                                :prepend-icon="item.icon"
+                                :value="item.key"
+                            >
+                                {{ item.label }}
+                            </v-tab>
+                        </v-tabs>
+
+                        <section v-if="activeInfoSubsection === 'eodhd'" aria-label="Infos EODHD">
+                            <div class="info-page-heading mb-6">
+                            <div>
+                                <p class="text-overline text-primary mb-1">Infos</p>
+                                <h1 class="text-h4">Stock & index data flows</h1>
+                                <p class="text-body-2 text-medium-emphasis mt-2">
+                                    Active GKStocks market-data tables with their EODHD source, refresh cadence, and queue execution mode.
+                                </p>
+                            </div>
+                            <v-btn
+                                prepend-icon="mdi-refresh"
+                                type="button"
+                                variant="tonal"
+                                :loading="infoTablesLoading"
+                                :disabled="infoTablesLoading"
+                                @click="loadInfoData"
+                            >
+                                Reload
+                            </v-btn>
+                            </div>
+
+                        <v-alert
+                            v-if="infoTablesError"
+                            class="mb-4"
+                            density="compact"
+                            type="error"
+                            variant="tonal"
+                        >
+                            {{ infoTablesError }}
+                        </v-alert>
+
+                        <div class="info-summary-grid mb-6">
+                            <v-card class="info-summary-card" variant="outlined">
+                                <v-card-text>
+                                    <span class="text-caption text-medium-emphasis">Market tables</span>
+                                    <strong>{{ infoTables.length }}</strong>
+                                </v-card-text>
+                            </v-card>
+                            <v-card class="info-summary-card" variant="outlined">
+                                <v-card-text>
+                                    <span class="text-caption text-medium-emphasis">Direct EODHD</span>
+                                    <strong>{{ directEodhdTableCount }}</strong>
+                                </v-card-text>
+                            </v-card>
+                            <v-card class="info-summary-card" variant="outlined">
+                                <v-card-text>
+                                    <span class="text-caption text-medium-emphasis">Queue-backed</span>
+                                    <strong>{{ queuedInfoTableCount }}</strong>
+                                </v-card-text>
+                            </v-card>
+                            <v-card class="info-summary-card" variant="outlined">
+                                <v-card-text>
+                                    <span class="text-caption text-medium-emphasis">Synchronous EODHD</span>
+                                    <strong>{{ synchronousInfoTableCount }}</strong>
+                                </v-card-text>
+                            </v-card>
+                        </div>
+
+                        <v-text-field
+                            v-model="infoTableSearch"
+                            class="mb-4"
+                            clearable
+                            density="comfortable"
+                            hide-details
+                            label="Filter tables, API paths, cadence, or queue jobs"
+                            prepend-inner-icon="mdi-magnify"
+                        />
+
+                        <v-progress-linear v-if="infoTablesLoading" class="mb-3" color="primary" indeterminate />
+
+                            <v-card variant="outlined">
+                            <v-table class="info-table" hover>
+                                <thead>
+                                    <tr>
+                                        <th>Table</th>
+                                        <th>Purpose / Zweck</th>
+                                        <th>EODHD access</th>
+                                        <th>Data cadence</th>
+                                        <th>Queue?</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="table in filteredInfoTables" :key="table.name">
+                                        <td>
+                                            <code class="info-table-name">{{ table.name }}</code>
+                                            <div class="text-caption text-medium-emphasis mt-1">{{ table.category }}</div>
+                                        </td>
+                                        <td>
+                                            <div>{{ table.purpose }}</div>
+                                            <div class="text-caption text-medium-emphasis mt-2" lang="de">
+                                                {{ table.purpose_de }}
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <v-chip
+                                                class="mb-2"
+                                                density="comfortable"
+                                                size="small"
+                                                :color="infoEodhdModeColor(table.eodhd.mode)"
+                                                :variant="table.eodhd.mode === 'none' ? 'outlined' : 'tonal'"
+                                            >
+                                                {{ infoEodhdModeLabel(table.eodhd.mode) }}
+                                            </v-chip>
+                                            <code v-if="table.eodhd.endpoint" class="info-api-path">
+                                                {{ table.eodhd.endpoint }}
+                                            </code>
+                                            <div v-else class="text-caption text-medium-emphasis">
+                                                {{ table.eodhd.access }}
+                                            </div>
+                                            <div
+                                                v-if="table.eodhd.documentation?.length"
+                                                class="info-documentation-links mt-2"
+                                            >
+                                                <v-btn
+                                                    v-for="documentationLink in table.eodhd.documentation"
+                                                    :key="documentationLink.url"
+                                                    class="info-documentation-link"
+                                                    density="compact"
+                                                    :href="documentationLink.url"
+                                                    rel="noopener noreferrer"
+                                                    size="x-small"
+                                                    target="_blank"
+                                                    variant="text"
+                                                >
+                                                    {{ documentationLink.label }}
+                                                    <v-icon class="ml-1" icon="mdi-open-in-new" size="x-small" />
+                                                </v-btn>
+                                            </div>
+                                        </td>
+                                        <td>{{ table.cadence }}</td>
+                                        <td>
+                                            <v-chip
+                                                class="mb-2"
+                                                density="comfortable"
+                                                size="small"
+                                                :color="infoQueueColor(table.queue)"
+                                                :variant="infoQueueKind(table.queue) === 'none' ? 'outlined' : 'tonal'"
+                                            >
+                                                {{ infoQueueLabel(table.queue) }}
+                                            </v-chip>
+                                            <code v-if="table.queue.job" class="info-queue-job">{{ table.queue.job }}</code>
+                                            <div class="text-caption text-medium-emphasis mt-1">{{ table.queue.mode }}</div>
+                                        </td>
+                                    </tr>
+                                    <tr v-if="!infoTablesLoading && filteredInfoTables.length === 0">
+                                        <td colspan="5" class="text-center text-medium-emphasis py-8">
+                                            No matching tables.
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </v-table>
+                            </v-card>
+                        </section>
+
+                        <section
+                            v-if="activeInfoSubsection === 'methoden'"
+                            class="info-method-page"
+                            aria-label="Infos Methoden"
+                        >
+                            <div class="mb-6">
+                                <p class="text-overline text-primary mb-1">Infos · Methoden</p>
+                                <h1 class="text-h4">EODHD in Laravel</h1>
+                                <p class="text-body-2 text-medium-emphasis mt-2">
+                                    Diese Übersicht zeigt, wo jeder EODHD-Zugriff gestartet wird, welche Laravel-Methoden
+                                    ihn ausführen und in welche GKStocks-Tabellen die Daten geschrieben werden.
+                                </p>
+                            </div>
+
+                            <v-alert
+                                v-if="infoTablesError"
+                                class="mb-4"
+                                density="compact"
+                                type="error"
+                                variant="tonal"
+                            >
+                                {{ infoTablesError }}
+                            </v-alert>
+
+                            <v-progress-linear v-if="infoTablesLoading" class="mb-4" color="primary" indeterminate />
+
+                            <div class="info-summary-grid mb-6">
+                                <v-card class="info-summary-card" variant="outlined">
+                                    <v-card-text>
+                                        <span class="text-caption text-medium-emphasis">EODHD accesses</span>
+                                        <strong>{{ infoMethods.length }}</strong>
+                                    </v-card-text>
+                                </v-card>
+                                <v-card class="info-summary-card" variant="outlined">
+                                    <v-card-text>
+                                        <span class="text-caption text-medium-emphasis">Scheduler-backed</span>
+                                        <strong>{{ scheduledInfoMethodCount }}</strong>
+                                    </v-card-text>
+                                </v-card>
+                                <v-card class="info-summary-card" variant="outlined">
+                                    <v-card-text>
+                                        <span class="text-caption text-medium-emphasis">Uses a queue</span>
+                                        <strong>{{ queuedInfoMethodCount }}</strong>
+                                    </v-card-text>
+                                </v-card>
+                                <v-card class="info-summary-card" variant="outlined">
+                                    <v-card-text>
+                                        <span class="text-caption text-medium-emphasis">Has synchronous path</span>
+                                        <strong>{{ synchronousInfoMethodCount }}</strong>
+                                    </v-card-text>
+                                </v-card>
+                            </div>
+
+                            <v-card v-if="!infoTablesLoading && infoMethods.length === 0" variant="outlined">
+                                <v-card-text class="text-medium-emphasis">No method information available.</v-card-text>
+                            </v-card>
+
+                            <div v-else class="info-method-grid">
+                                <v-card
+                                    v-for="method in infoMethods"
+                                    :key="method.key"
+                                    class="info-method-card"
+                                    variant="outlined"
+                                >
+                                    <v-card-title>{{ method.title }}</v-card-title>
+                                    <v-card-subtitle>
+                                        <code class="info-api-path">{{ method.access }}</code>
+                                    </v-card-subtitle>
+                                    <v-card-text>
+                                        <p class="mb-3">{{ method.description }}</p>
+
+                                        <div class="d-flex flex-wrap ga-2 mb-3">
+                                            <v-chip
+                                                density="comfortable"
+                                                size="small"
+                                                :color="infoExecutionModeColor(method.execution.mode)"
+                                                variant="tonal"
+                                            >
+                                                {{ infoExecutionModeLabel(method.execution.mode) }}
+                                            </v-chip>
+                                            <v-chip
+                                                v-if="method.execution.scheduled"
+                                                color="primary"
+                                                density="comfortable"
+                                                size="small"
+                                                variant="tonal"
+                                            >
+                                                Scheduler
+                                            </v-chip>
+                                            <v-chip
+                                                v-if="method.execution.queue"
+                                                color="success"
+                                                density="comfortable"
+                                                size="small"
+                                                variant="outlined"
+                                            >
+                                                Queue: {{ method.execution.queue }}
+                                            </v-chip>
+                                        </div>
+
+                                        <p class="text-body-2 text-medium-emphasis mb-4">
+                                            {{ method.execution.description }}
+                                        </p>
+
+                                        <div class="info-method-section">
+                                            <h2 class="text-subtitle-2 mb-2">Wo gestartet</h2>
+                                            <ul class="info-method-list">
+                                                <li v-for="trigger in method.triggers" :key="trigger">
+                                                    <code>{{ trigger }}</code>
+                                                </li>
+                                            </ul>
+                                        </div>
+
+                                        <div class="info-method-section">
+                                            <h2 class="text-subtitle-2 mb-2">Laravel-Aufrufkette</h2>
+                                            <ol class="info-method-list info-method-chain">
+                                                <li
+                                                    v-for="laravelMethod in method.laravel_methods"
+                                                    :key="`${laravelMethod.class}-${laravelMethod.method}`"
+                                                    class="info-method-chain-item"
+                                                >
+                                                    <v-chip
+                                                        class="info-method-layer"
+                                                        density="compact"
+                                                        size="x-small"
+                                                        variant="outlined"
+                                                    >
+                                                        {{ laravelMethod.layer }}
+                                                    </v-chip>
+                                                    <code>
+                                                        {{ infoMethodClassName(laravelMethod.class) }}::{{ laravelMethod.method }}()
+                                                    </code>
+                                                    <span class="info-method-namespace text-caption text-medium-emphasis">
+                                                        {{ laravelMethod.class }}
+                                                    </span>
+                                                </li>
+                                            </ol>
+                                        </div>
+
+                                        <div class="info-method-section">
+                                            <h2 class="text-subtitle-2 mb-2">Betroffene Tabellen</h2>
+                                            <div class="d-flex flex-wrap ga-2">
+                                                <v-chip
+                                                    v-for="table in method.tables"
+                                                    :key="table"
+                                                    density="compact"
+                                                    size="small"
+                                                >
+                                                    {{ table }}
+                                                </v-chip>
+                                            </div>
+                                        </div>
+
+                                        <v-alert
+                                            v-if="method.note"
+                                            class="mt-4"
+                                            density="compact"
+                                            type="info"
+                                            variant="tonal"
+                                        >
+                                            {{ method.note }}
+                                        </v-alert>
+                                    </v-card-text>
+                                </v-card>
+                            </div>
+                        </section>
+                    </section>
+
                     <section v-if="activeSection === 'depot'">
                         <div class="mb-4">
                             <p class="text-overline text-primary mb-1">Depot</p>
@@ -14803,6 +16647,132 @@ function formatIndexDataUpdateSchedule(settings) {
     transition: width 0.2s ease;
 }
 
+.info-page-heading {
+    align-items: flex-start;
+    display: flex;
+    gap: 24px;
+    justify-content: space-between;
+}
+
+.info-summary-grid {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.info-summary-card strong {
+    display: block;
+    font-size: 1.75rem;
+    line-height: 1.2;
+    margin-top: 6px;
+}
+
+.info-table :deep(table) {
+    min-width: 1180px;
+}
+
+.info-table th:nth-child(1) {
+    width: 17%;
+}
+
+.info-table th:nth-child(2) {
+    width: 21%;
+}
+
+.info-table th:nth-child(3) {
+    width: 22%;
+}
+
+.info-table th:nth-child(4) {
+    width: 20%;
+}
+
+.info-table th:nth-child(5) {
+    width: 20%;
+}
+
+.info-table td {
+    line-height: 1.45;
+    padding-bottom: 14px !important;
+    padding-top: 14px !important;
+    vertical-align: top;
+}
+
+.info-api-path,
+.info-queue-job,
+.info-table-name {
+    overflow-wrap: anywhere;
+}
+
+.info-api-path,
+.info-queue-job {
+    display: block;
+    font-size: 0.75rem;
+    white-space: normal;
+}
+
+.info-documentation-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.info-method-grid {
+    display: grid;
+    gap: 16px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.info-method-card {
+    height: 100%;
+}
+
+.info-method-section + .info-method-section {
+    margin-top: 20px;
+}
+
+.info-method-list {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding-left: 20px;
+}
+
+.info-method-chain {
+    list-style: none;
+    padding-left: 0;
+}
+
+.info-method-chain-item {
+    border-left: 2px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    display: grid;
+    gap: 4px;
+    padding-left: 12px;
+}
+
+.info-method-layer {
+    justify-self: start;
+}
+
+.info-method-namespace {
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 959px) {
+    .info-page-heading {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .info-summary-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .info-method-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
 .dashboard-brand-mark {
     border-radius: 10px;
     display: block;
@@ -15230,6 +17200,16 @@ function formatIndexDataUpdateSchedule(settings) {
         flex-direction: column;
         gap: 8px;
         padding: 12px;
+    }
+
+    .mobile-stock-card--selected {
+        border-color: rgb(var(--v-theme-primary));
+        box-shadow: 0 0 0 1px rgb(var(--v-theme-primary));
+    }
+
+    .mobile-stock-card:focus-visible {
+        outline: 2px solid rgb(var(--v-theme-primary));
+        outline-offset: 2px;
     }
 
     .mobile-stock-name {
@@ -16521,20 +18501,6 @@ function formatIndexDataUpdateSchedule(settings) {
     gap: 10px;
 }
 
-.index-add-tile {
-    align-items: center;
-    background: transparent;
-    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-    border-radius: 4px;
-    color: rgb(var(--v-theme-primary));
-    cursor: pointer;
-    display: inline-flex;
-    flex-direction: column;
-    height: 116px;
-    justify-content: center;
-    width: 112px;
-}
-
 .index-watch-card {
     align-items: center;
     background: transparent;
@@ -16552,8 +18518,7 @@ function formatIndexDataUpdateSchedule(settings) {
     width: 112px;
 }
 
-.index-watch-card:focus-visible,
-.index-add-tile:focus-visible {
+.index-watch-card:focus-visible {
     outline: 2px solid rgb(var(--v-theme-primary));
     outline-offset: 2px;
 }
@@ -16562,16 +18527,9 @@ function formatIndexDataUpdateSchedule(settings) {
     border-color: rgb(var(--v-theme-primary));
 }
 
-.index-add-tile-plus {
-    font-size: 3rem;
-    font-weight: 300;
-    line-height: 0.9;
-}
-
-.index-add-tile-label {
-    font-size: 0.8125rem;
-    font-weight: 700;
-    line-height: 1.2;
+.index-watch-card--active {
+    border-color: rgb(var(--v-theme-primary));
+    box-shadow: 0 0 0 1px rgb(var(--v-theme-primary));
 }
 
 .index-watch-card-symbol {
@@ -17093,6 +19051,14 @@ function formatIndexDataUpdateSchedule(settings) {
     opacity: 1;
 }
 
+.index-price-inline-card {
+    overflow: hidden;
+}
+
+.index-price-range-tabs {
+    border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
 .index-price-current {
     align-items: flex-start;
     border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
@@ -17337,6 +19303,20 @@ function formatIndexDataUpdateSchedule(settings) {
 .stock-holding-row:focus-visible {
     outline: 2px solid rgb(var(--v-theme-primary));
     outline-offset: -2px;
+}
+
+.stock-holding-row--selected td {
+    background: rgba(var(--v-theme-primary), 0.08);
+    border-bottom: 2px solid rgb(var(--v-theme-primary)) !important;
+    border-top: 2px solid rgb(var(--v-theme-primary)) !important;
+}
+
+.stock-holding-row--selected td:first-child {
+    border-left: 2px solid rgb(var(--v-theme-primary));
+}
+
+.stock-holding-row--selected td:last-child {
+    border-right: 2px solid rgb(var(--v-theme-primary));
 }
 
 .stock-holding-detail-row td {

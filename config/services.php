@@ -50,6 +50,7 @@ return [
         'calls_per_hour' => env('EODHD_CALLS_PER_HOUR', 1000),
         'calls_per_day' => env('EODHD_CALLS_PER_DAY', 100000),
         'calls_used_today' => env('EODHD_CALLS_USED_TODAY', 0),
+        'no_data_retry_hours' => env('EODHD_NO_DATA_RETRY_HOURS', 12),
     ],
 
     'slack' => [

@@ -23,3 +23,11 @@ Schedule::command('end-of-day-data:dispatch-due')
 Schedule::command('indices-data:dispatch-due')
     ->everyMinute()
     ->withoutOverlapping(10);
+
+Schedule::command('indices:eodhd-sync:dispatch-due')
+    ->everyMinute()
+    ->withoutOverlapping(30);
+
+Schedule::command('indices:v2-realtime:dispatch-due')
+    ->everyMinute()
+    ->withoutOverlapping(10);
