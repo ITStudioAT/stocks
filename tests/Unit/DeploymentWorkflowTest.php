@@ -49,7 +49,7 @@ class DeploymentWorkflowTest extends TestCase
         ], $composer['scripts']['queues:local']);
     }
 
-    public function test_composer_development_process_runs_the_scheduler(): void
+    public function test_composer_development_process_uses_the_platform_aware_launcher(): void
     {
         $composer = json_decode(
             file_get_contents($this->projectPath('composer.json')),
@@ -57,8 +57,33 @@ class DeploymentWorkflowTest extends TestCase
             flags: JSON_THROW_ON_ERROR,
         );
 
-        $this->assertStringContainsString('php artisan schedule:work', $composer['scripts']['dev'][1]);
-        $this->assertStringContainsString('--names=server,queue,scheduler,logs,vite', $composer['scripts']['dev'][1]);
+        $this->assertSame([
+            'Composer\\Config::disableProcessTimeout',
+            '@php scripts/dev.php',
+        ], $composer['scripts']['dev']);
+
+        $windows = $this->runPhpScript('scripts/dev.php', '--dry-run=windows');
+        $unix = $this->runPhpScript('scripts/dev.php', '--dry-run=unix');
+
+        $this->assertTrue($windows->isSuccessful(), $windows->getErrorOutput());
+        $this->assertStringContainsString('php artisan serve', $windows->getOutput());
+        $this->assertStringContainsString('php artisan queue:listen', $windows->getOutput());
+        $this->assertStringContainsString('php artisan schedule:work', $windows->getOutput());
+        $this->assertStringContainsString('npm run dev', $windows->getOutput());
+        $this->assertStringContainsString('--names=server,queue,scheduler,vite', $windows->getOutput());
+        $this->assertStringNotContainsString('php artisan pail', $windows->getOutput());
+
+        $this->assertTrue($unix->isSuccessful(), $unix->getErrorOutput());
+        $this->assertStringContainsString('php artisan pail --timeout=0', $unix->getOutput());
+        $this->assertStringContainsString('--names=server,queue,scheduler,logs,vite', $unix->getOutput());
+    }
+
+    public function test_stale_vite_cleanup_only_targets_the_vite_entry_point(): void
+    {
+        $cleanup = file_get_contents($this->projectPath('scripts/dev-stop-stale-vite.mjs'));
+
+        $this->assertStringContainsString("commandLine.Contains('\\\\node_modules\\\\vite\\\\bin\\\\vite.js')", $cleanup);
+        $this->assertStringNotContainsString("commandLine.Contains('vite')", $cleanup);
     }
 
     public function test_cloudways_deployment_uses_the_verified_artifact_and_stock_update_flags(): void

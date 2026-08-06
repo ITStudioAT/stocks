@@ -30,8 +30,11 @@ function Add-TargetProcess {
 
     $commandLine = ([string] $process.CommandLine).ToLowerInvariant()
     $processName = ([string] $process.Name).ToLowerInvariant()
+    $isViteEntryPoint =
+        $commandLine.Contains('\\node_modules\\vite\\bin\\vite.js') -or
+        $commandLine.Contains('/node_modules/vite/bin/vite.js')
 
-    if ($processName -eq 'node.exe' -and $commandLine.Contains($workspace) -and $commandLine.Contains('vite')) {
+    if ($processName -eq 'node.exe' -and $commandLine.Contains($workspace) -and $isViteEntryPoint) {
         $targets[$process.ProcessId] = $process
     }
 }
@@ -40,8 +43,7 @@ Get-CimInstance Win32_Process |
     Where-Object {
         $_.Name -eq 'node.exe' -and
         $_.ProcessId -ne $currentProcessId -and
-        (([string] $_.CommandLine).ToLowerInvariant()).Contains($workspace) -and
-        (([string] $_.CommandLine).ToLowerInvariant()).Contains('vite')
+        (([string] $_.CommandLine).ToLowerInvariant()).Contains($workspace)
     } |
     ForEach-Object { Add-TargetProcess -processId $_.ProcessId }
 
