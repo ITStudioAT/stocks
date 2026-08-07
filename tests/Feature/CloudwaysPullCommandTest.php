@@ -45,24 +45,38 @@ class CloudwaysPullCommandTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_it_checks_configuration_without_calling_cloudways(): void
+    public function test_it_checks_cloudways_git_history_access(): void
     {
+        Http::fake([
+            'api.cloudways.test/api/v2/git/history*' => Http::response(['logs' => []]),
+        ]);
+
         $this->artisan('cloudways:pull --check')
-            ->expectsOutputToContain('Cloudways platform Pull configuration is present.')
+            ->expectsOutputToContain('Cloudways Git Pull and History API access is working.')
             ->assertSuccessful();
 
-        Http::assertNothingSent();
+        Http::assertSentCount(1);
+        Http::assertSent(function (Request $request): bool {
+            return str_starts_with($request->url(), 'https://api.cloudways.test/api/v2/git/history?')
+                && $request->method() === 'GET'
+                && $request->hasHeader('Authorization', 'Bearer test-access-token')
+                && $request['server_id'] === 123
+                && $request['app_id'] === 456;
+        });
     }
 
     public function test_it_requests_and_waits_for_cloudways_platform_pull(): void
     {
-        Sleep::fake();
+        Sleep::fake(syncWithCarbon: true);
         Http::fake([
-            'api.cloudways.test/api/v2/git/pull' => Http::response(['operation_id' => 789]),
+            'api.cloudways.test/api/v2/git/pull' => Http::response(['status' => true]),
             'api.cloudways.test/api/v2/git/history*' => Http::sequence()
                 ->push([
                     'logs' => [[
+                        'git_url' => 'git@github.com:ITStudioAT/stocks.git',
                         'branch_name' => 'main',
+                        'customer_id' => 5,
+                        'path' => null,
                         'result' => 1,
                         'datetime' => '07, 08, 2026 - 09:00',
                         'description' => 'completed',
@@ -71,13 +85,19 @@ class CloudwaysPullCommandTest extends TestCase
                 ->push([
                     'logs' => [
                         [
+                            'git_url' => 'git@github.com:ITStudioAT/stocks.git',
                             'branch_name' => 'main',
-                            'result' => 1,
+                            'customer_id' => 5,
+                            'path' => null,
+                            'result' => 0,
                             'datetime' => '07, 08, 2026 - 10:00',
-                            'description' => 'running',
+                            'description' => '',
                         ],
                         [
+                            'git_url' => 'git@github.com:ITStudioAT/stocks.git',
                             'branch_name' => 'main',
+                            'customer_id' => 5,
+                            'path' => null,
                             'result' => 1,
                             'datetime' => '07, 08, 2026 - 09:00',
                             'description' => 'completed',
@@ -87,13 +107,19 @@ class CloudwaysPullCommandTest extends TestCase
                 ->push([
                     'logs' => [
                         [
+                            'git_url' => 'git@github.com:ITStudioAT/stocks.git',
                             'branch_name' => 'main',
+                            'customer_id' => 5,
+                            'path' => null,
                             'result' => 1,
                             'datetime' => '07, 08, 2026 - 10:00',
                             'description' => 'completed successfully',
                         ],
                         [
+                            'git_url' => 'git@github.com:ITStudioAT/stocks.git',
                             'branch_name' => 'main',
+                            'customer_id' => 5,
+                            'path' => null,
                             'result' => 1,
                             'datetime' => '07, 08, 2026 - 09:00',
                             'description' => 'completed',
@@ -104,7 +130,7 @@ class CloudwaysPullCommandTest extends TestCase
 
         $this->artisan('cloudways:pull')
             ->expectsOutputToContain('Requesting Cloudways platform Pull')
-            ->expectsOutputToContain('Cloudways: running')
+            ->expectsOutputToContain('Cloudways: Git deployment is pending.')
             ->expectsOutputToContain('Cloudways platform Pull completed successfully.')
             ->assertSuccessful();
 
@@ -130,11 +156,14 @@ class CloudwaysPullCommandTest extends TestCase
     public function test_it_fails_when_cloudways_reports_a_failed_pull(): void
     {
         Http::fake([
-            'api.cloudways.test/api/v2/git/pull' => Http::response(['operation_id' => 789]),
+            'api.cloudways.test/api/v2/git/pull' => Http::response(['status' => true]),
             'api.cloudways.test/api/v2/git/history*' => Http::sequence()
                 ->push(['logs' => []])
                 ->push(['logs' => [[
+                    'git_url' => 'git@github.com:ITStudioAT/stocks.git',
                     'branch_name' => 'main',
+                    'customer_id' => 5,
+                    'path' => null,
                     'result' => 0,
                     'datetime' => '07, 08, 2026 - 10:00',
                     'description' => 'Repository authentication failed',
@@ -147,15 +176,36 @@ class CloudwaysPullCommandTest extends TestCase
             ->assertFailed();
     }
 
-    public function test_it_rejects_an_invalid_operation_response(): void
+    public function test_it_times_out_when_an_empty_history_entry_never_finishes(): void
     {
+        config([
+            'services.cloudways.deployment.operation_timeout' => 2,
+            'services.cloudways.deployment.poll_interval' => 1,
+        ]);
+        Sleep::fake(syncWithCarbon: true);
+        $pendingDeployment = [
+            'git_url' => 'git@github.com:ITStudioAT/stocks.git',
+            'branch_name' => 'main',
+            'customer_id' => 5,
+            'path' => null,
+            'result' => 0,
+            'datetime' => '07, 08, 2026 - 10:00',
+            'description' => '',
+        ];
+
         Http::fake([
             'api.cloudways.test/api/v2/git/pull' => Http::response(['status' => true]),
-            'api.cloudways.test/api/v2/git/history*' => Http::response(['logs' => []]),
+            'api.cloudways.test/api/v2/git/history*' => Http::sequence()
+                ->push(['logs' => []])
+                ->push(['logs' => [$pendingDeployment]])
+                ->whenEmpty(Http::response(['logs' => [$pendingDeployment]])),
         ]);
 
         $this->artisan('cloudways:pull')
-            ->expectsOutputToContain('Cloudways did not return a valid deployment operation ID.')
+            ->doesntExpectOutputToContain('Cloudways reported that the platform Pull failed.')
+            ->expectsOutputToContain('Cloudways platform Pull did not finish within 2 seconds.')
             ->assertFailed();
+
+        Sleep::assertSleptTimes(2);
     }
 }

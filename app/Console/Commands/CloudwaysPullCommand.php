@@ -260,7 +260,10 @@ class CloudwaysPullCommand extends Command
         }
 
         if (is_numeric($result) && (int) $result === 0) {
-            return ['completion' => -1, 'message' => $message];
+            return [
+                'completion' => $message === '' ? 0 : -1,
+                'message' => $message === '' ? 'Git deployment is pending.' : $message,
+            ];
         }
 
         if (is_numeric($result) && (int) $result === 1) {
