@@ -27,6 +27,7 @@ const maxAnalyzeTrendMaxInvestAmount = 1000000;
 const cashLedgerPageSize = 20;
 const indexRealtimeOverdueCheckIntervalMilliseconds = 1000;
 const indexRealtimeDispatchRetryDelayMilliseconds = 5000;
+const STOCK_EODHD_SYNC_DISMISSED_REFRESH_ID_KEY = 'stock_eodhd_sync_dismissed_refresh_id';
 const cashTransactionTypeOptions = [
     { title: 'Start balance', value: 'opening_balance' },
     { title: 'Deposit', value: 'deposit' },
@@ -230,8 +231,10 @@ const holdingSearchInput = ref(null);
 const indexSearchInput = ref(null);
 const holdingMessage = ref('');
 const holdingError = ref('');
-const isDashboardInfoReloading = ref(false);
-const isDashboardAutoReloading = ref(false);
+const dashboardVersions = ref(null);
+const dashboardVersionsLoading = ref(false);
+const dashboardVersionsError = ref('');
+const isDashboardVersionDetailsVisible = ref(false);
 const indexMessage = ref('');
 const indexError = ref('');
 const indexPriceChartError = ref('');
@@ -267,7 +270,6 @@ const isIntradayBackfillRunningNow = ref(false);
 const priceRefreshTimer = ref(null);
 const intradayBackfillTimer = ref(null);
 const priceRefreshSettingsTimer = ref(null);
-const dashboardAutoReloadTimer = ref(null);
 const isPriceRefreshSettingsPolling = ref(false);
 const liveDataStatusNow = ref(Date.now());
 const liveDataStatusTimer = ref(null);
@@ -344,7 +346,9 @@ const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
 const canManageDashboardAdmin = computed(() => user.value?.roles?.some((role) => ['admin', 'super_admin'].includes(role)) ?? false);
 const profileDisplayName = computed(() => user.value?.name || 'Loading...');
-const appVersionLabel = computed(() => appVersion.value ?? '');
+const appVersionLabel = computed(() => dashboardVersions.value?.current_version ?? appVersion.value ?? '');
+const dashboardCurrentVersion = computed(() => dashboardVersions.value?.current_version ?? appVersion.value ?? 'x.x.x');
+const installedVersionItems = computed(() => dashboardVersions.value?.versions ?? []);
 const dashboardMenuToggleLabel = computed(() => (isDashboardMenuCompact.value
     ? 'Enhance dashboard menu'
     : 'Minify dashboard menu'));
@@ -359,7 +363,7 @@ const watchListTableColumnCount = computed(() => {
         ? 5
         : (isCompactWatchListTable.value ? 5 : 7);
 
-    return activeSection.value === 'stocks' ? columnCount - 1 : columnCount;
+    return columnCount;
 });
 const dashboardTrendRecommendations = computed(() => new Map(holdings.value.map((holding) => [
     holding.id,
@@ -440,6 +444,15 @@ const selectedDataRangeInstrument = computed(() => {
         : holdings.value;
 
     return instruments.find((instrument) => instrument.id === selectedDataRangeInstrumentId.value) ?? null;
+});
+const selectedDataRangeTitle = computed(() => {
+    if (selectedDataRangeInstrument.value) {
+        return selectedDataRangeInstrument.value.symbol
+            || selectedDataRangeInstrument.value.name
+            || `Instrument ${selectedDataRangeInstrument.value.id}`;
+    }
+
+    return activeDataSubsection.value === 'indices' ? 'All indices' : 'All stocks';
 });
 const selectedDataLiveLatestRows = computed(() => {
     const entries = selectedDataLiveLatestEntries.value?.entries ?? [];
@@ -783,6 +796,18 @@ const stockExchangeRefreshSchedules = computed(() => {
 });
 const isIndexEodhdSyncRunning = computed(() => ['queued', 'running'].includes(indexEodhdSync.value?.status));
 const isStockEodhdSyncRunning = computed(() => ['queued', 'running'].includes(stockEodhdSync.value?.status));
+const dismissedStockEodhdSyncRefreshId = ref(localStorage.getItem(STOCK_EODHD_SYNC_DISMISSED_REFRESH_ID_KEY));
+const stockEodhdSyncVisible = computed(() => {
+    if (!stockEodhdSync.value) {
+        return false;
+    }
+
+    if (isStockEodhdSyncRunning.value) {
+        return true;
+    }
+
+    return String(stockEodhdSync.value.refresh_id ?? '') !== dismissedStockEodhdSyncRefreshId.value;
+});
 const stockEodhdSyncProgress = computed(() => stockEodhdSync.value?.progress ?? {
     completed: 0,
     total: 0,
@@ -2889,12 +2914,15 @@ watch(
             restoreStockEodhdSync().catch(() => {});
         }
 
+        if (section === 'dashboard' && dashboardVersions.value === null) {
+            loadDashboardVersions().catch(() => {});
+        }
+
         if (section === 'infos' && infoTables.value.length === 0 && infoMethods.value.length === 0) {
             loadInfoData();
         }
 
         syncUpdateStatusPolling();
-        syncDashboardAutoReload();
     },
 );
 
@@ -2980,14 +3008,21 @@ onMounted(async () => {
     await auth.loadUser();
     applyRouteFromPath();
 
-    await depotsStore.loadActiveDepot();
+    await Promise.all([
+        depotsStore.loadActiveDepot(),
+        activeSection.value === 'dashboard'
+            ? loadDashboardVersions()
+            : Promise.resolve(),
+    ]);
 
     if (activeSection.value === 'depot') {
         depotsStore.loadTransactions();
     }
 
     await Promise.all([
-        loadWatchlistHoldingsForActiveSection().catch(() => {}),
+        activeSection.value === 'dashboard'
+            ? Promise.resolve()
+            : loadWatchlistHoldingsForActiveSection().catch(() => {}),
         depotsStore.loadIndexWatchItems().catch(() => {}),
         activeSection.value === 'indices'
             ? depotsStore.loadIndexEodhdSyncSettings().catch(() => {})
@@ -2999,7 +3034,6 @@ onMounted(async () => {
 
     ensureAnalyzeDetailIntradayCandles();
     syncUpdateStatusPolling();
-    syncDashboardAutoReload();
 
     await depotsStore.loadDepots();
 
@@ -3018,7 +3052,6 @@ onBeforeUnmount(() => {
     stopIntradayBackfillPolling();
     stopPriceRefreshSettingsPolling();
     stopLiveDataStatusClock();
-    stopDashboardAutoReload();
     stopDataExchangeReloadPolling();
     stopDataIntradayReloadPolling();
     stopIndexEodhdSyncPolling();
@@ -3166,7 +3199,6 @@ function navigateSection(section) {
         clearSectionMessages();
         updateUrlPath();
         syncUpdateStatusPolling();
-        syncDashboardAutoReload();
 
         return;
     }
@@ -3221,7 +3253,6 @@ function navigateSection(section) {
     }
 
     syncUpdateStatusPolling();
-    syncDashboardAutoReload();
 }
 
 async function loadInfoData() {
@@ -3318,13 +3349,11 @@ function syncUpdateStatusPolling() {
 }
 
 function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.current_page, options = {}) {
-    const shouldIncludeDashboardTrendCharts = activeSection.value === 'dashboard';
     const shouldIncludeAnalyzeCharts = activeSection.value === 'analyze' && selectedAnalyzeHoldingId.value !== null;
     const shouldIncludeStockChart = activeSection.value === 'stocks' && selectedStockWatchItem.value !== null;
-    const shouldIncludeCharts = shouldIncludeDashboardTrendCharts || shouldIncludeAnalyzeCharts || shouldIncludeStockChart;
-    const shouldIncludeAllChartHoldings = shouldIncludeDashboardTrendCharts
-        || (shouldIncludeAnalyzeCharts && activeAnalyzeSubsection.value === 'trend');
-    const shouldIncludeAllHoldings = ['dashboard', 'stocks'].includes(activeSection.value)
+    const shouldIncludeCharts = shouldIncludeAnalyzeCharts || shouldIncludeStockChart;
+    const shouldIncludeAllChartHoldings = shouldIncludeAnalyzeCharts && activeAnalyzeSubsection.value === 'trend';
+    const shouldIncludeAllHoldings = activeSection.value === 'stocks'
         || (activeSection.value === 'data' && activeDataSubsection.value === 'stocks');
 
     return depotsStore.loadWatchlistHoldings(page, {
@@ -3335,82 +3364,27 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
         chartStockId: shouldIncludeStockChart
             ? selectedStockWatchItem.value.id
             : (shouldIncludeAnalyzeCharts && !shouldIncludeAllChartHoldings ? selectedAnalyzeHoldingId.value : null),
-        chartRange: shouldIncludeDashboardTrendCharts
-            ? '1y'
-            : (shouldIncludeStockChart
-                ? stockChartRequestRange(selectedStockPriceRange.value)
-                : (shouldIncludeAnalyzeCharts ? selectedAnalyzeHistoryRange.value : null)),
+        chartRange: shouldIncludeStockChart
+            ? stockChartRequestRange(selectedStockPriceRange.value)
+            : (shouldIncludeAnalyzeCharts ? selectedAnalyzeHistoryRange.value : null),
     });
 }
 
-async function reloadDashboardInfo(options = {}) {
-    if (isDashboardInfoReloading.value || isDashboardAutoReloading.value) {
+async function loadDashboardVersions() {
+    if (dashboardVersionsLoading.value) {
         return;
     }
 
-    const isSilent = options.silent === true;
-
-    if (!isSilent) {
-        isDashboardInfoReloading.value = true;
-    }
-
-    if (isSilent) {
-        isDashboardAutoReloading.value = true;
-    }
-
-    if (!isSilent) {
-        holdingError.value = '';
-    }
+    dashboardVersionsLoading.value = true;
+    dashboardVersionsError.value = '';
 
     try {
-        await Promise.all([
-            depotsStore.loadActiveDepot(),
-            loadWatchlistHoldingsForActiveSection(1, { silent: isSilent }),
-            depotsStore.loadDepots(depotPagination.value.current_page),
-            depotsStore.loadIndexWatchItems(),
-        ]);
+        dashboardVersions.value = await request('/admin/dashboard/version');
     } catch (error) {
-        if (!isSilent) {
-            holdingError.value = error.message;
-        }
+        dashboardVersionsError.value = error.message;
     } finally {
-        if (!isSilent) {
-            isDashboardInfoReloading.value = false;
-        }
-
-        if (isSilent) {
-            isDashboardAutoReloading.value = false;
-        }
+        dashboardVersionsLoading.value = false;
     }
-}
-
-function syncDashboardAutoReload() {
-    if (activeSection.value === 'dashboard') {
-        startDashboardAutoReload();
-
-        return;
-    }
-
-    stopDashboardAutoReload();
-}
-
-function startDashboardAutoReload() {
-    if (dashboardAutoReloadTimer.value) {
-        return;
-    }
-
-    dashboardAutoReloadTimer.value = window.setInterval(() => {
-        reloadDashboardInfo({ silent: true });
-    }, 60000);
-}
-
-function stopDashboardAutoReload() {
-    if (!dashboardAutoReloadTimer.value) {
-        return;
-    }
-
-    window.clearInterval(dashboardAutoReloadTimer.value);
-    dashboardAutoReloadTimer.value = null;
 }
 
 function loadSelectedAnalyzeChartData() {
@@ -4516,6 +4490,13 @@ async function pollStockEodhdSync(refreshId) {
 }
 
 function closeStockEodhdSyncResult() {
+    const refreshId = String(stockEodhdSync.value?.refresh_id ?? '');
+
+    if (refreshId !== '') {
+        dismissedStockEodhdSyncRefreshId.value = refreshId;
+        localStorage.setItem(STOCK_EODHD_SYNC_DISMISSED_REFRESH_ID_KEY, refreshId);
+    }
+
     stopStockEodhdSyncPolling();
     stockEodhdSyncError.value = '';
     depotsStore.clearStockEodhdSync();
@@ -5761,13 +5742,10 @@ function toggleDataStockSelection(stockId) {
 
 async function loadSelectedDataDateRange() {
     const requestId = ++selectedDataDateRangeRequestId;
-    const instrumentId = Number(selectedDataRangeInstrumentId.value);
 
     if (
         activeSection.value !== 'data'
         || !isInstrumentDataSubsection(activeDataSubsection.value)
-        || Number.isNaN(instrumentId)
-        || instrumentId <= 0
     ) {
         selectedDataDateRange.value = null;
         selectedDataDateRangeLoading.value = false;
@@ -5777,14 +5755,16 @@ async function loadSelectedDataDateRange() {
     }
 
     const instrumentType = activeDataSubsection.value === 'indices' ? 'indices' : 'stocks';
+    const instrumentId = Number(selectedDataRangeInstrument.value?.id);
+    const requestPath = Number.isInteger(instrumentId) && instrumentId > 0
+        ? `/admin/data/${instrumentType}/${instrumentId}/${activeDataType.value}/date-range`
+        : `/admin/data/${instrumentType}/${activeDataType.value}/date-range`;
     selectedDataDateRange.value = null;
     selectedDataDateRangeLoading.value = true;
     selectedDataDateRangeError.value = '';
 
     try {
-        const data = await request(
-            `/admin/data/${instrumentType}/${instrumentId}/${activeDataType.value}/date-range`,
-        );
+        const data = await request(requestPath);
 
         if (requestId === selectedDataDateRangeRequestId) {
             selectedDataDateRange.value = data.range ?? null;
@@ -6054,6 +6034,7 @@ async function loadSelectedStockPrices() {
 function handleStockHoldingRowClick(holding) {
     if (activeSection.value === 'stocks') {
         toggleStockWatchItemSelection(holding);
+        toggleHoldingDetails(holding);
 
         return;
     }
@@ -10632,6 +10613,8 @@ function buildStockHoldingRefreshSchedule(holding, settings, referenceDate) {
     if (!tradingTimes) {
         return {
             isActive: false,
+            sessionLabel: null,
+            sessionWindow: null,
             scheduleStatus: 'Waiting',
             scheduleColor: 'default',
             status: 'Unavailable',
@@ -10648,6 +10631,8 @@ function buildStockHoldingRefreshSchedule(holding, settings, referenceDate) {
     if (!tradingWindow || !viennaWindow) {
         return {
             isActive: false,
+            sessionLabel: null,
+            sessionWindow: null,
             scheduleStatus: 'Waiting',
             scheduleColor: 'default',
             status: 'Unavailable',
@@ -10665,9 +10650,17 @@ function buildStockHoldingRefreshSchedule(holding, settings, referenceDate) {
         && referenceDate >= viennaWindow.refreshStartsAt
         && referenceDate < viennaWindow.refreshEndsAt;
     const isActive = settings?.closed_refresh_enabled === true || isWithinTradingWindow;
+    const tradingSession = indexTradingSessionDisplay(
+        tradingWindow,
+        settings,
+        referenceDate,
+        isWithinTradingWindow ? viennaWindow : null,
+    );
 
     return {
         isActive,
+        sessionLabel: tradingSession?.label ?? null,
+        sessionWindow: tradingSession?.window ?? null,
         scheduleStatus: isActive ? 'Scheduled' : 'Waiting',
         scheduleColor: isActive ? 'success' : 'default',
         status: isActive ? 'Active' : 'Inactive',
@@ -10691,6 +10684,8 @@ function stockHoldingRefreshSchedule(holding) {
 function indexWatchItemRefreshSchedule(indexItem) {
     return indexWatchItemRefreshSchedules.value.get(indexItem.id) ?? {
         isActive: false,
+        sessionLabel: null,
+        sessionWindow: null,
         scheduleStatus: 'Waiting',
         scheduleColor: 'default',
         status: 'Unavailable',
@@ -10763,6 +10758,8 @@ function stockExchangeViennaWindow(tradingWindow, settings, referenceDate) {
             ? {
                 trading: formatStockViennaWindow(tradingStartsAt, tradingEndsAt, tradingStartsAt),
                 refresh: formatStockViennaWindow(refreshStartsAt, refreshEndsAt, refreshStartsAt),
+                tradingStartsAt,
+                tradingEndsAt,
                 refreshStartsAt,
                 refreshEndsAt,
             }
@@ -10777,9 +10774,63 @@ function stockExchangeViennaWindow(tradingWindow, settings, referenceDate) {
     return {
         trading: formatStockViennaWindow(tradingStartsAt, tradingEndsAt, tradingStartsAt),
         refresh: formatStockViennaWindow(refreshStartsAt, refreshEndsAt, tradingStartsAt),
+        tradingStartsAt,
+        tradingEndsAt,
         refreshStartsAt,
         refreshEndsAt,
     };
+}
+
+function indexTradingSessionDisplay(tradingWindow, settings, referenceDate, currentViennaWindow) {
+    const sessionWindow = currentViennaWindow
+        ?? nextStockExchangeViennaWindow(tradingWindow, settings, referenceDate);
+
+    if (!sessionWindow) {
+        return null;
+    }
+
+    if (currentViennaWindow) {
+        return {
+            label: 'Current',
+            window: sessionWindow.trading,
+        };
+    }
+
+    const referenceDateKey = localDateKey(referenceDate, displayTimeZone);
+    const sessionDateKey = localDateKey(sessionWindow.tradingStartsAt, displayTimeZone);
+    const sessionDateLabel = sessionDateKey === referenceDateKey
+        ? 'today'
+        : formatViennaDateTime(sessionWindow.tradingStartsAt, {
+            day: '2-digit',
+            month: '2-digit',
+        });
+
+    return {
+        label: `Next ${sessionDateLabel}`,
+        window: sessionWindow.trading,
+    };
+}
+
+function nextStockExchangeViennaWindow(tradingWindow, settings, referenceDate) {
+    const millisecondsPerDay = 24 * 60 * 60 * 1000;
+
+    for (let dayOffset = 0; dayOffset <= 7; dayOffset += 1) {
+        const candidateReferenceDate = new Date(referenceDate.getTime() + (dayOffset * millisecondsPerDay));
+        const candidateLocalDate = exchangeLocalDateParts(tradingWindow.timezone, candidateReferenceDate);
+        const isWeekday = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].includes(candidateLocalDate?.weekday);
+
+        if (!isWeekday) {
+            continue;
+        }
+
+        const candidateWindow = stockExchangeViennaWindow(tradingWindow, settings, candidateReferenceDate);
+
+        if (candidateWindow && candidateWindow.refreshStartsAt > referenceDate) {
+            return candidateWindow;
+        }
+    }
+
+    return null;
 }
 
 function dateFromTimeZoneClock(time, timezone, referenceDate) {
@@ -11350,32 +11401,71 @@ function formatIndexDataUpdateSchedule(settings) {
             <v-main>
                 <v-container class="py-8" :fluid="lgAndDown">
                     <section v-if="['dashboard', 'indices', 'stocks'].includes(activeSection)">
-                        <div v-if="activeSection === 'dashboard'" class="dashboard-heading mb-6">
-                            <div>
-                                <p class="text-overline text-primary mb-1">Dashboard</p>
-                                <h1 class="text-h4">Watch-list</h1>
-                            </div>
-                            <div class="dashboard-actions">
-                                <v-btn
-                                    class="dashboard-action-button"
-                                    color="primary"
-                                    prepend-icon="mdi-plus"
-                                    variant="flat"
-                                    @click="openHoldingDialog"
-                                >
-                                    Add stock
-                                </v-btn>
-                                <v-btn
-                                    class="dashboard-action-button"
-                                    prepend-icon="mdi-refresh"
-                                    variant="tonal"
-                                    :disabled="isDashboardInfoReloading"
-                                    :loading="isDashboardInfoReloading"
-                                    @click="reloadDashboardInfo"
-                                >
-                                    Reload
-                                </v-btn>
-                            </div>
+                        <div v-if="activeSection === 'dashboard'" class="dashboard-version-page">
+                            <v-card
+                                class="dashboard-version-card"
+                                flat
+                                border
+                                rounded="xl"
+                                aria-label="Programmversion"
+                            >
+                                <v-card-text class="pa-0">
+                                    <div class="dashboard-version-heading">
+                                        <div>
+                                            <h1 class="dashboard-version-title">Aktuelle Version</h1>
+                                            <div class="dashboard-current-version" data-testid="app-version">
+                                                v{{ dashboardCurrentVersion }}
+                                            </div>
+                                        </div>
+                                        <v-btn
+                                            class="dashboard-version-toggle"
+                                            size="small"
+                                            variant="text"
+                                            color="primary"
+                                            :append-icon="isDashboardVersionDetailsVisible ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+                                            :aria-expanded="isDashboardVersionDetailsVisible"
+                                            aria-controls="dashboard-version-details"
+                                            @click="isDashboardVersionDetailsVisible = !isDashboardVersionDetailsVisible"
+                                        >
+                                            {{ isDashboardVersionDetailsVisible ? 'Weniger anzeigen' : 'Mehr anzeigen' }}
+                                        </v-btn>
+                                    </div>
+
+                                    <v-progress-linear
+                                        v-if="dashboardVersionsLoading"
+                                        class="mt-5"
+                                        color="primary"
+                                        indeterminate
+                                    />
+
+                                    <v-alert
+                                        v-if="dashboardVersionsError"
+                                        class="mt-5"
+                                        density="compact"
+                                        type="error"
+                                        variant="tonal"
+                                    >
+                                        {{ dashboardVersionsError }}
+                                    </v-alert>
+
+                                    <div
+                                        v-show="isDashboardVersionDetailsVisible"
+                                        id="dashboard-version-details"
+                                        class="dashboard-version-details"
+                                    >
+                                        <div class="dashboard-version-grid">
+                                            <div
+                                                v-for="item in installedVersionItems"
+                                                :key="item.key"
+                                                class="dashboard-version-item"
+                                            >
+                                                <span>{{ item.label }}</span>
+                                                <strong :title="item.version">{{ item.version }}</strong>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </v-card-text>
+                            </v-card>
                         </div>
 
                         <div v-if="activeSection === 'stocks'" aria-label="Stocks dashboard">
@@ -11446,7 +11536,7 @@ function formatIndexDataUpdateSchedule(settings) {
                             </v-alert>
 
                             <v-card
-                                v-if="stockEodhdSync"
+                                v-if="stockEodhdSyncVisible"
                                 class="stock-eodhd-sync-card mb-6"
                                 variant="outlined"
                                 aria-label="Stock EODHD synchronization status"
@@ -12139,6 +12229,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                             </span>
                                             <span>{{ formatIndexPrice(indexItem) }}</span>
                                         </span>
+                                        <span
+                                            v-if="indexWatchItemRefreshSchedule(indexItem).sessionWindow"
+                                            class="index-watch-card-session"
+                                            :aria-label="`${indexItem.symbol || 'Index'} trading time in Europe/Vienna`"
+                                        >
+                                            <span>{{ indexWatchItemRefreshSchedule(indexItem).sessionLabel }}</span>
+                                            <span>{{ indexWatchItemRefreshSchedule(indexItem).sessionWindow }}</span>
+                                        </span>
                                         <span class="index-watch-card-statuses d-inline-flex flex-column align-center ga-1">
                                             <v-chip
                                                 :aria-label="`${indexItem.symbol || 'Index'} live update schedule status`"
@@ -12164,7 +12262,7 @@ function formatIndexDataUpdateSchedule(settings) {
                         </div>
 
                         <v-alert
-                            v-if="['dashboard', 'stocks'].includes(activeSection) && visibleHoldingMessage"
+                            v-if="activeSection === 'stocks' && visibleHoldingMessage"
                             type="success"
                             variant="tonal"
                             density="compact"
@@ -12173,27 +12271,7 @@ function formatIndexDataUpdateSchedule(settings) {
                             {{ visibleHoldingMessage }}
                         </v-alert>
                         <v-alert
-                            v-if="activeSection === 'dashboard' && isPriceRefreshRunning"
-                            type="info"
-                            variant="tonal"
-                            density="compact"
-                            class="mb-4"
-                        >
-                            <div class="d-flex align-center justify-space-between ga-4">
-                                <span>Price refresh: {{ priceRefresh.step }}</span>
-                                <span v-if="priceRefresh.current">{{ priceRefresh.current }}</span>
-                            </div>
-                            <v-progress-linear
-                                class="mt-2"
-                                color="primary"
-                                height="6"
-                                rounded
-                                :indeterminate="priceRefresh.status === 'queued'"
-                                :model-value="priceRefreshProgressValue"
-                            />
-                        </v-alert>
-                        <v-alert
-                            v-if="['dashboard', 'stocks'].includes(activeSection) && (holdingError || holdingsError)"
+                            v-if="activeSection === 'stocks' && (holdingError || holdingsError)"
                             type="error"
                             variant="tonal"
                             density="compact"
@@ -12201,7 +12279,7 @@ function formatIndexDataUpdateSchedule(settings) {
                         >
                             {{ holdingError || holdingsError }}
                         </v-alert>
-                        <section v-if="['dashboard', 'stocks'].includes(activeSection)" class="watch-list-section mb-4" aria-label="Stocks">
+                        <section v-if="activeSection === 'stocks'" class="watch-list-section mb-4" aria-label="Stocks">
                             <div class="watch-list-section-header">
                                 <div>
                                     <div class="watch-list-section-eyebrow">Watch-list</div>
@@ -12298,7 +12376,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             {{ dashboardTrendRecommendationLabel(holding) }}
                                         </span>
                                     </div>
-                                    <div v-if="activeSection === 'dashboard'" class="mobile-stock-actions">
+                                    <div v-if="activeSection === 'stocks'" class="mobile-stock-actions">
                                         <v-btn
                                             aria-label="Add"
                                             color="success"
@@ -12359,7 +12437,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </span>
                                     </th>
                                     <th v-if="!isCompactWatchListTable" class="watch-list-source-time-cell">Source time</th>
-                                    <th v-if="activeSection === 'dashboard'" class="text-right watch-list-actions-cell">
+                                    <th v-if="activeSection === 'stocks'" class="text-right watch-list-actions-cell">
                                         Actions
                                     </th>
                                 </tr>
@@ -12543,7 +12621,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 {{ dashboardTrendRecommendationLabel(holding) }}
                                             </span>
                                         </td>
-                                        <td v-if="activeSection === 'dashboard'" class="text-right watch-list-actions-cell">
+                                        <td v-if="activeSection === 'stocks'" class="text-right watch-list-actions-cell">
                                             <v-btn
                                                 icon
                                                 variant="text"
@@ -12987,14 +13065,14 @@ function formatIndexDataUpdateSchedule(settings) {
                         </Teleport>
 
                         <v-progress-linear
-                            v-if="['dashboard', 'stocks'].includes(activeSection) && holdingsLoading"
+                            v-if="activeSection === 'stocks' && holdingsLoading"
                             indeterminate
                             color="primary"
                             class="mt-4"
                         />
 
                         <v-pagination
-                            v-if="['dashboard', 'stocks'].includes(activeSection) && holdingsPagination.last_page > 1"
+                            v-if="activeSection === 'stocks' && holdingsPagination.last_page > 1"
                             v-model="holdingsPagination.current_page"
                             class="mt-6"
                             :length="holdingsPagination.last_page"
@@ -13002,7 +13080,7 @@ function formatIndexDataUpdateSchedule(settings) {
                         />
 
                         <v-dialog
-                            v-if="['dashboard', 'stocks'].includes(activeSection)"
+                            v-if="activeSection === 'stocks'"
                             v-model="isHoldingDialogOpen"
                             persistent
                             max-width="900"
@@ -13605,7 +13683,7 @@ function formatIndexDataUpdateSchedule(settings) {
                         </v-card>
 
                         <v-dialog
-                            v-if="['dashboard', 'stocks'].includes(activeSection)"
+                            v-if="activeSection === 'stocks'"
                             v-model="isDeleteHoldingDialogOpen"
                             persistent
                             max-width="440"
@@ -15323,23 +15401,14 @@ function formatIndexDataUpdateSchedule(settings) {
                             </v-card>
                         </section>
 
-                        <v-alert
-                            v-if="isInstrumentDataSubsection(activeDataSubsection) && !selectedDataRangeInstrument"
-                            class="mt-6"
-                            type="info"
-                            variant="tonal"
-                        >
-                            Wähle {{ activeDataSubsection === 'indices' ? 'einen Index' : 'einen Stock' }}, um den gespeicherten Zeitraum zu sehen.
-                        </v-alert>
-
                         <v-card
-                            v-else-if="isInstrumentDataSubsection(activeDataSubsection)"
+                            v-if="isInstrumentDataSubsection(activeDataSubsection)"
                             class="data-date-range-card mt-6"
                             variant="outlined"
                             aria-label="Stored data date range"
                         >
                             <v-card-title class="text-subtitle-1 font-weight-bold">
-                                {{ selectedDataRangeInstrument.symbol || selectedDataRangeInstrument.name }} · {{ dataTypeLabel(activeDataType) }}
+                                {{ selectedDataRangeTitle }} · {{ dataTypeLabel(activeDataType) }}
                             </v-card-title>
                             <v-card-subtitle>Gespeicherter Zeitraum</v-card-subtitle>
                             <v-progress-linear
@@ -18335,6 +18404,83 @@ function formatIndexDataUpdateSchedule(settings) {
     justify-content: flex-end;
 }
 
+.dashboard-version-page {
+    max-width: 720px;
+}
+
+.dashboard-version-card {
+    background: rgb(var(--v-theme-surface));
+    border-color: rgba(var(--v-border-color), var(--v-border-opacity));
+    min-height: 104px;
+    padding: 14px 16px;
+}
+
+.dashboard-version-heading {
+    align-items: flex-start;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.dashboard-version-title {
+    color: rgb(var(--v-theme-on-surface));
+    font-size: 0.95rem;
+    font-weight: 750;
+    line-height: 1.25;
+    margin: 1px 0 0;
+}
+
+.dashboard-current-version {
+    color: rgb(var(--v-theme-primary));
+    font-size: 1.35rem;
+    font-weight: 750;
+    line-height: 1.1;
+    margin-top: 5px;
+}
+
+.dashboard-version-toggle {
+    border-radius: 9px;
+    font-size: 0.68rem;
+    letter-spacing: 0;
+    margin-top: 1px;
+    text-transform: none;
+}
+
+.dashboard-version-details {
+    margin-top: 12px;
+}
+
+.dashboard-version-grid {
+    display: grid;
+    gap: 6px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dashboard-version-item {
+    background: rgba(var(--v-theme-on-surface), 0.045);
+    border-radius: 8px;
+    min-width: 0;
+    padding: 8px 10px;
+}
+
+.dashboard-version-item span,
+.dashboard-version-item strong {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dashboard-version-item span {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    font-size: 0.61rem;
+}
+
+.dashboard-version-item strong {
+    font-size: 0.73rem;
+    margin-top: 2px;
+}
+
 .dashboard-navigation-drawer {
     transition: width 0.2s ease;
 }
@@ -18451,6 +18597,10 @@ function formatIndexDataUpdateSchedule(settings) {
 }
 
 @media (max-width: 959px) {
+    .dashboard-version-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .info-page-heading {
         align-items: stretch;
         flex-direction: column;
@@ -18753,6 +18903,19 @@ function formatIndexDataUpdateSchedule(settings) {
 }
 
 @media (max-width: 600px) {
+    .dashboard-version-heading {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .dashboard-version-toggle {
+        align-self: flex-start;
+    }
+
+    .dashboard-version-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
     .dashboard-heading {
         align-items: stretch;
         flex-direction: column;
@@ -20295,7 +20458,17 @@ function formatIndexDataUpdateSchedule(settings) {
 }
 
 .index-watch-card--market-status {
-    height: 166px;
+    height: 190px;
+}
+
+.index-watch-card-session {
+    color: rgba(var(--v-theme-on-surface), 0.72);
+    display: inline-flex;
+    flex-direction: column;
+    font-size: 0.625rem;
+    font-weight: 600;
+    line-height: 1.15;
+    white-space: nowrap;
 }
 
 .index-watch-card-symbol {

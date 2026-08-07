@@ -49,6 +49,10 @@
             "Composer\\Config::disableProcessTimeout",
             "@php scripts/update.php --target=cloudways --prepare"
         ],
+        "pdeploy": [
+            "Composer\\Config::disableProcessTimeout",
+            "bash scripts/pdeploy_cloudways.sh"
+        ],
         "setup:powershell": [
             "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install_powershell_helpers.ps1"
         ],
@@ -102,6 +106,9 @@
     "config": {
         "optimize-autoloader": true,
         "preferred-install": "dist",
+        "platform": {
+            "php": "8.3.33"
+        },
         "sort-packages": true,
         "allow-plugins": {
             "pestphp/pest-plugin": true,

@@ -10,6 +10,16 @@ use Illuminate\Http\JsonResponse;
 
 class AdminDataRangeController extends Controller
 {
+    public function allIndices(
+        MarketDataType $dataType,
+        StoredMarketDataRange $storedMarketDataRange,
+    ): JsonResponse {
+        return response()->json([
+            'data_type' => $dataType->value,
+            'range' => $storedMarketDataRange->forAllIndices($dataType),
+        ]);
+    }
+
     public function index(
         IndexWatchItem $indexWatchItem,
         MarketDataType $dataType,
@@ -29,6 +39,16 @@ class AdminDataRangeController extends Controller
         return response()->json([
             'data_type' => $dataType->value,
             'range' => $storedMarketDataRange->forStock($holding, $dataType),
+        ]);
+    }
+
+    public function allStocks(
+        MarketDataType $dataType,
+        StoredMarketDataRange $storedMarketDataRange,
+    ): JsonResponse {
+        return response()->json([
+            'data_type' => $dataType->value,
+            'range' => $storedMarketDataRange->forAllStocks($dataType),
         ]);
     }
 }

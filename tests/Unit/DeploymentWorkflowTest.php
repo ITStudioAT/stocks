@@ -47,6 +47,10 @@ class DeploymentWorkflowTest extends TestCase
             'Composer\Config::disableProcessTimeout',
             '@php scripts/update.php --target=cloudways --prepare',
         ], $composer['scripts']['deploy:prepare']);
+        $this->assertSame([
+            'Composer\Config::disableProcessTimeout',
+            'bash scripts/pdeploy_cloudways.sh',
+        ], $composer['scripts']['pdeploy']);
         $this->assertContains(
             'powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install_powershell_helpers.ps1',
             $composer['scripts']['setup:powershell'],
@@ -141,14 +145,65 @@ class DeploymentWorkflowTest extends TestCase
 
     public function test_cloudways_deployment_script_has_valid_bash_syntax(): void
     {
-        $syntax = new Process([
-            $this->bashExecutable(),
-            '-n',
-            $this->projectPath('scripts/deploy_cloudways.sh'),
-        ], $this->projectPath());
-        $syntax->run();
+        foreach (['scripts/deploy_cloudways.sh', 'scripts/pdeploy_cloudways.sh'] as $script) {
+            $syntax = new Process([
+                $this->bashExecutable(),
+                '-n',
+                $this->projectPath($script),
+            ], $this->projectPath());
+            $syntax->run();
 
-        $this->assertTrue($syntax->isSuccessful(), $syntax->getErrorOutput());
+            $this->assertTrue($syntax->isSuccessful(), $syntax->getErrorOutput());
+        }
+    }
+
+    public function test_cloudways_terminal_pull_deploys_main_with_one_command(): void
+    {
+        $deploymentDirectory = $this->createCloudwaysPullShellFixture();
+
+        $deployed = $this->runCloudwaysPullShellFixture($deploymentDirectory);
+
+        $this->assertTrue($deployed->isSuccessful(), $deployed->getErrorOutput());
+        $this->assertFileExists("{$deploymentDirectory}/storage/framework/git-fetched");
+        $this->assertFileExists("{$deploymentDirectory}/storage/framework/git-merged");
+        $this->assertDirectoryExists("{$deploymentDirectory}/public/build");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
+        $this->assertStringContainsString(
+            'Cloudways pull and deployment completed successfully.',
+            $deployed->getOutput(),
+        );
+    }
+
+    public function test_cloudways_terminal_pull_failure_restores_the_application(): void
+    {
+        $deploymentDirectory = $this->createCloudwaysPullShellFixture();
+        file_put_contents("{$deploymentDirectory}/storage/framework/fail-git-merge", '1');
+
+        $failed = $this->runCloudwaysPullShellFixture($deploymentDirectory);
+
+        $this->assertFalse($failed->isSuccessful());
+        $this->assertFileExists("{$deploymentDirectory}/storage/framework/git-fetched");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/git-merged");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
+        $this->assertStringContainsString(
+            'restoring the application from maintenance mode',
+            $failed->getErrorOutput(),
+        );
+    }
+
+    public function test_cloudways_terminal_pull_without_git_keeps_the_application_online(): void
+    {
+        $deploymentDirectory = $this->createCloudwaysShellFixture();
+        copy($this->projectPath('scripts/pdeploy_cloudways.sh'), "{$deploymentDirectory}/scripts/pdeploy_cloudways.sh");
+
+        $failed = $this->runCloudwaysPullShellFixture($deploymentDirectory);
+
+        $this->assertFalse($failed->isSuccessful());
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
+        $this->assertStringContainsString('not a Git working tree', $failed->getErrorOutput());
     }
 
     public function test_cloudways_deployment_rolls_back_a_first_frontend_and_resumes_its_own_maintenance_mode(): void
@@ -228,7 +283,7 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertStringContainsString('Join-Path `$repositoryRoot \'scripts/gitpush.ps1\'', $installer);
         $this->assertStringNotContainsString('C:\\laravel\\schooltool', $installer);
         $this->assertStringContainsString(
-            'composer deploy:prepare, Pull main, then run composer deploy',
+            'Cloudways terminal: run composer pdeploy',
             file_get_contents($this->projectPath('scripts/git_helpers.ps1')),
         );
     }
@@ -632,6 +687,60 @@ BASH);
             'stocks-deployment-test',
             $bashDirectory,
             ...$arguments,
+        ], $directory);
+        $process->run();
+
+        return $process;
+    }
+
+    private function createCloudwaysPullShellFixture(): string
+    {
+        $directory = $this->createCloudwaysShellFixture();
+        copy($this->projectPath('scripts/pdeploy_cloudways.sh'), "{$directory}/scripts/pdeploy_cloudways.sh");
+
+        $this->writeExecutable("{$directory}/bin/git", <<<'BASH'
+#!/usr/bin/env bash
+set -e
+
+case "${1:-}" in
+    rev-parse)
+        echo true
+        ;;
+    branch)
+        echo main
+        ;;
+    status)
+        ;;
+    fetch)
+        touch storage/framework/git-fetched
+        ;;
+    merge-base)
+        ;;
+    merge)
+        if [ -f storage/framework/fail-git-merge ]; then
+            exit 1
+        fi
+
+        touch storage/framework/git-merged
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+BASH);
+
+        return $directory;
+    }
+
+    private function runCloudwaysPullShellFixture(string $directory): Process
+    {
+        $bashDirectory = $this->bashPath($directory);
+        $process = new Process([
+            $this->bashExecutable(),
+            '-lc',
+            'export PATH="$1/bin:$PATH"; bash "$1/scripts/pdeploy_cloudways.sh"',
+            'stocks-deployment-test',
+            $bashDirectory,
         ], $directory);
         $process->run();
 

@@ -194,6 +194,42 @@ class StockSearchQueryResolverTest extends TestCase
         $this->assertSame('LYMH', $lymhCandidate['symbol']);
     }
 
+    public function test_it_corrects_the_stale_amundi_europe_energy_name_for_every_listing(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        Http::fake([
+            'eodhd.com/api/search/FR0010930644*' => Http::response([
+                [
+                    'Code' => 'AMEE',
+                    'Exchange' => 'XETRA',
+                    'Name' => 'Amundi ETF MSCI Europe Energy UCITS ETF',
+                    'Type' => 'ETF',
+                    'Country' => 'Germany',
+                    'Currency' => 'EUR',
+                    'ISIN' => 'FR0010930644',
+                ],
+                [
+                    'Code' => 'ANRJ',
+                    'Exchange' => 'PA',
+                    'Name' => 'Amundi Global Hydrogen UCITS ETF - Acc',
+                    'Type' => 'ETF',
+                    'Country' => 'France',
+                    'Currency' => 'EUR',
+                    'ISIN' => 'FR0010930644',
+                ],
+            ]),
+        ]);
+
+        $candidates = app(StockSearchQueryResolver::class)->resolveCandidates('FR0010930644');
+
+        $this->assertCount(2, $candidates);
+        $this->assertSame(
+            ['Amundi Global Hydrogen UCITS ETF Acc'],
+            collect($candidates)->pluck('name')->unique()->values()->all(),
+        );
+        $this->assertSame(['AMEE', 'ANRJ'], collect($candidates)->pluck('symbol')->all());
+    }
+
     public function test_it_finds_known_corrected_instruments_by_wkn_when_eodhd_returns_no_results(): void
     {
         config(['services.eodhd.key' => 'test-token']);

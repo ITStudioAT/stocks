@@ -8,6 +8,7 @@ const exitCode = await new Promise(resolve => {
     const childProcess = spawn('vitest', vitestArguments, {
         env: {
             ...process.env,
+            LARAVEL_BYPASS_ENV_CHECK: '1',
             VITEST: 'true',
         },
         shell: process.platform === 'win32',

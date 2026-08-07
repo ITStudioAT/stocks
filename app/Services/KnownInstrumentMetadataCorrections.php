@@ -8,6 +8,9 @@ class KnownInstrumentMetadataCorrections
      * @var array<string, array{name?: string, wkn?: string, valor?: string, country?: string}>
      */
     private const CorrectionsByIsin = [
+        'FR0010930644' => [
+            'name' => 'Amundi Global Hydrogen UCITS ETF Acc',
+        ],
         'LU1900066462' => [
             'name' => 'Amundi MSCI Eastern Europe Ex Russia UCITS ETF Acc',
             'wkn' => 'LYX02C',

@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminCloudwaysController;
+use App\Http\Controllers\AdminDashboardVersionController;
 use App\Http\Controllers\AdminDataController;
 use App\Http\Controllers\AdminDataRangeController;
 use App\Http\Controllers\AdminDepotController;
@@ -150,6 +151,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
         ])
         ->name('admin.menu');
     Route::get('/admin/me', [AdminAuthController::class, 'me'])->name('admin.me');
+    Route::get('/admin/dashboard/version', [AdminDashboardVersionController::class, 'show'])->name('admin.dashboard.version.show');
     Route::get('/admin/infos', [AdminInfoController::class, 'show'])->name('admin.infos.show');
     Route::get('/admin/depots', [AdminDepotController::class, 'index'])->name('admin.depots.index');
     Route::get('/admin/depots/active', [AdminDepotController::class, 'active'])->name('admin.depots.active');
@@ -206,7 +208,9 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::get('/admin/data/health/stock-trading-times', [AdminStockTradingTimeHealthCheckController::class, 'show'])->name('admin.data.health.stockTradingTimes.show');
     Route::post('/admin/data/health/stock-trading-times', [AdminStockTradingTimeHealthCheckController::class, 'store'])->name('admin.data.health.stockTradingTimes.store');
     Route::post('/admin/data/health/stock-trading-times/repair', AdminStockTradingTimeRepairController::class)->name('admin.data.health.stockTradingTimes.repair');
+    Route::get('/admin/data/indices/{dataType}/date-range', [AdminDataRangeController::class, 'allIndices'])->name('admin.data.indices.dateRange.all');
     Route::get('/admin/data/indices/{indexWatchItem}/{dataType}/date-range', [AdminDataRangeController::class, 'index'])->name('admin.data.indices.dateRange');
+    Route::get('/admin/data/stocks/{dataType}/date-range', [AdminDataRangeController::class, 'allStocks'])->name('admin.data.stocks.dateRange.all');
     Route::get('/admin/data/stocks/{holding}/{dataType}/date-range', [AdminDataRangeController::class, 'stock'])->name('admin.data.stocks.dateRange');
     Route::post('/admin/data/realtime/sync', [AdminDataController::class, 'syncRealtime'])->name('admin.data.realtime.sync');
     Route::post('/admin/data/end-of-day/sync', [AdminDataController::class, 'syncEndOfDay'])->name('admin.data.endOfDay.sync');

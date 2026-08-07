@@ -4,12 +4,42 @@ namespace App\Services;
 
 use App\MarketDataType;
 use App\Models\IndexWatchItem;
+use App\Models\IndexWatchItemIntradayCandle;
+use App\Models\IndexWatchItemPrice;
+use App\Models\IndexWatchItemRealtimePrice;
 use App\Models\StockHolding;
+use App\Models\StockHoldingDailyPrice;
+use App\Models\StockHoldingIntradayCandle;
+use App\Models\StockRealtimePrice;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 
 class StoredMarketDataRange
 {
+    /**
+     * @return array{date_from: ?string, date_to: ?string, row_count: int}
+     */
+    public function forAllIndices(MarketDataType $dataType): array
+    {
+        return match ($dataType) {
+            MarketDataType::LiveData => $this->summarize(
+                IndexWatchItemRealtimePrice::query()->whereNotNull('price'),
+                'trading_date',
+            ),
+            MarketDataType::IntradayData => $this->summarize(
+                IndexWatchItemIntradayCandle::query()
+                    ->where('interval', '5m')
+                    ->where('source_key', 'eodhd_intraday')
+                    ->whereNotNull('close'),
+                'trading_date',
+            ),
+            MarketDataType::EndOfDayData => $this->summarize(
+                IndexWatchItemPrice::query()->whereNotNull('actual_price'),
+                'trading_date',
+            ),
+        };
+    }
+
     /**
      * @return array{date_from: ?string, date_to: ?string, row_count: int}
      */
@@ -56,6 +86,34 @@ class StoredMarketDataRange
             ),
             MarketDataType::EndOfDayData => $this->summarize(
                 $holding->dailyPrices()->getQuery()->whereNotNull('close'),
+                'trading_date',
+            ),
+        };
+    }
+
+    /**
+     * @return array{date_from: ?string, date_to: ?string, row_count: int}
+     */
+    public function forAllStocks(MarketDataType $dataType): array
+    {
+        return match ($dataType) {
+            MarketDataType::LiveData => $this->summarize(
+                StockRealtimePrice::query()
+                    ->whereNotNull('stock_holding_id')
+                    ->whereNotNull('as_of')
+                    ->whereNotNull('price'),
+                'as_of',
+                true,
+            ),
+            MarketDataType::IntradayData => $this->summarize(
+                StockHoldingIntradayCandle::query()
+                    ->where('interval', '5m')
+                    ->where('source_key', 'eodhd_intraday')
+                    ->whereNotNull('close'),
+                'trading_date',
+            ),
+            MarketDataType::EndOfDayData => $this->summarize(
+                StockHoldingDailyPrice::query()->whereNotNull('close'),
                 'trading_date',
             ),
         };

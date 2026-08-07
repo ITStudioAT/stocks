@@ -2243,6 +2243,32 @@ class AdminDepotHoldingTest extends TestCase
         ]);
     }
 
+    public function test_admin_corrects_the_stale_amundi_europe_energy_name_when_adding_the_hydrogen_etf(): void
+    {
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->postJson('/admin/watchlist/holdings', [
+                'symbol' => 'AMEE',
+                'name' => 'Amundi ETF MSCI Europe Energy UCITS ETF',
+                'isin' => 'FR0010930644',
+                'wkn' => 'A1C7AK',
+                'exchange' => 'XETRA',
+                'mic_code' => 'XETR',
+                'instrument_type' => 'ETF',
+                'country' => 'Germany',
+                'currency' => 'EUR',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('holding.name', 'Amundi Global Hydrogen UCITS ETF Acc');
+
+        $this->assertDatabaseHas('stock_holdings', [
+            'symbol' => 'AMEE',
+            'name' => 'Amundi Global Hydrogen UCITS ETF Acc',
+            'isin' => 'FR0010930644',
+        ]);
+    }
+
     public function test_admin_can_queue_all_watchlist_realtime_prices(): void
     {
         config(['services.eodhd.key' => 'test-token']);

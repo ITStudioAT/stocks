@@ -1,3 +1,22 @@
+## 0.6.8
+
+### System
+
+- Schließen einer Info-Card bleibt geschlossen
+- Git Cl Workflow Fixed
+
+### Data
+
+- Ohne Selektion Anzeige der Gesamtdaten
+
+### Indices
+
+- Trading-Zeitren werden angezeigt
+
+### Dashboard
+
+- New DashSyboard
+
 ## 0.6.7
 
 ### Data-Healtch

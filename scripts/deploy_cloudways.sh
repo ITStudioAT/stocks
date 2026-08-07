@@ -48,7 +48,11 @@ prepare_cloudways_pull() {
         echo "Cloudways deployment maintenance mode enabled."
     fi
 
-    echo "Now use Cloudways Pull from main, then run composer deploy."
+    if [ "${STOCKS_CLOUDWAYS_TERMINAL_PULL:-false}" = true ]; then
+        echo "Cloudways deployment maintenance mode prepared for the terminal pull."
+    else
+        echo "Now use Cloudways Pull from main, then run composer deploy."
+    fi
 }
 
 ensure_release_files() {

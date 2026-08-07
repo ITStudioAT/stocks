@@ -402,6 +402,7 @@ function indexMonthPrices(direction = 'up') {
 }
 
 const dashboardWatchlistHoldingsPath = '/admin/watchlist/holdings?page=1&include_charts=1&all_chart_holdings=1&all=1&chart_range=1y';
+const stocksWatchlistHoldingsPath = '/admin/watchlist/holdings?page=1&all=1';
 
 function trendDailyPrices(direction = 'up') {
     const baseDate = new Date(Date.UTC(2026, 4, 1));
@@ -462,8 +463,20 @@ describe('App', () => {
             if (path === '/admin/depots/active') {
                 return Promise.resolve(jsonResponse({
                     depot: null,
+                    app_version: '0.7.2',
                     price_refresh_settings: priceRefreshSettings(),
                     index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/dashboard/version') {
+                return Promise.resolve(jsonResponse({
+                    current_version: '0.7.2',
+                    versions: [
+                        { key: 'laravel', label: 'Laravel', version: '13.24.0' },
+                        { key: 'php', label: 'PHP', version: '8.3.33' },
+                        { key: 'vue', label: 'Vue', version: '3.5.41' },
+                    ],
                 }));
             }
 
@@ -571,36 +584,28 @@ describe('App', () => {
         expect(wrapper.find('[aria-label="Indices"]').exists()).toBe(true);
         expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
 
-        const dashboardHeading = wrapper.get('.dashboard-heading');
-        expect(dashboardHeading.text()).toContain('Watch-list');
-        expect(dashboardHeading.find('.dashboard-actions').exists()).toBe(true);
-        const actionLabels = dashboardHeading.findAll('.dashboard-action-button').map((button) => button.text());
-        expect(actionLabels).toEqual(['Add stock', 'Reload']);
-        const mobileCards = wrapper.findAll('.mobile-stock-card');
-        expect(mobileCards).toHaveLength(2);
-        expect(mobileCards[0].text()).toContain('Apple');
-        expect(mobileCards[0].get('.mobile-stock-position').text()).toBe('Pieces: 2');
-        expect(mobileCards[0].text()).toContain('306.32');
-        expect(mobileCards[0].text()).toContain('+2.28% · 299.50');
-        expect(mobileCards[0].text()).not.toContain('Add');
-        expect(mobileCards[0].text()).not.toContain('Withdraw');
-        expect(mobileCards[0].text()).not.toContain('Delete');
-        expect(mobileCards[0].findAll('.mobile-stock-actions button').map((button) => button.attributes('aria-label'))).toEqual([
-            'Add',
-            'Withdraw',
-            'Delete',
-        ]);
-        expect(mobileCards[1].text()).toContain('Microsoft');
-        expect(mobileCards[1].get('.mobile-stock-position').text()).toBe('Pieces: 0');
-        expect(mobileCards[1].text()).toContain('429.95 USD');
-        expect(mobileCards[1].text()).toContain('+2.37% · 420.00 USD');
-        expect(wrapper.text()).not.toContain('EODHD exchange details');
-        expect(wrapper.text()).not.toContain('Exchange trading times');
-        expect(wrapper.text()).not.toContain('XETRA Stock Exchange');
+        const versionCard = wrapper.get('[aria-label="Programmversion"]');
+        expect(versionCard.text()).toContain('Aktuelle Version');
+        expect(versionCard.get('[data-testid="app-version"]').text()).toBe('v0.7.2');
+        expect(versionCard.text()).toContain('Mehr anzeigen');
+        expect(versionCard.find('#dashboard-version-details').isVisible()).toBe(false);
+        expect(wrapper.find('.watch-list-section').exists()).toBe(false);
+        expect(wrapper.find('.dashboard-actions').exists()).toBe(false);
+
+        await versionCard.get('.dashboard-version-toggle').trigger('click');
+
+        expect(versionCard.text()).toContain('Weniger anzeigen');
+        expect(versionCard.find('#dashboard-version-details').isVisible()).toBe(true);
+        expect(versionCard.text()).toContain('Laravel');
+        expect(versionCard.text()).toContain('13.24.0');
+        expect(versionCard.text()).toContain('PHP');
+        expect(versionCard.text()).toContain('8.3.33');
+        expect(versionCard.text()).toContain('Vue');
+        expect(versionCard.text()).toContain('3.5.41');
     });
 
     it('compacts the watch-list table below desktop width', async () => {
-        window.history.pushState({}, '', '/admin/dashboard');
+        window.history.pushState({}, '', '/admin/menu/stocks');
         setViewportSize(1000, 768);
 
         const emptyPagination = {
@@ -3719,7 +3724,8 @@ describe('App', () => {
     });
 
     it('shows the dedicated Stocks and Indices dashboard pages', async () => {
-        window.history.pushState({}, '', '/admin/dashboard');
+        localStorage.removeItem('stock_eodhd_sync_dismissed_refresh_id');
+        window.history.pushState({}, '', '/admin/menu/stocks');
         let currentPriceRefreshSettings = priceRefreshSettings();
         let indexChartDirection = 'up';
         let appleSubtitle = 'Core technology holding';
@@ -4803,7 +4809,7 @@ describe('App', () => {
         expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
         expect(wrapper.find('[aria-label="Indices"]').exists()).toBe(false);
         expect(wrapper.find('.index-watch-strip').exists()).toBe(false);
-        expect(fetchMock).toHaveBeenCalledWith(dashboardWatchlistHoldingsPath, expect.any(Object));
+        expect(fetchMock).toHaveBeenCalledWith(stocksWatchlistHoldingsPath, expect.any(Object));
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
@@ -4957,7 +4963,7 @@ describe('App', () => {
         expect(fetchMock.mock.calls.some(([path, options]) => (
             path === '/admin/watchlist/holdings/refresh-prices' && options?.method === 'POST'
         ))).toBe(false);
-        expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(1);
+        expect(fetchMock.mock.calls.filter(([path]) => path === stocksWatchlistHoldingsPath)).toHaveLength(1);
         expect(wrapper.text()).not.toContain('2 stock prices refreshed.');
         expect(wrapper.text()).not.toContain('Price refresh: 2/2');
 
@@ -4978,6 +4984,9 @@ describe('App', () => {
 
         expect(wrapper.text()).not.toContain('2 stock prices refreshed.');
         expect(wrapper.text()).not.toContain('Price refresh: 2/2');
+
+        wrapper.vm.navigateSection('stocks');
+        await flushPromises();
 
         const addStockButton = wrapper.findAll('button').find((button) => button.text().includes('Add stock'));
         await addStockButton.trigger('click');
@@ -5053,8 +5062,8 @@ describe('App', () => {
         expect(fetchMock).toHaveBeenCalledWith('/admin/v2/stocks/eodhd-sync', expect.any(Object));
         expect(wrapper.get('.watch-list-section').text()).toContain('Apple');
         expect(wrapper.get('.watch-list-section').text()).toContain('Core technology holding');
-        expect(wrapper.find('[aria-label="Buy stock"]').exists()).toBe(false);
-        expect(wrapper.find('[aria-label="Sell stock"]').exists()).toBe(false);
+        expect(wrapper.find('[aria-label="Buy stock"]').exists()).toBe(true);
+        expect(wrapper.find('[aria-label="Sell stock"]').exists()).toBe(true);
 
         await stockEodhdSyncButton.trigger('click');
         await flushPromises();
@@ -5072,6 +5081,17 @@ describe('App', () => {
         expect(completedStockSync.text()).toContain('completed');
         expect(completedStockSync.text()).toContain('EOD: 40 records');
         expect(completedStockSync.text()).toContain('Intraday: 900 candles');
+
+        await completedStockSync.get('[aria-label="Close stock EODHD synchronization result"]').trigger('click');
+        await flushPromises();
+
+        expect(localStorage.getItem('stock_eodhd_sync_dismissed_refresh_id')).toBe('stock-eodhd-test');
+        expect(stocksDashboard.find('[aria-label="Stock EODHD synchronization status"]').exists()).toBe(false);
+
+        await wrapper.vm.restoreStockEodhdSync();
+        await flushPromises();
+
+        expect(stocksDashboard.find('[aria-label="Stock EODHD synchronization status"]').exists()).toBe(false);
 
         const stocksTable = wrapper.get('.desktop-watch-list-table');
         expect(stocksTable.findAll('.watch-list-live-badge')).toHaveLength(1);
@@ -5100,8 +5120,8 @@ describe('App', () => {
         expect(closedMarketStockRow.get('.latest-price-value').classes()).not.toContain('text-error');
         expect(buyStockRow.find('.watch-list-live-badge').exists()).toBe(false);
         expect(usStockRow.get('[aria-label="EXXX live update activity status"]').text()).toBe('Active');
-        expect(stocksTable.findAll('thead th').map((heading) => heading.text())).not.toContain('Actions');
-        expect(stocksTable.find('[aria-label="Delete stock"]').exists()).toBe(false);
+        expect(stocksTable.findAll('thead th').map((heading) => heading.text())).toContain('Actions');
+        expect(stocksTable.find('[aria-label="Delete stock"]').exists()).toBe(true);
         expect(appleStockRow.attributes('aria-selected')).toBe('false');
         expect(appleStockRow.classes()).not.toContain('stock-holding-row--selected');
 
@@ -5542,9 +5562,13 @@ describe('App', () => {
         expect(daxIndexCard.get('[aria-label="DAX live update schedule status"]').text()).toBe('Waiting');
         expect(daxIndexCard.get('[aria-label="DAX live update activity status"]').text()).toBe('Inactive');
         expect(daxIndexCard.get('[aria-label="DAX live update activity status"]').classes()).toContain('text-error');
+        expect(daxIndexCard.get('[aria-label="DAX trading time in Europe/Vienna"]').text()).toContain('Next 07.08.');
+        expect(daxIndexCard.get('[aria-label="DAX trading time in Europe/Vienna"]').text()).toContain('09:00–17:30');
         expect(djiIndexCard.get('[aria-label="DJI live update schedule status"]').text()).toBe('Scheduled');
         expect(djiIndexCard.get('[aria-label="DJI live update activity status"]').text()).toBe('Active');
         expect(djiIndexCard.get('[aria-label="DJI live update activity status"]').classes()).toContain('text-success');
+        expect(djiIndexCard.get('[aria-label="DJI trading time in Europe/Vienna"]').text()).toContain('Current');
+        expect(djiIndexCard.get('[aria-label="DJI trading time in Europe/Vienna"]').text()).toContain('15:30–22:00');
         expect(utcIndexCard.get('[aria-label="UTCX live update schedule status"]').text()).toBe('Scheduled');
         expect(utcIndexCard.get('[aria-label="UTCX live update activity status"]').text()).toBe('Active');
         wrapper.vm.indexWatchItems.splice(
@@ -5673,7 +5697,7 @@ describe('App', () => {
         expect(wrapper.vm.indexMessage).toBe('Index removed.');
         expect(wrapper.findAll('.index-watch-card')).toHaveLength(0);
 
-        wrapper.vm.navigateSection('dashboard');
+        wrapper.vm.navigateSection('stocks');
         await flushPromises();
 
         const reopenedAddStockButton = wrapper.findAll('button').find((button) => button.text().includes('Add stock'));
@@ -5703,9 +5727,18 @@ describe('App', () => {
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/1', expect.objectContaining({
             method: 'DELETE',
         }));
+
+        wrapper.unmount();
+        window.history.pushState({}, '', '/admin/menu/stocks');
+
+        const reloadedWrapper = mountApp();
+        await flushPromises();
+
+        expect(reloadedWrapper.get('[aria-label="Stocks dashboard"]')
+            .find('[aria-label="Stock EODHD synchronization status"]').exists()).toBe(false);
     }, 10000);
 
-    it('reloads the dashboard info without starting update requests', async () => {
+    it('loads the new dashboard without a market-data reload action', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
         const emptyPagination = {
             current_page: 1,
@@ -5739,6 +5772,13 @@ describe('App', () => {
                     app_version: '0.1.5',
                     price_refresh_settings: priceRefreshSettings(),
                     index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/dashboard/version') {
+                return Promise.resolve(jsonResponse({
+                    current_version: '0.1.5',
+                    versions: [],
                 }));
             }
 
@@ -5778,22 +5818,20 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
-        const reloadButton = wrapper.findAll('.dashboard-action-button')
-            .find((button) => button.text().includes('Reload'));
-        await reloadButton.trigger('click');
-        await flushPromises();
-
-        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(2);
-        expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(2);
-        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(2);
-        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(2);
+        expect(wrapper.find('.dashboard-action-button').exists()).toBe(false);
+        expect(wrapper.find('.watch-list-section').exists()).toBe(false);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/version')).toHaveLength(1);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);
+        expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(0);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(1);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/sync'))).toBe(false);
     });
 
-    it('automatically reloads the dashboard info every minute without starting update requests', async () => {
+    it('does not automatically reload the new dashboard', async () => {
         vi.useFakeTimers();
         window.history.pushState({}, '', '/admin/dashboard');
         const emptyPagination = {
@@ -5828,6 +5866,13 @@ describe('App', () => {
                     app_version: '0.1.5',
                     price_refresh_settings: priceRefreshSettings(),
                     index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/dashboard/version') {
+                return Promise.resolve(jsonResponse({
+                    current_version: '0.1.5',
+                    versions: [],
                 }));
             }
 
@@ -5869,17 +5914,18 @@ describe('App', () => {
             await flushPromises();
 
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);
-            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(1);
+            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(0);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(1);
 
             await vi.advanceTimersByTimeAsync(60000);
             await flushPromises();
 
-            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(2);
-            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(2);
-            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(2);
-            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(2);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/version')).toHaveLength(1);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);
+            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(0);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(1);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
             expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/sync'))).toBe(false);
@@ -5891,7 +5937,7 @@ describe('App', () => {
     });
 
     it('disables the delete button for holdings with position pieces', async () => {
-        window.history.pushState({}, '', '/admin/dashboard');
+        window.history.pushState({}, '', '/admin/menu/stocks');
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 2, from: 1, to: 2 };
         const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
         const holdingWithPieces = {
@@ -6682,6 +6728,28 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/data/indices/live-data/date-range') {
+                return Promise.resolve(jsonResponse({
+                    data_type: 'live-data',
+                    range: {
+                        date_from: '2026-06-01',
+                        date_to: '2026-08-05',
+                        row_count: 825,
+                    },
+                }));
+            }
+
+            if (path === '/admin/data/indices/intraday-data/date-range') {
+                return Promise.resolve(jsonResponse({
+                    data_type: 'intraday-data',
+                    range: {
+                        date_from: '2025-07-01',
+                        date_to: '2026-08-05',
+                        row_count: 19045,
+                    },
+                }));
+            }
+
             if (path === '/admin/data/stocks/7/eod-data/date-range') {
                 return Promise.resolve(jsonResponse({
                     data_type: 'eod-data',
@@ -6689,6 +6757,28 @@ describe('App', () => {
                         date_from: '2025-06-05',
                         date_to: '2026-06-17',
                         row_count: 257,
+                    },
+                }));
+            }
+
+            if (path === '/admin/data/stocks/intraday-data/date-range') {
+                return Promise.resolve(jsonResponse({
+                    data_type: 'intraday-data',
+                    range: {
+                        date_from: '2025-08-01',
+                        date_to: '2026-08-06',
+                        row_count: 22400,
+                    },
+                }));
+            }
+
+            if (path === '/admin/data/stocks/eod-data/date-range') {
+                return Promise.resolve(jsonResponse({
+                    data_type: 'eod-data',
+                    range: {
+                        date_from: '2025-05-01',
+                        date_to: '2026-06-17',
+                        row_count: 557,
                     },
                 }));
             }
@@ -7058,6 +7148,11 @@ describe('App', () => {
         expect(wrapper.get('[aria-label="Data indices"]').text()).toContain('Nasdaq 100');
         expect(wrapper.text()).not.toContain('Exchanges');
         expect(wrapper.text()).not.toContain('Repair');
+        const allIndexLiveDataRange = wrapper.get('[aria-label="Stored data date range"]');
+        expect(allIndexLiveDataRange.text()).toContain('All indices · Live-Daten');
+        expect(allIndexLiveDataRange.text()).toContain('01.06.2026');
+        expect(allIndexLiveDataRange.text()).toContain('05.08.2026');
+        expect(allIndexLiveDataRange.text()).toContain('825');
 
         const indexIntradayDataTab = indexDataTypeTabs.findAll('.v-tab')
             .find((tab) => tab.text() === 'Intraday-Daten');
@@ -7065,6 +7160,10 @@ describe('App', () => {
         await flushPromises();
 
         expect(window.location.pathname).toBe('/admin/menu/data/indices/intraday-data');
+        const allIndexIntradayDataRange = wrapper.get('[aria-label="Stored data date range"]');
+        expect(allIndexIntradayDataRange.text()).toContain('All indices · Intraday-Daten');
+        expect(allIndexIntradayDataRange.text()).toContain('01.07.2025');
+        expect(allIndexIntradayDataRange.text().replace(/\s/g, '')).toContain('19045');
 
         const indexButtons = wrapper.get('[aria-label="Data indices"]').findAll('button');
         expect(indexButtons[0].attributes('aria-pressed')).toBe('false');
@@ -7079,7 +7178,8 @@ describe('App', () => {
         await indexButtons[0].trigger('click');
         await flushPromises();
         expect(indexButtons[0].attributes('aria-pressed')).toBe('false');
-        expect(wrapper.find('[aria-label="Stored data date range"]').exists()).toBe(false);
+        expect(wrapper.get('[aria-label="Stored data date range"]').text()).toContain('All indices · Intraday-Daten');
+        expect(wrapper.get('[aria-label="Stored data date range"]').text().replace(/\s/g, '')).toContain('19045');
 
         const stocksTab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Stocks');
         await stocksTab.trigger('click');
@@ -7097,6 +7197,10 @@ describe('App', () => {
         await flushPromises();
 
         expect(window.location.pathname).toBe('/admin/menu/data/stocks/eod-data');
+        const allStockEodDataRange = wrapper.get('[aria-label="Stored data date range"]');
+        expect(allStockEodDataRange.text()).toContain('All stocks · EOD-Daten');
+        expect(allStockEodDataRange.text()).toContain('01.05.2025');
+        expect(allStockEodDataRange.text()).toContain('557');
         const dataStocks = wrapper.get('[aria-label="Data stocks"]');
         const stockButtons = dataStocks.findAll('button');
         expect(stockButtons).toHaveLength(2);
@@ -7119,6 +7223,8 @@ describe('App', () => {
         await stockButtons[0].trigger('click');
         await flushPromises();
         expect(stockButtons[0].attributes('aria-pressed')).toBe('false');
+        expect(wrapper.get('[aria-label="Stored data date range"]').text()).toContain('All stocks · EOD-Daten');
+        expect(wrapper.get('[aria-label="Stored data date range"]').text()).toContain('557');
         localStorage.removeItem('data_intraday_refresh_info_dismissed');
 
         const healthTab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Health');
@@ -8184,8 +8290,8 @@ describe('App', () => {
         expect(wrapper.text()).toContain('1,250.00 EUR');
     });
 
-    it('books stock transaction from the dashboard', async () => {
-        window.history.pushState({}, '', '/admin/dashboard');
+    it('books stock transaction from the Stocks page', async () => {
+        window.history.pushState({}, '', '/admin/menu/stocks');
         const emptyPagination = {
             current_page: 1,
             last_page: 1,
@@ -9196,7 +9302,7 @@ describe('App', () => {
             await vi.advanceTimersByTimeAsync(5000);
             await flushPromises();
 
-            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(1);
+            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(0);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
@@ -9391,7 +9497,8 @@ describe('App', () => {
 
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
         expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
-        expect(wrapper.text()).toContain('The request failed.');
+        expect(wrapper.text()).not.toContain('The request failed.');
+        expect(wrapper.find('[aria-label="Programmversion"]').exists()).toBe(true);
     });
 
     it('does not show the clear queue action on the dashboard', async () => {
