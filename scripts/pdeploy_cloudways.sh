@@ -45,9 +45,10 @@ if ! flock -n 8; then
 fi
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    echo "This Cloudways application is not a Git working tree." >&2
-    echo "Configure command-line Git with an origin remote and deploy key, or use the Cloudways Pull menu." >&2
-    exit 1
+    echo "Cloudways Pull deployment detected; deploying the current commit-bound release without a Git fetch."
+    trap - EXIT
+
+    exec bash scripts/deploy_cloudways.sh
 fi
 
 current_branch="$(git branch --show-current)"

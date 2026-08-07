@@ -231,17 +231,21 @@ class DeploymentWorkflowTest extends TestCase
         );
     }
 
-    public function test_cloudways_terminal_pull_without_git_keeps_the_application_online(): void
+    public function test_cloudways_pull_deploys_without_git_metadata(): void
     {
         $deploymentDirectory = $this->createCloudwaysShellFixture();
         copy($this->projectPath('scripts/pdeploy_cloudways.sh'), "{$deploymentDirectory}/scripts/pdeploy_cloudways.sh");
 
-        $failed = $this->runCloudwaysPullShellFixture($deploymentDirectory);
+        $deployed = $this->runCloudwaysPullShellFixture($deploymentDirectory);
 
-        $this->assertFalse($failed->isSuccessful());
+        $this->assertTrue($deployed->isSuccessful(), $deployed->getErrorOutput());
+        $this->assertDirectoryExists("{$deploymentDirectory}/public/build");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
-        $this->assertStringContainsString('not a Git working tree', $failed->getErrorOutput());
+        $this->assertStringContainsString(
+            'Cloudways Pull deployment detected',
+            $deployed->getOutput(),
+        );
     }
 
     public function test_cloudways_deployment_rolls_back_a_first_frontend_and_resumes_its_own_maintenance_mode(): void
