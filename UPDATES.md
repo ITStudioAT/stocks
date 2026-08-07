@@ -1,3 +1,10 @@
+## 0.7.0
+
+### Depot
+
+- Eigener Cash-Menüpunkt
+- Auswertung aller Stocks aus der Vergangenheit
+
 ## 0.6.9
 
 ### System
@@ -21,7 +28,7 @@
 
 ### Dashboard
 
-- New DashSyboard
+- New Dashboard
 
 ## 0.6.7
 

@@ -26,6 +26,7 @@ const defaultAnalyzeTrendMaxInvestAmount = 0;
 const maxAnalyzeTrendMaxInvestAmount = 1000000;
 const cashLedgerPageSize = 20;
 const indexRealtimeOverdueCheckIntervalMilliseconds = 1000;
+const activeItemRefreshIntervalMilliseconds = 60_000;
 const indexRealtimeDispatchRetryDelayMilliseconds = 5000;
 const STOCK_EODHD_SYNC_DISMISSED_REFRESH_ID_KEY = 'stock_eodhd_sync_dismissed_refresh_id';
 const cashTransactionTypeOptions = [
@@ -65,6 +66,10 @@ const {
     depotHoldings,
     depotValuations,
     depotPerformanceSeries,
+    depotStockPeriodStocks,
+    depotStockPeriod,
+    depotStockPeriodLabel,
+    depotStockPeriodYear,
     transactions,
     appVersion,
     eodhdApiUsage,
@@ -99,6 +104,7 @@ const {
     loading: depotsLoading,
     holdingsLoading,
     transactionsLoading,
+    depotStockPeriodLoading,
     testOptionsLoading,
     testExchangesLoading,
     testIntradayLoading,
@@ -112,6 +118,7 @@ const {
     error: depotsError,
     holdingsError,
     transactionsError,
+    depotStockPeriodError,
     testOptionsError,
     testExchangesError,
     testIntradayError,
@@ -150,6 +157,8 @@ const activeInfoSubsection = ref('eodhd');
 const activeAnalyzeSubsection = ref('overview');
 const activeDataSubsection = ref('indices');
 const activeDataType = ref('live-data');
+const activeDepotSubsection = ref('overview');
+const activeDepotStocksSubsection = ref('actual-year');
 const stockTradingTimeHealthCheck = ref(null);
 const stockTradingTimeHealthCheckLoading = ref(false);
 const stockTradingTimeRepairLoading = ref(false);
@@ -318,6 +327,8 @@ const dataIntradayReloadTimer = ref(null);
 const indexEodhdSyncTimer = ref(null);
 const stockEodhdSyncTimer = ref(null);
 const indexRealtimeOverdueTimer = ref(null);
+const activeItemRefreshTimer = ref(null);
+const isActiveItemRefreshing = ref(false);
 const isIndexRealtimeDueDispatching = ref(false);
 const nextIndexRealtimeDispatchAttemptAt = ref(0);
 const isDashboardMenuCompact = ref(smAndDown.value);
@@ -2585,6 +2596,40 @@ const infoSubmenuItems = [
         icon: 'mdi-function-variant',
     },
 ];
+const depotSubmenuItems = [
+    {
+        key: 'overview',
+        label: 'Overview',
+        icon: 'mdi-view-dashboard-outline',
+    },
+    {
+        key: 'cash',
+        label: 'Cash',
+        icon: 'mdi-cash-multiple',
+    },
+    {
+        key: 'all-stocks',
+        label: 'All Stocks',
+        icon: 'mdi-format-list-bulleted',
+    },
+];
+const depotStocksSubmenuItems = [
+    {
+        key: 'actual-year',
+        label: 'Actual Year',
+        icon: 'mdi-calendar-today-outline',
+    },
+    {
+        key: 'last-year',
+        label: 'Last Year',
+        icon: 'mdi-calendar-arrow-left',
+    },
+    {
+        key: '4-ever',
+        label: '4-Ever',
+        icon: 'mdi-infinity',
+    },
+];
 const analyzeHistoryRangeItems = [
     {
         key: '1y',
@@ -2788,6 +2833,11 @@ watch(
 watch(
     activeSection,
     () => syncIndexRealtimeOverdueMonitoring(),
+);
+
+watch(
+    [activeSection, selectedIndexWatchItem, selectedStockWatchItem, activeDepot, activeDepotSubsection],
+    () => syncActiveItemRefresh(),
 );
 
 watch(
@@ -3015,8 +3065,12 @@ onMounted(async () => {
             : Promise.resolve(),
     ]);
 
-    if (activeSection.value === 'depot') {
+    if (activeSection.value === 'depot' && depotSubsectionRequiresTransactions(activeDepotSubsection.value)) {
         depotsStore.loadTransactions();
+    }
+
+    if (activeSection.value === 'depot' && isDepotStockPeriodPage()) {
+        depotsStore.loadDepotStockPeriod(activeDepotStocksSubsection.value);
     }
 
     await Promise.all([
@@ -3034,6 +3088,7 @@ onMounted(async () => {
 
     ensureAnalyzeDetailIntradayCandles();
     syncUpdateStatusPolling();
+    syncActiveItemRefresh();
 
     await depotsStore.loadDepots();
 
@@ -3057,6 +3112,7 @@ onBeforeUnmount(() => {
     stopIndexEodhdSyncPolling();
     stopStockEodhdSyncPolling();
     stopIndexRealtimeOverdueMonitoring();
+    stopActiveItemRefresh();
     stopHoldingDialogKeyboardShortcuts();
     clearAnalyzeIsinCopiedTimer();
     clearDataHistoricIsinCopiedTimer();
@@ -3091,6 +3147,77 @@ function stopIndexRealtimeOverdueMonitoring() {
     if (indexRealtimeOverdueTimer.value !== null) {
         window.clearInterval(indexRealtimeOverdueTimer.value);
         indexRealtimeOverdueTimer.value = null;
+    }
+}
+
+function shouldRefreshActiveItem() {
+    if (activeSection.value === 'indices') {
+        return selectedIndexWatchItem.value !== null;
+    }
+
+    if (activeSection.value === 'stocks') {
+        return selectedStockWatchItem.value !== null;
+    }
+
+    return activeSection.value === 'depot'
+        && depotSubsectionRequiresTransactions(activeDepotSubsection.value)
+        && activeDepot.value !== null;
+}
+
+function syncActiveItemRefresh() {
+    if (!shouldRefreshActiveItem()) {
+        stopActiveItemRefresh();
+
+        return;
+    }
+
+    if (activeItemRefreshTimer.value !== null) {
+        return;
+    }
+
+    activeItemRefreshTimer.value = window.setInterval(
+        refreshActiveItemPage,
+        activeItemRefreshIntervalMilliseconds,
+    );
+}
+
+function stopActiveItemRefresh() {
+    if (activeItemRefreshTimer.value === null) {
+        return;
+    }
+
+    window.clearInterval(activeItemRefreshTimer.value);
+    activeItemRefreshTimer.value = null;
+}
+
+async function refreshActiveItemPage() {
+    if (!shouldRefreshActiveItem() || isActiveItemRefreshing.value) {
+        return;
+    }
+
+    isActiveItemRefreshing.value = true;
+
+    try {
+        if (activeSection.value === 'indices') {
+            await reloadSelectedIndexWatchItem();
+
+            return;
+        }
+
+        if (activeSection.value === 'stocks') {
+            await loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page, { silent: true });
+
+            return;
+        }
+
+        await Promise.all([
+            depotsStore.loadActiveDepot(),
+            depotsStore.loadTransactions(),
+        ]);
+    } catch {
+        // Store errors remain visible while the next minute can retry automatically.
+    } finally {
+        isActiveItemRefreshing.value = false;
     }
 }
 
@@ -3217,6 +3344,10 @@ function navigateSection(section) {
         activeInfoSubsection.value = 'eodhd';
     }
 
+    if (section === 'depot' && !isDepotSubsection(activeDepotSubsection.value)) {
+        activeDepotSubsection.value = 'overview';
+    }
+
     clearSectionMessages();
     updateUrlPath();
 
@@ -3230,7 +3361,14 @@ function navigateSection(section) {
 
     if (section === 'depot') {
         depotsStore.loadActiveDepot();
-        depotsStore.loadTransactions();
+
+        if (depotSubsectionRequiresTransactions(activeDepotSubsection.value)) {
+            depotsStore.loadTransactions();
+        }
+
+        if (isDepotStockPeriodPage()) {
+            depotsStore.loadDepotStockPeriod(activeDepotStocksSubsection.value);
+        }
     }
 
     if (section === 'depots') {
@@ -3635,6 +3773,39 @@ function navigateInfoSubsection(subsection) {
     updateUrlPath();
 }
 
+function navigateDepotSubsection(subsection) {
+    if (!isDepotSubsection(subsection) || activeDepotSubsection.value === subsection) {
+        return;
+    }
+
+    activeDepotSubsection.value = subsection;
+    activeSection.value = 'depot';
+    clearSectionMessages();
+    updateUrlPath();
+
+    if (depotSubsectionRequiresTransactions(subsection)) {
+        depotsStore.loadTransactions();
+    }
+
+    if (subsection === 'all-stocks') {
+        depotsStore.loadDepotStockPeriod(activeDepotStocksSubsection.value);
+    }
+}
+
+function navigateDepotStocksSubsection(subsection) {
+    if (!isDepotStocksSubsection(subsection) || activeDepotStocksSubsection.value === subsection) {
+        return;
+    }
+
+    activeDepotStocksSubsection.value = subsection;
+    activeDepotSubsection.value = 'all-stocks';
+    activeSection.value = 'depot';
+    clearSectionMessages();
+    updateUrlPath();
+
+    depotsStore.loadDepotStockPeriod(subsection);
+}
+
 function isStandaloneDataStockSubsection(subsection) {
     return ['live-data', 'historical-data', 'eod-data'].includes(subsection);
 }
@@ -3895,7 +4066,7 @@ function applyRouteFromPath() {
     }
 
     if (path.startsWith('/admin/menu/')) {
-        const [sectionSegment, subsectionSegment, dataTypeSegment] = path
+        const [sectionSegment, subsectionSegment, detailSegment] = path
             .replace('/admin/menu/', '')
             .split('/')
             .map((segment) => decodeURIComponent(segment));
@@ -3917,8 +4088,8 @@ function applyRouteFromPath() {
             activeDataSubsection.value = isDataSubsection(subsectionSegment)
                 ? subsectionSegment
                 : 'indices';
-            activeDataType.value = isDataType(dataTypeSegment)
-                ? dataTypeSegment
+            activeDataType.value = isDataType(detailSegment)
+                ? detailSegment
                 : 'live-data';
             if (activeDataSubsection.value === 'health') {
                 activeDataType.value = 'intraday-data';
@@ -3933,6 +4104,20 @@ function applyRouteFromPath() {
             activeInfoSubsection.value = isInfoSubsection(subsectionSegment)
                 ? subsectionSegment
                 : 'eodhd';
+            updateUrlPath({ replace: true });
+
+            return;
+        }
+
+        if (normalizedSection === 'depot') {
+            activeSection.value = 'depot';
+            activeDepotSubsection.value = isDepotSubsection(subsectionSegment)
+                ? subsectionSegment
+                : 'overview';
+            activeDepotStocksSubsection.value = activeDepotSubsection.value === 'all-stocks'
+                && isDepotStocksSubsection(detailSegment)
+                ? detailSegment
+                : 'actual-year';
             updateUrlPath({ replace: true });
 
             return;
@@ -3961,7 +4146,11 @@ function updateUrlPath(options = {}) {
                     ? `/admin/menu/data/${activeDataSubsection.value}/${activeDataType.value}`
                     : activeSection.value === 'infos'
                         ? `/admin/menu/infos/${activeInfoSubsection.value}`
-                        : `/admin/menu/${activeSection.value}`;
+                        : activeSection.value === 'depot'
+                            ? activeDepotSubsection.value === 'all-stocks'
+                                ? `/admin/menu/depot/all-stocks/${activeDepotStocksSubsection.value}`
+                                : `/admin/menu/depot/${activeDepotSubsection.value}`
+                            : `/admin/menu/${activeSection.value}`;
     const target = activeSection.value === 'analyze'
         ? `${path}?stock=${selectedAnalyzeHoldingId.value === null ? 'all' : encodeURIComponent(String(selectedAnalyzeHoldingId.value))}`
         : path;
@@ -4022,6 +4211,23 @@ function isDataType(dataType) {
 
 function isInfoSubsection(subsection) {
     return infoSubmenuItems.some((item) => item.key === subsection);
+}
+
+function isDepotSubsection(subsection) {
+    return depotSubmenuItems.some((item) => item.key === subsection);
+}
+
+function depotSubsectionRequiresTransactions(subsection) {
+    return ['overview', 'cash'].includes(subsection);
+}
+
+function isDepotStockPeriodPage() {
+    return activeDepotSubsection.value === 'all-stocks'
+        && isDepotStocksSubsection(activeDepotStocksSubsection.value);
+}
+
+function isDepotStocksSubsection(subsection) {
+    return depotStocksSubmenuItems.some((item) => item.key === subsection);
 }
 
 function applyAnalyzeSelectionFromQuery(searchParams) {
@@ -6433,6 +6639,78 @@ function formatDepotCashBalance() {
 
 function formatDepotAccountBalance() {
     return `${formatAccountBalance(depotValuationNumber('account_balance'))} EUR`;
+}
+
+function formatDepotYearStockPrice(stock, key) {
+    return formatPriceValue(stock?.[key], stock?.currency, { showCurrency: true });
+}
+
+function depotStockPeriodHeading() {
+    if (depotStockPeriod.value === '4-ever') {
+        return 'All traded stocks';
+    }
+
+    return depotStockPeriodYear.value === null
+        ? 'Traded stocks'
+        : `Traded stocks ${depotStockPeriodYear.value}`;
+}
+
+function depotStockPeriodEntryLabel() {
+    return depotStockPeriod.value === '4-ever' ? 'Ø Buy' : 'Ø Buy / 1.1.';
+}
+
+function depotStockPeriodEmptyMessage() {
+    return depotStockPeriod.value === '4-ever'
+        ? 'No traded stocks found.'
+        : `No traded stocks in ${depotStockPeriodYear.value ?? new Date().getFullYear()}.`;
+}
+
+function formatDepotStockTradedVolume(stock) {
+    return `${formatAccountBalance(stock?.traded_volume)} ${stock?.currency ?? 'EUR'}`;
+}
+
+function formatDepotStockTradedPieces(stock) {
+    return `${formatAdaptiveNumber(stock?.traded_volume_pieces)} pieces`;
+}
+
+function formatDepotYearStockPosition(stock) {
+    const pieces = Number(stock?.position_pieces);
+
+    if (!Number.isFinite(pieces) || pieces <= 0) {
+        return 'Sold';
+    }
+
+    return `${formatAdaptiveNumber(pieces)} in stock`;
+}
+
+function formatDepotYearStockChangePercent(stock) {
+    const percent = Number(stock?.change_percent);
+
+    if (!Number.isFinite(percent)) {
+        return '-';
+    }
+
+    return `${percent > 0 ? '+' : ''}${percent.toFixed(2)}%`;
+}
+
+function formatDepotYearStockChangeAmount(stock) {
+    const amount = Number(stock?.change_amount);
+
+    if (!Number.isFinite(amount)) {
+        return '-';
+    }
+
+    return `${amount > 0 ? '+' : ''}${formatAccountBalance(amount)}`;
+}
+
+function depotYearStockChangeClass(stock) {
+    const amount = Number(stock?.change_amount);
+
+    return {
+        'text-success': Number.isFinite(amount) && amount > 0,
+        'text-error': Number.isFinite(amount) && amount < 0,
+        'text-medium-emphasis': !Number.isFinite(amount) || amount === 0,
+    };
 }
 
 function formatDepotYearStartBalance() {
@@ -10569,7 +10847,7 @@ function formatIndexEodhdUpdateSchedule(settings) {
 function indexEodhdUpdateStatusDetail(settings) {
     return settings?.status === 'updating'
         ? 'The EOD and 5-minute intraday synchronization is running.'
-        : 'No job is running; the next update starts at the time shown below.';
+        : '';
 }
 
 function indexEodhdActivityLabel(settings) {
@@ -10922,7 +11200,7 @@ function stockLiveUpdateStatusDetail(settings) {
         return 'Updates are inactive outside the configured trading window.';
     }
 
-    return 'No job is running; the next refresh starts at the time shown below.';
+    return '';
 }
 
 function formatHistoricalDataUpdateSchedule(settings) {
@@ -11503,16 +11781,6 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </v-btn>
                                     <v-btn
                                         class="dashboard-action-button"
-                                        prepend-icon="mdi-pencil-outline"
-                                        type="button"
-                                        variant="outlined"
-                                        :disabled="!selectedStockWatchItem || holdingsLoading"
-                                        @click="openEditHoldingDialog(selectedStockWatchItem)"
-                                    >
-                                        Edit stock
-                                    </v-btn>
-                                    <v-btn
-                                        class="dashboard-action-button"
                                         color="error"
                                         prepend-icon="mdi-delete-outline"
                                         type="button"
@@ -11649,7 +11917,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     {{ schedule.text }}
                                                 </div>
                                             </div>
-                                            <div class="text-caption text-medium-emphasis">
+                                            <div
+                                                v-if="stockLiveUpdateStatusDetail(priceRefreshSettings)"
+                                                class="text-caption text-medium-emphasis"
+                                            >
                                                 {{ stockLiveUpdateStatusDetail(priceRefreshSettings) }}
                                             </div>
                                             <div class="text-caption text-medium-emphasis">
@@ -11850,7 +12121,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <div class="text-body-2">
                                                 {{ formatIndexEodhdUpdateSchedule(indexEodhdSyncSettings) }}
                                             </div>
-                                            <div class="text-caption text-medium-emphasis">
+                                            <div
+                                                v-if="indexEodhdUpdateStatusDetail(indexEodhdSyncSettings)"
+                                                class="text-caption text-medium-emphasis"
+                                            >
                                                 {{ indexEodhdUpdateStatusDetail(indexEodhdSyncSettings) }}
                                             </div>
                                             <div class="text-caption text-medium-emphasis">
@@ -12314,7 +12588,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <div class="mobile-stock-name">
                                         {{ stockDisplayName(holding) }}
                                     </div>
-                                    <div v-if="holding.subtitle" class="text-caption text-medium-emphasis">
+                                    <div v-if="holding.subtitle" class="stock-subtitle text-caption text-info font-weight-medium">
                                         {{ holding.subtitle }}
                                     </div>
                                     <div class="mobile-stock-position">
@@ -12378,6 +12652,15 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </div>
                                     <div v-if="activeSection === 'stocks'" class="mobile-stock-actions">
                                         <v-btn
+                                            aria-label="Edit stock"
+                                            color="primary"
+                                            icon="mdi-pencil-outline"
+                                            size="small"
+                                            variant="tonal"
+                                            :disabled="holdingsLoading"
+                                            @click.stop="openEditHoldingDialog(holding)"
+                                        />
+                                        <v-btn
                                             aria-label="Add"
                                             color="success"
                                             icon="mdi-cart-plus"
@@ -12394,15 +12677,6 @@ function formatIndexDataUpdateSchedule(settings) {
                                             variant="tonal"
                                             :disabled="!activeDepot || holdingsLoading || !hasPositionPieces(holding)"
                                             @click="openStockTransactionDialog(holding, 'sell')"
-                                        />
-                                        <v-btn
-                                            aria-label="Delete"
-                                            color="error"
-                                            icon="mdi-delete-outline"
-                                            size="small"
-                                            variant="tonal"
-                                            :disabled="holdingsLoading || hasPositionPieces(holding)"
-                                            @click="openDeleteHoldingDialog(holding)"
                                         />
                                     </div>
                                     </article>
@@ -12473,7 +12747,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </td>
                                         <td class="watch-list-content-cell">
                                             <div>{{ stockDisplayName(holding) }}</div>
-                                            <div v-if="holding.subtitle" class="text-caption text-medium-emphasis">
+                                            <div v-if="holding.subtitle" class="stock-subtitle text-caption text-info font-weight-medium">
                                                 {{ holding.subtitle }}
                                             </div>
                                             <div
@@ -12625,6 +12899,16 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <v-btn
                                                 icon
                                                 variant="text"
+                                                color="primary"
+                                                aria-label="Edit stock"
+                                                :disabled="holdingsLoading"
+                                                @click.stop="openEditHoldingDialog(holding)"
+                                            >
+                                                <v-icon icon="mdi-pencil-outline" />
+                                            </v-btn>
+                                            <v-btn
+                                                icon
+                                                variant="text"
                                                 color="success"
                                                 aria-label="Buy stock"
                                                 :disabled="!activeDepot || holdingsLoading"
@@ -12641,16 +12925,6 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 @click.stop="openStockTransactionDialog(holding, 'sell')"
                                             >
                                                 <v-icon icon="mdi-cart-minus" />
-                                            </v-btn>
-                                            <v-btn
-                                                icon
-                                                variant="text"
-                                                color="error"
-                                                aria-label="Delete stock"
-                                                :disabled="holdingsLoading || hasPositionPieces(holding)"
-                                                @click.stop="openDeleteHoldingDialog(holding)"
-                                            >
-                                                <v-icon icon="mdi-delete-outline" />
                                             </v-btn>
                                         </td>
                                     </tr>
@@ -12880,7 +13154,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                 <span class="index-price-dialog-name">
                                     {{ stockDisplayName(selectedStockWatchItem, 'Stock') }}
                                 </span>
-                                <span v-if="selectedStockWatchItem.subtitle" class="index-price-dialog-code">
+                                <span v-if="selectedStockWatchItem.subtitle" class="index-price-dialog-code stock-subtitle text-info font-weight-medium">
                                     {{ selectedStockWatchItem.subtitle }}
                                 </span>
                                 <span v-if="selectedStockWatchItem.isin" class="index-price-dialog-code">
@@ -15410,6 +15684,26 @@ function formatIndexDataUpdateSchedule(settings) {
                             <v-card-title class="text-subtitle-1 font-weight-bold">
                                 {{ selectedDataRangeTitle }} · {{ dataTypeLabel(activeDataType) }}
                             </v-card-title>
+                            <div
+                                v-if="selectedDataRangeInstrument"
+                                class="px-4 pb-2"
+                                :aria-label="activeDataSubsection === 'indices'
+                                    ? 'Selected data index identity'
+                                    : 'Selected data stock identity'"
+                            >
+                                <div class="font-weight-medium">
+                                    {{ stockDisplayName(
+                                        selectedDataRangeInstrument,
+                                        `${activeDataSubsection === 'indices' ? 'Index' : 'Stock'} ${selectedDataRangeInstrument.id}`,
+                                    ) }}
+                                </div>
+                                <div
+                                    v-if="activeDataSubsection === 'stocks' && selectedDataRangeInstrument.subtitle"
+                                    class="stock-subtitle text-caption text-info font-weight-medium"
+                                >
+                                    {{ selectedDataRangeInstrument.subtitle }}
+                                </div>
+                            </div>
                             <v-card-subtitle>Gespeicherter Zeitraum</v-card-subtitle>
                             <v-progress-linear
                                 v-if="selectedDataDateRangeLoading"
@@ -17229,6 +17523,160 @@ function formatIndexDataUpdateSchedule(settings) {
                     </section>
 
                     <section v-if="activeSection === 'depot'">
+                        <v-tabs
+                            :model-value="activeDepotSubsection"
+                            color="primary"
+                            :class="activeDepotSubsection === 'all-stocks' ? 'mb-2' : 'mb-6'"
+                            @update:model-value="navigateDepotSubsection"
+                        >
+                            <v-tab
+                                v-for="item in depotSubmenuItems"
+                                :key="item.key"
+                                :value="item.key"
+                                :prepend-icon="item.icon"
+                            >
+                                {{ item.label }}
+                            </v-tab>
+                        </v-tabs>
+
+                        <v-tabs
+                            v-if="activeDepotSubsection === 'all-stocks'"
+                            :model-value="activeDepotStocksSubsection"
+                            aria-label="Depot All Stocks periods"
+                            color="primary"
+                            class="mb-6"
+                            density="compact"
+                            @update:model-value="navigateDepotStocksSubsection"
+                        >
+                            <v-tab
+                                v-for="item in depotStocksSubmenuItems"
+                                :key="item.key"
+                                :value="item.key"
+                                :prepend-icon="item.icon"
+                            >
+                                {{ item.label }}
+                            </v-tab>
+                        </v-tabs>
+
+                        <template v-if="activeDepotSubsection === 'all-stocks'">
+                            <section v-if="activeDepot" class="depot-year-stocks-section" aria-label="Depot stock period performance">
+                                <div class="mb-4">
+                                    <p class="text-overline text-primary mb-1">{{ depotStockPeriodLabel }}</p>
+                                    <h1 class="text-h5">{{ depotStockPeriodHeading() }}</h1>
+                                </div>
+
+                                <v-progress-linear v-if="depotStockPeriodLoading" indeterminate class="mb-3" />
+                                <v-alert
+                                    v-if="depotStockPeriodError"
+                                    type="error"
+                                    variant="tonal"
+                                    density="compact"
+                                    class="mb-3"
+                                >
+                                    {{ depotStockPeriodError }}
+                                </v-alert>
+
+                                <div v-if="depotStockPeriodStocks.length > 0" class="mobile-depot-year-stocks">
+                                    <article
+                                        v-for="stock in depotStockPeriodStocks"
+                                        :key="`depot-year-stock-${stock.id}`"
+                                        class="mobile-depot-year-stock-card"
+                                    >
+                                        <div>
+                                            <div class="mobile-depot-year-stock-name">
+                                                {{ stock.symbol || '-' }} · {{ stockDisplayName(stock, `Stock ${stock.id}`) }}
+                                            </div>
+                                            <div v-if="stock.subtitle" class="stock-subtitle text-caption text-info font-weight-medium">
+                                                {{ stock.subtitle }}
+                                            </div>
+                                            <div class="text-caption text-medium-emphasis">
+                                                {{ formatDepotYearStockPosition(stock) }}
+                                            </div>
+                                        </div>
+                                        <div class="mobile-depot-year-stock-row">
+                                            <span class="text-caption text-medium-emphasis">{{ depotStockPeriodEntryLabel() }}</span>
+                                            <span>{{ formatDepotYearStockPrice(stock, 'average_buy_or_year_start_price') }}</span>
+                                        </div>
+                                        <div class="mobile-depot-year-stock-row">
+                                            <span class="text-caption text-medium-emphasis">Ø Sell / in stock</span>
+                                            <span>{{ formatDepotYearStockPrice(stock, 'average_sell_or_current_price') }}</span>
+                                        </div>
+                                        <div class="mobile-depot-year-stock-row">
+                                            <span class="text-caption text-medium-emphasis">Traded volume (money)</span>
+                                            <span>{{ formatDepotStockTradedVolume(stock) }}</span>
+                                        </div>
+                                        <div class="mobile-depot-year-stock-row">
+                                            <span class="text-caption text-medium-emphasis">Traded volume (pieces)</span>
+                                            <span>{{ formatDepotStockTradedPieces(stock) }}</span>
+                                        </div>
+                                        <div class="mobile-depot-year-stock-row font-weight-medium" :class="depotYearStockChangeClass(stock)">
+                                            <span>{{ formatDepotYearStockChangePercent(stock) }}</span>
+                                            <span>{{ formatDepotYearStockChangeAmount(stock) }} EUR</span>
+                                        </div>
+                                    </article>
+                                </div>
+
+                                <v-table v-if="depotStockPeriodStocks.length > 0" class="desktop-depot-year-stocks-table" density="compact">
+                                    <thead>
+                                        <tr>
+                                            <th>Stock</th>
+                                            <th class="text-right">{{ depotStockPeriodEntryLabel() }}</th>
+                                            <th class="text-right">Ø Sell / in stock</th>
+                                            <th class="text-right">Traded volume (money)</th>
+                                            <th class="text-right">Traded volume (pieces)</th>
+                                            <th class="text-right">+/- %</th>
+                                            <th class="text-right">+/- EUR</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="stock in depotStockPeriodStocks" :key="stock.id">
+                                            <td>
+                                                <div class="font-weight-medium">
+                                                    {{ stock.symbol || '-' }} · {{ stockDisplayName(stock, `Stock ${stock.id}`) }}
+                                                </div>
+                                                <div v-if="stock.subtitle" class="stock-subtitle text-caption text-info font-weight-medium">
+                                                    {{ stock.subtitle }}
+                                                </div>
+                                                <div class="text-caption text-medium-emphasis">
+                                                    {{ formatDepotYearStockPosition(stock) }}
+                                                </div>
+                                            </td>
+                                            <td class="text-right">
+                                                {{ formatDepotYearStockPrice(stock, 'average_buy_or_year_start_price') }}
+                                            </td>
+                                            <td class="text-right">
+                                                {{ formatDepotYearStockPrice(stock, 'average_sell_or_current_price') }}
+                                            </td>
+                                            <td class="text-right">
+                                                {{ formatDepotStockTradedVolume(stock) }}
+                                            </td>
+                                            <td class="text-right">
+                                                {{ formatDepotStockTradedPieces(stock) }}
+                                            </td>
+                                            <td class="text-right font-weight-medium" :class="depotYearStockChangeClass(stock)">
+                                                {{ formatDepotYearStockChangePercent(stock) }}
+                                            </td>
+                                            <td class="text-right font-weight-medium" :class="depotYearStockChangeClass(stock)">
+                                                {{ formatDepotYearStockChangeAmount(stock) }}
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </v-table>
+
+                                <p
+                                    v-if="depotStockPeriodStocks.length === 0 && !depotStockPeriodLoading && !depotStockPeriodError"
+                                    class="text-medium-emphasis text-body-2"
+                                >
+                                    {{ depotStockPeriodEmptyMessage() }}
+                                </p>
+                            </section>
+
+                            <v-alert v-else type="info" variant="tonal" density="compact">
+                                No active depot found.
+                            </v-alert>
+                        </template>
+
+                        <template v-if="activeDepotSubsection === 'overview'">
                         <div class="mb-4">
                             <p class="text-overline text-primary mb-1">Depot</p>
                             <h1 class="text-h4">{{ activeDepot?.name ?? '–' }}</h1>
@@ -17375,7 +17823,13 @@ function formatIndexDataUpdateSchedule(settings) {
                                     class="mobile-depot-stock-card"
                                 >
                                     <div class="mobile-depot-stock-name">
-                                        <div>{{ stockDisplayLabel(holding) }}</div>
+                                        <div>{{ stockDisplayName(holding) }}</div>
+                                        <div
+                                            v-if="holding.subtitle"
+                                            class="stock-subtitle text-caption text-info font-weight-medium"
+                                        >
+                                            {{ holding.subtitle }}
+                                        </div>
                                         <div class="mobile-depot-stock-isin">{{ holding.isin || '-' }}</div>
                                     </div>
                                     <div class="mobile-depot-stock-row mobile-depot-stock-row--prices">
@@ -17461,7 +17915,13 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <tr v-for="holding in depotHoldings" :key="holding.id" :class="depotHoldingRowClass(holding)">
                                         <td v-if="!isCompactDepotStocksTable">{{ holding.symbol || '-' }}</td>
                                         <td>
-                                            <div>{{ stockDisplayLabel(holding) }}</div>
+                                            <div>{{ stockDisplayName(holding) }}</div>
+                                            <div
+                                                v-if="holding.subtitle"
+                                                class="stock-subtitle text-caption text-info font-weight-medium"
+                                            >
+                                                {{ holding.subtitle }}
+                                            </div>
                                             <div class="depot-stock-isin">{{ holding.isin || '-' }}</div>
                                         </td>
                                         <td class="text-right">{{ formatPositionPieces(holding) }}</td>
@@ -17723,7 +18183,31 @@ function formatIndexDataUpdateSchedule(settings) {
                             </v-card-text>
                         </v-card>
 
-                        <div v-if="activeDepot" class="cash-ledger-section mt-6">
+                        <v-alert v-if="!activeDepot" type="info" variant="tonal" density="compact" class="mt-4">
+                            No active depot found.
+                        </v-alert>
+                        </template>
+
+                        <template v-if="activeDepotSubsection === 'cash'">
+                        <div v-if="activeDepot">
+                            <v-card
+                                class="cash-balance-card mb-6"
+                                variant="outlined"
+                                width="100%"
+                                max-width="480"
+                            >
+                                <v-card-text class="d-flex align-center justify-space-between ga-4">
+                                    <div>
+                                        <p class="text-overline text-medium-emphasis mb-1">Cash</p>
+                                        <h2 class="text-subtitle-1 font-weight-medium">Current cash balance</h2>
+                                    </div>
+                                    <div class="text-h5 font-weight-medium text-primary text-right">
+                                        {{ formatDepotCashBalance() }}
+                                    </div>
+                                </v-card-text>
+                            </v-card>
+
+                            <div class="cash-ledger-section">
                             <div class="d-flex align-center justify-space-between flex-wrap ga-3 mb-2">
                                 <p class="text-overline text-medium-emphasis mb-0">Cash ledger</p>
                                 <div class="d-flex align-center ga-2">
@@ -17867,11 +18351,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                 />
                             </div>
                             <p v-if="transactions.length === 0 && !transactionsLoading" class="text-medium-emphasis text-body-2 mt-2">No transactions yet.</p>
+                            </div>
                         </div>
 
                         <v-alert v-else type="info" variant="tonal" density="compact" class="mt-4">
                             No active depot found.
                         </v-alert>
+                        </template>
+
                     </section>
 
                     <section v-if="activeSection === 'depots'">
@@ -18839,6 +19326,7 @@ function formatIndexDataUpdateSchedule(settings) {
 }
 
 .mobile-cash-ledger,
+.mobile-depot-year-stocks,
 .mobile-depot-stocks,
 .mobile-watch-list {
     display: none;
@@ -18943,6 +19431,10 @@ function formatIndexDataUpdateSchedule(settings) {
         display: none;
     }
 
+    .desktop-depot-year-stocks-table {
+        display: none;
+    }
+
     .desktop-cash-ledger-table {
         display: none;
     }
@@ -18978,6 +19470,41 @@ function formatIndexDataUpdateSchedule(settings) {
         font-weight: 600;
         line-height: 1.25;
         overflow-wrap: anywhere;
+    }
+
+    .mobile-depot-year-stocks {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .mobile-depot-year-stock-card {
+        background: rgb(var(--v-theme-surface));
+        border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+        border-radius: 8px;
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(0, 1fr);
+        padding: 12px;
+    }
+
+    .mobile-depot-year-stock-name {
+        color: rgb(var(--v-theme-primary));
+        font-size: 0.95rem;
+        font-weight: 600;
+        line-height: 1.25;
+        overflow-wrap: anywhere;
+    }
+
+    .mobile-depot-year-stock-row {
+        align-items: center;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+    }
+
+    .mobile-depot-year-stock-row > span:last-child {
+        text-align: right;
     }
 
     .mobile-depot-stocks {
@@ -20974,6 +21501,11 @@ function formatIndexDataUpdateSchedule(settings) {
     font-size: 0.75rem;
     font-weight: 400;
     gap: 4px;
+}
+
+.stock-subtitle {
+    color: rgb(var(--v-theme-info));
+    font-weight: 500;
 }
 
 .index-price-dialog-code-copy {

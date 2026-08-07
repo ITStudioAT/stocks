@@ -18,6 +18,205 @@ class DepotTransactionTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_actual_year_stocks_include_realized_and_unrealized_performance(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-08-07 12:00:00', 'Europe/Vienna'));
+
+        try {
+            $admin = $this->adminUser();
+            $depot = Depot::factory()->create([
+                'account_balance' => '10000.00',
+                'is_active' => true,
+            ]);
+            $carriedHolding = StockHolding::factory()->create([
+                'symbol' => 'ALPHA',
+                'name' => 'Alpha Carried Stock',
+                'subtitle' => 'Carried position',
+                'currency' => 'EUR',
+                'latest_price' => '140.000000',
+            ]);
+            $tradedHolding = StockHolding::factory()->create([
+                'symbol' => 'BETA',
+                'name' => 'Beta Traded Stock',
+                'currency' => 'EUR',
+                'latest_price' => '210.000000',
+            ]);
+            $closedHolding = StockHolding::factory()->create([
+                'symbol' => 'GAMMA',
+                'name' => 'Gamma Closed Stock',
+                'currency' => 'EUR',
+                'latest_price' => '60.000000',
+            ]);
+            $excludedHolding = StockHolding::factory()->create([
+                'symbol' => 'OLD',
+                'name' => 'Old Closed Stock',
+                'currency' => 'EUR',
+            ]);
+
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $carriedHolding->id,
+                'trading_date' => '2025-12-31',
+                'close' => '119.00000000',
+                'adjusted_close' => '120.00000000',
+                'currency' => 'EUR',
+            ]);
+
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $carriedHolding->id,
+                'type' => 'buy',
+                'pieces' => '10.00000000',
+                'total_amount' => '1000.00',
+                'unit_price' => '100.00000000',
+                'booked_at' => '2025-06-10 00:00:00',
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $carriedHolding->id,
+                'type' => 'sell',
+                'pieces' => '4.00000000',
+                'total_amount' => '600.00',
+                'unit_price' => '150.00000000',
+                'booked_at' => '2026-04-10 00:00:00',
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $tradedHolding->id,
+                'type' => 'buy',
+                'pieces' => '5.00000000',
+                'total_amount' => '1000.00',
+                'unit_price' => '200.00000000',
+                'booked_at' => '2026-02-10 00:00:00',
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $tradedHolding->id,
+                'type' => 'sell',
+                'pieces' => '2.00000000',
+                'total_amount' => '440.00',
+                'unit_price' => '220.00000000',
+                'booked_at' => '2026-05-10 00:00:00',
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $closedHolding->id,
+                'type' => 'buy',
+                'pieces' => '2.00000000',
+                'total_amount' => '100.00',
+                'unit_price' => '50.00000000',
+                'booked_at' => '2026-03-10 00:00:00',
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $closedHolding->id,
+                'type' => 'sell',
+                'pieces' => '2.00000000',
+                'total_amount' => '90.00',
+                'unit_price' => '45.00000000',
+                'booked_at' => '2026-06-10 00:00:00',
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $excludedHolding->id,
+                'type' => 'buy',
+                'pieces' => '1.00000000',
+                'total_amount' => '100.00',
+                'unit_price' => '100.00000000',
+                'booked_at' => '2025-01-10 00:00:00',
+            ]);
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => $excludedHolding->id,
+                'type' => 'sell',
+                'pieces' => '1.00000000',
+                'total_amount' => '100.00',
+                'unit_price' => '100.00000000',
+                'booked_at' => '2025-02-10 00:00:00',
+            ]);
+
+            $response = $this->actingAs($admin)
+                ->getJson('/admin/depot-stocks/actual-year')
+                ->assertOk()
+                ->assertJsonPath('period', 'actual-year')
+                ->assertJsonPath('label', 'Actual Year')
+                ->assertJsonPath('year', 2026)
+                ->assertJsonCount(3, 'stocks');
+            $stocks = collect($response->json('stocks'))->keyBy('symbol');
+
+            $this->assertSame('Alpha Carried Stock', $stocks['ALPHA']['name']);
+            $this->assertSame('Carried position', $stocks['ALPHA']['subtitle']);
+            $this->assertSame('10.00000000', $stocks['ALPHA']['opening_pieces']);
+            $this->assertSame('6.00000000', $stocks['ALPHA']['position_pieces']);
+            $this->assertSame('120.00000000', $stocks['ALPHA']['average_buy_or_year_start_price']);
+            $this->assertSame('144.00000000', $stocks['ALPHA']['average_sell_or_current_price']);
+            $this->assertSame('20.00', $stocks['ALPHA']['change_percent']);
+            $this->assertSame('240.00', $stocks['ALPHA']['change_amount']);
+            $this->assertSame('600.00', $stocks['ALPHA']['traded_volume']);
+            $this->assertSame('4.00000000', $stocks['ALPHA']['traded_volume_pieces']);
+
+            $this->assertSame('200.00000000', $stocks['BETA']['average_buy_or_year_start_price']);
+            $this->assertSame('214.00000000', $stocks['BETA']['average_sell_or_current_price']);
+            $this->assertSame('7.00', $stocks['BETA']['change_percent']);
+            $this->assertSame('70.00', $stocks['BETA']['change_amount']);
+            $this->assertSame('1440.00', $stocks['BETA']['traded_volume']);
+            $this->assertSame('7.00000000', $stocks['BETA']['traded_volume_pieces']);
+
+            $this->assertSame('0.00000000', $stocks['GAMMA']['position_pieces']);
+            $this->assertSame('45.00000000', $stocks['GAMMA']['average_sell_or_current_price']);
+            $this->assertSame('-10.00', $stocks['GAMMA']['change_percent']);
+            $this->assertSame('-10.00', $stocks['GAMMA']['change_amount']);
+            $this->assertSame('190.00', $stocks['GAMMA']['traded_volume']);
+            $this->assertSame('4.00000000', $stocks['GAMMA']['traded_volume_pieces']);
+            $this->assertArrayNotHasKey('OLD', $stocks->all());
+
+            $lastYearResponse = $this->actingAs($admin)
+                ->getJson('/admin/depot-stocks/last-year')
+                ->assertOk()
+                ->assertJsonPath('period', 'last-year')
+                ->assertJsonPath('label', 'Last Year')
+                ->assertJsonPath('year', 2025)
+                ->assertJsonCount(2, 'stocks');
+            $lastYearStocks = collect($lastYearResponse->json('stocks'))->keyBy('symbol');
+
+            $this->assertSame('100.00000000', $lastYearStocks['ALPHA']['average_buy_or_year_start_price']);
+            $this->assertSame('120.00000000', $lastYearStocks['ALPHA']['average_sell_or_current_price']);
+            $this->assertSame('20.00', $lastYearStocks['ALPHA']['change_percent']);
+            $this->assertSame('200.00', $lastYearStocks['ALPHA']['change_amount']);
+            $this->assertSame('1000.00', $lastYearStocks['ALPHA']['traded_volume']);
+            $this->assertSame('10.00000000', $lastYearStocks['ALPHA']['traded_volume_pieces']);
+            $this->assertSame('200.00', $lastYearStocks['OLD']['traded_volume']);
+            $this->assertSame('2.00000000', $lastYearStocks['OLD']['traded_volume_pieces']);
+            $this->assertArrayNotHasKey('BETA', $lastYearStocks->all());
+
+            $fourEverResponse = $this->actingAs($admin)
+                ->getJson('/admin/depot-stocks/4-ever')
+                ->assertOk()
+                ->assertJsonPath('period', '4-ever')
+                ->assertJsonPath('label', '4-Ever')
+                ->assertJsonPath('year', null)
+                ->assertJsonCount(4, 'stocks');
+            $fourEverStocks = collect($fourEverResponse->json('stocks'))->keyBy('symbol');
+
+            $this->assertSame('100.00000000', $fourEverStocks['ALPHA']['average_buy_or_year_start_price']);
+            $this->assertSame('144.00000000', $fourEverStocks['ALPHA']['average_sell_or_current_price']);
+            $this->assertSame('44.00', $fourEverStocks['ALPHA']['change_percent']);
+            $this->assertSame('440.00', $fourEverStocks['ALPHA']['change_amount']);
+            $this->assertSame('1600.00', $fourEverStocks['ALPHA']['traded_volume']);
+            $this->assertSame('14.00000000', $fourEverStocks['ALPHA']['traded_volume_pieces']);
+            $this->assertSame('200.00', $fourEverStocks['OLD']['traded_volume']);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_actual_year_stocks_are_empty_without_an_active_depot(): void
+    {
+        $this->actingAs($this->adminUser())
+            ->getJson('/admin/depot-stocks/actual-year')
+            ->assertOk()
+            ->assertJsonPath('stocks', []);
+    }
+
     public function test_admin_can_book_cash_transactions_on_the_active_depot(): void
     {
         $admin = $this->adminUser();

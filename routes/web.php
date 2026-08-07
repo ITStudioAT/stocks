@@ -7,6 +7,7 @@ use App\Http\Controllers\AdminDataController;
 use App\Http\Controllers\AdminDataRangeController;
 use App\Http\Controllers\AdminDepotController;
 use App\Http\Controllers\AdminDepotHoldingController;
+use App\Http\Controllers\AdminDepotStockPeriodController;
 use App\Http\Controllers\AdminDepotTransactionController;
 use App\Http\Controllers\AdminIndexWatchItemController;
 use App\Http\Controllers\AdminInfoController;
@@ -169,6 +170,9 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::patch('/admin/depots/{depot}', [AdminDepotController::class, 'update'])->name('admin.depots.update');
     Route::patch('/admin/depots/{depot}/activate', [AdminDepotController::class, 'activate'])->name('admin.depots.activate');
     Route::get('/admin/depot-transactions', [AdminDepotTransactionController::class, 'index'])->name('admin.depot-transactions.index');
+    Route::get('/admin/depot-stocks/{period}', [AdminDepotStockPeriodController::class, 'index'])
+        ->whereIn('period', ['actual-year', 'last-year', '4-ever'])
+        ->name('admin.depot-stocks.period.index');
     Route::patch('/admin/depot-transactions/{depotTransaction}/date', [AdminDepotTransactionController::class, 'updateDate'])->name('admin.depot-transactions.date.update');
     Route::post('/admin/depot-transactions/cash', [AdminDepotTransactionController::class, 'storeCash'])->name('admin.depot-transactions.cash.store');
     Route::post('/admin/depot-transactions/stocks', [AdminDepotTransactionController::class, 'storeStock'])->name('admin.depot-transactions.stocks.store');

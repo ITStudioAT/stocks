@@ -13,6 +13,10 @@ export const useDepotStore = defineStore('depots', {
         depotHoldings: [],
         depotValuations: {},
         depotPerformanceSeries: [],
+        depotStockPeriodStocks: [],
+        depotStockPeriod: null,
+        depotStockPeriodLabel: '',
+        depotStockPeriodYear: null,
         transactions: [],
         exchangeTradingTimes: [],
         appVersion: null,
@@ -75,6 +79,7 @@ export const useDepotStore = defineStore('depots', {
         loading: false,
         holdingsLoading: false,
         transactionsLoading: false,
+        depotStockPeriodLoading: false,
         exchangeTradingTimesLoading: false,
         queueStatusLoading: false,
         testOptionsLoading: false,
@@ -91,6 +96,7 @@ export const useDepotStore = defineStore('depots', {
         error: '',
         holdingsError: '',
         transactionsError: '',
+        depotStockPeriodError: '',
         exchangeTradingTimesError: '',
         queueStatusError: '',
         testOptionsError: '',
@@ -1196,6 +1202,25 @@ export const useDepotStore = defineStore('depots', {
                 throw error;
             } finally {
                 this.transactionsLoading = false;
+            }
+        },
+        async loadDepotStockPeriod(period) {
+            this.depotStockPeriodLoading = true;
+            this.depotStockPeriodError = '';
+
+            try {
+                const data = await request(`/admin/depot-stocks/${encodeURIComponent(period)}`);
+                this.depotStockPeriodStocks = data.stocks ?? [];
+                this.depotStockPeriod = data.period ?? period;
+                this.depotStockPeriodLabel = data.label ?? '';
+                this.depotStockPeriodYear = data.year ?? null;
+
+                return data;
+            } catch (error) {
+                this.depotStockPeriodError = error.message;
+                throw error;
+            } finally {
+                this.depotStockPeriodLoading = false;
             }
         },
         async bookCashTransaction(payload) {

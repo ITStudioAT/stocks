@@ -4838,6 +4838,11 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Long term depot');
         expect(wrapper.text()).toContain('AAPL');
         expect(wrapper.text()).toContain('Apple');
+        const stockSubtitles = wrapper.findAll('.stock-subtitle');
+        expect(stockSubtitles.length).toBeGreaterThan(0);
+        expect(stockSubtitles.every((subtitle) => subtitle.classes().includes('text-info'))).toBe(true);
+        expect(stockSubtitles.every((subtitle) => !subtitle.classes().includes('text-primary'))).toBe(true);
+        expect(stockSubtitles.every((subtitle) => subtitle.classes().includes('font-weight-medium'))).toBe(true);
         expect(wrapper.text()).toContain('US0378331005');
         expect(wrapper.text()).toContain('865985');
         expect(wrapper.text()).toContain('US0378331005 · WKN: 865985');
@@ -4898,6 +4903,15 @@ describe('App', () => {
         await holdingRows[0].trigger('click');
         await flushPromises();
 
+        expect(wrapper.vm.activeItemRefreshIntervalMilliseconds).toBe(60_000);
+        expect(wrapper.vm.activeItemRefreshTimer).not.toBeNull();
+        const stockRefreshRequestCount = fetchMock.mock.calls
+            .filter(([path]) => path.startsWith('/admin/watchlist/holdings?page=1')).length;
+        await wrapper.vm.refreshActiveItemPage();
+        await flushPromises();
+        expect(fetchMock.mock.calls
+            .filter(([path]) => path.startsWith('/admin/watchlist/holdings?page=1'))).toHaveLength(stockRefreshRequestCount + 1);
+
         expect(wrapper.text()).toContain('305.55');
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/1/intraday-candles', expect.anything());
         const intradayTable = wrapper.find('.holding-intraday-table');
@@ -4913,6 +4927,7 @@ describe('App', () => {
         await wrapper.find('.stock-holding-row').trigger('click');
         await flushPromises();
 
+        expect(wrapper.vm.activeItemRefreshTimer).toBeNull();
         expect(wrapper.text()).not.toContain('305.55');
 
         const closedMarketHoldingRow = wrapper.findAll('.stock-holding-row')[1];
@@ -5054,8 +5069,7 @@ describe('App', () => {
         const stocksDeleteButton = stocksDashboardButtons.find((button) => button.text() === 'Delete stock');
         expect(stockEodhdSyncButton.attributes('disabled')).toBeUndefined();
         expect(stocksAddButton.exists()).toBe(true);
-        expect(stocksEditButton.exists()).toBe(true);
-        expect(stocksEditButton.attributes('disabled')).toBeDefined();
+        expect(stocksEditButton).toBeUndefined();
         expect(stocksDeleteButton.exists()).toBe(true);
         expect(stocksDeleteButton.attributes('disabled')).toBeDefined();
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings?page=1&all=1', expect.any(Object));
@@ -5121,7 +5135,10 @@ describe('App', () => {
         expect(buyStockRow.find('.watch-list-live-badge').exists()).toBe(false);
         expect(usStockRow.get('[aria-label="EXXX live update activity status"]').text()).toBe('Active');
         expect(stocksTable.findAll('thead th').map((heading) => heading.text())).toContain('Actions');
-        expect(stocksTable.find('[aria-label="Delete stock"]').exists()).toBe(true);
+        expect(appleStockRow.find('[aria-label="Edit stock"]').exists()).toBe(true);
+        expect(wrapper.find('.mobile-stock-actions [aria-label="Edit stock"]').exists()).toBe(true);
+        expect(stocksTable.find('[aria-label="Delete stock"]').exists()).toBe(false);
+        expect(wrapper.find('.mobile-stock-actions [aria-label="Delete"]').exists()).toBe(false);
         expect(appleStockRow.attributes('aria-selected')).toBe('false');
         expect(appleStockRow.classes()).not.toContain('stock-holding-row--selected');
 
@@ -5131,13 +5148,12 @@ describe('App', () => {
         expect(appleStockRow.attributes('aria-selected')).toBe('true');
         expect(appleStockRow.classes()).toContain('stock-holding-row--selected');
         expect(stocksDeleteButton.attributes('disabled')).toBeUndefined();
-        expect(stocksEditButton.attributes('disabled')).toBeUndefined();
         expect(fetchMock).toHaveBeenCalledWith(
             '/admin/watchlist/holdings?page=1&include_charts=1&all=1&chart_stock_id=1&chart_range=today',
             expect.any(Object),
         );
 
-        await stocksEditButton.trigger('click');
+        await appleStockRow.get('[aria-label="Edit stock"]').trigger('click');
         await flushPromises();
 
         const editDialog = Array.from(document.body.querySelectorAll('.v-overlay'))
@@ -5274,7 +5290,7 @@ describe('App', () => {
         await wrapper.vm.$nextTick();
         expect(usStockRow.get('[aria-label="EXXX live update schedule status"]').text()).toBe('Scheduled');
         expect(usStockRow.get('[aria-label="EXXX live update activity status"]').text()).toBe('Active');
-        expect(stockRealtimeSchedule.text()).toContain('No job is running; the next refresh starts at the time shown below.');
+        expect(stockRealtimeSchedule.text()).not.toContain('No job is running; the next refresh starts at the time shown below.');
         expect(stockRealtimeSchedule.text()).toContain('Latest 06.08.2026, 18:49');
         expect(stockRealtimeSchedule.text()).toContain('Next 06.08.2026, 18:59');
         expect(stockRealtimeSchedule.text()).toContain('Europe/Vienna');
@@ -5360,7 +5376,7 @@ describe('App', () => {
         expect(eodAndIntradaySchedule.get('.v-btn').classes()).toContain('v-btn--variant-text');
         expect(realtimeSchedule.get('.v-btn').classes()).toContain('v-btn--variant-text');
         expect(automaticUpdatesCard.text()).toContain('EOD + 5-minute intraday run times · 02:00 · 18:30');
-        expect(automaticUpdatesCard.text()).toContain('No job is running; the next update starts at the time shown below.');
+        expect(automaticUpdatesCard.text()).not.toContain('No job is running; the next update starts at the time shown below.');
         expect(automaticUpdatesCard.text()).toContain('Live/realtime prices');
         expect(realtimeSchedule.find('[aria-label="Index live update schedule status"]').exists()).toBe(false);
         expect(realtimeSchedule.find('[aria-label="Index live update activity status"]').exists()).toBe(false);
@@ -5588,6 +5604,8 @@ describe('App', () => {
         await wrapper.find('.index-watch-card').trigger('click');
         await flushPromises();
 
+        expect(wrapper.vm.activeItemRefreshTimer).not.toBeNull();
+
         expect(fetchMock).toHaveBeenCalledWith('/admin/index-watch-items/1/prices/ensure?range=intraday', expect.objectContaining({
             method: 'POST',
         }));
@@ -5711,7 +5729,7 @@ describe('App', () => {
 
         expect(wrapper.vm.isHoldingDialogOpen).toBe(false);
 
-        const deleteStockButton = wrapper.find('[aria-label="Delete stock"]');
+        const deleteStockButton = wrapper.findAll('button').find((button) => button.text() === 'Delete stock');
         await deleteStockButton.trigger('click');
         await flushPromises();
 
@@ -5936,7 +5954,7 @@ describe('App', () => {
         }
     });
 
-    it('disables the delete button for holdings with position pieces', async () => {
+    it('keeps stock deletion only in the page actions and disables it for holdings with position pieces', async () => {
         window.history.pushState({}, '', '/admin/menu/stocks');
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 2, from: 1, to: 2 };
         const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
@@ -5982,10 +6000,19 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
-        const deleteButtons = wrapper.findAll('[aria-label="Delete stock"]');
-        expect(deleteButtons).toHaveLength(2);
-        expect(deleteButtons[0].attributes('disabled')).toBeDefined();
-        expect(deleteButtons[1].attributes('disabled')).toBeUndefined();
+        expect(wrapper.find('[aria-label="Delete stock"]').exists()).toBe(false);
+        expect(wrapper.find('.mobile-stock-actions [aria-label="Delete"]').exists()).toBe(false);
+
+        const deleteStockButton = wrapper.findAll('button').find((button) => button.text() === 'Delete stock');
+        expect(deleteStockButton.attributes('disabled')).toBeDefined();
+
+        await wrapper.findAll('.stock-holding-row')[0].trigger('click');
+        await flushPromises();
+        expect(deleteStockButton.attributes('disabled')).toBeDefined();
+
+        await wrapper.findAll('.stock-holding-row')[1].trigger('click');
+        await flushPromises();
+        expect(deleteStockButton.attributes('disabled')).toBeUndefined();
     });
 
     it('does not load Shanghai exchange trading sessions on the dashboard', async () => {
@@ -6728,6 +6755,17 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/data/indices/4/live-data/date-range') {
+                return Promise.resolve(jsonResponse({
+                    data_type: 'live-data',
+                    range: {
+                        date_from: '2026-08-05',
+                        date_to: '2026-08-05',
+                        row_count: 25,
+                    },
+                }));
+            }
+
             if (path === '/admin/data/indices/live-data/date-range') {
                 return Promise.resolve(jsonResponse({
                     data_type: 'live-data',
@@ -6757,6 +6795,17 @@ describe('App', () => {
                         date_from: '2025-06-05',
                         date_to: '2026-06-17',
                         row_count: 257,
+                    },
+                }));
+            }
+
+            if (path === '/admin/data/stocks/7/live-data/date-range') {
+                return Promise.resolve(jsonResponse({
+                    data_type: 'live-data',
+                    range: {
+                        date_from: '2026-06-17',
+                        date_to: '2026-06-17',
+                        row_count: 12,
                     },
                 }));
             }
@@ -7153,6 +7202,17 @@ describe('App', () => {
         expect(allIndexLiveDataRange.text()).toContain('01.06.2026');
         expect(allIndexLiveDataRange.text()).toContain('05.08.2026');
         expect(allIndexLiveDataRange.text()).toContain('825');
+        const indexButtons = wrapper.get('[aria-label="Data indices"]').findAll('button');
+        expect(indexButtons[0].attributes('aria-pressed')).toBe('false');
+        await indexButtons[0].trigger('click');
+        await flushPromises();
+
+        const selectedIndexLiveDataRange = wrapper.get('[aria-label="Stored data date range"]');
+        expect(selectedIndexLiveDataRange.text()).toContain('GDAXI · Live-Daten');
+        expect(selectedIndexLiveDataRange.get('[aria-label="Selected data index identity"]').text()).toContain('DAX Index');
+
+        await indexButtons[0].trigger('click');
+        await flushPromises();
 
         const indexIntradayDataTab = indexDataTypeTabs.findAll('.v-tab')
             .find((tab) => tab.text() === 'Intraday-Daten');
@@ -7165,7 +7225,6 @@ describe('App', () => {
         expect(allIndexIntradayDataRange.text()).toContain('01.07.2025');
         expect(allIndexIntradayDataRange.text().replace(/\s/g, '')).toContain('19045');
 
-        const indexButtons = wrapper.get('[aria-label="Data indices"]').findAll('button');
         expect(indexButtons[0].attributes('aria-pressed')).toBe('false');
         await indexButtons[0].trigger('click');
         await flushPromises();
@@ -7220,6 +7279,21 @@ describe('App', () => {
         expect(stockDataRange.text()).toContain('17.06.2026');
         expect(stockDataRange.text()).toContain('257');
         expect(dataStocks.find('.test-selected-stock-card').exists()).toBe(false);
+
+        const stockLiveDataTab = stockDataTypeTabs.findAll('.v-tab')
+            .find((tab) => tab.text() === 'Live-Daten');
+        await stockLiveDataTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/data/stocks/live-data');
+        const stockLiveDataRange = wrapper.get('[aria-label="Stored data date range"]');
+        expect(stockLiveDataRange.text()).toContain('AMES · Live-Daten');
+        const selectedDataStockIdentity = stockLiveDataRange.get('[aria-label="Selected data stock identity"]');
+        expect(selectedDataStockIdentity.text()).toContain('Amundi IBEX 35');
+        expect(selectedDataStockIdentity.get('.stock-subtitle').text()).toBe('Accumulating');
+
+        await stockEodDataTab.trigger('click');
+        await flushPromises();
         await stockButtons[0].trigger('click');
         await flushPromises();
         expect(stockButtons[0].attributes('aria-pressed')).toBe('false');
@@ -8109,7 +8183,7 @@ describe('App', () => {
     });
 
     it('books depot cash transaction from the depot page', async () => {
-        window.history.pushState({}, '', '/admin/menu/depot');
+        window.history.pushState({}, '', '/admin/menu/depot/cash');
         const depot = {
             id: 1,
             name: 'Main depot',
@@ -8205,6 +8279,82 @@ describe('App', () => {
                     : { transactions: [] }));
             }
 
+            if (path === '/admin/depot-stocks/actual-year') {
+                return Promise.resolve(jsonResponse({
+                    period: 'actual-year',
+                    label: 'Actual Year',
+                    year: 2026,
+                    stocks: [
+                        {
+                            id: 7,
+                            symbol: 'AMES',
+                            name: 'Amundi IBEX 35',
+                            subtitle: 'Accumulating',
+                            isin: 'LU1681043599',
+                            currency: 'EUR',
+                            opening_pieces: '0.00000000',
+                            bought_pieces: '10.00000000',
+                            sold_pieces: '4.00000000',
+                            position_pieces: '6.00000000',
+                            traded_volume: '140.00',
+                            traded_volume_pieces: '14.00000000',
+                            average_buy_or_year_start_price: '10.00000000',
+                            average_sell_or_current_price: '11.50000000',
+                            change_percent: '15.00',
+                            change_amount: '15.00',
+                        },
+                    ],
+                }));
+            }
+
+            if (path === '/admin/depot-stocks/last-year') {
+                return Promise.resolve(jsonResponse({
+                    period: 'last-year',
+                    label: 'Last Year',
+                    year: 2025,
+                    stocks: [
+                        {
+                            id: 8,
+                            symbol: 'AAPL',
+                            name: 'Apple',
+                            subtitle: 'Technology',
+                            currency: 'EUR',
+                            position_pieces: '0.00000000',
+                            traded_volume: '980.00',
+                            traded_volume_pieces: '9.00000000',
+                            average_buy_or_year_start_price: '100.00000000',
+                            average_sell_or_current_price: '105.00000000',
+                            change_percent: '5.00',
+                            change_amount: '25.00',
+                        },
+                    ],
+                }));
+            }
+
+            if (path === '/admin/depot-stocks/4-ever') {
+                return Promise.resolve(jsonResponse({
+                    period: '4-ever',
+                    label: '4-Ever',
+                    year: null,
+                    stocks: [
+                        {
+                            id: 7,
+                            symbol: 'AMES',
+                            name: 'Amundi IBEX 35',
+                            subtitle: 'Accumulating',
+                            currency: 'EUR',
+                            position_pieces: '6.00000000',
+                            traded_volume: '1540.00',
+                            traded_volume_pieces: '18.00000000',
+                            average_buy_or_year_start_price: '10.00000000',
+                            average_sell_or_current_price: '12.00000000',
+                            change_percent: '20.00',
+                            change_amount: '20.00',
+                        },
+                    ],
+                }));
+            }
+
             if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot,
@@ -8261,6 +8411,14 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
+        expect(window.location.pathname).toBe('/admin/menu/depot/cash');
+        expect(wrapper.text()).toContain('Overview');
+        expect(wrapper.text()).toContain('Cash');
+        expect(wrapper.text()).toContain('All Stocks');
+        expect(wrapper.find('.depot-balance-card').exists()).toBe(false);
+        expect(wrapper.vm.activeItemRefreshIntervalMilliseconds).toBe(60_000);
+        expect(wrapper.vm.activeItemRefreshTimer).not.toBeNull();
+
         const addCashButton = wrapper.findAll('button').find((button) => button.text().includes('Add cash'));
         await addCashButton.trigger('click');
         await flushPromises();
@@ -8287,7 +8445,84 @@ describe('App', () => {
             }),
         }));
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depot-transactions')).toHaveLength(2);
-        expect(wrapper.text()).toContain('1,250.00 EUR');
+        expect(wrapper.text()).toContain('1,250.00');
+
+        const activeDepotRefreshRequestCount = fetchMock.mock.calls
+            .filter(([path]) => path === '/admin/depots/active').length;
+        await wrapper.vm.refreshActiveItemPage();
+        await flushPromises();
+
+        expect(fetchMock.mock.calls
+            .filter(([path]) => path === '/admin/depots/active')).toHaveLength(activeDepotRefreshRequestCount + 1);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depot-transactions')).toHaveLength(3);
+
+        const allStocksTab = wrapper.findAll('[role="tab"]').find((tab) => tab.text().includes('All Stocks'));
+        await allStocksTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/depot/all-stocks/actual-year');
+        expect(wrapper.text()).toContain('Actual Year');
+        expect(wrapper.text()).toContain('Last Year');
+        expect(wrapper.text()).toContain('4-Ever');
+        const actualYearStocks = wrapper.get('[aria-label="Depot stock period performance"]');
+        expect(actualYearStocks.text()).toContain('Traded stocks 2026');
+        expect(actualYearStocks.text()).toContain('AMES · Amundi IBEX 35');
+        expect(actualYearStocks.text()).toContain('Accumulating');
+        expect(actualYearStocks.text()).toContain('6.0000 in stock');
+        expect(actualYearStocks.text()).toContain('Ø Buy / 1.1.');
+        expect(actualYearStocks.text()).toContain('Ø Sell / in stock');
+        expect(actualYearStocks.text()).toContain('Traded volume');
+        expect(actualYearStocks.text()).toContain('140.00 EUR');
+        expect(actualYearStocks.text()).toContain('14.000 pieces');
+        expect(actualYearStocks.text()).toContain('+15.00%');
+        expect(actualYearStocks.text()).toContain('+15.00');
+        expect(fetchMock).toHaveBeenCalledWith('/admin/depot-stocks/actual-year', expect.anything());
+        expect(wrapper.find('.depot-balance-card').exists()).toBe(false);
+        expect(wrapper.text()).not.toContain('More to come.');
+        expect(wrapper.findAll('button').some((button) => button.text().includes('Add cash'))).toBe(false);
+        expect(wrapper.findAll('button').some((button) => button.text().includes('Buy stock'))).toBe(false);
+        expect(wrapper.findAll('button').some((button) => button.text().includes('Sell stock'))).toBe(false);
+        expect(wrapper.vm.activeItemRefreshTimer).toBeNull();
+
+        const lastYearTab = wrapper.findAll('[role="tab"]').find((tab) => tab.text().includes('Last Year'));
+        await lastYearTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/depot/all-stocks/last-year');
+        const lastYearStocks = wrapper.get('[aria-label="Depot stock period performance"]');
+        expect(lastYearStocks.text()).toContain('Traded stocks 2025');
+        expect(lastYearStocks.text()).toContain('AAPL · Apple');
+        expect(lastYearStocks.text()).toContain('980.00 EUR');
+        expect(lastYearStocks.text()).toContain('9.0000 pieces');
+        expect(fetchMock).toHaveBeenCalledWith('/admin/depot-stocks/last-year', expect.anything());
+
+        const fourEverTab = wrapper.findAll('[role="tab"]').find((tab) => tab.text().includes('4-Ever'));
+        await fourEverTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/depot/all-stocks/4-ever');
+        const fourEverStocks = wrapper.get('[aria-label="Depot stock period performance"]');
+        expect(fourEverStocks.text()).toContain('All traded stocks');
+        expect(fourEverStocks.text()).toContain('Ø Buy');
+        expect(fourEverStocks.text()).toContain('1,540.00 EUR');
+        expect(fourEverStocks.text()).toContain('18.000 pieces');
+        expect(fetchMock).toHaveBeenCalledWith('/admin/depot-stocks/4-ever', expect.anything());
+
+        wrapper.unmount();
+        mountedWrappers.delete(wrapper);
+        document.body.innerHTML = '';
+
+        const refreshedWrapper = mountApp();
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/depot/all-stocks/4-ever');
+        expect(refreshedWrapper.text()).toContain('Actual Year');
+        expect(refreshedWrapper.text()).toContain('Last Year');
+        expect(refreshedWrapper.text()).toContain('4-Ever');
+        expect(refreshedWrapper.get('[aria-label="Depot stock period performance"]').text()).toContain('All traded stocks');
+        expect(refreshedWrapper.find('.depot-balance-card').exists()).toBe(false);
+        expect(refreshedWrapper.text()).not.toContain('More to come.');
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depot-transactions')).toHaveLength(3);
     });
 
     it('books stock transaction from the Stocks page', async () => {
@@ -8431,7 +8666,7 @@ describe('App', () => {
         }));
     });
 
-    it('shows the cash ledger table on the depot page', async () => {
+    it('moves the cash ledger from Depot Overview to Cash', async () => {
         window.history.pushState({}, '', '/admin/menu/depot');
         const depot = {
             id: 1,
@@ -8474,6 +8709,7 @@ describe('App', () => {
                 id: 1,
                 symbol: 'AAPL',
                 name: 'Apple Inc.',
+                subtitle: 'Technology holding',
                 isin: 'US0378331005',
                 currency: 'USD',
                 latest_price: '191.500000',
@@ -8790,9 +9026,16 @@ describe('App', () => {
         expect(wrapper.text()).toContain('↑');
         expect(wrapper.text()).toContain('+9.43%');
         expect(wrapper.text()).toContain('+33.00');
+        const desktopDepotStockSubtitle = wrapper.get('.desktop-depot-stocks-table .stock-subtitle');
+        expect(desktopDepotStockSubtitle.text()).toBe('Technology holding');
+        expect(desktopDepotStockSubtitle.classes()).toContain('text-info');
+        expect(desktopDepotStockSubtitle.classes()).toContain('font-weight-medium');
         const mobileDepotStockCards = wrapper.findAll('.mobile-depot-stock-card');
         expect(mobileDepotStockCards).toHaveLength(1);
         expect(mobileDepotStockCards[0].find('.mobile-depot-stock-name').text()).toContain('Apple Inc.');
+        expect(mobileDepotStockCards[0].get('.stock-subtitle').text()).toBe('Technology holding');
+        expect(mobileDepotStockCards[0].get('.stock-subtitle').classes()).toContain('text-info');
+        expect(mobileDepotStockCards[0].get('.stock-subtitle').classes()).toContain('font-weight-medium');
         expect(mobileDepotStockCards[0].find('.mobile-depot-stock-isin').text()).toBe('US0378331005');
         expect(mobileDepotStockCards[0].text()).toContain('2');
         expect(mobileDepotStockCards[0].text()).toContain('191.50 USD');
@@ -8824,6 +9067,19 @@ describe('App', () => {
         expect(compactDepotHeaders).toContain('Change');
         expect(compactDepotHeaders).toContain('+/- EUR');
         expect(compactDepotHeaders).toContain('Actions');
+        expect(wrapper.text()).toContain('Sum');
+        expect(wrapper.find('.cash-ledger-section').exists()).toBe(false);
+
+        const cashTab = wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Cash');
+        await cashTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/depot/cash');
+        expect(wrapper.find('.depot-balance-card').exists()).toBe(false);
+        expect(wrapper.find('.depot-performance-card').exists()).toBe(false);
+        expect(wrapper.find('.cash-balance-card').text()).toContain('Current cash balance');
+        expect(wrapper.find('.cash-balance-card').text()).toContain('650.00 EUR');
+        expect(wrapper.find('.cash-ledger-section').exists()).toBe(true);
         const compactCashLedgerHeaders = wrapper
             .find('.desktop-cash-ledger-table')
             .findAll('th')
@@ -8835,7 +9091,6 @@ describe('App', () => {
         expect(compactCashLedgerHeaders).not.toContain('Amount');
         expect(compactCashLedgerHeaders).toContain('Cash effect');
         expect(compactCashLedgerHeaders).toContain('Balance');
-        expect(wrapper.text()).toContain('Sum');
         expect(wrapper.text()).toContain('Cash ledger');
         expect(wrapper.text()).toContain('Buy');
         expect(wrapper.text()).toContain('Apple Inc.');
@@ -8888,15 +9143,25 @@ describe('App', () => {
         }));
         expect(wrapper.find('.mobile-cash-ledger-card').text()).toContain('03.06.2026');
 
-        await flatexPriceHeaderButton.trigger('click');
+        const overviewTab = wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Overview');
+        await overviewTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/depot/overview');
+        expect(wrapper.find('.cash-ledger-section').exists()).toBe(false);
+        expect(wrapper.find('.depot-balance-card').exists()).toBe(true);
+
+        const restoredLatestPriceHeaderButton = wrapper.findAll('button').find((button) => button.text() === 'Latest price');
+        const restoredFlatexPriceHeaderButton = wrapper.findAll('button').find((button) => button.text() === 'Flatex price');
+        await restoredFlatexPriceHeaderButton.trigger('click');
         await flushPromises();
 
         expect(fetchMock).toHaveBeenCalledWith('/admin/ui-preferences', expect.objectContaining({
             method: 'PATCH',
             body: JSON.stringify({ depot_price_source: 'flatex' }),
         }));
-        expect(latestPriceHeaderButton.classes()).not.toContain('depot-price-source-button--active');
-        expect(flatexPriceHeaderButton.classes()).toContain('depot-price-source-button--active');
+        expect(restoredLatestPriceHeaderButton.classes()).not.toContain('depot-price-source-button--active');
+        expect(restoredFlatexPriceHeaderButton.classes()).toContain('depot-price-source-button--active');
         expect(wrapper.text()).toContain('360.00 USD');
         expect(wrapper.text()).toContain('1,010.00 EUR');
         expect(wrapper.text()).toContain('+1.00% · +10.00 EUR');
@@ -8945,8 +9210,8 @@ describe('App', () => {
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings/1/flatex-price')).toHaveLength(1);
     });
 
-    it('shows the cash ledger below the performance chart and paginates it by twenty rows', async () => {
-        window.history.pushState({}, '', '/admin/menu/depot');
+    it('shows the cash ledger on the Cash page and paginates it by twenty rows', async () => {
+        window.history.pushState({}, '', '/admin/menu/depot/cash');
         const depot = {
             id: 1,
             name: 'Main depot',
@@ -9052,14 +9317,13 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
-        const performanceCard = wrapper.find('.depot-performance-card');
         const cashLedgerSection = wrapper.find('.cash-ledger-section');
         const cashLedgerRows = wrapper.findAll('.desktop-cash-ledger-table tbody tr');
         const firstPageLedgerText = wrapper.find('.desktop-cash-ledger-table tbody').text();
 
-        expect(performanceCard.exists()).toBe(true);
+        expect(window.location.pathname).toBe('/admin/menu/depot/cash');
+        expect(wrapper.find('.depot-performance-card').exists()).toBe(false);
         expect(cashLedgerSection.exists()).toBe(true);
-        expect(performanceCard.element.compareDocumentPosition(cashLedgerSection.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
         expect(cashLedgerRows).toHaveLength(20);
         expect(firstPageLedgerText).toContain('Ledger note 20');
         expect(firstPageLedgerText).not.toContain('Ledger note 21');
