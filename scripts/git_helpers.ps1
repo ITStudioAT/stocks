@@ -423,8 +423,7 @@ function gitpush {
         Write-Host ''
         Write-Host 'READY.' -ForegroundColor Green
         Write-Host 'Windows PCs may pull main and run: composer deploy' -ForegroundColor Green
-        Write-Host 'Cloudways terminal: run composer pdeploy' -ForegroundColor Green
-        Write-Host 'Cloudways menu: run composer deploy:prepare, Pull main, then run composer deploy' -ForegroundColor Green
+        Write-Host 'Cloudways terminal (including Pull-managed applications): run composer pdeploy' -ForegroundColor Green
 
         if (-not $WaitForCI) {
             Write-Host 'GitHub is checking the release in the background.' -ForegroundColor DarkGray

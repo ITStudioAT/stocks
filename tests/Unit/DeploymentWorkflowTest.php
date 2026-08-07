@@ -231,20 +231,47 @@ class DeploymentWorkflowTest extends TestCase
         );
     }
 
-    public function test_cloudways_pull_deploys_without_git_metadata(): void
+    public function test_cloudways_terminal_pull_bootstraps_git_when_metadata_is_missing(): void
     {
-        $deploymentDirectory = $this->createCloudwaysShellFixture();
-        copy($this->projectPath('scripts/pdeploy_cloudways.sh'), "{$deploymentDirectory}/scripts/pdeploy_cloudways.sh");
+        $deploymentDirectory = $this->createCloudwaysBootstrapPullShellFixture();
 
         $deployed = $this->runCloudwaysPullShellFixture($deploymentDirectory);
 
         $this->assertTrue($deployed->isSuccessful(), $deployed->getErrorOutput());
+        $this->assertDirectoryExists("{$deploymentDirectory}/.git");
+        $this->assertFileExists("{$deploymentDirectory}/storage/framework/git-cloned");
+        $this->assertFileExists("{$deploymentDirectory}/storage/framework/git-reset");
         $this->assertDirectoryExists("{$deploymentDirectory}/public/build");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
         $this->assertStringContainsString(
-            'Cloudways Pull deployment detected',
+            'Cloudways Git bootstrap, pull, and deployment completed successfully.',
             $deployed->getOutput(),
+        );
+    }
+
+    public function test_cloudways_git_bootstrap_failure_keeps_the_application_online(): void
+    {
+        $deploymentDirectory = $this->createCloudwaysBootstrapPullShellFixture();
+        file_put_contents("{$deploymentDirectory}/storage/framework/fail-git-clone", '1');
+
+        $failed = $this->runCloudwaysPullShellFixture($deploymentDirectory);
+
+        $this->assertFalse($failed->isSuccessful());
+        $this->assertDirectoryDoesNotExist("{$deploymentDirectory}/.git");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
+        $this->assertSame(
+            [],
+            glob("{$deploymentDirectory}/storage/framework/cloudways-pdeploy-bootstrap.*"),
+        );
+        $this->assertStringContainsString(
+            'Give this Cloudways SSH user read access to the private GitHub repository',
+            $failed->getErrorOutput(),
+        );
+        $this->assertStringContainsString(
+            'A read-only GitHub deploy key is sufficient.',
+            $failed->getErrorOutput(),
         );
     }
 
@@ -325,7 +352,7 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertStringContainsString('Join-Path `$repositoryRoot \'scripts/gitpush.ps1\'', $installer);
         $this->assertStringNotContainsString('C:\\laravel\\schooltool', $installer);
         $this->assertStringContainsString(
-            'Cloudways terminal: run composer pdeploy',
+            'Cloudways terminal (including Pull-managed applications): run composer pdeploy',
             file_get_contents($this->projectPath('scripts/git_helpers.ps1')),
         );
     }
@@ -803,6 +830,46 @@ case "${1:-}" in
         fi
 
         touch storage/framework/git-merged
+        ;;
+    *)
+        exit 1
+        ;;
+esac
+BASH);
+
+        return $directory;
+    }
+
+    private function createCloudwaysBootstrapPullShellFixture(): string
+    {
+        $directory = $this->createCloudwaysShellFixture();
+        copy($this->projectPath('scripts/pdeploy_cloudways.sh'), "{$directory}/scripts/pdeploy_cloudways.sh");
+
+        $this->writeExecutable("{$directory}/bin/git", <<<'BASH'
+#!/usr/bin/env bash
+set -e
+
+case "${1:-}" in
+    rev-parse)
+        if [ -d .git ]; then
+            echo true
+            exit 0
+        fi
+
+        exit 1
+        ;;
+    clone)
+        bootstrap_directory="${@: -1}"
+        mkdir -p "$bootstrap_directory/.git"
+
+        if [ -f storage/framework/fail-git-clone ]; then
+            exit 1
+        fi
+
+        touch storage/framework/git-cloned
+        ;;
+    --git-dir=*)
+        touch storage/framework/git-reset
         ;;
     *)
         exit 1
