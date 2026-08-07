@@ -6257,6 +6257,10 @@ describe('App', () => {
         localStorage.removeItem('data_intraday_refresh_info_dismissed');
         let mockedIndexPriceRefreshSettings = indexPriceRefreshSettings();
         let mockedIndexDataUpdateSettings = indexDataUpdateSettings();
+        let resolveStockTradingTimeHealthCheck;
+        const stockTradingTimeHealthCheckRequest = new Promise((resolve) => {
+            resolveStockTradingTimeHealthCheck = resolve;
+        });
         const fetchMock = vi.fn((path, options = {}) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -6935,6 +6939,52 @@ describe('App', () => {
                 ]));
             }
 
+            if (path === '/admin/data/health/stock-trading-times' && !options?.method) {
+                return Promise.resolve(jsonResponse({
+                    health_check: {
+                        status: 'never',
+                        last_executed_at: null,
+                        timezone: 'Europe/Vienna',
+                        summary: {
+                            total_stocks_count: 0,
+                            healthy_stocks_count: 0,
+                            missing_stocks_count: 0,
+                            broken_stocks_count: 0,
+                            issue_stocks_count: 0,
+                        },
+                        issues: [],
+                    },
+                }));
+            }
+
+            if (path === '/admin/data/health/stock-trading-times' && options?.method === 'POST') {
+                return stockTradingTimeHealthCheckRequest;
+            }
+
+            if (path === '/admin/data/health/stock-trading-times/repair' && options?.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    health_check: {
+                        status: 'healthy',
+                        last_executed_at: '2026-08-07T12:35:00+02:00',
+                        timezone: 'Europe/Vienna',
+                        summary: {
+                            total_stocks_count: 2,
+                            healthy_stocks_count: 2,
+                            missing_stocks_count: 0,
+                            broken_stocks_count: 0,
+                            issue_stocks_count: 0,
+                        },
+                        issues: [],
+                        repair: {
+                            attempted_stocks_count: 1,
+                            repaired_stocks_count: 1,
+                            failed_stocks_count: 0,
+                            failures: [],
+                        },
+                    },
+                }));
+            }
+
             return Promise.reject(new Error(`Unexpected request: ${path}`));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -6998,7 +7048,7 @@ describe('App', () => {
         await flushPromises();
 
         const dataTabs = wrapper.findAll('.v-tab').map((tab) => tab.text());
-        expect(dataTabs).toEqual(['Indizes', 'Stocks', 'Live-Daten', 'Intraday-Daten', 'EOD-Daten']);
+        expect(dataTabs).toEqual(['Indizes', 'Stocks', 'Health', 'Live-Daten', 'Intraday-Daten', 'EOD-Daten']);
         expect(window.location.pathname).toBe('/admin/menu/data/indices/live-data');
         const indexDataTypeTabs = wrapper.get('[aria-label="Data indices data types"]');
         expect(indexDataTypeTabs.text()).toContain('Live-Daten');
@@ -7070,6 +7120,73 @@ describe('App', () => {
         await flushPromises();
         expect(stockButtons[0].attributes('aria-pressed')).toBe('false');
         localStorage.removeItem('data_intraday_refresh_info_dismissed');
+
+        const healthTab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Health');
+        await healthTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/data/health/intraday-data');
+        const healthSection = wrapper.get('[aria-label="Data health"]');
+        const healthCheckCard = healthSection.get('[aria-label="Health check status"]');
+        expect(healthCheckCard.text()).toContain('Trading time of stocks are checked.');
+        expect(healthCheckCard.text()).toContain('Last executed: never · Europe/Vienna');
+        const healthCheckButton = healthCheckCard.findAll('button')
+            .find((button) => button.text().includes('Health-Check'));
+        expect(healthCheckButton.attributes('type')).toBe('button');
+        expect(wrapper.find('[aria-label="Data health data types"]').exists()).toBe(false);
+        expect(wrapper.find('[aria-label="Stored data date range"]').exists()).toBe(false);
+        expect(wrapper.text()).not.toContain('Wähle einen Stock');
+
+        await healthCheckButton.trigger('click');
+
+        expect(healthCheckCard.text()).toContain('Checking stock trading times...');
+        resolveStockTradingTimeHealthCheck(jsonResponse({
+            health_check: {
+                status: 'issues',
+                last_executed_at: '2026-08-07T12:34:00+02:00',
+                timezone: 'Europe/Vienna',
+                summary: {
+                    total_stocks_count: 2,
+                    healthy_stocks_count: 1,
+                    missing_stocks_count: 1,
+                    broken_stocks_count: 0,
+                    issue_stocks_count: 1,
+                },
+                issues: [
+                    {
+                        id: 8,
+                        label: 'ARGT · Global X MSCI Argentina ETF',
+                        status: 'missing',
+                        current_trading_times: null,
+                        exchange_code: 'US',
+                    },
+                ],
+            },
+        }));
+        await flushPromises();
+
+        const healthSummary = healthCheckCard.get('[aria-label="Stock trading time health summary"]');
+        expect(healthSummary.text()).toContain('Summary');
+        expect(healthSummary.text()).toContain('2 stocks checked: 1 healthy, 1 missing, 0 broken.');
+        expect(healthSummary.text()).toContain('ARGT · Global X MSCI Argentina ETF');
+        expect(healthCheckCard.text()).toContain('07.08.2026, 12:34');
+        const repairTradingTimesButton = healthSummary.findAll('button')
+            .find((button) => button.text().includes('Repair with EODHD'));
+        expect(repairTradingTimesButton.exists()).toBe(true);
+
+        await repairTradingTimesButton.trigger('click');
+        await flushPromises();
+
+        expect(healthSummary.text()).toContain('2 stocks checked: 2 healthy, 0 missing, 0 broken.');
+        expect(healthSummary.text()).toContain('1 repaired, 0 failed.');
+        expect(healthSummary.findAll('button').some((button) => button.text().includes('Repair with EODHD'))).toBe(false);
+        expect(fetchMock).toHaveBeenCalledWith('/admin/data/health/stock-trading-times', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(fetchMock).toHaveBeenCalledWith('/admin/data/health/stock-trading-times/repair', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(window.location.pathname).toBe('/admin/menu/data/health/intraday-data');
 
         return;
 

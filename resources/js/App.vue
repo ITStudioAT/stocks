@@ -149,6 +149,10 @@ const activeInfoSubsection = ref('eodhd');
 const activeAnalyzeSubsection = ref('overview');
 const activeDataSubsection = ref('indices');
 const activeDataType = ref('live-data');
+const stockTradingTimeHealthCheck = ref(null);
+const stockTradingTimeHealthCheckLoading = ref(false);
+const stockTradingTimeRepairLoading = ref(false);
+const stockTradingTimeHealthError = ref('');
 const selectedAnalyzeHistoryRange = ref('1y');
 const selectedAnalyzeHistoryWindowOffset = ref(0);
 const selectedAnalyzeHoldingId = ref(null);
@@ -427,7 +431,9 @@ const selectedDataHistoricStock = computed(() => {
 });
 const selectedDataRangeInstrumentId = computed(() => activeDataSubsection.value === 'indices'
     ? selectedDataIndexId.value
-    : selectedDataHistoricStockId.value);
+    : activeDataSubsection.value === 'stocks'
+        ? selectedDataHistoricStockId.value
+        : null);
 const selectedDataRangeInstrument = computed(() => {
     const instruments = activeDataSubsection.value === 'indices'
         ? indexWatchItems.value
@@ -2519,6 +2525,11 @@ const dataSubmenuItems = [
         label: 'Stocks',
         icon: 'mdi-finance',
     },
+    {
+        key: 'health',
+        label: 'Health',
+        icon: 'mdi-heart-pulse',
+    },
 ];
 const dataTypeSubmenuItems = [
     {
@@ -2868,6 +2879,10 @@ watch(
 
         if (section === 'data' && dataSubsection === 'stocks') {
             depotsStore.loadWatchlistHoldings(1, { allHoldings: true }).catch(() => {});
+        }
+
+        if (section === 'data' && dataSubsection === 'health' && stockTradingTimeHealthCheck.value === null) {
+            loadStockTradingTimeHealthCheck().catch(() => {});
         }
 
         if (section === 'stocks') {
@@ -3564,6 +3579,9 @@ function navigateDataSubsection(subsection) {
     }
 
     activeDataSubsection.value = subsection;
+    if (subsection === 'health') {
+        activeDataType.value = 'intraday-data';
+    }
     activeSection.value = 'data';
     clearSectionMessages();
     updateUrlPath();
@@ -3578,6 +3596,58 @@ function navigateDataType(dataType) {
     activeSection.value = 'data';
     clearSectionMessages();
     updateUrlPath();
+}
+
+async function loadStockTradingTimeHealthCheck() {
+    stockTradingTimeHealthError.value = '';
+
+    try {
+        const data = await request('/admin/data/health/stock-trading-times');
+        stockTradingTimeHealthCheck.value = data.health_check ?? null;
+
+        return data;
+    } catch (error) {
+        stockTradingTimeHealthError.value = error.message;
+        throw error;
+    }
+}
+
+async function runStockTradingTimeHealthCheck() {
+    stockTradingTimeHealthCheckLoading.value = true;
+    stockTradingTimeHealthError.value = '';
+
+    try {
+        const data = await request('/admin/data/health/stock-trading-times', {
+            method: 'POST',
+        });
+        stockTradingTimeHealthCheck.value = data.health_check ?? null;
+
+        return data;
+    } catch (error) {
+        stockTradingTimeHealthError.value = error.message;
+        return null;
+    } finally {
+        stockTradingTimeHealthCheckLoading.value = false;
+    }
+}
+
+async function repairStockTradingTimes() {
+    stockTradingTimeRepairLoading.value = true;
+    stockTradingTimeHealthError.value = '';
+
+    try {
+        const data = await request('/admin/data/health/stock-trading-times/repair', {
+            method: 'POST',
+        });
+        stockTradingTimeHealthCheck.value = data.health_check ?? null;
+
+        return data;
+    } catch (error) {
+        stockTradingTimeHealthError.value = error.message;
+        return null;
+    } finally {
+        stockTradingTimeRepairLoading.value = false;
+    }
 }
 
 function navigateInfoSubsection(subsection) {
@@ -3876,6 +3946,9 @@ function applyRouteFromPath() {
             activeDataType.value = isDataType(dataTypeSegment)
                 ? dataTypeSegment
                 : 'live-data';
+            if (activeDataSubsection.value === 'health') {
+                activeDataType.value = 'intraday-data';
+            }
             updateUrlPath({ replace: true });
 
             return;
@@ -3963,6 +4036,10 @@ function ensureAnalyzeHoldingSelection(currentHoldings = holdings.value) {
 
 function isDataSubsection(subsection) {
     return dataSubmenuItems.some((item) => item.key === subsection);
+}
+
+function isInstrumentDataSubsection(subsection) {
+    return ['indices', 'stocks'].includes(subsection);
 }
 
 function isDataType(dataType) {
@@ -5686,7 +5763,12 @@ async function loadSelectedDataDateRange() {
     const requestId = ++selectedDataDateRangeRequestId;
     const instrumentId = Number(selectedDataRangeInstrumentId.value);
 
-    if (activeSection.value !== 'data' || Number.isNaN(instrumentId) || instrumentId <= 0) {
+    if (
+        activeSection.value !== 'data'
+        || !isInstrumentDataSubsection(activeDataSubsection.value)
+        || Number.isNaN(instrumentId)
+        || instrumentId <= 0
+    ) {
         selectedDataDateRange.value = null;
         selectedDataDateRangeLoading.value = false;
         selectedDataDateRangeError.value = '';
@@ -15067,6 +15149,7 @@ function formatIndexDataUpdateSchedule(settings) {
                         </v-tabs>
 
                         <v-tabs
+                            v-if="isInstrumentDataSubsection(activeDataSubsection)"
                             :model-value="activeDataType"
                             :aria-label="`Data ${activeDataSubsection} data types`"
                             color="primary"
@@ -15131,8 +15214,117 @@ function formatIndexDataUpdateSchedule(settings) {
                             </div>
                         </section>
 
+                        <section v-if="activeDataSubsection === 'health'" aria-label="Data health">
+                            <div class="dashboard-heading mb-6">
+                                <div>
+                                    <p class="text-overline text-primary mb-1">Data</p>
+                                    <h2 class="text-h4">Health</h2>
+                                </div>
+                            </div>
+
+                            <v-card class="mb-6" variant="outlined" aria-label="Health check status">
+                                <v-card-text>
+                                    <div class="index-update-schedule-row d-flex flex-wrap align-center justify-space-between ga-3">
+                                        <div class="flex-grow-1">
+                                            <div class="text-body-2 font-weight-bold">Health-Check</div>
+                                            <div class="text-body-2">Trading time of stocks are checked.</div>
+                                            <div
+                                                v-if="stockTradingTimeHealthCheckLoading || stockTradingTimeRepairLoading"
+                                                class="text-body-2 text-primary mt-2"
+                                            >
+                                                {{ stockTradingTimeRepairLoading
+                                                    ? 'Repairing stock trading times with fresh EODHD data...'
+                                                    : 'Checking stock trading times...' }}
+                                            </div>
+                                            <v-progress-linear
+                                                v-if="stockTradingTimeHealthCheckLoading || stockTradingTimeRepairLoading"
+                                                class="mt-2"
+                                                color="primary"
+                                                indeterminate
+                                            />
+                                            <div class="text-caption text-medium-emphasis">
+                                                Last executed:
+                                                {{ stockTradingTimeHealthCheck?.last_executed_at
+                                                    ? formatDateTime(stockTradingTimeHealthCheck.last_executed_at)
+                                                    : 'never' }}
+                                                · Europe/Vienna
+                                            </div>
+                                        </div>
+                                        <v-btn
+                                            prepend-icon="mdi-heart-pulse"
+                                            size="small"
+                                            type="button"
+                                            variant="text"
+                                            :disabled="stockTradingTimeRepairLoading"
+                                            :loading="stockTradingTimeHealthCheckLoading"
+                                            @click="runStockTradingTimeHealthCheck"
+                                        >
+                                            Health-Check
+                                        </v-btn>
+                                    </div>
+
+                                    <v-alert
+                                        v-if="stockTradingTimeHealthError"
+                                        class="mt-4"
+                                        density="compact"
+                                        type="error"
+                                        variant="tonal"
+                                    >
+                                        {{ stockTradingTimeHealthError }}
+                                    </v-alert>
+
+                                    <v-alert
+                                        v-if="stockTradingTimeHealthCheck && stockTradingTimeHealthCheck.status !== 'never'"
+                                        class="mt-4"
+                                        density="compact"
+                                        :type="stockTradingTimeHealthCheck.status === 'healthy' ? 'success' : 'warning'"
+                                        variant="tonal"
+                                        aria-label="Stock trading time health summary"
+                                    >
+                                        <div class="font-weight-bold mb-1">Summary</div>
+                                        <div>
+                                            {{ stockTradingTimeHealthCheck.summary.total_stocks_count }} stocks checked:
+                                            {{ stockTradingTimeHealthCheck.summary.healthy_stocks_count }} healthy,
+                                            {{ stockTradingTimeHealthCheck.summary.missing_stocks_count }} missing,
+                                            {{ stockTradingTimeHealthCheck.summary.broken_stocks_count }} broken.
+                                        </div>
+                                        <div v-if="stockTradingTimeHealthCheck.repair" class="mt-1">
+                                            {{ stockTradingTimeHealthCheck.repair.repaired_stocks_count }} repaired,
+                                            {{ stockTradingTimeHealthCheck.repair.failed_stocks_count }} failed.
+                                        </div>
+                                        <v-list
+                                            v-if="stockTradingTimeHealthCheck.issues.length"
+                                            class="bg-transparent mt-2 pa-0"
+                                            density="compact"
+                                        >
+                                            <v-list-item
+                                                v-for="issue in stockTradingTimeHealthCheck.issues"
+                                                :key="`stock-trading-time-issue-${issue.id}`"
+                                                :title="issue.label"
+                                                :subtitle="issue.status === 'missing' ? 'Trading time is missing.' : 'Trading time is broken.'"
+                                            />
+                                        </v-list>
+                                        <v-btn
+                                            v-if="stockTradingTimeHealthCheck.summary.issue_stocks_count > 0"
+                                            class="mt-3"
+                                            color="warning"
+                                            prepend-icon="mdi-wrench-outline"
+                                            size="small"
+                                            type="button"
+                                            variant="outlined"
+                                            :disabled="stockTradingTimeHealthCheckLoading"
+                                            :loading="stockTradingTimeRepairLoading"
+                                            @click="repairStockTradingTimes"
+                                        >
+                                            Repair with EODHD
+                                        </v-btn>
+                                    </v-alert>
+                                </v-card-text>
+                            </v-card>
+                        </section>
+
                         <v-alert
-                            v-if="!selectedDataRangeInstrument"
+                            v-if="isInstrumentDataSubsection(activeDataSubsection) && !selectedDataRangeInstrument"
                             class="mt-6"
                             type="info"
                             variant="tonal"
@@ -15141,7 +15333,7 @@ function formatIndexDataUpdateSchedule(settings) {
                         </v-alert>
 
                         <v-card
-                            v-else
+                            v-else-if="isInstrumentDataSubsection(activeDataSubsection)"
                             class="data-date-range-card mt-6"
                             variant="outlined"
                             aria-label="Stored data date range"

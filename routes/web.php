@@ -15,6 +15,8 @@ use App\Http\Controllers\AdminQueueStatusController;
 use App\Http\Controllers\AdminRoleController;
 use App\Http\Controllers\AdminStockHistoricalPriceController;
 use App\Http\Controllers\AdminStockSearchController;
+use App\Http\Controllers\AdminStockTradingTimeHealthCheckController;
+use App\Http\Controllers\AdminStockTradingTimeRepairController;
 use App\Http\Controllers\AdminTestsController;
 use App\Http\Controllers\AdminUiPreferencesController;
 use App\Http\Controllers\AdminUserController;
@@ -201,6 +203,9 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::post('/admin/data/exchanges/reload', [AdminDataController::class, 'reload'])->name('admin.data.exchanges.reload');
     Route::get('/admin/data/exchanges/reload/{refreshId}', [AdminDataController::class, 'reloadStatus'])->name('admin.data.exchanges.reload.status');
     Route::get('/admin/data/realtime/latest', [AdminDataController::class, 'latestRealtimePrices'])->name('admin.data.realtime.latest');
+    Route::get('/admin/data/health/stock-trading-times', [AdminStockTradingTimeHealthCheckController::class, 'show'])->name('admin.data.health.stockTradingTimes.show');
+    Route::post('/admin/data/health/stock-trading-times', [AdminStockTradingTimeHealthCheckController::class, 'store'])->name('admin.data.health.stockTradingTimes.store');
+    Route::post('/admin/data/health/stock-trading-times/repair', AdminStockTradingTimeRepairController::class)->name('admin.data.health.stockTradingTimes.repair');
     Route::get('/admin/data/indices/{indexWatchItem}/{dataType}/date-range', [AdminDataRangeController::class, 'index'])->name('admin.data.indices.dateRange');
     Route::get('/admin/data/stocks/{holding}/{dataType}/date-range', [AdminDataRangeController::class, 'stock'])->name('admin.data.stocks.dateRange');
     Route::post('/admin/data/realtime/sync', [AdminDataController::class, 'syncRealtime'])->name('admin.data.realtime.sync');

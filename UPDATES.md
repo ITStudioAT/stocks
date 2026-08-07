@@ -1,14 +1,22 @@
+## 0.6.7
+
+### Data-Healtch
+
+- New Menu-Item
+
 ## 0.6.6
 
 ### System
+
 - Indizes Status Anzeige gefixt
 
 ### Stocks
+
 - Untertitel hinzugefügt
 
 ### Data
-- Completly new Data-Menu-Item
 
+- Completly new Data-Menu-Item
 
 ## 0.6.5
 

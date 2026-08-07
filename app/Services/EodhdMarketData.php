@@ -291,6 +291,14 @@ class EodhdMarketData
     /**
      * @return array{code: string, name: ?string, operating_mic: ?string, country: ?string, currency: ?string, timezone: ?string, is_open: bool, open: ?string, close: ?string, open_utc: ?string, close_utc: ?string, working_days: ?string, error: ?string}
      */
+    public function freshExchangeDetailsForCode(string $exchangeCode): array
+    {
+        return $this->fetchExchangeDetails(Str::upper(trim($exchangeCode)));
+    }
+
+    /**
+     * @return array{code: string, name: ?string, operating_mic: ?string, country: ?string, currency: ?string, timezone: ?string, is_open: bool, open: ?string, close: ?string, open_utc: ?string, close_utc: ?string, working_days: ?string, error: ?string}
+     */
     public function exchangeDetailsForIndexWatchItem(IndexWatchItem $item): array
     {
         $profile = $this->indexMarketHours->profile($item);
