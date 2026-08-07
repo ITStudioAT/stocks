@@ -30,6 +30,18 @@ return [
         'username' => env('CLOUDWAYS_USERNAME'),
         'password' => env('CLOUDWAYS_PASSWORD'),
         'connect_timeout' => env('CLOUDWAYS_CONNECT_TIMEOUT', 5),
+        'deployment' => [
+            'base_url' => env('CLOUDWAYS_API_BASE_URL', 'https://api.cloudways.com/api/v2'),
+            'access_token' => env('CLOUDWAYS_API_ACCESS_TOKEN'),
+            'server_id' => env('CLOUDWAYS_SERVER_ID'),
+            'app_id' => env('CLOUDWAYS_APP_ID'),
+            'branch' => env('CLOUDWAYS_DEPLOY_BRANCH', 'main'),
+            'deploy_path' => env('CLOUDWAYS_DEPLOY_PATH'),
+            'connect_timeout' => env('CLOUDWAYS_API_CONNECT_TIMEOUT', 5),
+            'timeout' => env('CLOUDWAYS_API_TIMEOUT', 20),
+            'operation_timeout' => env('CLOUDWAYS_DEPLOY_OPERATION_TIMEOUT', 600),
+            'poll_interval' => env('CLOUDWAYS_DEPLOY_POLL_INTERVAL', 3),
+        ],
     ],
 
     'resend' => [

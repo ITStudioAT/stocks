@@ -7,28 +7,8 @@ cd "$project_directory"
 maintenance_marker="${project_directory}/storage/framework/cloudways-deploy-maintenance"
 maintenance_prepared=false
 deployment_handed_off=false
-bootstrap_directory=''
-repository_url='git@github.com:ITStudioAT/stocks.git'
-
-cleanup_bootstrap_directory() {
-    if [ -z "$bootstrap_directory" ] || [ ! -d "$bootstrap_directory" ]; then
-        return 0
-    fi
-
-    case "$bootstrap_directory" in
-        "${project_directory}/storage/framework/cloudways-pdeploy-bootstrap."*)
-            rm -rf -- "$bootstrap_directory"
-            bootstrap_directory=''
-            ;;
-        *)
-            echo "Refusing to remove an unexpected bootstrap directory: $bootstrap_directory" >&2
-            ;;
-    esac
-}
 
 restore_after_pull_failure() {
-    cleanup_bootstrap_directory
-
     if [ "$maintenance_prepared" != true ] || [ "$deployment_handed_off" = true ]; then
         return
     fi
@@ -48,25 +28,21 @@ restore_after_pull_failure() {
     fi
 }
 
-bootstrap_git_worktree() {
-    echo "No Git working tree found; bootstrapping command-line Git access to origin/main..."
+pull_with_cloudways_api() {
+    echo "No Git working tree found; using the Cloudways platform Pull API."
 
-    bootstrap_directory="$(mktemp -d "${project_directory}/storage/framework/cloudways-pdeploy-bootstrap.XXXXXX")"
-
-    if ! git clone --depth 1 --branch main "$repository_url" "$bootstrap_directory"; then
-        echo "Could not clone $repository_url." >&2
-        echo "Give this Cloudways SSH user read access to the private GitHub repository, then run composer pdeploy again." >&2
-        echo "A read-only GitHub deploy key is sufficient." >&2
+    if ! php artisan cloudways:pull --check --no-interaction; then
+        echo "Configure the Cloudways deployment API values, clear cached configuration, and run composer pdeploy again." >&2
         exit 1
     fi
 
     STOCKS_CLOUDWAYS_TERMINAL_PULL=true bash scripts/deploy_cloudways.sh --prepare
     maintenance_prepared=true
 
-    echo "Installing origin/main and its Git metadata..."
-    git --git-dir="${bootstrap_directory}/.git" --work-tree="$project_directory" reset --hard origin/main
-    mv -- "${bootstrap_directory}/.git" "${project_directory}/.git"
-    cleanup_bootstrap_directory
+    if ! php artisan cloudways:pull --no-interaction; then
+        echo "Cloudways did not complete the platform Pull; deployment was not started." >&2
+        exit 1
+    fi
 
     deployment_handed_off=true
     bash scripts/deploy_cloudways.sh
@@ -74,13 +50,13 @@ bootstrap_git_worktree() {
     maintenance_prepared=false
     trap - EXIT
 
-    echo "Cloudways Git bootstrap, pull, and deployment completed successfully."
+    echo "Cloudways platform Pull and deployment completed successfully."
     exit 0
 }
 
 trap restore_after_pull_failure EXIT
 
-for command_name in bash git php flock; do
+for command_name in bash php flock; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
         echo "${command_name} was not found on PATH." >&2
         exit 1
@@ -95,7 +71,12 @@ if ! flock -n 8; then
 fi
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    bootstrap_git_worktree
+    pull_with_cloudways_api
+fi
+
+if ! command -v git >/dev/null 2>&1; then
+    echo "git was not found on PATH." >&2
+    exit 1
 fi
 
 current_branch="$(git branch --show-current)"

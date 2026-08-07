@@ -231,46 +231,44 @@ class DeploymentWorkflowTest extends TestCase
         );
     }
 
-    public function test_cloudways_terminal_pull_bootstraps_git_when_metadata_is_missing(): void
+    public function test_cloudways_terminal_pull_uses_the_platform_api_when_git_metadata_is_missing(): void
     {
-        $deploymentDirectory = $this->createCloudwaysBootstrapPullShellFixture();
+        $deploymentDirectory = $this->createCloudwaysApiPullShellFixture();
 
         $deployed = $this->runCloudwaysPullShellFixture($deploymentDirectory);
 
         $this->assertTrue($deployed->isSuccessful(), $deployed->getErrorOutput());
-        $this->assertDirectoryExists("{$deploymentDirectory}/.git");
-        $this->assertFileExists("{$deploymentDirectory}/storage/framework/git-cloned");
-        $this->assertFileExists("{$deploymentDirectory}/storage/framework/git-reset");
+        $this->assertDirectoryDoesNotExist("{$deploymentDirectory}/.git");
+        $this->assertFileExists("{$deploymentDirectory}/storage/framework/cloudways-api-checked");
+        $this->assertFileExists("{$deploymentDirectory}/storage/framework/cloudways-api-pulled");
         $this->assertDirectoryExists("{$deploymentDirectory}/public/build");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
         $this->assertStringContainsString(
-            'Cloudways Git bootstrap, pull, and deployment completed successfully.',
+            'Cloudways platform Pull and deployment completed successfully.',
             $deployed->getOutput(),
         );
     }
 
-    public function test_cloudways_git_bootstrap_failure_keeps_the_application_online(): void
+    public function test_cloudways_platform_pull_failure_keeps_the_application_online(): void
     {
-        $deploymentDirectory = $this->createCloudwaysBootstrapPullShellFixture();
-        file_put_contents("{$deploymentDirectory}/storage/framework/fail-git-clone", '1');
+        $deploymentDirectory = $this->createCloudwaysApiPullShellFixture();
+        file_put_contents("{$deploymentDirectory}/storage/framework/fail-cloudways-api-pull", '1');
 
         $failed = $this->runCloudwaysPullShellFixture($deploymentDirectory);
 
         $this->assertFalse($failed->isSuccessful());
         $this->assertDirectoryDoesNotExist("{$deploymentDirectory}/.git");
+        $this->assertFileExists("{$deploymentDirectory}/storage/framework/cloudways-api-checked");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-api-pulled");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
-        $this->assertSame(
-            [],
-            glob("{$deploymentDirectory}/storage/framework/cloudways-pdeploy-bootstrap.*"),
-        );
         $this->assertStringContainsString(
-            'Give this Cloudways SSH user read access to the private GitHub repository',
+            'Cloudways did not complete the platform Pull; deployment was not started.',
             $failed->getErrorOutput(),
         );
         $this->assertStringContainsString(
-            'A read-only GitHub deploy key is sufficient.',
+            'restoring the application from maintenance mode',
             $failed->getErrorOutput(),
         );
     }
@@ -766,6 +764,18 @@ if [ "${1:-}" != "artisan" ]; then
 fi
 
 case "${2:-}" in
+    cloudways:pull)
+        if [ "${3:-}" = "--check" ]; then
+            touch storage/framework/cloudways-api-checked
+            exit 0
+        fi
+
+        if [ -f storage/framework/fail-cloudways-api-pull ]; then
+            exit 1
+        fi
+
+        touch storage/framework/cloudways-api-pulled
+        ;;
     down)
         touch storage/framework/down
         ;;
@@ -840,7 +850,7 @@ BASH);
         return $directory;
     }
 
-    private function createCloudwaysBootstrapPullShellFixture(): string
+    private function createCloudwaysApiPullShellFixture(): string
     {
         $directory = $this->createCloudwaysShellFixture();
         copy($this->projectPath('scripts/pdeploy_cloudways.sh'), "{$directory}/scripts/pdeploy_cloudways.sh");
@@ -851,25 +861,7 @@ set -e
 
 case "${1:-}" in
     rev-parse)
-        if [ -d .git ]; then
-            echo true
-            exit 0
-        fi
-
         exit 1
-        ;;
-    clone)
-        bootstrap_directory="${@: -1}"
-        mkdir -p "$bootstrap_directory/.git"
-
-        if [ -f storage/framework/fail-git-clone ]; then
-            exit 1
-        fi
-
-        touch storage/framework/git-cloned
-        ;;
-    --git-dir=*)
-        touch storage/framework/git-reset
         ;;
     *)
         exit 1
