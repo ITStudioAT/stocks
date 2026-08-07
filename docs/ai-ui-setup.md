@@ -5,7 +5,7 @@ This workspace is a Laravel, Vue, and Vuetify project. AI-assisted UI work shoul
 ## Current Project Inventory
 
 - Laravel: `13.11.2`
-- PHP: `^8.3`
+- PHP: `^8.4.1`
 - Laravel Boost: installed as `laravel/boost 2.4.8`
 - Vue: `3.5.34`
 - Vuetify: installed as `4.0.7`

@@ -57,6 +57,26 @@ class DeploymentWorkflowTest extends TestCase
         );
     }
 
+    public function test_php_platform_is_aligned_for_local_and_cloudways_deployments(): void
+    {
+        $composer = json_decode(
+            file_get_contents($this->projectPath('composer.json')),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $continuousIntegrationWorkflow = file_get_contents($this->projectPath('.github/workflows/ci.yml'));
+
+        $this->assertSame('^8.4.1', $composer['require']['php']);
+        $this->assertSame('8.4.1', $composer['config']['platform']['php']);
+        $this->assertSame('^8.0', $composer['require']['symfony/http-client']);
+        $this->assertSame('^8.0', $composer['require']['symfony/postmark-mailer']);
+        $this->assertSame(2, substr_count($continuousIntegrationWorkflow, "php-version: '8.4'"));
+        $this->assertStringContainsString(
+            'run: composer check-platform-reqs --no-interaction',
+            $continuousIntegrationWorkflow,
+        );
+    }
+
     public function test_composer_exposes_the_local_queue_worker_command(): void
     {
         $composer = json_decode(
@@ -130,6 +150,22 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertStringContainsString(
             'php artisan app:update --no-interaction --skip-composer --skip-npm --skip-build',
             $deployment,
+        );
+        $this->assertStringContainsString(
+            'composer check-platform-reqs --no-dev --no-interaction',
+            $deployment,
+        );
+        $this->assertStringContainsString(
+            'composer check-platform-reqs --lock --no-dev --no-interaction',
+            $deployment,
+        );
+        $this->assertLessThan(
+            strpos($deployment, 'composer install'),
+            strpos($deployment, 'composer check-platform-reqs --lock'),
+        );
+        $this->assertLessThan(
+            strrpos($deployment, 'composer check-platform-reqs'),
+            strpos($deployment, 'composer install'),
         );
         $this->assertStringNotContainsString('--skip-frontend', $deployment);
         $this->assertStringNotContainsString('npm run build', $deployment);

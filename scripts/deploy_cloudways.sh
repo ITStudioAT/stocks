@@ -261,6 +261,9 @@ if [ "$prepare_only" = true ]; then
     exit 0
 fi
 
+echo "Verifying Cloudways PHP platform requirements..."
+composer check-platform-reqs --lock --no-dev --no-interaction
+
 if [ -f storage/framework/down ]; then
     if [ ! -f "$maintenance_marker" ]; then
         echo "The application is in maintenance mode, but not because of this deployment workflow." >&2
@@ -300,6 +303,7 @@ composer install \
     --prefer-dist \
     --optimize-autoloader \
     --no-interaction
+composer check-platform-reqs --no-dev --no-interaction
 
 install_frontend_artifact
 php artisan app:update --no-interaction --skip-composer --skip-npm --skip-build

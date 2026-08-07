@@ -1,6 +1,6 @@
 # Claude Project Instructions
 
-This is a Laravel 13, PHP 8.3, Vue 3, Tailwind 4 application. Follow the project rules in `AGENTS.md` as the source of truth for architecture, coding style, Laravel Boost usage, and verification.
+This is a Laravel 13, PHP 8.4, Vue 3, Tailwind 4 application. Follow the project rules in `AGENTS.md` as the source of truth for architecture, coding style, Laravel Boost usage, and verification.
 
 ## Required Tests
 

@@ -87,7 +87,7 @@ class UpdateApplicationCommandTest extends TestCase
 
         try {
             $this->artisan('app:update --dry-run')
-                ->expectsOutputToContain('Would run: composer require symfony/http-client:^7.4 symfony/postmark-mailer:^7.4 --no-interaction --no-scripts --no-progress')
+                ->expectsOutputToContain('Would run: composer require symfony/http-client:^8.0 symfony/postmark-mailer:^8.0 --no-interaction --no-scripts --no-progress')
                 ->expectsOutputToContain('Would run: composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader')
                 ->assertSuccessful();
         } finally {

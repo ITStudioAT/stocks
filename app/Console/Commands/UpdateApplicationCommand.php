@@ -44,8 +44,8 @@ class UpdateApplicationCommand extends Command
      * @var array<string, string>
      */
     private const REQUIRED_COMPOSER_PACKAGES = [
-        'symfony/http-client' => '^7.4',
-        'symfony/postmark-mailer' => '^7.4',
+        'symfony/http-client' => '^8.0',
+        'symfony/postmark-mailer' => '^8.0',
     ];
 
     public function handle(): int

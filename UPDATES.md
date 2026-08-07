@@ -1,3 +1,9 @@
+## 0.6.9
+
+### System
+
+- Deployment fixed
+
 ## 0.6.8
 
 ### System
