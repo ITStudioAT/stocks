@@ -65,6 +65,7 @@ class DeploymentWorkflowTest extends TestCase
             flags: JSON_THROW_ON_ERROR,
         );
         $continuousIntegrationWorkflow = file_get_contents($this->projectPath('.github/workflows/ci.yml'));
+        $phpUnitConfiguration = file_get_contents($this->projectPath('phpunit.xml'));
 
         $this->assertSame('^8.4.1', $composer['require']['php']);
         $this->assertSame('8.4.1', $composer['config']['platform']['php']);
@@ -75,6 +76,7 @@ class DeploymentWorkflowTest extends TestCase
             'run: composer check-platform-reqs --no-interaction',
             $continuousIntegrationWorkflow,
         );
+        $this->assertStringContainsString('<env name="APP_KEY" value="base64:', $phpUnitConfiguration);
     }
 
     public function test_composer_exposes_the_local_queue_worker_command(): void
@@ -719,7 +721,7 @@ BASH);
         $process = new Process([
             $this->bashExecutable(),
             '-lc',
-            'export PATH="$1/bin:$PATH"; "$1/scripts/deploy_cloudways.sh" "${@:2}"',
+            'export PATH="$1/bin:$PATH"; bash "$1/scripts/deploy_cloudways.sh" "${@:2}"',
             'stocks-deployment-test',
             $bashDirectory,
             ...$arguments,
