@@ -13,6 +13,7 @@ export const useDepotStore = defineStore('depots', {
         depotHoldings: [],
         depotValuations: {},
         depotPerformanceSeries: [],
+        dashboardDailyPerformance: null,
         depotStockPeriodStocks: [],
         depotStockPeriod: null,
         depotStockPeriodLabel: '',
@@ -79,6 +80,7 @@ export const useDepotStore = defineStore('depots', {
         loading: false,
         holdingsLoading: false,
         transactionsLoading: false,
+        dashboardDailyPerformanceLoading: false,
         depotStockPeriodLoading: false,
         exchangeTradingTimesLoading: false,
         queueStatusLoading: false,
@@ -96,6 +98,7 @@ export const useDepotStore = defineStore('depots', {
         error: '',
         holdingsError: '',
         transactionsError: '',
+        dashboardDailyPerformanceError: '',
         depotStockPeriodError: '',
         exchangeTradingTimesError: '',
         queueStatusError: '',
@@ -132,6 +135,22 @@ export const useDepotStore = defineStore('depots', {
                 throw error;
             } finally {
                 this.loading = false;
+            }
+        },
+        async loadDashboardDailyPerformance() {
+            this.dashboardDailyPerformanceLoading = true;
+            this.dashboardDailyPerformanceError = '';
+
+            try {
+                const data = await request('/admin/dashboard/performance');
+                this.dashboardDailyPerformance = data.days ?? [];
+
+                return data;
+            } catch (error) {
+                this.dashboardDailyPerformanceError = error.message;
+                throw error;
+            } finally {
+                this.dashboardDailyPerformanceLoading = false;
             }
         },
         async loadDepots(page = 1) {

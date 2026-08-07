@@ -46,6 +46,13 @@ const weekdayOptions = [
     { title: 'Thursday', value: 4 },
     { title: 'Friday', value: 5 },
 ];
+const dashboardPerformanceCardLabels = [
+    'Montag',
+    'Dienstag',
+    'Mittwoch',
+    'Donnerstag',
+    'Freitag',
+];
 
 const { lgAndDown, mdAndDown, smAndDown } = useDisplay();
 
@@ -66,6 +73,7 @@ const {
     depotHoldings,
     depotValuations,
     depotPerformanceSeries,
+    dashboardDailyPerformance,
     depotStockPeriodStocks,
     depotStockPeriod,
     depotStockPeriodLabel,
@@ -104,6 +112,7 @@ const {
     loading: depotsLoading,
     holdingsLoading,
     transactionsLoading,
+    dashboardDailyPerformanceLoading,
     depotStockPeriodLoading,
     testOptionsLoading,
     testExchangesLoading,
@@ -118,6 +127,7 @@ const {
     error: depotsError,
     holdingsError,
     transactionsError,
+    dashboardDailyPerformanceError,
     depotStockPeriodError,
     testOptionsError,
     testExchangesError,
@@ -360,6 +370,19 @@ const profileDisplayName = computed(() => user.value?.name || 'Loading...');
 const appVersionLabel = computed(() => dashboardVersions.value?.current_version ?? appVersion.value ?? '');
 const dashboardCurrentVersion = computed(() => dashboardVersions.value?.current_version ?? appVersion.value ?? 'x.x.x');
 const installedVersionItems = computed(() => dashboardVersions.value?.versions ?? []);
+const dashboardPerformanceCards = computed(() => dashboardPerformanceCardLabels.map((fallbackLabel, index) => {
+    const performance = dashboardDailyPerformance.value?.[index] ?? null;
+    const weekday = performance
+        ? new Intl.DateTimeFormat('de-DE', { weekday: 'long', timeZone: 'UTC' })
+            .format(new Date(`${performance.date}T00:00:00Z`))
+        : fallbackLabel;
+
+    return {
+        key: performance?.date ?? `empty-${index}`,
+        label: performance?.is_live ? `${weekday} · Live` : weekday,
+        performance,
+    };
+}));
 const dashboardMenuToggleLabel = computed(() => (isDashboardMenuCompact.value
     ? 'Enhance dashboard menu'
     : 'Minify dashboard menu'));
@@ -2710,13 +2733,6 @@ const menuItems = computed(() => [
         label: 'Dashboard',
         icon: 'mdi-view-dashboard-outline',
     },
-    ...(canManageDashboardAdmin.value ? [
-        {
-            key: 'infos',
-            label: 'Infos',
-            icon: 'mdi-information-outline',
-        },
-    ] : []),
     {
         key: 'indices',
         label: 'Indices',
@@ -2727,24 +2743,29 @@ const menuItems = computed(() => [
         label: 'Stocks',
         icon: 'mdi-finance',
     },
-    ...(canManageDashboardAdmin.value ? [
-        {
-            key: 'data',
-            label: 'Data',
-            icon: 'mdi-database-outline',
-        },
-    ] : []),
-    {
-        key: 'analyze',
-        label: 'Analyze',
-        icon: 'mdi-chart-line',
-    },
     {
         key: 'depot',
         label: 'Depot',
         subtitle: activeDepot.value?.name ?? '–',
         icon: 'mdi-briefcase-outline',
     },
+    {
+        key: 'analyze',
+        label: 'Analyze',
+        icon: 'mdi-chart-line',
+    },
+    ...(canManageDashboardAdmin.value ? [
+        {
+            key: 'data',
+            label: 'Data',
+            icon: 'mdi-database-outline',
+        },
+        {
+            key: 'infos',
+            label: 'Infos',
+            icon: 'mdi-information-outline',
+        },
+    ] : []),
     ...(canManageDashboardAdmin.value ? [
         {
             key: 'admin',
@@ -2968,6 +2989,10 @@ watch(
             loadDashboardVersions().catch(() => {});
         }
 
+        if (section === 'dashboard' && dashboardDailyPerformance.value === null) {
+            depotsStore.loadDashboardDailyPerformance().catch(() => {});
+        }
+
         if (section === 'infos' && infoTables.value.length === 0 && infoMethods.value.length === 0) {
             loadInfoData();
         }
@@ -3062,6 +3087,9 @@ onMounted(async () => {
         depotsStore.loadActiveDepot(),
         activeSection.value === 'dashboard'
             ? loadDashboardVersions()
+            : Promise.resolve(),
+        activeSection.value === 'dashboard'
+            ? depotsStore.loadDashboardDailyPerformance()
             : Promise.resolve(),
     ]);
 
@@ -6415,6 +6443,60 @@ function formatAccountBalance(value) {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
     }).format(Number(value ?? 0));
+}
+
+function dashboardPerformanceAmount(performance) {
+    if (!performance || performance.change_amount === null) {
+        return '— EUR';
+    }
+
+    const amount = Number(performance.change_amount);
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${formatAccountBalance(amount)} EUR`;
+}
+
+function dashboardPerformancePercent(performance) {
+    if (!performance || performance.change_percent === null) {
+        return '— %';
+    }
+
+    const percent = Number(performance.change_percent);
+    const sign = percent > 0 ? '+' : '';
+
+    return `${sign}${percent.toFixed(2)}%`;
+}
+
+function dashboardPerformanceValueClass(performance) {
+    if (!performance || performance.change_amount === null) {
+        return { 'text-medium-emphasis': true };
+    }
+
+    const amount = Number(performance?.change_amount ?? 0);
+
+    return {
+        'text-success': amount > 0,
+        'text-error': amount < 0,
+        'text-medium-emphasis': amount === 0,
+    };
+}
+
+function dashboardPerformanceIcon(performance) {
+    if (!performance || performance.change_amount === null) {
+        return 'mdi-minus';
+    }
+
+    const amount = Number(performance?.change_amount ?? 0);
+
+    if (amount > 0) {
+        return 'mdi-trending-up';
+    }
+
+    if (amount < 0) {
+        return 'mdi-trending-down';
+    }
+
+    return 'mdi-minus';
 }
 
 function formatInteger(value) {
@@ -11771,6 +11853,72 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </div>
                                 </v-card-text>
                             </v-card>
+
+                            <div class="dashboard-performance-section" aria-label="Depotentwicklung der aktuellen Woche von Montag bis Freitag">
+                                <div class="dashboard-performance-heading">
+                                    <div>
+                                        <p class="text-overline text-primary mb-1">Depotentwicklung</p>
+                                        <h1 class="dashboard-performance-title">Aktuelle Woche</h1>
+                                    </div>
+                                    <v-progress-circular
+                                        v-if="dashboardDailyPerformanceLoading"
+                                        color="primary"
+                                        indeterminate
+                                        size="22"
+                                        width="2"
+                                    />
+                                </div>
+
+                                <v-alert
+                                    v-if="dashboardDailyPerformanceError"
+                                    class="mb-3"
+                                    density="compact"
+                                    type="error"
+                                    variant="tonal"
+                                >
+                                    {{ dashboardDailyPerformanceError }}
+                                </v-alert>
+
+                                <div class="dashboard-performance-grid">
+                                    <v-card
+                                        v-for="card in dashboardPerformanceCards"
+                                        :key="card.key"
+                                        class="dashboard-performance-card"
+                                        flat
+                                        border
+                                        rounded="xl"
+                                    >
+                                        <v-card-text class="pa-4">
+                                            <div class="dashboard-performance-card-heading">
+                                                <div>
+                                                    <div class="dashboard-performance-card-label">{{ card.label }}</div>
+                                                    <div class="dashboard-performance-card-date">
+                                                        {{ card.performance ? formatIndexHistoryDate(card.performance.date) : 'Keine Daten' }}
+                                                    </div>
+                                                </div>
+                                                <v-icon
+                                                    :class="dashboardPerformanceValueClass(card.performance)"
+                                                    :icon="dashboardPerformanceIcon(card.performance)"
+                                                    size="20"
+                                                />
+                                            </div>
+                                            <div
+                                                class="dashboard-performance-amount"
+                                                :class="dashboardPerformanceValueClass(card.performance)"
+                                            >
+                                                {{ dashboardPerformanceAmount(card.performance) }}
+                                            </div>
+                                            <div
+                                                class="dashboard-performance-percent"
+                                                :class="dashboardPerformanceValueClass(card.performance)"
+                                            >
+                                                {{ dashboardPerformancePercent(card.performance) }}
+                                            </div>
+                                        </v-card-text>
+                                    </v-card>
+                                </div>
+                            </div>
+
                         </div>
 
                         <div v-if="activeSection === 'stocks'" aria-label="Stocks dashboard">
@@ -18932,7 +19080,69 @@ function formatIndexDataUpdateSchedule(settings) {
 }
 
 .dashboard-version-page {
-    max-width: 720px;
+    max-width: 920px;
+}
+
+.dashboard-performance-section {
+    margin-top: 16px;
+}
+
+.dashboard-performance-heading {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.dashboard-performance-title {
+    color: rgb(var(--v-theme-on-surface));
+    font-size: 1.15rem;
+    font-weight: 750;
+    line-height: 1.25;
+}
+
+.dashboard-performance-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.dashboard-performance-card {
+    background: rgb(var(--v-theme-surface));
+    border-color: rgba(var(--v-border-color), var(--v-border-opacity));
+    min-width: 0;
+}
+
+.dashboard-performance-card-heading {
+    align-items: flex-start;
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+}
+
+.dashboard-performance-card-label {
+    color: rgba(var(--v-theme-on-surface), 0.72);
+    font-size: 0.72rem;
+    font-weight: 650;
+}
+
+.dashboard-performance-card-date {
+    color: rgba(var(--v-theme-on-surface), 0.52);
+    font-size: 0.65rem;
+    margin-top: 2px;
+}
+
+.dashboard-performance-amount {
+    font-size: 1.05rem;
+    font-weight: 750;
+    line-height: 1.2;
+    margin-top: 14px;
+}
+
+.dashboard-performance-percent {
+    font-size: 0.76rem;
+    font-weight: 650;
+    margin-top: 3px;
 }
 
 .dashboard-version-card {
@@ -19430,7 +19640,17 @@ function formatIndexDataUpdateSchedule(settings) {
     overflow-wrap: anywhere;
 }
 
+@media (max-width: 960px) {
+    .dashboard-performance-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
 @media (max-width: 600px) {
+    .dashboard-performance-grid {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
     .dashboard-version-heading {
         align-items: stretch;
         flex-direction: column;

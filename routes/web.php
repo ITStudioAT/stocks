@@ -153,6 +153,7 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
         ->name('admin.menu');
     Route::get('/admin/me', [AdminAuthController::class, 'me'])->name('admin.me');
     Route::get('/admin/dashboard/version', [AdminDashboardVersionController::class, 'show'])->name('admin.dashboard.version.show');
+    Route::get('/admin/dashboard/performance', [AdminDepotTransactionController::class, 'dailyPerformance'])->name('admin.dashboard.performance.show');
     Route::get('/admin/infos', [AdminInfoController::class, 'show'])->name('admin.infos.show');
     Route::get('/admin/depots', [AdminDepotController::class, 'index'])->name('admin.depots.index');
     Route::get('/admin/depots/active', [AdminDepotController::class, 'active'])->name('admin.depots.active');

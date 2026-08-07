@@ -480,6 +480,10 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/dashboard/performance') {
+                return Promise.resolve(jsonResponse({ days: [] }));
+            }
+
             if (path.startsWith('/admin/watchlist/holdings?page=1')) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
@@ -1488,11 +1492,17 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
-        const drawerText = wrapper.find('.dashboard-navigation-drawer').text();
-        expect(drawerText.indexOf('Dashboard')).toBeLessThan(drawerText.indexOf('Infos'));
-        expect(drawerText.indexOf('Infos')).toBeLessThan(drawerText.indexOf('Indices'));
-        expect(drawerText.indexOf('Indices')).toBeLessThan(drawerText.indexOf('Analyze'));
-        expect(drawerText.indexOf('Analyze')).toBeLessThan(drawerText.indexOf('Depot'));
+        expect(wrapper.vm.menuItems.map((item) => item.key)).toEqual([
+            'dashboard',
+            'indices',
+            'stocks',
+            'depot',
+            'analyze',
+            'data',
+            'infos',
+            'admin',
+            'profile',
+        ]);
         expect(wrapper.find('[aria-label="Analyze detail"]').exists()).toBe(true);
         expect(window.location.pathname).toBe('/admin/menu/analyze/detail');
         expect(window.location.search).toBe('?stock=1');
@@ -5042,7 +5052,17 @@ describe('App', () => {
         });
 
         const topLevelMenuKeys = wrapper.vm.menuItems.map((item) => item.key);
-        expect(topLevelMenuKeys.indexOf('stocks')).toBe(topLevelMenuKeys.indexOf('indices') + 1);
+        expect(topLevelMenuKeys).toEqual([
+            'dashboard',
+            'indices',
+            'stocks',
+            'depot',
+            'analyze',
+            'data',
+            'infos',
+            'admin',
+            'profile',
+        ]);
 
         currentPriceRefreshSettings = priceRefreshSettings({
             closed_refresh_enabled: false,
@@ -5795,6 +5815,43 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/dashboard/performance') {
+                return Promise.resolve(jsonResponse({
+                    days: [
+                        {
+                            date: '2026-08-03',
+                            is_live: false,
+                            change_amount: '-12.30',
+                            change_percent: '-0.04',
+                        },
+                        {
+                            date: '2026-08-04',
+                            is_live: false,
+                            change_amount: '42.10',
+                            change_percent: '0.14',
+                        },
+                        {
+                            date: '2026-08-05',
+                            is_live: false,
+                            change_amount: '0.00',
+                            change_percent: '0.00',
+                        },
+                        {
+                            date: '2026-08-06',
+                            is_live: false,
+                            change_amount: '-80.15',
+                            change_percent: '-0.27',
+                        },
+                        {
+                            date: '2026-08-07',
+                            is_live: true,
+                            change_amount: '125.40',
+                            change_percent: '0.42',
+                        },
+                    ],
+                }));
+            }
+
             if (path === dashboardWatchlistHoldingsPath) {
                 return Promise.resolve(jsonResponse({
                     depot,
@@ -5833,7 +5890,23 @@ describe('App', () => {
 
         expect(wrapper.find('.dashboard-action-button').exists()).toBe(false);
         expect(wrapper.find('.watch-list-section').exists()).toBe(false);
+        expect(wrapper.get('.dashboard-version-page').element.firstElementChild.classList)
+            .toContain('dashboard-version-card');
+        expect(wrapper.findAll('.dashboard-performance-card')).toHaveLength(5);
+        expect(wrapper.findAll('.dashboard-performance-card')[0].text()).toContain('Montag');
+        expect(wrapper.findAll('.dashboard-performance-card')[0].text()).toContain('03.08.2026');
+        expect(wrapper.findAll('.dashboard-performance-card')[1].text()).toContain('Dienstag');
+        expect(wrapper.findAll('.dashboard-performance-card')[2].text()).toContain('Mittwoch');
+        expect(wrapper.findAll('.dashboard-performance-card')[2].text()).toContain('0.00 EUR');
+        expect(wrapper.findAll('.dashboard-performance-card')[3].text()).toContain('Donnerstag');
+        expect(wrapper.findAll('.dashboard-performance-card')[3].text()).toContain('-80.15 EUR');
+        expect(wrapper.findAll('.dashboard-performance-card')[3].text()).toContain('-0.27%');
+        expect(wrapper.findAll('.dashboard-performance-card')[4].text()).toContain('Freitag · Live');
+        expect(wrapper.findAll('.dashboard-performance-card')[4].text()).toContain('07.08.2026');
+        expect(wrapper.findAll('.dashboard-performance-card')[4].text()).toContain('+125.40 EUR');
+        expect(wrapper.findAll('.dashboard-performance-card')[4].text()).toContain('+0.42%');
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/version')).toHaveLength(1);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/performance')).toHaveLength(1);
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);
         expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(0);
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
@@ -5889,6 +5962,10 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/dashboard/performance') {
+                return Promise.resolve(jsonResponse({ days: [] }));
+            }
+
             if (path === dashboardWatchlistHoldingsPath) {
                 return Promise.resolve(jsonResponse({
                     depot,
@@ -5935,6 +6012,7 @@ describe('App', () => {
             await flushPromises();
 
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/version')).toHaveLength(1);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/performance')).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(0);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
@@ -8163,6 +8241,10 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse(queueStatusResponse()));
             }
 
+            if (path === '/admin/dashboard/performance') {
+                return Promise.resolve(jsonResponse({ days: [] }));
+            }
+
             return Promise.reject(new Error(`Unexpected request: ${path}`));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -9560,6 +9642,10 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse(queueStatusResponse()));
             }
 
+            if (path === '/admin/dashboard/performance') {
+                return Promise.resolve(jsonResponse({ days: [] }));
+            }
+
             return Promise.reject(new Error(`Unexpected request: ${path}`));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -9678,6 +9764,10 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse(queueStatusResponse()));
             }
 
+            if (path === '/admin/dashboard/performance') {
+                return Promise.resolve(jsonResponse({ days: [] }));
+            }
+
             return Promise.reject(new Error(`Unexpected request: ${path}`));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -9758,6 +9848,10 @@ describe('App', () => {
                         to: null,
                     },
                 }));
+            }
+
+            if (path === '/admin/dashboard/performance') {
+                return Promise.resolve(jsonResponse({ days: [] }));
             }
 
             return Promise.reject(new Error(`Unexpected request: ${path}`));
@@ -9843,6 +9937,10 @@ describe('App', () => {
                     cleared_failed_jobs: 0,
                     queue: queueStatusResponse().queue,
                 }));
+            }
+
+            if (path === '/admin/dashboard/performance') {
+                return Promise.resolve(jsonResponse({ days: [] }));
             }
 
             return Promise.reject(new Error(`Unexpected request: ${path}`));
@@ -9936,6 +10034,10 @@ describe('App', () => {
 
             if (path === '/admin/queue/status') {
                 return Promise.resolve(jsonResponse(queueStatusResponse()));
+            }
+
+            if (path === '/admin/dashboard/performance') {
+                return Promise.resolve(jsonResponse({ days: [] }));
             }
 
             return Promise.reject(new Error(`Unexpected request: ${path}`));

@@ -1,3 +1,9 @@
+## 0.8.6
+
+### Dashboard
+
+- Infos über die Handelswoche
+
 ## 0.8.3-0.8.5
 
 ### Test

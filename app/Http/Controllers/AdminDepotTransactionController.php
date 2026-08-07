@@ -10,6 +10,7 @@ use App\Models\StockPrice;
 use App\Models\StockRealtimePrice;
 use App\Services\DepotTransactionBooker;
 use App\Services\StockPreviousCloseResolver;
+use App\Services\StockPriceCatalog;
 use App\Services\UiPreferences;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -22,6 +23,7 @@ class AdminDepotTransactionController extends Controller
 {
     public function __construct(
         private StockPreviousCloseResolver $stockPreviousCloseResolver,
+        private StockPriceCatalog $stockPriceCatalog,
     ) {}
 
     public function index(Request $request, UiPreferences $uiPreferences): JsonResponse
@@ -46,6 +48,21 @@ class AdminDepotTransactionController extends Controller
             'depot_performance_series' => $this->depotPerformancePayloads($depot, $depotHoldings),
             'transactions' => $this->transactionPayloads($depot),
             'ui_preferences' => $uiPreferences->payload($request->user()),
+        ]);
+    }
+
+    public function dailyPerformance(): JsonResponse
+    {
+        $depot = $this->activeDepot();
+
+        if (! $depot) {
+            return response()->json(['days' => []]);
+        }
+
+        $depotHoldings = $this->depotHoldingPayloads($depot);
+
+        return response()->json([
+            'days' => $this->dailyPerformancePayloads($depot, $depotHoldings),
         ]);
     }
 
@@ -549,6 +566,168 @@ class AdminDepotTransactionController extends Controller
     }
 
     /**
+     * @param  array<int, array{id: int, symbol: ?string, name: ?string, isin: ?string, currency: ?string, latest_price: ?string, previous_day_price: ?string, previous_day_price_date: ?string, previous_day_change_percent: ?string, flatex_price: ?string, year_start_price: ?string, latest_price_fetched_at: ?string, latest_price_status: string, position_pieces: string}>  $depotHoldings
+     * @return array<int, array{date: string, is_live: bool, account_balance: ?string, previous_balance: ?string, change_amount: ?string, change_percent: ?string}>
+     */
+    private function dailyPerformancePayloads(Depot $depot, array $depotHoldings): array
+    {
+        $holdingIds = collect($depotHoldings)->pluck('id');
+
+        if ($holdingIds->isEmpty()) {
+            return [];
+        }
+
+        $performanceDates = $this->currentWeekPerformanceDates();
+        $latestPerformanceDate = $this->latestDailyPerformanceDate($holdingIds);
+
+        $isLivePerformanceDate = $latestPerformanceDate !== null
+            && $this->isLivePerformanceDate($holdingIds, $latestPerformanceDate);
+        $currentBalance = (float) $depot->account_balance + $this->holdingStockBalance($depotHoldings, 'latest_price');
+        $balanceDates = collect([$performanceDates->first()])
+            ->map(fn (string $date): string => Carbon::parse($date)->subDay()->toDateString())
+            ->merge($performanceDates)
+            ->filter(fn (string $date): bool => $latestPerformanceDate !== null && $date <= $latestPerformanceDate);
+        $balances = $balanceDates->mapWithKeys(function (string $date) use ($currentBalance, $depot, $isLivePerformanceDate, $latestPerformanceDate): array {
+            $balance = $isLivePerformanceDate && $date === $latestPerformanceDate
+                ? $currentBalance
+                : $this->performanceAccountBalanceAt($depot, Carbon::parse($date)->endOfDay());
+
+            return [$date => $balance];
+        });
+
+        return $performanceDates
+            ->map(function (string $date) use ($balances, $isLivePerformanceDate, $latestPerformanceDate): array {
+                if ($latestPerformanceDate === null || $date > $latestPerformanceDate) {
+                    return [
+                        'date' => $date,
+                        'is_live' => false,
+                        'account_balance' => null,
+                        'previous_balance' => null,
+                        'change_amount' => null,
+                        'change_percent' => null,
+                    ];
+                }
+
+                $previousDate = Carbon::parse($date)->subDay()->toDateString();
+                $accountBalance = (float) $balances->get($date, 0.0);
+                $previousBalance = (float) $balances->get($previousDate, 0.0);
+                $changeAmount = $accountBalance - $previousBalance;
+                $changePercent = $previousBalance === 0.0
+                    ? null
+                    : ($changeAmount / $previousBalance) * 100;
+
+                return [
+                    'date' => $date,
+                    'is_live' => $isLivePerformanceDate && $date === $latestPerformanceDate,
+                    'account_balance' => $this->decimal($accountBalance, 2),
+                    'previous_balance' => $this->decimal($previousBalance, 2),
+                    'change_amount' => $this->decimal($changeAmount, 2),
+                    'change_percent' => $changePercent === null ? null : $this->decimal($changePercent, 2),
+                ];
+            })
+            ->all();
+    }
+
+    /**
+     * @return Collection<int, string>
+     */
+    private function currentWeekPerformanceDates(): Collection
+    {
+        $weekStart = now()->startOfWeek(Carbon::MONDAY)->startOfDay();
+
+        return collect(range(0, 4))
+            ->map(fn (int $dayOffset): string => $weekStart->copy()->addDays($dayOffset)->toDateString());
+    }
+
+    /**
+     * @param  Collection<int, int|string>  $holdingIds
+     */
+    private function latestDailyPerformanceDate(Collection $holdingIds): ?string
+    {
+        $instrumentKeys = StockHolding::query()
+            ->whereKey($holdingIds->all())
+            ->get(['id', 'isin', 'wkn', 'symbol', 'mic_code', 'exchange'])
+            ->map(fn (StockHolding $holding): string => $this->stockPriceCatalog->instrumentKeyForHolding($holding))
+            ->unique()
+            ->values();
+        $dailyPriceDates = StockHoldingDailyPrice::query()
+            ->whereIn('stock_holding_id', $holdingIds->all())
+            ->where('trading_date', '<=', now()->toDateString())
+            ->where(function ($query): void {
+                $query
+                    ->whereNotNull('adjusted_close')
+                    ->orWhereNotNull('close');
+            })
+            ->distinct()
+            ->orderByDesc('trading_date')
+            ->limit(1)
+            ->pluck('trading_date')
+            ->map(fn (Carbon|string $date): string => $date instanceof Carbon ? $date->toDateString() : $date);
+
+        $realtimePriceDates = StockRealtimePrice::query()
+            ->whereIn('stock_holding_id', $holdingIds->all())
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->where('as_of', '<=', now()->endOfDay())
+            ->selectRaw('DATE(as_of) as performance_date')
+            ->distinct()
+            ->orderByDesc('performance_date')
+            ->limit(1)
+            ->pluck('performance_date');
+        $officialPriceDates = StockPrice::query()
+            ->whereIn('instrument_key', $instrumentKeys->all())
+            ->where('source_key', 'eodhd_eod')
+            ->where('price_type', 'historical_eod')
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->where('as_of', '<=', now()->endOfDay())
+            ->selectRaw('DATE(as_of) as performance_date')
+            ->distinct()
+            ->orderByDesc('performance_date')
+            ->limit(1)
+            ->pluck('performance_date');
+
+        $latestPerformanceDate = $dailyPriceDates
+            ->merge($realtimePriceDates)
+            ->merge($officialPriceDates)
+            ->filter()
+            ->map(fn ($date): string => (string) $date)
+            ->unique()
+            ->sortDesc()
+            ->first();
+
+        if (! $latestPerformanceDate) {
+            return null;
+        }
+
+        return $latestPerformanceDate;
+    }
+
+    /**
+     * @param  Collection<int, int|string>  $holdingIds
+     */
+    private function isLivePerformanceDate(Collection $holdingIds, string $date): bool
+    {
+        if ($date !== now()->toDateString()) {
+            return false;
+        }
+
+        return StockRealtimePrice::query()
+            ->whereIn('stock_holding_id', $holdingIds->all())
+            ->whereDate('as_of', $date)
+            ->whereNotNull('price')
+            ->whereIn('freshness_status', ['realtime', 'fresh', 'delayed'])
+            ->exists();
+    }
+
+    private function performanceAccountBalanceAt(Depot $depot, Carbon $cutoff): float
+    {
+        return $this->cashBalanceAt($depot, $cutoff)
+            + $this->stockMarketBalanceAt($depot, $cutoff)
+            + $this->externalCashFlowAfter($depot, $cutoff);
+    }
+
+    /**
      * @param  array<int, array<string, mixed>>  $depotHoldings
      */
     private function holdingStockBalance(array $depotHoldings, string $priceKey): float
@@ -737,6 +916,13 @@ class AdminDepotTransactionController extends Controller
             return collect();
         }
 
+        $holdings = StockHolding::query()
+            ->whereKey($holdingIds->all())
+            ->get(['id', 'isin', 'wkn', 'symbol', 'mic_code', 'exchange'])
+            ->keyBy('id');
+        $instrumentKeyByHoldingId = $holdings->mapWithKeys(fn (StockHolding $holding): array => [
+            $holding->id => $this->stockPriceCatalog->instrumentKeyForHolding($holding),
+        ]);
         $dailyPriceByHoldingId = StockHoldingDailyPrice::query()
             ->whereIn('stock_holding_id', $holdingIds->all())
             ->where('trading_date', '<=', $cutoff->toDateString())
@@ -760,12 +946,25 @@ class AdminDepotTransactionController extends Controller
             ->get(['stock_holding_id', 'price', 'as_of'])
             ->groupBy('stock_holding_id')
             ->map(fn (Collection $realtimePrices): ?StockRealtimePrice => $realtimePrices->first());
+        $officialPriceByInstrumentKey = StockPrice::query()
+            ->whereIn('instrument_key', $instrumentKeyByHoldingId->values()->all())
+            ->where('source_key', 'eodhd_eod')
+            ->where('price_type', 'historical_eod')
+            ->whereNotNull('price')
+            ->whereNotNull('as_of')
+            ->where('as_of', '<=', $cutoff)
+            ->orderByDesc('as_of')
+            ->orderByDesc('id')
+            ->get(['id', 'instrument_key', 'price', 'as_of'])
+            ->groupBy('instrument_key')
+            ->map(fn (Collection $stockPrices): ?StockPrice => $stockPrices->first());
 
         return $holdingIds
-            ->mapWithKeys(function (int|string $holdingId) use ($dailyPriceByHoldingId, $realtimePriceByHoldingId): array {
+            ->mapWithKeys(function (int|string $holdingId) use ($dailyPriceByHoldingId, $instrumentKeyByHoldingId, $officialPriceByInstrumentKey, $realtimePriceByHoldingId): array {
                 $dailyPrice = $dailyPriceByHoldingId->get($holdingId);
                 $realtimePrice = $realtimePriceByHoldingId->get($holdingId);
-                $price = $this->historicalMarketPrice($dailyPrice, $realtimePrice);
+                $officialPrice = $officialPriceByInstrumentKey->get($instrumentKeyByHoldingId->get($holdingId));
+                $price = $this->historicalMarketPrice($dailyPrice, $realtimePrice, $officialPrice);
 
                 return $price === null ? [] : [(int) $holdingId => $price];
             });
@@ -774,12 +973,23 @@ class AdminDepotTransactionController extends Controller
     private function historicalMarketPrice(
         ?StockHoldingDailyPrice $dailyPrice,
         ?StockRealtimePrice $realtimePrice,
+        ?StockPrice $officialPrice = null,
     ): ?string {
         $realtimePriceDate = $realtimePrice?->as_of?->copy()->startOfDay();
         $dailyPriceDate = $dailyPrice?->trading_date?->copy()->startOfDay();
+        $officialPriceDate = $officialPrice?->as_of?->copy()->startOfDay();
+
+        if ($officialPrice?->price !== null && ($dailyPriceDate === null || $officialPriceDate?->gte($dailyPriceDate))) {
+            $dailyPrice = null;
+            $dailyPriceDate = $officialPriceDate;
+        }
 
         if ($realtimePrice?->price !== null && ($dailyPriceDate === null || $realtimePriceDate?->gt($dailyPriceDate))) {
             return $realtimePrice->price;
+        }
+
+        if ($officialPrice?->price !== null && $officialPriceDate?->equalTo($dailyPriceDate)) {
+            return $officialPrice->price;
         }
 
         return $dailyPrice?->adjusted_close ?? $dailyPrice?->close;
