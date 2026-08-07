@@ -62,15 +62,15 @@ class StockEndOfDayRepairService
      */
     public function repair(): array
     {
-        $holdings = $this->missingHoldings();
-        $result = $this->endOfDayDataService->syncHoldings(
+        $holdings = $this->holdings();
+        $result = $this->endOfDayDataService->reloadHoldings(
             $holdings,
             now('Europe/Vienna')->subYear()->startOfDay(),
             now('Europe/Vienna')->startOfDay(),
         );
 
         return [
-            'message' => trans_choice('{0} No missing stocks found.|{1} 1 stock repaired.|[2,*] :count stocks repaired.', $holdings->count()),
+            'message' => trans_choice('{0} No stocks found.|{1} 1 stock reloaded.|[2,*] :count stocks reloaded.', $holdings->count()),
             'repaired_stocks_count' => $holdings->count(),
             'stored_prices_count' => $result['stored_count'],
             'repair' => [
@@ -84,17 +84,7 @@ class StockEndOfDayRepairService
      */
     public function repairHolding(StockHolding $holding): array
     {
-        if (! $this->isMissing($holding)) {
-            return [
-                'stock' => [
-                    'id' => $holding->id,
-                    'label' => $this->holdingLabel($holding),
-                ],
-                'stored_prices_count' => 0,
-            ];
-        }
-
-        $result = $this->endOfDayDataService->syncHolding(
+        $result = $this->endOfDayDataService->reloadHolding(
             $holding,
             now('Europe/Vienna')->subYear()->startOfDay(),
             now('Europe/Vienna')->startOfDay(),
@@ -156,14 +146,6 @@ class StockEndOfDayRepairService
         return StockHolding::query()
             ->orderBy('id')
             ->get(['id', 'name', 'subtitle', 'isin', 'wkn', 'symbol', 'exchange', 'mic_code', 'currency', 'trading_times']);
-    }
-
-    private function isMissing(StockHolding $holding): bool
-    {
-        return ! $this->stockPriceCatalog->pricesForHolding($holding)
-            ->whereNotNull('price')
-            ->where('as_of', '<=', now()->subYear()->endOfDay())
-            ->exists();
     }
 
     private function holdingLabel(StockHolding $holding): string

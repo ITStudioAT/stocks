@@ -54,7 +54,7 @@ class AdminDataEndOfDaySyncTest extends TestCase
         $this->actingAs($admin)
             ->postJson('/admin/data/end-of-day/sync')
             ->assertOk()
-            ->assertJsonPath('message', 'EODHD end-of-day sync: 1 record(s) created.')
+            ->assertJsonPath('message', 'EODHD end-of-day sync: 1 record(s) loaded/updated.')
             ->assertJsonPath('requested_count', 1)
             ->assertJsonPath('stored_count', 1)
             ->assertJsonPath('skipped_count', 0)
@@ -83,7 +83,7 @@ class AdminDataEndOfDaySyncTest extends TestCase
             && $request['fmt'] === 'json');
     }
 
-    public function test_end_of_day_sync_only_requests_stocks_missing_the_expected_last_date(): void
+    public function test_end_of_day_sync_revalidates_the_expected_last_date_for_every_stock(): void
     {
         config(['services.eodhd.key' => 'test-token']);
         $this->travelTo(Carbon::parse('2026-06-26 19:20:00', 'Europe/Vienna'));
@@ -125,14 +125,14 @@ class AdminDataEndOfDaySyncTest extends TestCase
         $this->actingAs($admin)
             ->postJson('/admin/data/end-of-day/sync')
             ->assertOk()
-            ->assertJsonPath('requested_count', 3)
-            ->assertJsonPath('stored_count', 3)
+            ->assertJsonPath('requested_count', 4)
+            ->assertJsonPath('stored_count', 4)
             ->assertJsonPath('skipped_count', 0)
             ->assertJsonPath('failed_count', 0)
             ->assertJsonPath('date_from', '2026-06-26')
             ->assertJsonPath('date_to', '2026-06-26');
 
-        Http::assertSentCount(3);
+        Http::assertSentCount(4);
         Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/eod/AAA.XETRA')
             && $request['from'] === '2026-06-26'
             && $request['to'] === '2026-06-26');
@@ -142,7 +142,9 @@ class AdminDataEndOfDaySyncTest extends TestCase
         Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/eod/CCC.XETRA')
             && $request['from'] === '2026-06-26'
             && $request['to'] === '2026-06-26');
-        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), '/eod/DONE.XETRA'));
+        Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/eod/DONE.XETRA')
+            && $request['from'] === '2026-06-26'
+            && $request['to'] === '2026-06-26');
     }
 
     public function test_end_of_day_sync_continues_at_the_stored_interval_when_the_expected_last_date_is_still_missing(): void

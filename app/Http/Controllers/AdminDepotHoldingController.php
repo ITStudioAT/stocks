@@ -22,6 +22,7 @@ use App\Services\IndexPriceRefreshSettings;
 use App\Services\KnownInstrumentMetadataCorrections;
 use App\Services\PriceRefreshScheduler;
 use App\Services\StockHistoricalPriceService;
+use App\Services\StockPreviousCloseResolver;
 use App\Services\StockPriceCatalog;
 use App\Services\StockPriceFreshness;
 use App\Services\TradingSessionPriceResolver;
@@ -44,6 +45,7 @@ class AdminDepotHoldingController extends Controller
 
     public function __construct(
         private StockPriceFreshness $stockPriceFreshness,
+        private StockPreviousCloseResolver $stockPreviousCloseResolver,
         private PriceRefreshScheduler $priceRefreshScheduler,
         private IndexPriceRefreshSettings $indexPriceRefreshSettings,
         private TradingSessionPriceResolver $tradingSessionPriceResolver,
@@ -698,33 +700,13 @@ class AdminDepotHoldingController extends Controller
      */
     private function endOfDaySessionPrices(StockHolding $holding, ?string $relevantTradingDate): array
     {
-        $query = $this->stockPriceCatalog->pricesForHolding($holding)
-            ->where('price_type', 'historical_eod')
-            ->whereNotNull('price')
-            ->whereNotNull('as_of')
-            ->orderByDesc('as_of')
-            ->orderByDesc('id');
-
-        if ($relevantTradingDate !== null) {
-            $query->where('as_of', '<', Carbon::parse($relevantTradingDate, config('app.timezone'))->startOfDay()->utc());
-        }
-
-        $prices = $query
-            ->get(['id', 'price', 'as_of'])
-            ->unique(fn (StockPrice $stockPrice): string => $this->storedStockPriceDateTime($stockPrice, 'as_of')
-                ?->setTimezone(config('app.timezone'))
-                ->toDateString() ?? "row-{$stockPrice->id}")
-            ->take(2)
-            ->values();
-
-        $end24Price = $prices->get(0);
-        $end48Price = $prices->get(1);
+        $previousCloses = $this->stockPreviousCloseResolver->resolve($holding, $relevantTradingDate);
 
         return [
-            'end_price_24' => $end24Price instanceof StockPrice ? $this->pricePayload($end24Price->price) : null,
-            'end_price_48' => $end48Price instanceof StockPrice ? $this->pricePayload($end48Price->price) : null,
-            'end_price_24_date' => $end24Price instanceof StockPrice ? $this->endOfDayDate($end24Price) : null,
-            'end_price_48_date' => $end48Price instanceof StockPrice ? $this->endOfDayDate($end48Price) : null,
+            'end_price_24' => $this->pricePayload($previousCloses['previous_close']),
+            'end_price_48' => $this->pricePayload($previousCloses['earlier_close']),
+            'end_price_24_date' => $previousCloses['previous_close_date'],
+            'end_price_48_date' => $previousCloses['earlier_close_date'],
         ];
     }
 
@@ -1923,13 +1905,6 @@ class AdminDepotHoldingController extends Controller
         } catch (Throwable) {
             return $asOf;
         }
-    }
-
-    private function endOfDayDate(StockPrice $stockPrice): ?string
-    {
-        return $this->storedStockPriceDateTime($stockPrice, 'as_of')
-            ?->setTimezone(config('app.timezone'))
-            ->toDateString();
     }
 
     private function storedStockPriceTimestamp(StockPrice|StockRealtimePrice $stockPrice, string $column): ?string

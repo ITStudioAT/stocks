@@ -4912,16 +4912,11 @@ describe('App', () => {
         expect(fetchMock.mock.calls
             .filter(([path]) => path.startsWith('/admin/watchlist/holdings?page=1'))).toHaveLength(stockRefreshRequestCount + 1);
 
-        expect(wrapper.text()).toContain('305.55');
-        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/1/intraday-candles', expect.anything());
-        const intradayTable = wrapper.find('.holding-intraday-table');
-        expect(wrapper.find('.holding-intraday-detail-header').text()).toContain('Intraday 05.06.2026');
-        expect(wrapper.find('.holding-intraday-detail-header').text()).not.toContain('- 5m');
-        expect(wrapper.find('.holding-intraday-detail-header').text()).toContain('3 rows');
-        expect(intradayTable.text()).toContain('05.06.2026, 09:00');
-        expect(intradayTable.text()).toContain('05.06.2026, 09:05');
-        expect(intradayTable.text()).toContain('05.06.2026, 17:30');
-        expect(intradayTable.text()).toContain('306.32001000');
+        expect(wrapper.text()).not.toContain('305.55');
+        expect(fetchMock).not.toHaveBeenCalledWith('/admin/watchlist/holdings/1/intraday-candles', expect.anything());
+        expect(wrapper.find('.holding-intraday-detail').exists()).toBe(false);
+        expect(wrapper.find('.holding-intraday-chart').exists()).toBe(false);
+        expect(wrapper.find('.holding-intraday-table').exists()).toBe(false);
         expect(wrapper.find('.recent-price-strip').exists()).toBe(false);
 
         await wrapper.find('.stock-holding-row').trigger('click');
@@ -4934,8 +4929,8 @@ describe('App', () => {
         await closedMarketHoldingRow.trigger('click');
         await flushPromises();
 
-        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/4/intraday-candles', expect.anything());
-        expect(wrapper.text()).toContain('No EODHD intraday prices available for this session.');
+        expect(fetchMock).not.toHaveBeenCalledWith('/admin/watchlist/holdings/4/intraday-candles', expect.anything());
+        expect(wrapper.text()).not.toContain('No EODHD intraday prices available for this session.');
 
         await closedMarketHoldingRow.trigger('click');
         await flushPromises();
@@ -6963,7 +6958,7 @@ describe('App', () => {
 
             if (path === '/admin/data/end-of-day/sync' && options?.method === 'POST') {
                 return Promise.resolve(jsonResponse({
-                    message: 'EODHD end-of-day sync: 1 record(s) created.',
+                    message: 'EODHD end-of-day sync: 1 record(s) loaded/updated.',
                     requested_count: 1,
                     stored_count: 1,
                     skipped_count: 0,
@@ -7880,7 +7875,7 @@ describe('App', () => {
         expect(fetchMock).toHaveBeenCalledWith('/admin/data/end-of-day/sync', expect.objectContaining({
             method: 'POST',
         }));
-        expect(dataOverview.text()).toContain('EODHD end-of-day sync: 1 record(s) created.');
+        expect(dataOverview.text()).toContain('EODHD end-of-day sync: 1 record(s) loaded/updated.');
         expect(endOfDayDataCard.findAll('.test-intraday-summary-card--update').map((card) => card.text())).toEqual([
             'Latest update12.06.2026, 19:21',
             'Next update15.06.2026, 19:20',
@@ -7890,7 +7885,7 @@ describe('App', () => {
         await endOfDayDataSyncAlertCloseButton.trigger('click');
         await flushPromises();
 
-        expect(dataOverview.text()).not.toContain('EODHD end-of-day sync: 1 record(s) created.');
+        expect(dataOverview.text()).not.toContain('EODHD end-of-day sync: 1 record(s) loaded/updated.');
         await syncHistoricalDataButton.trigger('click');
 
         const historicalDataManualSyncStatusDot = historicalDataCard.find('[aria-label="Historical data update status: updating"]');
@@ -8728,6 +8723,9 @@ describe('App', () => {
                 stock_balance: '383.00',
                 cash_balance: '650.00',
                 account_balance: '1033.00',
+                previous_day_balance: '1020.00',
+                previous_day_change_amount: '13.00',
+                previous_day_change_percent: '1.27',
                 year_start_balance: '1000.00',
                 current_balance: '1033.00',
                 balance_change_amount: '33.00',
@@ -8754,6 +8752,9 @@ describe('App', () => {
                 stock_balance: '360.00',
                 cash_balance: '650.00',
                 account_balance: '1010.00',
+                previous_day_balance: '1020.00',
+                previous_day_change_amount: '-10.00',
+                previous_day_change_percent: '-0.98',
                 year_start_balance: '1000.00',
                 current_balance: '1010.00',
                 balance_change_amount: '10.00',
@@ -8863,6 +8864,9 @@ describe('App', () => {
                         stock_balance: '360.50',
                         cash_balance: '650.00',
                         account_balance: '1010.50',
+                        previous_day_balance: '1020.00',
+                        previous_day_change_amount: '-9.50',
+                        previous_day_change_percent: '-0.93',
                         year_start_balance: '1000.00',
                         current_balance: '1010.50',
                         balance_change_amount: '10.50',
@@ -8941,6 +8945,10 @@ describe('App', () => {
         expect(wrapper.text()).toContain('650.00 EUR');
         expect(wrapper.text()).toContain('Account balance');
         expect(wrapper.text()).toContain('1,033.00 EUR');
+        expect(wrapper.find('.depot-account-yesterday-row').text()).toContain('Account Yesterday');
+        expect(wrapper.find('.depot-account-yesterday-row').text()).toContain('1,020.00 EUR');
+        expect(wrapper.find('.depot-account-yesterday-change-row').text()).toContain('+1.27% · +13.00 EUR');
+        expect(wrapper.find('.depot-account-yesterday-change-row .text-success').exists()).toBe(true);
         expect(wrapper.text()).not.toContain('Status');
         expect(wrapper.text()).not.toContain('Active');
         expect(wrapper.text()).toContain('Aktuelles Jahr');

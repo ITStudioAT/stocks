@@ -1138,6 +1138,9 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('depot_valuations.latest.stock_balance', '478.75')
             ->assertJsonPath('depot_valuations.latest.cash_balance', '710.00')
             ->assertJsonPath('depot_valuations.latest.account_balance', '1188.75')
+            ->assertJsonPath('depot_valuations.latest.previous_day_balance', '1000.00')
+            ->assertJsonPath('depot_valuations.latest.previous_day_change_amount', '188.75')
+            ->assertJsonPath('depot_valuations.latest.previous_day_change_percent', '18.88')
             ->assertJsonPath('depot_valuations.latest.year_start_balance', '1000.00')
             ->assertJsonPath('depot_valuations.latest.current_balance', '1188.75')
             ->assertJsonPath('depot_valuations.latest.balance_change_amount', '188.75')
@@ -1312,9 +1315,9 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('depot_holdings.0.latest_price', '121.25000000')
             ->assertJsonPath('depot_holdings.0.latest_price_status', 'realtime')
             ->assertJsonPath('depot_holdings.0.latest_price_fetched_at', '2026-06-15T07:23:00+02:00')
-            ->assertJsonPath('depot_holdings.0.previous_day_price', '120.00000000')
-            ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-06-12')
-            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '1.04')
+            ->assertJsonPath('depot_holdings.0.previous_day_price', '118.00000000')
+            ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-06-11')
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '2.75')
             ->assertJsonPath('depot_valuations.latest.stock_balance', '242.50')
             ->assertJsonPath('depot_valuations.latest.current_balance', '1242.50');
     }
@@ -1359,7 +1362,7 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '1.86');
     }
 
-    public function test_depot_holding_payload_prefers_previous_day_realtime_price_over_stale_daily_price(): void
+    public function test_depot_holding_payload_prefers_official_eod_over_realtime_and_stale_daily_price(): void
     {
         $admin = $this->adminUser();
         $depot = Depot::factory()->create([
@@ -1369,15 +1372,16 @@ class DepotTransactionTest extends TestCase
         $holding = StockHolding::factory()->create([
             'symbol' => 'CEBS',
             'currency' => 'EUR',
-            'latest_price' => '8.931000',
+            'isin' => 'IE00063FT9K6',
+            'latest_price' => '9.796000',
         ]);
         $latestRealtimePrice = StockRealtimePrice::factory()->create([
             'stock_holding_id' => $holding->id,
             'symbol' => 'CEBS',
             'currency' => 'EUR',
-            'price' => '8.93100000',
-            'as_of' => Carbon::parse('2026-06-25 07:50:00', 'UTC'),
-            'fetched_at' => Carbon::parse('2026-06-25 08:07:42', 'UTC'),
+            'price' => '9.79600000',
+            'as_of' => Carbon::parse('2026-08-07 08:03:00', 'UTC'),
+            'fetched_at' => Carbon::parse('2026-08-07 08:03:10', 'UTC'),
             'freshness_status' => 'fresh',
         ]);
         $holding->update([
@@ -1387,10 +1391,24 @@ class DepotTransactionTest extends TestCase
             'stock_holding_id' => $holding->id,
             'symbol' => 'CEBS',
             'currency' => 'EUR',
-            'price' => '8.87800000',
-            'as_of' => Carbon::parse('2026-06-24 13:36:00', 'UTC'),
-            'fetched_at' => Carbon::parse('2026-06-25 05:13:42', 'UTC'),
+            'price' => '9.84300000',
+            'as_of' => Carbon::parse('2026-08-06 15:36:00', 'UTC'),
+            'fetched_at' => Carbon::parse('2026-08-06 15:36:10', 'UTC'),
             'freshness_status' => 'stale',
+        ]);
+        StockPrice::factory()->create([
+            'instrument_key' => 'isin:IE00063FT9K6',
+            'source_key' => 'eodhd_eod',
+            'source_name' => 'EODHD EOD',
+            'symbol' => 'CEBS',
+            'isin' => 'IE00063FT9K6',
+            'currency' => 'EUR',
+            'price' => '9.78100000',
+            'close' => '9.78100000',
+            'price_type' => 'historical_eod',
+            'as_of' => Carbon::parse('2026-08-06', 'Europe/Vienna')->endOfDay()->utc(),
+            'fetched_at' => Carbon::parse('2026-08-07 06:00:00', 'UTC'),
+            'freshness_status' => 'historical',
         ]);
         StockHoldingDailyPrice::factory()->create([
             'stock_holding_id' => $holding->id,
@@ -1414,10 +1432,10 @@ class DepotTransactionTest extends TestCase
         $this->actingAs($admin)
             ->getJson('/admin/depot-transactions')
             ->assertOk()
-            ->assertJsonPath('depot_holdings.0.latest_price', '8.93100000')
-            ->assertJsonPath('depot_holdings.0.previous_day_price', '8.87800000')
-            ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-06-24')
-            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '0.60');
+            ->assertJsonPath('depot_holdings.0.latest_price', '9.79600000')
+            ->assertJsonPath('depot_holdings.0.previous_day_price', '9.78100000')
+            ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-08-06')
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '0.15');
     }
 
     public function test_depot_year_start_price_uses_only_current_open_lots_after_sells(): void

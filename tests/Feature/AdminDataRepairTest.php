@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Services\StockPriceCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Http;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -104,6 +105,62 @@ class AdminDataRepairTest extends TestCase
     public function test_guest_cannot_view_data_repair_summary(): void
     {
         $this->getJson('/admin/data/repair')->assertUnauthorized();
+    }
+
+    public function test_admin_can_reload_and_correct_an_already_stored_end_of_day_price(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        Carbon::setTestNow(Carbon::parse('2026-08-07 12:00:00', 'Europe/Vienna'));
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'CEBS',
+            'name' => 'iShares Copper Miners UCITS ETF EUR',
+            'isin' => 'IE00063FT9K6',
+            'exchange' => 'XETRA',
+            'mic_code' => 'XETR',
+            'currency' => 'EUR',
+        ]);
+        $instrumentKey = app(StockPriceCatalog::class)->instrumentKeyForHolding($holding);
+        $date = '2026-08-06';
+        StockPrice::factory()->create([
+            'instrument_key' => $instrumentKey,
+            'quote_hash' => hash('sha256', "{$instrumentKey}|eodhd_eod|{$date}|close"),
+            'source_key' => 'eodhd_eod',
+            'source_name' => 'EODHD EOD',
+            'symbol' => 'CEBS',
+            'isin' => 'IE00063FT9K6',
+            'currency' => 'EUR',
+            'price' => '9.84300000',
+            'close' => '9.84300000',
+            'price_type' => 'historical_eod',
+            'as_of' => Carbon::parse($date, 'Europe/Vienna')->endOfDay()->utc(),
+            'fetched_at' => Carbon::parse($date, 'Europe/Vienna')->endOfDay()->utc(),
+            'freshness_status' => 'historical',
+        ]);
+
+        Http::fake([
+            'eodhd.com/api/eod/CEBS.XETRA*' => Http::response([[
+                'date' => $date,
+                'open' => 9.85,
+                'high' => 9.989,
+                'low' => 9.73,
+                'close' => 9.781,
+                'adjusted_close' => 9.781,
+                'volume' => 110877,
+            ]]),
+        ]);
+
+        $this->actingAs($this->adminUser())
+            ->postJson("/admin/data/repair/end-of-day/{$holding->id}")
+            ->assertOk()
+            ->assertJsonPath('stock.id', $holding->id)
+            ->assertJsonPath('stored_prices_count', 1);
+
+        $this->assertSame(1, StockPrice::query()->count());
+        $this->assertDatabaseHas('stock_prices', [
+            'quote_hash' => hash('sha256', "{$instrumentKey}|eodhd_eod|{$date}|close"),
+            'price' => '9.78100000',
+            'close' => '9.78100000',
+        ]);
     }
 
     private function createIntradayCandle(StockHolding $holding, string $tradingDate): StockHoldingIntradayCandle

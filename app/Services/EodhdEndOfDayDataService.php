@@ -18,7 +18,6 @@ class EodhdEndOfDayDataService
         private EodhdApiClient $apiClient,
         private EodhdMarketData $marketData,
         private StockPriceCatalog $stockPriceCatalog,
-        private StockHistoricalPriceService $historicalPriceService,
     ) {}
 
     /**
@@ -54,11 +53,8 @@ class EodhdEndOfDayDataService
     public function syncLatestMissing(): array
     {
         $targetDate = $this->completedTradingDay->date()->startOfDay();
-        $outdatedStockIds = collect($this->historicalPriceService->coverage()['end_of_day_outdated_stocks'])
-            ->pluck('id')
-            ->all();
 
-        return $this->syncHoldings($this->holdingsForIds($outdatedStockIds), $targetDate, $targetDate);
+        return $this->reloadHoldings($this->holdings(), $targetDate, $targetDate);
     }
 
     /**
@@ -75,6 +71,40 @@ class EodhdEndOfDayDataService
      */
     public function syncHoldings(Collection $holdings, Carbon $dateFrom, Carbon $dateTo): array
     {
+        return $this->processHoldings($holdings, $dateFrom, $dateTo, false);
+    }
+
+    /**
+     * @param  Collection<int, StockHolding>  $holdings
+     * @return array{
+     *     requested_count: int,
+     *     stored_count: int,
+     *     skipped_count: int,
+     *     failed_count: int,
+     *     date_from: string,
+     *     date_to: string,
+     *     errors: array<int, string>,
+     * }
+     */
+    public function reloadHoldings(Collection $holdings, Carbon $dateFrom, Carbon $dateTo): array
+    {
+        return $this->processHoldings($holdings, $dateFrom, $dateTo, true);
+    }
+
+    /**
+     * @param  Collection<int, StockHolding>  $holdings
+     * @return array{
+     *     requested_count: int,
+     *     stored_count: int,
+     *     skipped_count: int,
+     *     failed_count: int,
+     *     date_from: string,
+     *     date_to: string,
+     *     errors: array<int, string>,
+     * }
+     */
+    private function processHoldings(Collection $holdings, Carbon $dateFrom, Carbon $dateTo, bool $reloadStored): array
+    {
         $requestedCount = 0;
         $storedCount = 0;
         $skippedCount = 0;
@@ -83,7 +113,7 @@ class EodhdEndOfDayDataService
 
         foreach ($holdings as $holding) {
             try {
-                $result = $this->syncHolding($holding, $dateFrom, $dateTo);
+                $result = $this->processHolding($holding, $dateFrom, $dateTo, $reloadStored);
             } catch (Throwable $exception) {
                 $failedCount++;
                 $errors[] = $exception->getMessage();
@@ -112,6 +142,22 @@ class EodhdEndOfDayDataService
      */
     public function syncHolding(StockHolding $holding, Carbon $dateFrom, Carbon $dateTo): array
     {
+        return $this->processHolding($holding, $dateFrom, $dateTo, false);
+    }
+
+    /**
+     * @return array{requested_count: int, stored_count: int, skipped_count: int, ranges: array<int, array{from: string, to: string}>}
+     */
+    public function reloadHolding(StockHolding $holding, Carbon $dateFrom, Carbon $dateTo): array
+    {
+        return $this->processHolding($holding, $dateFrom, $dateTo, true);
+    }
+
+    /**
+     * @return array{requested_count: int, stored_count: int, skipped_count: int, ranges: array<int, array{from: string, to: string}>}
+     */
+    private function processHolding(StockHolding $holding, Carbon $dateFrom, Carbon $dateTo, bool $reloadStored): array
+    {
         $dateFrom = $dateFrom->copy()->startOfDay();
         $dateTo = $dateTo->copy()->startOfDay();
 
@@ -124,7 +170,9 @@ class EodhdEndOfDayDataService
             ];
         }
 
-        $missingRanges = $this->missingRanges($holding, $dateFrom, $dateTo);
+        $missingRanges = $reloadStored
+            ? [['from' => $dateFrom->toDateString(), 'to' => $dateTo->toDateString()]]
+            : $this->missingRanges($holding, $dateFrom, $dateTo);
 
         if ($missingRanges === []) {
             return [
@@ -159,24 +207,6 @@ class EodhdEndOfDayDataService
     private function holdings(): Collection
     {
         return StockHolding::query()
-            ->orderBy('id')
-            ->get(['id', 'name', 'isin', 'wkn', 'symbol', 'exchange', 'mic_code', 'currency', 'trading_times']);
-    }
-
-    /**
-     * @param  array<int, int>  $ids
-     * @return Collection<int, StockHolding>
-     */
-    private function holdingsForIds(array $ids): Collection
-    {
-        if ($ids === []) {
-            return StockHolding::query()
-                ->whereRaw('1 = 0')
-                ->get(['id', 'name', 'isin', 'wkn', 'symbol', 'exchange', 'mic_code', 'currency', 'trading_times']);
-        }
-
-        return StockHolding::query()
-            ->whereIn('id', $ids)
             ->orderBy('id')
             ->get(['id', 'name', 'isin', 'wkn', 'symbol', 'exchange', 'mic_code', 'currency', 'trading_times']);
     }
@@ -300,7 +330,38 @@ class EodhdEndOfDayDataService
             return 0;
         }
 
-        return (int) DB::transaction(fn (): int => StockPrice::query()->insertOrIgnore($rows));
+        return DB::transaction(function () use ($rows): int {
+            StockPrice::query()->upsert(
+                $rows,
+                uniqueBy: ['quote_hash'],
+                update: [
+                    'instrument_key',
+                    'source_key',
+                    'source_name',
+                    'source_url',
+                    'source_quality',
+                    'venue',
+                    'mic',
+                    'isin',
+                    'wkn',
+                    'symbol',
+                    'currency',
+                    'close',
+                    'price',
+                    'price_type',
+                    'as_of',
+                    'fetched_at',
+                    'freshness_status',
+                    'validation_status',
+                    'validation_errors',
+                    'raw_payload',
+                    'trading_times',
+                    'updated_at',
+                ],
+            );
+
+            return count($rows);
+        });
     }
 
     /**

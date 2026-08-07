@@ -259,7 +259,7 @@ class AdminDataController extends Controller
 
         return response()->json([
             ...$result,
-            'message' => "EODHD end-of-day sync: {$result['stored_count']} record(s) created.",
+            'message' => "EODHD end-of-day sync: {$result['stored_count']} record(s) loaded/updated.",
             'end_of_day_data_update_settings' => $endOfDayDataUpdateScheduler->markRefreshed(),
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);

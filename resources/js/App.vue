@@ -6240,7 +6240,6 @@ async function loadSelectedStockPrices() {
 function handleStockHoldingRowClick(holding) {
     if (activeSection.value === 'stocks') {
         toggleStockWatchItemSelection(holding);
-        toggleHoldingDetails(holding);
 
         return;
     }
@@ -6639,6 +6638,34 @@ function formatDepotCashBalance() {
 
 function formatDepotAccountBalance() {
     return `${formatAccountBalance(depotValuationNumber('account_balance'))} EUR`;
+}
+
+function formatDepotPreviousDayBalance() {
+    return `${formatAccountBalance(depotValuationNumber('previous_day_balance'))} EUR`;
+}
+
+function formatDepotPreviousDayChangeAmount() {
+    const amount = depotValuationNumber('previous_day_change_amount');
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${formatAccountBalance(amount)} EUR`;
+}
+
+function formatDepotPreviousDayChangePercent() {
+    const amount = depotValuationNumber('previous_day_change_percent');
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${amount.toFixed(2)}%`;
+}
+
+function depotPreviousDayChangeClass() {
+    const amount = depotValuationNumber('previous_day_change_amount');
+
+    return {
+        'text-success': amount > 0,
+        'text-error': amount < 0,
+        'text-medium-emphasis': amount === 0,
+    };
 }
 
 function formatDepotYearStockPrice(stock, key) {
@@ -12727,7 +12754,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             'stock-holding-row--selected': activeSection === 'stocks'
                                                 && selectedStockWatchItem?.id === holding.id,
                                         }"
-                                        :aria-expanded="isHoldingExpanded(holding)"
+                                        :aria-expanded="activeSection === 'stocks' ? undefined : isHoldingExpanded(holding)"
                                         :aria-selected="activeSection === 'stocks'
                                             ? selectedStockWatchItem?.id === holding.id
                                             : undefined"
@@ -12936,7 +12963,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <div :id="`desktop-stock-chart-target-${holding.id}`" />
                                         </td>
                                     </tr>
-                                    <tr v-if="isHoldingExpanded(holding)" class="stock-holding-detail-row">
+                                    <tr v-if="activeSection !== 'stocks' && isHoldingExpanded(holding)" class="stock-holding-detail-row">
                                         <td :colspan="watchListTableColumnCount">
                                             <div
                                                 v-if="expandedHoldingIntradayLoading(holding)"
@@ -17698,6 +17725,19 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Account balance</td>
                                             <td class="text-right">{{ formatDepotAccountBalance() }}</td>
+                                        </tr>
+                                        <tr class="depot-account-yesterday-row">
+                                            <td class="text-medium-emphasis text-caption">Account Yesterday</td>
+                                            <td class="text-right">{{ formatDepotPreviousDayBalance() }}</td>
+                                        </tr>
+                                        <tr class="depot-account-yesterday-change-row">
+                                            <td class="text-medium-emphasis text-caption">+/-</td>
+                                            <td class="text-right">
+                                                <span :class="depotPreviousDayChangeClass()">
+                                                    {{ formatDepotPreviousDayChangePercent() }} ·
+                                                    {{ formatDepotPreviousDayChangeAmount() }}
+                                                </span>
+                                            </td>
                                         </tr>
                                     </tbody>
                                 </v-table>

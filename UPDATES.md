@@ -1,3 +1,12 @@
+## 0.8.2
+
+### Depot
+
+- Previous Day prices synchronized
+- Vortages-Balance hinzugefügt
+
+### Depot
+
 ## 0.7.0 - 0.8.1
 
 ### Depot

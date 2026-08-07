@@ -92,6 +92,57 @@ class EodhdEndOfDayDataServiceTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_reload_updates_an_existing_end_of_day_date_with_provider_corrections(): void
+    {
+        config(['services.eodhd.key' => 'test-token']);
+        $holding = $this->xetraHolding();
+        $date = '2026-06-26';
+        $instrumentKey = 'isin:'.$holding->isin;
+        StockPrice::factory()->create([
+            'instrument_key' => $instrumentKey,
+            'quote_hash' => hash('sha256', "{$instrumentKey}|eodhd_eod|{$date}|close"),
+            'source_key' => 'eodhd_eod',
+            'source_name' => 'EODHD EOD',
+            'symbol' => $holding->symbol,
+            'currency' => $holding->currency,
+            'price' => '102.00000000',
+            'close' => '102.00000000',
+            'price_type' => 'historical_eod',
+            'as_of' => Carbon::parse($date, 'Europe/Vienna')->endOfDay()->utc(),
+            'fetched_at' => Carbon::parse($date, 'Europe/Vienna')->endOfDay()->utc(),
+            'freshness_status' => 'historical',
+            'validation_status' => 'valid',
+        ]);
+
+        Http::fake([
+            'eodhd.com/api/eod/AMES.XETRA*' => Http::response([[
+                'date' => $date,
+                'open' => 100.25,
+                'high' => 102.00,
+                'low' => 99.75,
+                'close' => 101.50,
+                'adjusted_close' => 101.40,
+                'volume' => 12345,
+            ]]),
+        ]);
+
+        $result = app(EodhdEndOfDayDataService::class)->reloadHolding(
+            $holding,
+            Carbon::parse($date, 'Europe/Vienna'),
+            Carbon::parse($date, 'Europe/Vienna'),
+        );
+
+        $this->assertSame(1, $result['requested_count']);
+        $this->assertSame(1, $result['stored_count']);
+        $this->assertSame(1, StockPrice::query()->count());
+        $this->assertDatabaseHas('stock_prices', [
+            'quote_hash' => hash('sha256', "{$instrumentKey}|eodhd_eod|{$date}|close"),
+            'price' => '101.50000000',
+            'close' => '101.50000000',
+        ]);
+        $this->assertSame(12345, StockPrice::query()->firstOrFail()->raw_payload['volume']);
+    }
+
     private function xetraHolding(): StockHolding
     {
         return StockHolding::factory()->create([
