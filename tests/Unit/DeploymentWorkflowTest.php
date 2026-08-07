@@ -330,6 +330,45 @@ class DeploymentWorkflowTest extends TestCase
         );
     }
 
+    public function test_gitpush_rejects_an_existing_remote_tag_before_mutating_the_release(): void
+    {
+        $gitHelpers = file_get_contents($this->projectPath('scripts/git_helpers.ps1'));
+        $gitPushPosition = strpos($gitHelpers, 'function gitpush');
+
+        $this->assertIsInt($gitPushPosition);
+
+        $remoteTagCheckPosition = strpos(
+            $gitHelpers,
+            'Assert-StocksRemoteReleaseTagIsAvailable -Version $version',
+            $gitPushPosition,
+        );
+        $synchronizePosition = strpos($gitHelpers, "Invoke-StocksCommand 'Synchronizing main before the release...'", $gitPushPosition);
+        $localTagCheckPosition = strpos(
+            $gitHelpers,
+            'Test-StocksLocalReleaseTagCanResume -Version $version',
+            $gitPushPosition,
+        );
+        $preparePosition = strpos($gitHelpers, "Invoke-StocksCommand 'Preparing local dependencies...'", $gitPushPosition);
+        $releaseChecksPosition = strpos($gitHelpers, 'Invoke-StocksReleaseChecks -Full:$Full', $gitPushPosition);
+        $sourceCommitPosition = strpos($gitHelpers, 'git commit -m $message', $gitPushPosition);
+
+        $this->assertIsInt($remoteTagCheckPosition);
+        $this->assertIsInt($synchronizePosition);
+        $this->assertIsInt($localTagCheckPosition);
+        $this->assertIsInt($preparePosition);
+        $this->assertIsInt($releaseChecksPosition);
+        $this->assertIsInt($sourceCommitPosition);
+        $this->assertLessThan($synchronizePosition, $remoteTagCheckPosition);
+        $this->assertLessThan($localTagCheckPosition, $synchronizePosition);
+        $this->assertLessThan($preparePosition, $localTagCheckPosition);
+        $this->assertLessThan($releaseChecksPosition, $remoteTagCheckPosition);
+        $this->assertLessThan($sourceCommitPosition, $remoteTagCheckPosition);
+        $this->assertStringContainsString(
+            'is already published as $tag on origin. Choose an unused version. No release changes were made.',
+            $gitHelpers,
+        );
+    }
+
     public function test_powershell_update_helper_checks_and_updates_composer_and_npm_packages(): void
     {
         $installer = file_get_contents($this->projectPath('scripts/install_powershell_helpers.ps1'));

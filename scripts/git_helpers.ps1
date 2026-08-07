@@ -174,6 +174,61 @@ function Wait-StocksCi {
     Write-Host "GitHub CI verified the release: $($run.url)" -ForegroundColor Green
 }
 
+function Assert-StocksRemoteReleaseTagIsAvailable {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Version
+    )
+
+    $tag = "v$Version"
+    $remoteTag = @(git ls-remote --tags origin "refs/tags/$tag" 2>$null)
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not verify whether $tag already exists on origin. No release changes were made."
+    }
+
+    if ($remoteTag.Count -gt 0) {
+        throw "Version $Version is already published as $tag on origin. Choose an unused version. No release changes were made."
+    }
+}
+
+function Test-StocksLocalReleaseTagCanResume {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Version
+    )
+
+    $tag = "v$Version"
+    $existingTagCommit = git rev-list -n 1 $tag 2>$null
+
+    if (-not $existingTagCommit) {
+        return $false
+    }
+
+    $localHead = git rev-parse HEAD
+    $worktreeChanges = git status --porcelain --untracked-files=all
+    $releaseFilesExist =
+        (Test-Path -LiteralPath 'deployment/frontend-build.tar.gz') -and
+        (Test-Path -LiteralPath 'deployment/frontend-build.sha256') -and
+        (Test-Path -LiteralPath 'deployment/source-commit') -and
+        (Test-Path -LiteralPath 'deployment/source-manifest.sha256')
+
+    if ($existingTagCommit -ne $localHead -or $worktreeChanges -or -not $releaseFilesExist) {
+        throw "Local tag $tag already belongs to another release. Choose an unused version. No release changes were made."
+    }
+
+    $sourceCommit = git rev-parse "$localHead^"
+    & php scripts/frontend-release.php verify $sourceCommit *> $null
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Local tag $tag does not identify a valid completed release. Choose an unused version. No release changes were made."
+    }
+
+    Write-Host "Resuming the completed local release tagged $tag." -ForegroundColor Cyan
+
+    return $true
+}
+
 function gitpush {
     [CmdletBinding()]
     param(
@@ -197,20 +252,32 @@ function gitpush {
             throw "gitpush only publishes the main branch. Current branch: $branch"
         }
 
+        if ($version) {
+            Assert-StocksRemoteReleaseTagIsAvailable -Version $version
+        }
+
         Invoke-StocksCommand 'Synchronizing main before the release...' {
             git pull --rebase --autostash origin main
         }
 
-        Invoke-StocksCommand 'Preparing local dependencies...' {
-            php scripts/update.php --target=local --prepare
+        $resumeTaggedRelease = $false
+
+        if ($version) {
+            $resumeTaggedRelease = Test-StocksLocalReleaseTagCanResume -Version $version
         }
 
-        Invoke-StocksCommand 'Formatting changed PHP files...' {
-            php vendor/bin/pint --dirty --format agent
-        }
+        if (-not $resumeTaggedRelease) {
+            Invoke-StocksCommand 'Preparing local dependencies...' {
+                php scripts/update.php --target=local --prepare
+            }
 
-        Invoke-StocksCommand 'Checking UTF-8 source files...' {
-            php scripts/check-encoding.php
+            Invoke-StocksCommand 'Formatting changed PHP files...' {
+                php vendor/bin/pint --dirty --format agent
+            }
+
+            Invoke-StocksCommand 'Checking UTF-8 source files...' {
+                php scripts/check-encoding.php
+            }
         }
 
         $sourceChanges = git status --porcelain --untracked-files=all | Where-Object {
