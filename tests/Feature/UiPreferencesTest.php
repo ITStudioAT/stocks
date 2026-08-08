@@ -23,7 +23,10 @@ class UiPreferencesTest extends TestCase
             ->assertJsonPath('ui_preferences.analyze_trend_row_limit', 200)
             ->assertJsonPath('ui_preferences.analyze_trend_excluded_holding_ids', [])
             ->assertJsonPath('ui_preferences.analyze_trend_trade_amounts', [7000, 5000, 3000])
-            ->assertJsonPath('ui_preferences.analyze_trend_max_invest_amount', 0);
+            ->assertJsonPath('ui_preferences.analyze_trend_max_invest_amount', 0)
+            ->assertJsonPath('ui_preferences.analyze_trend_virtual_buy_amount', 7000)
+            ->assertJsonPath('ui_preferences.analyze_trend_streak_buy_thresholds', [-4, -3, -2, -1, 0])
+            ->assertJsonPath('ui_preferences.analyze_trend_streak_sell_threshold', 3);
 
         $this->actingAs($admin)
             ->patchJson('/admin/ui-preferences', [
@@ -69,15 +72,32 @@ class UiPreferencesTest extends TestCase
             ->patchJson('/admin/ui-preferences', [
                 'analyze_trend_trade_amounts' => [8000, 0, 0],
                 'analyze_trend_max_invest_amount' => 25000,
+                'analyze_trend_virtual_buy_amount' => 8000,
             ])
             ->assertOk()
             ->assertJsonPath('ui_preferences.analyze_trend_trade_amounts', [8000, 0, 0])
-            ->assertJsonPath('ui_preferences.analyze_trend_max_invest_amount', 25000);
+            ->assertJsonPath('ui_preferences.analyze_trend_max_invest_amount', 25000)
+            ->assertJsonPath('ui_preferences.analyze_trend_virtual_buy_amount', 8000);
 
         $config->refresh();
 
         $this->assertSame([8000, 0, 0], $config->value['analyze_trend_trade_amounts']);
         $this->assertSame(25000, $config->value['analyze_trend_max_invest_amount']);
+        $this->assertSame(8000, $config->value['analyze_trend_virtual_buy_amount']);
+
+        $this->actingAs($admin)
+            ->patchJson('/admin/ui-preferences', [
+                'analyze_trend_streak_buy_thresholds' => [null, -3.5, -2.5, -1.5, -1, 0],
+                'analyze_trend_streak_sell_threshold' => 3.5,
+            ])
+            ->assertOk()
+            ->assertJsonPath('ui_preferences.analyze_trend_streak_buy_thresholds', [null, -3.5, -2.5, -1.5, -1, 0])
+            ->assertJsonPath('ui_preferences.analyze_trend_streak_sell_threshold', 3.5);
+
+        $config->refresh();
+
+        $this->assertSame([null, -3.5, -2.5, -1.5, -1, 0], $config->value['analyze_trend_streak_buy_thresholds']);
+        $this->assertSame(3.5, $config->value['analyze_trend_streak_sell_threshold']);
 
         $this->actingAs($otherAdmin)
             ->getJson('/admin/ui-preferences')
@@ -85,7 +105,45 @@ class UiPreferencesTest extends TestCase
             ->assertJsonPath('ui_preferences.analyze_trend_row_limit', 200)
             ->assertJsonPath('ui_preferences.analyze_trend_excluded_holding_ids', [])
             ->assertJsonPath('ui_preferences.analyze_trend_trade_amounts', [7000, 5000, 3000])
-            ->assertJsonPath('ui_preferences.analyze_trend_max_invest_amount', 0);
+            ->assertJsonPath('ui_preferences.analyze_trend_max_invest_amount', 0)
+            ->assertJsonPath('ui_preferences.analyze_trend_virtual_buy_amount', 7000)
+            ->assertJsonPath('ui_preferences.analyze_trend_streak_buy_thresholds', [-4, -3, -2, -1, 0])
+            ->assertJsonPath('ui_preferences.analyze_trend_streak_sell_threshold', 3);
+    }
+
+    public function test_admin_must_provide_valid_analyze_trend_streak_rules(): void
+    {
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->patchJson('/admin/ui-preferences', [
+                'analyze_trend_streak_buy_thresholds' => [],
+                'analyze_trend_streak_sell_threshold' => 101,
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors([
+                'analyze_trend_streak_buy_thresholds',
+                'analyze_trend_streak_sell_threshold',
+            ]);
+
+        $this->actingAs($admin)
+            ->patchJson('/admin/ui-preferences', [
+                'analyze_trend_streak_buy_thresholds' => [-4, 1],
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('analyze_trend_streak_buy_thresholds.1');
+    }
+
+    public function test_admin_must_provide_a_valid_virtual_buy_amount(): void
+    {
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->patchJson('/admin/ui-preferences', [
+                'analyze_trend_virtual_buy_amount' => -1,
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('analyze_trend_virtual_buy_amount');
     }
 
     public function test_admin_must_provide_a_valid_depot_price_source(): void

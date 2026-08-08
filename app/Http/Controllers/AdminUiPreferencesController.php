@@ -27,6 +27,10 @@ class AdminUiPreferencesController extends Controller
             'analyze_trend_trade_amounts' => ['sometimes', 'array', 'size:3'],
             'analyze_trend_trade_amounts.*' => ['integer', 'min:0', 'max:1000000'],
             'analyze_trend_max_invest_amount' => ['sometimes', 'integer', 'min:0', 'max:1000000'],
+            'analyze_trend_virtual_buy_amount' => ['sometimes', 'integer', 'min:0', 'max:1000000'],
+            'analyze_trend_streak_buy_thresholds' => ['sometimes', 'array', 'min:1', 'max:20'],
+            'analyze_trend_streak_buy_thresholds.*' => ['nullable', 'numeric', 'min:-100', 'max:0'],
+            'analyze_trend_streak_sell_threshold' => ['sometimes', 'numeric', 'min:0', 'max:100'],
         ]);
 
         if (
@@ -35,6 +39,9 @@ class AdminUiPreferencesController extends Controller
             && ! array_key_exists('analyze_trend_excluded_holding_ids', $validated)
             && ! array_key_exists('analyze_trend_trade_amounts', $validated)
             && ! array_key_exists('analyze_trend_max_invest_amount', $validated)
+            && ! array_key_exists('analyze_trend_virtual_buy_amount', $validated)
+            && ! array_key_exists('analyze_trend_streak_buy_thresholds', $validated)
+            && ! array_key_exists('analyze_trend_streak_sell_threshold', $validated)
         ) {
             throw ValidationException::withMessages([
                 'ui_preferences' => 'Provide a UI preference to update.',
@@ -61,6 +68,7 @@ class AdminUiPreferencesController extends Controller
         if (
             array_key_exists('analyze_trend_trade_amounts', $validated)
             || array_key_exists('analyze_trend_max_invest_amount', $validated)
+            || array_key_exists('analyze_trend_virtual_buy_amount', $validated)
         ) {
             return response()->json([
                 'message' => 'UI preferences updated.',
@@ -68,6 +76,21 @@ class AdminUiPreferencesController extends Controller
                     $request->user(),
                     $validated['analyze_trend_trade_amounts'] ?? null,
                     $validated['analyze_trend_max_invest_amount'] ?? null,
+                    $validated['analyze_trend_virtual_buy_amount'] ?? null,
+                ),
+            ]);
+        }
+
+        if (
+            array_key_exists('analyze_trend_streak_buy_thresholds', $validated)
+            || array_key_exists('analyze_trend_streak_sell_threshold', $validated)
+        ) {
+            return response()->json([
+                'message' => 'UI preferences updated.',
+                'ui_preferences' => $uiPreferences->updateAnalyzeTrendStreakSettings(
+                    $request->user(),
+                    $validated['analyze_trend_streak_buy_thresholds'] ?? null,
+                    $validated['analyze_trend_streak_sell_threshold'] ?? null,
                 ),
             ]);
         }

@@ -20,10 +20,13 @@ const indexPriceRangeItems = [
     { key: '6m', label: '6 month' },
     { key: '1y', label: '1 year' },
 ];
-const defaultAnalyzeTrendTradeAmounts = [7000, 5000, 3000];
-const maxAnalyzeTrendTradeAmount = 1000000;
 const defaultAnalyzeTrendMaxInvestAmount = 0;
 const maxAnalyzeTrendMaxInvestAmount = 1000000;
+const defaultAnalyzeTrendVirtualBuyAmount = 7000;
+const maxAnalyzeTrendVirtualBuyAmount = 1000000;
+const defaultAnalyzeTrendStreakBuyThresholds = [-4, -3, -2, -1, 0];
+const maxAnalyzeTrendStreakBuyThresholdCount = 20;
+const defaultAnalyzeTrendStreakSellThreshold = 3;
 const cashLedgerPageSize = 20;
 const indexRealtimeOverdueCheckIntervalMilliseconds = 1000;
 const activeItemRefreshIntervalMilliseconds = 60_000;
@@ -191,14 +194,23 @@ const isAnalyzeTrendRowLimitDialogOpen = ref(false);
 const isAnalyzeTrendRowLimitSaving = ref(false);
 const selectedAnalyzeCopiedIsin = ref(null);
 const analyzeIsinCopiedTimer = ref(null);
-const analyzeTrendTradeAmounts = ref([...defaultAnalyzeTrendTradeAmounts]);
-const analyzeTrendTradeAmountEditValues = ref(defaultAnalyzeTrendTradeAmounts.map((amount) => String(amount)));
 const analyzeTrendMaxInvestAmount = ref(defaultAnalyzeTrendMaxInvestAmount);
 const analyzeTrendMaxInvestAmountEditValue = ref(String(defaultAnalyzeTrendMaxInvestAmount));
-const isAnalyzeTrendTradeAmountDialogOpen = ref(false);
-const isAnalyzeTrendTradeAmountSaving = ref(false);
 const isAnalyzeTrendMaxInvestAmountDialogOpen = ref(false);
 const isAnalyzeTrendMaxInvestAmountSaving = ref(false);
+const analyzeTrendVirtualBuyAmount = ref(defaultAnalyzeTrendVirtualBuyAmount);
+const analyzeTrendVirtualBuyAmountEditValue = ref(String(defaultAnalyzeTrendVirtualBuyAmount));
+const isAnalyzeTrendVirtualBuyAmountDialogOpen = ref(false);
+const isAnalyzeTrendVirtualBuyAmountSaving = ref(false);
+const analyzeTrendStreakBuyThresholds = ref([...defaultAnalyzeTrendStreakBuyThresholds]);
+const analyzeTrendStreakBuyThresholdEditValues = ref(defaultAnalyzeTrendStreakBuyThresholds.map((threshold) => ({
+    isEnabled: true,
+    changePercent: String(threshold),
+})));
+const analyzeTrendStreakSellThreshold = ref(defaultAnalyzeTrendStreakSellThreshold);
+const analyzeTrendStreakSellThresholdEditValue = ref(String(defaultAnalyzeTrendStreakSellThreshold));
+const isAnalyzeTrendStreakRulesDialogOpen = ref(false);
+const isAnalyzeTrendStreakRulesSaving = ref(false);
 const selectedTestStockId = ref(null);
 const selectedDataIntradayStockId = ref(null);
 const selectedDataIndexId = ref(null);
@@ -424,7 +436,7 @@ const watchListTableColumnCount = computed(() => {
 });
 const dashboardTrendRecommendations = computed(() => new Map(holdings.value.map((holding) => [
     holding.id,
-    latestAnalyzeTrendMarker(holding, analyzeTrendRowLimit.value, analyzeTrendTradeAmounts.value),
+    latestAnalyzeTrendMarker(holding, analyzeTrendRowLimit.value, analyzeTrendVirtualBuyAmount.value),
 ])));
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
 const selectedTestStock = computed(() => testOptions.value.stocks
@@ -956,7 +968,7 @@ const includedAnalyzeTrendHoldings = computed(() => holdings.value
 const analyzeTrendIncludedRows = computed(() => buildAnalyzeTrendHoldingRows(
     includedAnalyzeTrendHoldings.value,
     analyzeTrendRowLimit.value,
-    analyzeTrendTradeAmounts.value,
+    analyzeTrendVirtualBuyAmount.value,
 ));
 const analyzeTrendHoldingStats = computed(() => buildAnalyzeTrendHoldingStats(analyzeTrendIncludedRows.value));
 const analyzeTrendPortfolioCapitalByDate = computed(() => buildAnalyzeTrendPortfolioCapitalByDate(
@@ -966,7 +978,7 @@ const selectedAnalyzeTrendRows = computed(() => buildAnalyzeTrendRows(
     selectedAnalyzeHolding.value,
     analyzeTrendPortfolioCapitalByDate.value,
     analyzeTrendRowLimit.value,
-    analyzeTrendTradeAmounts.value,
+    analyzeTrendVirtualBuyAmount.value,
 ));
 const selectedAnalyzeTrendV2Rows = computed(() => buildAnalyzeTrendV2Rows(
     selectedAnalyzeHolding.value,
@@ -989,10 +1001,22 @@ const analyzeTrendInvestmentOptimization = computed(() => buildAnalyzeTrendInves
     analyzeTrendIncludedRows.value,
     analyzeTrendMaxInvestAmount.value,
 ));
-const analyzeTrendTradeAmountInfo = computed(() => analyzeTrendTradeAmountLabel(analyzeTrendTradeAmounts.value));
 const analyzeTrendMaxInvestAmountInfo = computed(() => analyzeTrendMaxInvestAmountLabel(analyzeTrendMaxInvestAmount.value));
+const analyzeTrendVirtualBuyAmountInfo = computed(() => analyzeTrendVirtualBuyAmountLabel(
+    analyzeTrendVirtualBuyAmount.value,
+));
 const analyzeTrendInvestmentOptimizationInfo = computed(() => analyzeTrendInvestmentOptimizationLabel(
     analyzeTrendInvestmentOptimization.value,
+));
+const analyzeTrendVirtualBuyRulesInfo = computed(() => analyzeTrendVirtualBuyRulesLabel(
+    analyzeTrendStreakBuyThresholds.value,
+));
+const analyzeTrendVirtualSellRulesInfo = computed(() => (
+    `SELL: virtual position ≥ +${analyzeTrendStreakSellThreshold.value}%`
+));
+const isAnalyzeTrendStreakRulesFormValid = computed(() => (
+    isValidAnalyzeTrendStreakBuyThresholds(analyzeTrendStreakBuyThresholdEditValues.value)
+    && isValidAnalyzeTrendStreakSellThreshold(analyzeTrendStreakSellThresholdEditValue.value)
 ));
 const showAnalyzeSparklineDots = computed(() => isAnalyzeTodayRange(selectedAnalyzeHistoryRange.value));
 const analyzeIntradayDetail = computed(() => analyzeIntradayCandles.value?.intraday ?? null);
@@ -1080,7 +1104,7 @@ function buildAnalyzeTrendRows(
     holding,
     portfolioCapitalByDate = null,
     rowLimit = defaultAnalyzeTrendRowLimit,
-    tradeAmounts = defaultAnalyzeTrendTradeAmounts,
+    virtualBuyAmount = defaultAnalyzeTrendVirtualBuyAmount,
 ) {
     const prices = analyzeTrendDailyPrices(holding);
     const depotStateByDate = analyzeTrendDepotStateByDate(holding, prices);
@@ -1111,6 +1135,7 @@ function buildAnalyzeTrendRows(
             negativeStreak,
             streakBuySignal,
             streakRecommendations: [],
+            virtualTradeActions: [],
             streakEvolution: [],
             streakWin: null,
             streakCapital: null,
@@ -1131,7 +1156,7 @@ function buildAnalyzeTrendRows(
 
     const visibleRows = rows.slice(-normalizeAnalyzeTrendRowLimit(rowLimit));
 
-    addAnalyzeTrendStreakTrades(visibleRows, tradeAmounts);
+    addAnalyzeTrendStreakTrades(visibleRows, virtualBuyAmount);
     addAnalyzeTrendPortfolioCapital(visibleRows, portfolioCapitalByDate);
 
     return visibleRows.reverse();
@@ -1354,7 +1379,7 @@ function analyzeTrendDepotRealizedTotal(holding) {
 function buildAnalyzeTrendHoldingRows(
     holdings,
     rowLimit = defaultAnalyzeTrendRowLimit,
-    tradeAmounts = defaultAnalyzeTrendTradeAmounts,
+    virtualBuyAmount = defaultAnalyzeTrendVirtualBuyAmount,
 ) {
     if (!Array.isArray(holdings) || holdings.length === 0) {
         return [];
@@ -1362,7 +1387,7 @@ function buildAnalyzeTrendHoldingRows(
 
     return holdings.map((holding) => ({
         holding,
-        rows: buildAnalyzeTrendRows(holding, null, rowLimit, tradeAmounts).slice().reverse(),
+        rows: buildAnalyzeTrendRows(holding, null, rowLimit, virtualBuyAmount).slice().reverse(),
     }));
 }
 
@@ -1601,7 +1626,7 @@ function buildAnalyzeTrendHoldingInvestmentOptimizationBasis(rows) {
         activeTrades.forEach((trade) => {
             trade.changePercent += row.dayChangePercent ?? 0;
 
-            if (trade.changePercent >= 3) {
+            if (trade.changePercent >= analyzeTrendStreakSellThreshold.value) {
                 winCoefficients[trade.bucket] += trade.changePercent / 100;
                 trade.isClosed = true;
             }
@@ -2031,9 +2056,9 @@ function analyzeTrendScoreConfidence(score) {
 function latestAnalyzeTrendMarker(
     holding,
     rowLimit = defaultAnalyzeTrendRowLimit,
-    tradeAmounts = defaultAnalyzeTrendTradeAmounts,
+    virtualBuyAmount = defaultAnalyzeTrendVirtualBuyAmount,
 ) {
-    const latestRow = buildAnalyzeTrendRows(holding, null, rowLimit, tradeAmounts)[0] ?? null;
+    const latestRow = buildAnalyzeTrendRows(holding, null, rowLimit, virtualBuyAmount)[0] ?? null;
 
     if (!latestRow) {
         return null;
@@ -2971,9 +2996,17 @@ watch(
         }
 
         analyzeTrendRowLimit.value = normalizeAnalyzeTrendRowLimit(preferences?.analyze_trend_row_limit);
-        analyzeTrendTradeAmounts.value = normalizeAnalyzeTrendTradeAmounts(preferences?.analyze_trend_trade_amounts);
         analyzeTrendMaxInvestAmount.value = normalizeAnalyzeTrendMaxInvestAmount(
             preferences?.analyze_trend_max_invest_amount,
+        );
+        analyzeTrendVirtualBuyAmount.value = normalizeAnalyzeTrendVirtualBuyAmount(
+            preferences?.analyze_trend_virtual_buy_amount,
+        );
+        analyzeTrendStreakBuyThresholds.value = normalizeAnalyzeTrendStreakBuyThresholds(
+            preferences?.analyze_trend_streak_buy_thresholds,
+        );
+        analyzeTrendStreakSellThreshold.value = normalizeAnalyzeTrendStreakSellThreshold(
+            preferences?.analyze_trend_streak_sell_threshold,
         );
         excludedAnalyzeTrendHoldingIds.value = normalizeAnalyzeTrendExcludedHoldingIds(
             preferences?.analyze_trend_excluded_holding_ids,
@@ -4319,20 +4352,6 @@ function normalizeAnalyzeTrendRowLimit(value) {
     return Math.min(Math.max(rowLimit, 1), maxAnalyzeTrendRowLimit);
 }
 
-function normalizeAnalyzeTrendTradeAmounts(value) {
-    if (!Array.isArray(value) || value.length !== 3) {
-        return [...defaultAnalyzeTrendTradeAmounts];
-    }
-
-    const tradeAmounts = value.map((amount) => Number(amount));
-
-    if (tradeAmounts.some((amount) => !Number.isInteger(amount))) {
-        return [...defaultAnalyzeTrendTradeAmounts];
-    }
-
-    return tradeAmounts.map((amount) => Math.min(Math.max(amount, 0), maxAnalyzeTrendTradeAmount));
-}
-
 function normalizeAnalyzeTrendMaxInvestAmount(value) {
     const maxInvestAmount = Number(value);
 
@@ -4341,6 +4360,68 @@ function normalizeAnalyzeTrendMaxInvestAmount(value) {
     }
 
     return Math.min(Math.max(maxInvestAmount, 0), maxAnalyzeTrendMaxInvestAmount);
+}
+
+function normalizeAnalyzeTrendVirtualBuyAmount(value) {
+    const virtualBuyAmount = Number(value);
+
+    if (!Number.isInteger(virtualBuyAmount)) {
+        return defaultAnalyzeTrendVirtualBuyAmount;
+    }
+
+    return Math.min(Math.max(virtualBuyAmount, 0), maxAnalyzeTrendVirtualBuyAmount);
+}
+
+function normalizeAnalyzeTrendStreakBuyThresholds(value) {
+    if (!isValidAnalyzeTrendStreakBuyThresholds(value)) {
+        return [...defaultAnalyzeTrendStreakBuyThresholds];
+    }
+
+    return value.map((threshold) => {
+        if (threshold === null || threshold?.isEnabled === false) {
+            return null;
+        }
+
+        return Number(threshold?.changePercent ?? threshold);
+    });
+}
+
+function isValidAnalyzeTrendStreakBuyThresholds(value) {
+    if (
+        !Array.isArray(value)
+        || value.length === 0
+        || value.length > maxAnalyzeTrendStreakBuyThresholdCount
+    ) {
+        return false;
+    }
+
+    return value.every((threshold) => {
+        if (threshold === null || threshold?.isEnabled === false) {
+            return true;
+        }
+
+        const thresholdValue = threshold?.changePercent ?? threshold;
+        const normalizedThreshold = Number(thresholdValue);
+
+        return thresholdValue !== ''
+            && Number.isFinite(normalizedThreshold)
+            && normalizedThreshold >= -100
+            && normalizedThreshold <= 0;
+    });
+}
+
+function normalizeAnalyzeTrendStreakSellThreshold(value) {
+    if (!isValidAnalyzeTrendStreakSellThreshold(value)) {
+        return defaultAnalyzeTrendStreakSellThreshold;
+    }
+
+    return Number(value);
+}
+
+function isValidAnalyzeTrendStreakSellThreshold(value) {
+    const threshold = Number(value);
+
+    return value !== '' && Number.isFinite(threshold) && threshold >= 0 && threshold <= 100;
 }
 
 function normalizeAnalyzeTrendExcludedHoldingIds(value) {
@@ -4382,33 +4463,33 @@ function cancelAnalyzeTrendRowLimitEdit() {
     isAnalyzeTrendRowLimitDialogOpen.value = false;
 }
 
-function editAnalyzeTrendTradeAmounts() {
-    analyzeTrendTradeAmountEditValues.value = analyzeTrendTradeAmounts.value.map((amount) => String(amount));
-    isAnalyzeTrendTradeAmountDialogOpen.value = true;
+function editAnalyzeTrendVirtualBuyAmount() {
+    analyzeTrendVirtualBuyAmountEditValue.value = String(analyzeTrendVirtualBuyAmount.value);
+    isAnalyzeTrendVirtualBuyAmountDialogOpen.value = true;
 }
 
-async function saveAnalyzeTrendTradeAmounts() {
-    const tradeAmounts = normalizeAnalyzeTrendTradeAmounts(analyzeTrendTradeAmountEditValues.value);
+async function saveAnalyzeTrendVirtualBuyAmount() {
+    const virtualBuyAmount = normalizeAnalyzeTrendVirtualBuyAmount(analyzeTrendVirtualBuyAmountEditValue.value);
 
     try {
-        isAnalyzeTrendTradeAmountSaving.value = true;
-        analyzeTrendTradeAmounts.value = tradeAmounts;
+        isAnalyzeTrendVirtualBuyAmountSaving.value = true;
+        analyzeTrendVirtualBuyAmount.value = virtualBuyAmount;
 
         await depotsStore.updateUiPreferences({
-            analyze_trend_trade_amounts: tradeAmounts,
+            analyze_trend_virtual_buy_amount: virtualBuyAmount,
         });
 
-        isAnalyzeTrendTradeAmountDialogOpen.value = false;
+        isAnalyzeTrendVirtualBuyAmountDialogOpen.value = false;
     } catch (error) {
         transactionsError.value = error.message;
     } finally {
-        isAnalyzeTrendTradeAmountSaving.value = false;
+        isAnalyzeTrendVirtualBuyAmountSaving.value = false;
     }
 }
 
-function cancelAnalyzeTrendTradeAmountEdit() {
-    analyzeTrendTradeAmountEditValues.value = analyzeTrendTradeAmounts.value.map((amount) => String(amount));
-    isAnalyzeTrendTradeAmountDialogOpen.value = false;
+function cancelAnalyzeTrendVirtualBuyAmountEdit() {
+    analyzeTrendVirtualBuyAmountEditValue.value = String(analyzeTrendVirtualBuyAmount.value);
+    isAnalyzeTrendVirtualBuyAmountDialogOpen.value = false;
 }
 
 function editAnalyzeTrendMaxInvestAmount() {
@@ -4438,6 +4519,71 @@ async function saveAnalyzeTrendMaxInvestAmount() {
 function cancelAnalyzeTrendMaxInvestAmountEdit() {
     analyzeTrendMaxInvestAmountEditValue.value = String(analyzeTrendMaxInvestAmount.value);
     isAnalyzeTrendMaxInvestAmountDialogOpen.value = false;
+}
+
+function editAnalyzeTrendStreakRules() {
+    analyzeTrendStreakBuyThresholdEditValues.value = analyzeTrendStreakBuyThresholds.value
+        .map((threshold) => ({
+            isEnabled: threshold !== null,
+            changePercent: String(threshold ?? 0),
+        }));
+    analyzeTrendStreakSellThresholdEditValue.value = String(analyzeTrendStreakSellThreshold.value);
+    isAnalyzeTrendStreakRulesDialogOpen.value = true;
+}
+
+function addAnalyzeTrendStreakBuyThreshold() {
+    if (analyzeTrendStreakBuyThresholdEditValues.value.length >= maxAnalyzeTrendStreakBuyThresholdCount) {
+        return;
+    }
+
+    analyzeTrendStreakBuyThresholdEditValues.value.push({
+        isEnabled: true,
+        changePercent: '0',
+    });
+}
+
+function removeAnalyzeTrendStreakBuyThreshold(index) {
+    if (analyzeTrendStreakBuyThresholdEditValues.value.length <= 1) {
+        return;
+    }
+
+    analyzeTrendStreakBuyThresholdEditValues.value.splice(index, 1);
+}
+
+async function saveAnalyzeTrendStreakRules() {
+    if (!isAnalyzeTrendStreakRulesFormValid.value) {
+        return;
+    }
+
+    const buyThresholds = normalizeAnalyzeTrendStreakBuyThresholds(analyzeTrendStreakBuyThresholdEditValues.value);
+    const sellThreshold = normalizeAnalyzeTrendStreakSellThreshold(analyzeTrendStreakSellThresholdEditValue.value);
+
+    try {
+        isAnalyzeTrendStreakRulesSaving.value = true;
+        analyzeTrendStreakBuyThresholds.value = buyThresholds;
+        analyzeTrendStreakSellThreshold.value = sellThreshold;
+
+        await depotsStore.updateUiPreferences({
+            analyze_trend_streak_buy_thresholds: buyThresholds,
+            analyze_trend_streak_sell_threshold: sellThreshold,
+        });
+
+        isAnalyzeTrendStreakRulesDialogOpen.value = false;
+    } catch (error) {
+        transactionsError.value = error.message;
+    } finally {
+        isAnalyzeTrendStreakRulesSaving.value = false;
+    }
+}
+
+function cancelAnalyzeTrendStreakRulesEdit() {
+    analyzeTrendStreakBuyThresholdEditValues.value = analyzeTrendStreakBuyThresholds.value
+        .map((threshold) => ({
+            isEnabled: threshold !== null,
+            changePercent: String(threshold ?? 0),
+        }));
+    analyzeTrendStreakSellThresholdEditValue.value = String(analyzeTrendStreakSellThreshold.value);
+    isAnalyzeTrendStreakRulesDialogOpen.value = false;
 }
 
 function moveAnalyzeChartWindowBackward() {
@@ -10576,10 +10722,10 @@ function formatAnalyzeTrendNegativeStreak(streak) {
     return `${streak.count} (${formatPriceChangePercent(streak.changePercent)})`;
 }
 
-function addAnalyzeTrendStreakTrades(rows, tradeAmounts = defaultAnalyzeTrendTradeAmounts) {
+function addAnalyzeTrendStreakTrades(rows, virtualBuyAmount = defaultAnalyzeTrendVirtualBuyAmount) {
     let totalWin = 0;
     let activeTrades = [];
-    const normalizedTradeAmounts = normalizeAnalyzeTrendTradeAmounts(tradeAmounts);
+    const normalizedVirtualBuyAmount = normalizeAnalyzeTrendVirtualBuyAmount(virtualBuyAmount);
 
     rows.forEach((row) => {
         activeTrades.forEach((trade) => {
@@ -10590,7 +10736,7 @@ function addAnalyzeTrendStreakTrades(rows, tradeAmounts = defaultAnalyzeTrendTra
                 changePercent: trade.changePercent,
             });
 
-            if (trade.changePercent >= 3) {
+            if (trade.changePercent >= analyzeTrendStreakSellThreshold.value) {
                 const win = trade.amount * (trade.changePercent / 100);
                 totalWin += win;
                 row.streakWin = (row.streakWin ?? 0) + win;
@@ -10599,6 +10745,11 @@ function addAnalyzeTrendStreakTrades(rows, tradeAmounts = defaultAnalyzeTrendTra
                 row.streakRecommendations.push({
                     type: 'sell',
                     label: `SELL ${trade.number}`,
+                });
+                row.virtualTradeActions.push({
+                    type: 'sell',
+                    label: `VSELL ${trade.number}`,
+                    amount: trade.amount,
                 });
 
                 trade.isClosed = true;
@@ -10609,12 +10760,11 @@ function addAnalyzeTrendStreakTrades(rows, tradeAmounts = defaultAnalyzeTrendTra
 
         if (row.streakBuySignal) {
             const tradeNumber = nextAnalyzeTrendStreakTradeNumber(activeTrades);
-            const tradeAmount = analyzeTrendStreakTradeAmount(tradeNumber, normalizedTradeAmounts);
 
-            if (tradeAmount > 0) {
+            if (normalizedVirtualBuyAmount > 0) {
                 activeTrades.push({
                     number: tradeNumber,
-                    amount: tradeAmount,
+                    amount: normalizedVirtualBuyAmount,
                     changePercent: 0,
                     isClosed: false,
                 });
@@ -10622,6 +10772,11 @@ function addAnalyzeTrendStreakTrades(rows, tradeAmounts = defaultAnalyzeTrendTra
                 row.streakRecommendations.push({
                     type: 'buy',
                     label: `BUY ${tradeNumber}`,
+                });
+                row.virtualTradeActions.push({
+                    type: 'buy',
+                    label: `VBUY ${tradeNumber}`,
+                    amount: normalizedVirtualBuyAmount,
                 });
             }
         }
@@ -10637,10 +10792,6 @@ function addAnalyzeTrendStreakTrades(rows, tradeAmounts = defaultAnalyzeTrendTra
             );
         }
     });
-}
-
-function analyzeTrendStreakTradeAmount(tradeNumber, tradeAmounts = defaultAnalyzeTrendTradeAmounts) {
-    return tradeAmounts[tradeNumber - 1] ?? tradeAmounts.at(-1);
 }
 
 function analyzeTrendStreakTradeBucket(tradeNumber) {
@@ -10667,22 +10818,14 @@ function analyzeTrendStreakBuySignal(streak, previousStreak = null) {
 }
 
 function analyzeTrendStreakQualifiesForBuy(streak) {
-    if (!streak) {
+    if (!streak || streak.count <= 0) {
         return false;
     }
 
-    if (streak.count >= 5) {
-        return true;
-    }
+    const thresholdIndex = Math.min(streak.count, analyzeTrendStreakBuyThresholds.value.length) - 1;
+    const threshold = analyzeTrendStreakBuyThresholds.value[thresholdIndex];
 
-    const thresholds = {
-        1: -4,
-        2: -3,
-        3: -2,
-        4: -1,
-    };
-
-    return streak.changePercent <= thresholds[streak.count];
+    return threshold !== null && streak.changePercent <= threshold;
 }
 
 function formatAnalyzeTrendStreakEvolutionItems(evolutionItems) {
@@ -10716,10 +10859,24 @@ function formatAnalyzeTrendSignedWin(value, currency = 'EUR') {
     return `${sign}${formatAccountBalance(value)} ${currency ?? 'EUR'}`;
 }
 
-function analyzeTrendTradeAmountLabel(tradeAmounts) {
-    const [firstAmount, secondAmount, laterAmount] = normalizeAnalyzeTrendTradeAmounts(tradeAmounts);
+function analyzeTrendVirtualBuyAmountLabel(virtualBuyAmount) {
+    return `Invest: ${formatWholeEuroAmount(normalizeAnalyzeTrendVirtualBuyAmount(virtualBuyAmount))}`;
+}
 
-    return `Invest amounts: 1st ${formatWholeEuroAmount(firstAmount)} | 2nd ${formatWholeEuroAmount(secondAmount)} | 3rd+ ${formatWholeEuroAmount(laterAmount)}`;
+function analyzeTrendVirtualBuyRulesLabel(thresholds) {
+    const lastThresholdIndex = thresholds.length - 1;
+    const rules = thresholds.map((threshold, index) => {
+        const streak = index + 1;
+        const suffix = index === lastThresholdIndex ? '+' : '';
+
+        if (threshold === null) {
+            return `streak ${streak}${suffix}: no BUY`;
+        }
+
+        return `streak ${streak}${suffix} ≤ ${threshold}%`;
+    });
+
+    return `BUY: ${rules.join(', ')}`;
 }
 
 function analyzeTrendMaxInvestAmountLabel(maxInvestAmount) {
@@ -15532,13 +15689,12 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <v-icon icon="mdi-pencil" size="14" />
                                     </button>
                                     <button
-                                        v-if="activeAnalyzeSubsection !== 'trend-v2'"
                                         type="button"
                                         class="analyze-trend-invest-info"
-                                        aria-label="Edit trend invest amounts"
-                                        @click="editAnalyzeTrendTradeAmounts"
+                                        aria-label="Edit virtual buy invest amount"
+                                        @click="editAnalyzeTrendVirtualBuyAmount"
                                     >
-                                        <span>{{ analyzeTrendTradeAmountInfo }}</span>
+                                        <span>{{ analyzeTrendVirtualBuyAmountInfo }}</span>
                                         <v-icon icon="mdi-pencil" size="14" />
                                     </button>
                                     <button
@@ -15548,6 +15704,27 @@ function formatIndexDataUpdateSchedule(settings) {
                                         @click="editAnalyzeTrendMaxInvestAmount"
                                     >
                                         <span>{{ analyzeTrendMaxInvestAmountInfo }}</span>
+                                        <v-icon icon="mdi-pencil" size="14" />
+                                    </button>
+                                    <span
+                                        class="analyze-trend-virtual-trade-info analyze-trend-rec--buy"
+                                        aria-label="Virtual buy rules"
+                                    >
+                                        {{ analyzeTrendVirtualBuyRulesInfo }}
+                                    </span>
+                                    <span
+                                        class="analyze-trend-virtual-trade-info analyze-trend-rec--sell"
+                                        aria-label="Virtual sell rules"
+                                    >
+                                        {{ analyzeTrendVirtualSellRulesInfo }}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        class="analyze-trend-invest-info"
+                                        aria-label="Edit virtual trade rules"
+                                        @click="editAnalyzeTrendStreakRules"
+                                    >
+                                        <span>Edit</span>
                                         <v-icon icon="mdi-pencil" size="14" />
                                     </button>
                                     <span
@@ -15581,6 +15758,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 <template v-if="activeAnalyzeSubsection !== 'trend-v2'">
                                                     <th class="text-right">-Streak</th>
                                                     <th>Rec</th>
+                                                    <th>VBUY/VSELL</th>
                                                     <th>DEP</th>
                                                     <th class="text-right">Evoluation</th>
                                                     <th class="text-right">Next %</th>
@@ -15638,6 +15816,34 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         }"
                                                     >
                                                         {{ recommendationItem.label }}
+                                                    </span>
+                                                </td>
+                                                <td v-if="activeAnalyzeSubsection !== 'trend-v2'">
+                                                    <div
+                                                        v-for="virtualTradeAction in trendRow.virtualTradeActions"
+                                                        :key="virtualTradeAction.label"
+                                                    >
+                                                        <span
+                                                            class="analyze-trend-rec"
+                                                            :class="{
+                                                                'analyze-trend-rec--buy': virtualTradeAction.type === 'buy',
+                                                                'analyze-trend-rec--sell': virtualTradeAction.type === 'sell',
+                                                            }"
+                                                        >
+                                                            {{ virtualTradeAction.label }} ·
+                                                            {{ formatWholeEuroAmount(virtualTradeAction.amount) }}
+                                                        </span>
+                                                    </div>
+                                                    <span
+                                                        v-if="trendRow.streakWin !== null || trendRow.streakCapital !== null"
+                                                        class="analyze-trend-dep-change"
+                                                        :class="priceChangePercentClass(
+                                                            trendRow.streakWin ?? trendRow.streakCapital,
+                                                        )"
+                                                    >
+                                                        {{ formatAnalyzeTrendSignedWin(
+                                                            trendRow.streakWin ?? trendRow.streakCapital,
+                                                        ) }}
                                                     </span>
                                                 </td>
                                                 <td v-if="activeAnalyzeSubsection !== 'trend-v2'">
@@ -15749,50 +15955,28 @@ function formatIndexDataUpdateSchedule(settings) {
                                 </v-card>
                             </v-dialog>
                             <v-dialog
-                                v-model="isAnalyzeTrendTradeAmountDialogOpen"
+                                v-model="isAnalyzeTrendVirtualBuyAmountDialogOpen"
                                 class="analyze-trend-invest-dialog"
                                 persistent
-                                max-width="460"
+                                max-width="420"
                             >
                                 <v-card>
-                                    <v-card-title>Edit invest amounts</v-card-title>
+                                    <v-card-title>Edit invest</v-card-title>
                                     <v-card-text>
                                         <div class="text-caption text-medium-emphasis mb-3">
-                                            Amounts used for the first, second, and later open trend trades.
+                                            Amount invested each time a virtual BUY is made.
                                         </div>
                                         <v-text-field
-                                            v-model="analyzeTrendTradeAmountEditValues[0]"
+                                            v-model="analyzeTrendVirtualBuyAmountEditValue"
                                             autofocus
-                                            label="First invest"
+                                            label="Invest"
                                             type="number"
                                             min="0"
-                                            :max="maxAnalyzeTrendTradeAmount"
+                                            :max="maxAnalyzeTrendVirtualBuyAmount"
                                             step="1"
                                             suffix="EUR"
                                             density="compact"
-                                            @keydown.enter.prevent="saveAnalyzeTrendTradeAmounts"
-                                        />
-                                        <v-text-field
-                                            v-model="analyzeTrendTradeAmountEditValues[1]"
-                                            label="Second invest"
-                                            type="number"
-                                            min="0"
-                                            :max="maxAnalyzeTrendTradeAmount"
-                                            step="1"
-                                            suffix="EUR"
-                                            density="compact"
-                                            @keydown.enter.prevent="saveAnalyzeTrendTradeAmounts"
-                                        />
-                                        <v-text-field
-                                            v-model="analyzeTrendTradeAmountEditValues[2]"
-                                            label="Third and later invests"
-                                            type="number"
-                                            min="0"
-                                            :max="maxAnalyzeTrendTradeAmount"
-                                            step="1"
-                                            suffix="EUR"
-                                            density="compact"
-                                            @keydown.enter.prevent="saveAnalyzeTrendTradeAmounts"
+                                            @keydown.enter.prevent="saveAnalyzeTrendVirtualBuyAmount"
                                         />
                                     </v-card-text>
                                     <v-card-actions>
@@ -15800,8 +15984,8 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <v-btn
                                             type="button"
                                             variant="text"
-                                            :disabled="isAnalyzeTrendTradeAmountSaving"
-                                            @click="cancelAnalyzeTrendTradeAmountEdit"
+                                            :disabled="isAnalyzeTrendVirtualBuyAmountSaving"
+                                            @click="cancelAnalyzeTrendVirtualBuyAmountEdit"
                                         >
                                             Cancel
                                         </v-btn>
@@ -15809,8 +15993,8 @@ function formatIndexDataUpdateSchedule(settings) {
                                             type="button"
                                             color="primary"
                                             variant="flat"
-                                            :loading="isAnalyzeTrendTradeAmountSaving"
-                                            @click="saveAnalyzeTrendTradeAmounts"
+                                            :loading="isAnalyzeTrendVirtualBuyAmountSaving"
+                                            @click="saveAnalyzeTrendVirtualBuyAmount"
                                         >
                                             Save
                                         </v-btn>
@@ -15858,6 +16042,105 @@ function formatIndexDataUpdateSchedule(settings) {
                                             variant="flat"
                                             :loading="isAnalyzeTrendMaxInvestAmountSaving"
                                             @click="saveAnalyzeTrendMaxInvestAmount"
+                                        >
+                                            Save
+                                        </v-btn>
+                                    </v-card-actions>
+                                </v-card>
+                            </v-dialog>
+                            <v-dialog
+                                v-model="isAnalyzeTrendStreakRulesDialogOpen"
+                                class="analyze-trend-streak-rules-dialog"
+                                persistent
+                                max-width="620"
+                            >
+                                <v-card>
+                                    <v-card-title>Edit virtual trade rules</v-card-title>
+                                    <v-card-text>
+                                        <div class="text-caption text-medium-emphasis mb-3">
+                                            Uncheck BUY to disable buying for that streak. The final row also applies to longer streaks.
+                                        </div>
+                                        <div class="analyze-trend-streak-rule-list">
+                                            <div
+                                                v-for="(threshold, index) in analyzeTrendStreakBuyThresholdEditValues"
+                                                :key="index"
+                                                class="analyze-trend-streak-rule-row"
+                                            >
+                                                <v-checkbox
+                                                    v-model="threshold.isEnabled"
+                                                    :aria-label="`Enable BUY for streak ${index + 1}`"
+                                                    label="BUY"
+                                                    density="compact"
+                                                    hide-details
+                                                />
+                                                <v-text-field
+                                                    v-model="threshold.changePercent"
+                                                    :autofocus="index === 0"
+                                                    :label="`BUY streak ${index + 1}${index === analyzeTrendStreakBuyThresholdEditValues.length - 1 ? '+' : ''}`"
+                                                    type="number"
+                                                    min="-100"
+                                                    max="0"
+                                                    step="0.1"
+                                                    suffix="%"
+                                                    density="compact"
+                                                    required
+                                                    :disabled="!threshold.isEnabled"
+                                                    @keydown.enter.prevent="saveAnalyzeTrendStreakRules"
+                                                />
+                                                <v-btn
+                                                    :aria-label="`Remove BUY streak rule ${index + 1}`"
+                                                    color="error"
+                                                    icon="mdi-delete-outline"
+                                                    size="small"
+                                                    type="button"
+                                                    variant="text"
+                                                    :disabled="analyzeTrendStreakBuyThresholdEditValues.length <= 1"
+                                                    @click="removeAnalyzeTrendStreakBuyThreshold(index)"
+                                                />
+                                            </div>
+                                            <v-btn
+                                                class="align-self-start"
+                                                prepend-icon="mdi-plus"
+                                                type="button"
+                                                variant="text"
+                                                :disabled="analyzeTrendStreakBuyThresholdEditValues.length >= maxAnalyzeTrendStreakBuyThresholdCount"
+                                                @click="addAnalyzeTrendStreakBuyThreshold"
+                                            >
+                                                Add BUY rule
+                                            </v-btn>
+                                        </div>
+                                        <v-divider class="my-4" />
+                                        <v-text-field
+                                            v-model="analyzeTrendStreakSellThresholdEditValue"
+                                            label="SELL virtual position gain"
+                                            type="number"
+                                            min="0"
+                                            max="100"
+                                            step="0.1"
+                                            prefix="+"
+                                            suffix="%"
+                                            density="compact"
+                                            required
+                                            @keydown.enter.prevent="saveAnalyzeTrendStreakRules"
+                                        />
+                                    </v-card-text>
+                                    <v-card-actions>
+                                        <v-spacer />
+                                        <v-btn
+                                            type="button"
+                                            variant="text"
+                                            :disabled="isAnalyzeTrendStreakRulesSaving"
+                                            @click="cancelAnalyzeTrendStreakRulesEdit"
+                                        >
+                                            Cancel
+                                        </v-btn>
+                                        <v-btn
+                                            type="button"
+                                            color="primary"
+                                            variant="flat"
+                                            :disabled="!isAnalyzeTrendStreakRulesFormValid"
+                                            :loading="isAnalyzeTrendStreakRulesSaving"
+                                            @click="saveAnalyzeTrendStreakRules"
                                         >
                                             Save
                                         </v-btn>
@@ -21117,6 +21400,24 @@ function formatIndexDataUpdateSchedule(settings) {
 
 .analyze-trend-invest-info:hover {
     color: #145b4b;
+}
+
+.analyze-trend-virtual-trade-info {
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.analyze-trend-streak-rule-list {
+    display: grid;
+    gap: 10px;
+}
+
+.analyze-trend-streak-rule-row {
+    align-items: start;
+    display: grid;
+    gap: 8px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
 .analyze-trend-optimization-info {
