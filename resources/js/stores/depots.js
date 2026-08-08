@@ -14,6 +14,7 @@ export const useDepotStore = defineStore('depots', {
         depotValuations: {},
         depotPerformanceSeries: [],
         dashboardDailyPerformance: null,
+        dashboardPerformanceSums: [],
         depotStockPeriodStocks: [],
         depotStockPeriod: null,
         depotStockPeriodLabel: '',
@@ -144,6 +145,7 @@ export const useDepotStore = defineStore('depots', {
             try {
                 const data = await request('/admin/dashboard/performance');
                 this.dashboardDailyPerformance = data.days ?? [];
+                this.dashboardPerformanceSums = data.sums ?? [];
 
                 return data;
             } catch (error) {

@@ -56,13 +56,23 @@ class AdminDepotTransactionController extends Controller
         $depot = $this->activeDepot();
 
         if (! $depot) {
-            return response()->json(['days' => []]);
+            return response()->json([
+                'days' => [],
+                'sums' => [],
+            ]);
         }
 
         $depotHoldings = $this->depotHoldingPayloads($depot);
+        $depotValuation = $this->depotValuationPayload(
+            $depot,
+            $depotHoldings,
+            'latest',
+            $this->previousDayAccountBalance($depot),
+        );
 
         return response()->json([
             'days' => $this->dailyPerformancePayloads($depot, $depotHoldings),
+            'sums' => $this->dashboardPerformanceSumPayloads($depotValuation),
         ]);
     }
 
@@ -626,6 +636,31 @@ class AdminDepotTransactionController extends Controller
                 ];
             })
             ->all();
+    }
+
+    /**
+     * @param  array<string, string>  $depotValuation
+     * @return array<int, array{period: string, change_amount: string, change_percent: string}>
+     */
+    private function dashboardPerformanceSumPayloads(array $depotValuation): array
+    {
+        return [
+            [
+                'period' => 'week',
+                'change_amount' => $depotValuation['one_week_change_amount'],
+                'change_percent' => $depotValuation['one_week_change_percent'],
+            ],
+            [
+                'period' => 'month',
+                'change_amount' => $depotValuation['month_change_amount'],
+                'change_percent' => $depotValuation['month_change_percent'],
+            ],
+            [
+                'period' => 'year',
+                'change_amount' => $depotValuation['balance_change_amount'],
+                'change_percent' => $depotValuation['balance_change_percent'],
+            ],
+        ];
     }
 
     /**

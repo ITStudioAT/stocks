@@ -95,7 +95,17 @@ class AdminDashboardPerformanceTest extends TestCase
                 ->assertJsonPath('days.4.date', '2026-08-07')
                 ->assertJsonPath('days.4.is_live', true)
                 ->assertJsonPath('days.4.change_amount', '10.00')
-                ->assertJsonPath('days.4.change_percent', '1.00');
+                ->assertJsonPath('days.4.change_percent', '1.00')
+                ->assertJsonCount(3, 'sums')
+                ->assertJsonPath('sums.0.period', 'week')
+                ->assertJsonPath('sums.0.change_amount', '10.00')
+                ->assertJsonPath('sums.0.change_percent', '1.00')
+                ->assertJsonPath('sums.1.period', 'month')
+                ->assertJsonPath('sums.1.change_amount', '10.00')
+                ->assertJsonPath('sums.1.change_percent', '1.00')
+                ->assertJsonPath('sums.2.period', 'year')
+                ->assertJsonPath('sums.2.change_amount', '10.00')
+                ->assertJsonPath('sums.2.change_percent', '1.00');
         } finally {
             Carbon::setTestNow();
         }
@@ -106,7 +116,10 @@ class AdminDashboardPerformanceTest extends TestCase
         $this->actingAs($this->adminUser())
             ->getJson('/admin/dashboard/performance')
             ->assertOk()
-            ->assertExactJson(['days' => []]);
+            ->assertExactJson([
+                'days' => [],
+                'sums' => [],
+            ]);
     }
 
     public function test_guest_cannot_view_dashboard_performance(): void

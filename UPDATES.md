@@ -1,3 +1,9 @@
+## 0.8.7 x
+
+### Dashboard
+
+- Summe Woche, Monat, Jahr hinzugefügt
+
 ## 0.8.6
 
 ### Dashboard

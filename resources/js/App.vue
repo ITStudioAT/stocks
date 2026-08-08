@@ -53,6 +53,11 @@ const dashboardPerformanceCardLabels = [
     'Donnerstag',
     'Freitag',
 ];
+const dashboardPerformanceSumLabels = [
+    { key: 'week', label: 'Week' },
+    { key: 'month', label: 'Month' },
+    { key: 'year', label: 'Year' },
+];
 
 const { lgAndDown, mdAndDown, smAndDown } = useDisplay();
 
@@ -74,6 +79,7 @@ const {
     depotValuations,
     depotPerformanceSeries,
     dashboardDailyPerformance,
+    dashboardPerformanceSums,
     depotStockPeriodStocks,
     depotStockPeriod,
     depotStockPeriodLabel,
@@ -383,6 +389,11 @@ const dashboardPerformanceCards = computed(() => dashboardPerformanceCardLabels.
         performance,
     };
 }));
+const dashboardPerformanceSumCards = computed(() => dashboardPerformanceSumLabels.map(({ key, label }) => ({
+    key,
+    label,
+    performance: dashboardPerformanceSums.value.find((performance) => performance.period === key) ?? null,
+})));
 const dashboardMenuToggleLabel = computed(() => (isDashboardMenuCompact.value
     ? 'Enhance dashboard menu'
     : 'Minify dashboard menu'));
@@ -11908,7 +11919,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <v-card
                                         v-for="card in dashboardPerformanceCards"
                                         :key="card.key"
-                                        class="dashboard-performance-card"
+                                        class="dashboard-performance-card dashboard-performance-day-card"
                                         flat
                                         border
                                         rounded="xl"
@@ -11921,6 +11932,43 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         {{ card.performance ? formatIndexHistoryDate(card.performance.date) : 'Keine Daten' }}
                                                     </div>
                                                 </div>
+                                                <v-icon
+                                                    :class="dashboardPerformanceValueClass(card.performance)"
+                                                    :icon="dashboardPerformanceIcon(card.performance)"
+                                                    size="20"
+                                                />
+                                            </div>
+                                            <div
+                                                class="dashboard-performance-amount"
+                                                :class="dashboardPerformanceValueClass(card.performance)"
+                                            >
+                                                {{ dashboardPerformanceAmount(card.performance) }}
+                                            </div>
+                                            <div
+                                                class="dashboard-performance-percent"
+                                                :class="dashboardPerformanceValueClass(card.performance)"
+                                            >
+                                                {{ dashboardPerformancePercent(card.performance) }}
+                                            </div>
+                                        </v-card-text>
+                                    </v-card>
+                                </div>
+
+                                <div
+                                    class="dashboard-performance-sum-grid"
+                                    aria-label="Performance sums for week, month, and year"
+                                >
+                                    <v-card
+                                        v-for="card in dashboardPerformanceSumCards"
+                                        :key="card.key"
+                                        class="dashboard-performance-card dashboard-performance-sum-card"
+                                        flat
+                                        border
+                                        rounded="xl"
+                                    >
+                                        <v-card-text class="pa-4">
+                                            <div class="dashboard-performance-card-heading">
+                                                <div class="dashboard-performance-card-label">{{ card.label }}</div>
                                                 <v-icon
                                                     :class="dashboardPerformanceValueClass(card.performance)"
                                                     :icon="dashboardPerformanceIcon(card.performance)"
@@ -19175,6 +19223,13 @@ function formatIndexDataUpdateSchedule(settings) {
     grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.dashboard-performance-sum-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin-top: 10px;
+}
+
 .dashboard-performance-card {
     background: rgb(var(--v-theme-surface));
     border-color: rgba(var(--v-border-color), var(--v-border-opacity));
@@ -19709,13 +19764,15 @@ function formatIndexDataUpdateSchedule(settings) {
 }
 
 @media (max-width: 960px) {
-    .dashboard-performance-grid {
+    .dashboard-performance-grid,
+    .dashboard-performance-sum-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 }
 
 @media (max-width: 600px) {
-    .dashboard-performance-grid {
+    .dashboard-performance-grid,
+    .dashboard-performance-sum-grid {
         grid-template-columns: minmax(0, 1fr);
     }
 
