@@ -1566,6 +1566,11 @@ describe('App', () => {
         expect(analyzeTrendV2.find('.analyze-trend-include-toggle').exists()).toBe(false);
         expect(analyzeTrendV2.find('.analyze-holding-card--compact').exists()).toBe(true);
         expect(analyzeTrendV2.find('.analyze-holding-card-name--compact').exists()).toBe(true);
+        const trendV2RankBadges = analyzeTrendV2.findAll('.analyze-holding-card-v2-rank');
+        expect(trendV2RankBadges).toHaveLength(12);
+        expect(trendV2RankBadges.map((badge) => badge.text()).sort()).toEqual([
+            '#1', '#10', '#11', '#12', '#2', '#3', '#4', '#5', '#6', '#7', '#8', '#9',
+        ]);
         expect(analyzeTrendV2.find('.analyze-holding-card-symbol').exists()).toBe(false);
         expect(analyzeTrendV2.find('.analyze-holding-card-isin').exists()).toBe(false);
         expect(analyzeTrendV2.find('.analyze-holding-card-price').exists()).toBe(false);
@@ -1582,8 +1587,34 @@ describe('App', () => {
             'Price',
             'Day %',
             'BUY/SELL',
+            'VBUY/VSELL',
+            'VBUY/VSELL MAX INVEST0.00 EUR',
         ]);
-        expect(analyzeTrendV2.find('.analyze-trend-summary').exists()).toBe(false);
+        const analyzeTrendV2Summary = analyzeTrendV2.find('[aria-label="Trend v2 analysis summary"]');
+        expect(analyzeTrendV2Summary.exists()).toBe(true);
+        expect(analyzeTrendV2Summary.classes()).toContain('analyze-trend-summary--compact');
+        expect(analyzeTrendV2Summary.findAll('.analyze-trend-summary-label').map((label) => label.text()))
+            .toEqual([
+                'All VBUY/VSELL totals',
+                'Max VBUY invest at same time',
+                'VBUY/VSELL total within max invest',
+                'Safe invest per VBUY',
+                'VBUY/VSELL total safe invest',
+            ]);
+        const analyzeTrendV2SummaryItems = analyzeTrendV2Summary.findAll('.analyze-trend-summary-item');
+        expect(analyzeTrendV2SummaryItems[0].classes()).toContain('analyze-trend-summary-item--virtual');
+        expect(analyzeTrendV2SummaryItems[1].classes()).toContain('analyze-trend-summary-item--virtual');
+        expect(analyzeTrendV2SummaryItems[2].classes()).toContain('analyze-trend-summary-item--max-invest');
+        expect(analyzeTrendV2SummaryItems[3].classes()).toContain('analyze-trend-summary-item--safe-invest');
+        expect(analyzeTrendV2SummaryItems[4].classes()).toContain('analyze-trend-summary-item--safe-invest');
+        expect(analyzeTrendV2Summary.findAll('strong').map((value) => value.text()))
+            .toEqual(expect.arrayContaining([
+                expect.stringMatching(/^-?[\d,.]+ EUR$/),
+                expect.stringMatching(/^[\d,.]+ EUR$/),
+            ]));
+        expect(analyzeTrendV2Summary.find('.analyze-trend-summary-note').text()).toBe('Max: 0 EUR');
+        expect(analyzeTrendV2Summary.findAll('.analyze-trend-summary-note')[1].text())
+            .toMatch(/^Peak open positions: \d+$/);
         const trendV2RowsControl = analyzeTrendV2.find('[aria-label="Edit trend row count"]');
         expect(trendV2RowsControl.exists()).toBe(true);
         expect(trendV2RowsControl.classes()).toContain('analyze-trend-invest-info');
@@ -1595,10 +1626,11 @@ describe('App', () => {
         expect(analyzeTrendV2.find('[aria-label="Virtual sell rules"]').text())
             .toBe('SELL: virtual position ≥ +3%');
         expect(analyzeTrendV2.find('[aria-label="Edit virtual trade rules"]').exists()).toBe(true);
+
         expect(analyzeTrendV2.find('.analyze-trend-optimization-info').exists()).toBe(false);
         expect(analyzeTrendV2.find('.analyze-trend-rec').exists()).toBe(false);
         expect(analyzeTrendV2.find('.analyze-holding-card-stat').exists()).toBe(false);
-        expect(analyzeTrendV2.findAll('.analyze-trend-table tbody tr')[0].findAll('td')).toHaveLength(4);
+        expect(analyzeTrendV2.findAll('.analyze-trend-table tbody tr')[0].findAll('td')).toHaveLength(6);
 
         const trendV2StockMenu = analyzeTrendV2.find('[aria-label="Analyze trend v2 stocks"]');
         const trendV2BuyStreakCard = trendV2StockMenu.findAll('.analyze-holding-card')
@@ -1611,6 +1643,9 @@ describe('App', () => {
         const trendV2BuySellHeading = analyzeTrendV2.findAll('.analyze-trend-table th')[3];
         expect(trendV2BuySellHeading.text()).toBe('BUY/SELL +308.48 EUR');
         expect(trendV2BuySellHeading.find('.analyze-trend-dep-change').classes()).toContain('text-success');
+        const trendV2VirtualBuySellHeading = analyzeTrendV2.findAll('.analyze-trend-table th')[4];
+        expect(trendV2VirtualBuySellHeading.text()).toBe('VBUY/VSELL +434.00 EUR');
+        expect(trendV2VirtualBuySellHeading.find('.analyze-trend-dep-change').classes()).toContain('text-success');
         const trendV2BuyStreakRows = analyzeTrendV2.findAll('.analyze-trend-table tbody tr');
         expect(trendV2BuyStreakRows[0].findAll('td')[3].text()).toBe('SELL+208.48 EUR');
         expect(trendV2BuyStreakRows[0].find('.analyze-trend-rec--sell').exists()).toBe(true);
@@ -1619,10 +1654,37 @@ describe('App', () => {
         expect(trendV2BuyStreakRows[2].findAll('td')[3].text()).toBe('-135.18 EUR');
         expect(trendV2BuyStreakRows[3].findAll('td')[3].text()).toBe('-67.93 EUR');
         expect(trendV2BuyStreakRows[1].find('.analyze-trend-dep-change').classes()).toContain('text-error');
-        expect(trendV2BuyStreakRows[4].findAll('td')[3].text()).toBe('BUY');
+        expect(trendV2BuyStreakRows[4].findAll('td')[3].text()).toBe('BUY6,792.64 EUR');
         expect(trendV2BuyStreakRows[4].find('.analyze-trend-rec--buy').exists()).toBe(true);
+        expect(trendV2BuyStreakRows[4].findAll('td')[3].find('.analyze-trend-dep-change').text())
+            .toBe('6,792.64 EUR');
+        expect(trendV2BuyStreakRows[0].findAll('td')[4].text())
+            .toBe('VSELL+217.00 EUR');
+        expect(trendV2BuyStreakRows[0].findAll('td')[4].find('.analyze-trend-rec--sell').exists()).toBe(true);
+        expect(trendV2BuyStreakRows[3].findAll('td')[4].text()).toBe('-70.00 EUR');
+        expect(trendV2BuyStreakRows[4].findAll('td')[4].text())
+            .toBe('VBUY streak 3: -3.00%7,000.00 EUR');
+        expect(trendV2BuyStreakRows[4].findAll('td')[4].find('.analyze-trend-rec--buy').exists()).toBe(true);
+        expect(trendV2BuyStreakRows.every((row) => row.findAll('td')[5].text() === '')).toBe(true);
         expect(analyzeTrendV2.find('[aria-label="Virtual buy rules"]').exists()).toBe(true);
         expect(analyzeTrendV2.find('[aria-label="Virtual sell rules"]').exists()).toBe(true);
+
+        const trendV2TrendSignalCard = trendV2StockMenu.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Trend Signal Fund'));
+        await trendV2TrendSignalCard.trigger('click');
+        await flushPromises();
+
+        const trendV2OpenDepotHeading = analyzeTrendV2.findAll('.analyze-trend-table th')[3];
+        expect(trendV2OpenDepotHeading.text()).toMatch(/^BUY\/SELL \+\d/);
+        expect(trendV2OpenDepotHeading.text()).toContain('USD');
+
+        const trendV2TripleStreakCard = trendV2StockMenu.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Triple Streak Fund'));
+        await trendV2TripleStreakCard.trigger('click');
+        await flushPromises();
+
+        const trendV2OpenVirtualHeading = analyzeTrendV2.findAll('.analyze-trend-table th')[4];
+        expect(trendV2OpenVirtualHeading.text()).toMatch(/^VBUY\/VSELL -\d/);
 
         const trendV2AppleCard = trendV2StockMenu.findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Apple'));
@@ -5495,6 +5557,9 @@ describe('App', () => {
         expect(usStockRow.get('[aria-label="EXXX live update schedule status"]').text()).toBe('Scheduled');
         expect(usStockRow.get('[aria-label="EXXX live update activity status"]').text()).toBe('Active');
         expect(stockRealtimeSchedule.text()).not.toContain('No job is running; the next refresh starts at the time shown below.');
+        expect(stockRealtimeSchedule.text()).not.toContain(
+            'Updates are inactive outside the configured trading window.',
+        );
         expect(stockRealtimeSchedule.text()).toContain('Latest 06.08.2026, 18:49');
         expect(stockRealtimeSchedule.text()).toContain('Next 06.08.2026, 18:59');
         expect(stockRealtimeSchedule.text()).toContain('Europe/Vienna');
