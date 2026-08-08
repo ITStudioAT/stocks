@@ -5,10 +5,16 @@
 - Summe Woche, Monat, Jahr hinzugefügt
 
 ### Data
+
 - Sync Cloudways to local
 
 ### Analyze
+
 - Trend v2
+
+### System
+
+- Transfer SSHX-Command to other Devices
 
 ## 0.8.6
 

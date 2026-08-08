@@ -8,6 +8,8 @@ $legacyStartMarker = '# >>> schooltool managed helpers >>>'
 $legacyEndMarker = '# <<< schooltool managed helpers <<<'
 $startMarker = '# >>> project git dispatcher >>>'
 $endMarker = '# <<< project git dispatcher <<<'
+$sshStartMarker = '# >>> project SSH dispatcher >>>'
+$sshEndMarker = '# <<< project SSH dispatcher <<<'
 $managedBlock = @"
 $startMarker
 function mu {
@@ -117,6 +119,55 @@ function gitpush {
 }
 $endMarker
 "@
+$sshManagedBlock = @"
+$sshStartMarker
+function sshx {
+    [CmdletBinding()]
+    param()
+
+    `$repositoryRoot = git rev-parse --show-toplevel 2>`$null
+
+    if (`$LASTEXITCODE -ne 0 -or -not `$repositoryRoot) {
+        throw 'sshx must be run inside a Git repository.'
+    }
+
+    `$repositoryRoot = `$repositoryRoot.Trim()
+    `$remoteUrl = git -C `$repositoryRoot remote get-url origin 2>`$null
+
+    if (`$LASTEXITCODE -ne 0 -or -not `$remoteUrl) {
+        throw 'sshx requires an origin remote.'
+    }
+
+    `$remoteUrl = `$remoteUrl.Trim()
+    `$trustedRemotePattern = '^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)ITStudioAT/(?<project>schooltool|stocks)(?:\.git)?/?$'
+    `$remoteMatch = [regex]::Match(`$remoteUrl, `$trustedRemotePattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+
+    if (-not `$remoteMatch.Success) {
+        throw "sshx does not trust the origin remote: `$remoteUrl"
+    }
+
+    `$project = `$remoteMatch.Groups['project'].Value.ToLowerInvariant()
+    `$projectDestinations = @{
+        schooltool = 'sftp_schooltool_at@165.227.156.99'
+        stocks = 'sftp_gkstocks_admin@165.227.156.99'
+    }
+    `$destination = `$projectDestinations[`$project]
+    `$sshCommand = Get-Command ssh.exe -ErrorAction SilentlyContinue
+    `$sshExecutable = if (`$sshCommand) {
+        `$sshCommand.Source
+    }
+    elseif (Test-Path -LiteralPath 'C:\Program Files\Git\usr\bin\ssh.exe' -PathType Leaf) {
+        'C:\Program Files\Git\usr\bin\ssh.exe'
+    }
+    else {
+        throw 'No SSH client was found. Install Windows OpenSSH Client or Git for Windows.'
+    }
+
+    Write-Host "Connecting `$project to `$destination..." -ForegroundColor Cyan
+    & `$sshExecutable `$destination
+}
+$sshEndMarker
+"@
 
 $windowsPowerShellUtf8 = New-Object System.Text.UTF8Encoding($true)
 
@@ -136,7 +187,8 @@ foreach ($profilePath in $profilePaths) {
 
     foreach ($markers in @(
         @($legacyStartMarker, $legacyEndMarker),
-        @($startMarker, $endMarker)
+        @($startMarker, $endMarker),
+        @($sshStartMarker, $sshEndMarker)
     )) {
         $pattern = [regex]::Escape($markers[0]) + '.*?' + [regex]::Escape($markers[1])
         $profileContent = [regex]::Replace(
@@ -151,7 +203,8 @@ foreach ($profilePath in $profilePaths) {
         $profileContent += [Environment]::NewLine + [Environment]::NewLine
     }
 
-    $profileContent += $managedBlock + [Environment]::NewLine
+    $profileContent += $managedBlock + [Environment]::NewLine + [Environment]::NewLine
+    $profileContent += $sshManagedBlock + [Environment]::NewLine
     [System.IO.File]::WriteAllText($profilePath, $profileContent, $windowsPowerShellUtf8)
 
     Write-Host "Project-aware helpers installed in $profilePath" -ForegroundColor Green
@@ -162,4 +215,4 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Could not configure the repository hooks path.'
 }
 
-Write-Host 'Open a new PowerShell terminal before using gitpush or mu.' -ForegroundColor Cyan
+Write-Host 'Open a new PowerShell terminal before using gitpush, mu, or sshx.' -ForegroundColor Cyan

@@ -411,6 +411,27 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertStringContainsString("'WindowsPowerShell\\Microsoft.PowerShell_profile.ps1'", $installer);
     }
 
+    public function test_powershell_ssh_helper_dispatches_trusted_project_remotes(): void
+    {
+        $installer = file_get_contents($this->projectPath('scripts/install_powershell_helpers.ps1'));
+
+        $this->assertStringContainsString('function sshx', $installer);
+        $this->assertStringContainsString('# >>> project SSH dispatcher >>>', $installer);
+        $this->assertStringContainsString('@($sshStartMarker, $sshEndMarker)', $installer);
+        $this->assertStringContainsString('$profileContent += $sshManagedBlock', $installer);
+        $this->assertStringContainsString('git rev-parse --show-toplevel', $installer);
+        $this->assertStringContainsString('remote get-url origin', $installer);
+        $this->assertStringContainsString('ITStudioAT/(?<project>schooltool|stocks)', $installer);
+        $this->assertMatchesRegularExpression(
+            "/schooltool = 'sftp_schooltool_at@165\\.227\\.156\\.99'.*stocks = 'sftp_gkstocks_admin@165\\.227\\.156\\.99'/s",
+            $installer,
+        );
+        $this->assertStringContainsString('Get-Command ssh.exe', $installer);
+        $this->assertStringContainsString("'C:\\Program Files\\Git\\usr\\bin\\ssh.exe'", $installer);
+        $this->assertStringNotContainsString('C:\\laravel\\schooltool', $installer);
+        $this->assertStringNotContainsString('C:\\laravel\\stocks', $installer);
+    }
+
     public function test_source_manifest_rejects_unlisted_tracked_files(): void
     {
         $manifestName = 'deployment-test-'.bin2hex(random_bytes(4)).'.sha256';
