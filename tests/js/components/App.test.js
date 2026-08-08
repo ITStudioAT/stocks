@@ -1047,8 +1047,8 @@ describe('App', () => {
         }));
     });
 
-    it('shows the Analyze menu page with URL-backed subpages', async () => {
-        window.history.pushState({}, '', '/admin/menu/analyze/detail');
+    it('shows Trend as the default Analyze page with only the supported submenu items', async () => {
+        window.history.pushState({}, '', '/admin/menu/analyze');
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
         const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
         const clipboardWriteText = vi.fn(() => Promise.resolve());
@@ -1503,33 +1503,51 @@ describe('App', () => {
             'admin',
             'profile',
         ]);
-        expect(wrapper.find('[aria-label="Analyze detail"]').exists()).toBe(true);
-        expect(window.location.pathname).toBe('/admin/menu/analyze/detail');
+        expect(wrapper.find('[aria-label="Analyze trend"]').exists()).toBe(true);
+        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
         expect(window.location.search).toBe('?stock=1');
-        expect(wrapper.find('[aria-label="Analyze detail stocks"]').find('.analyze-holding-card--all').exists()).toBe(false);
-        expect(wrapper.text()).toContain('Charts');
-        expect(wrapper.text()).toContain('Intraday');
-        expect(wrapper.text()).toContain('Detail');
-        expect(wrapper.text()).toContain('Trend');
-        expect(wrapper.text()).toContain('Tests');
-        const analyzeTabsText = wrapper.findAll('.v-tab').map((tab) => tab.text()).join(' ');
-        expect(analyzeTabsText.indexOf('Charts')).toBeLessThan(analyzeTabsText.indexOf('Intraday'));
-        expect(analyzeTabsText.indexOf('Intraday')).toBeLessThan(analyzeTabsText.indexOf('Detail'));
-        expect(analyzeTabsText.indexOf('Detail')).toBeLessThan(analyzeTabsText.indexOf('Trend'));
-        expect(analyzeTabsText.indexOf('Trend')).toBeLessThan(analyzeTabsText.indexOf('Tests'));
+        expect(wrapper.find('[aria-label="Analyze trend stocks"]').find('.analyze-holding-card--all').exists()).toBe(false);
+        expect(wrapper.findAll('.v-tab').map((tab) => tab.text())).toEqual(['Trend', 'Trend v2', 'Charts']);
 
-        const trendTab = wrapper.findAll('.v-tab')
-            .find((tab) => tab.text().includes('Trend'));
+        const trendV2Tab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Trend v2');
+        await trendV2Tab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/trend-v2');
+        expect(window.location.search).toBe('?stock=1');
+        const analyzeTrendV2 = wrapper.find('[aria-label="Analyze trend v2"]');
+        expect(analyzeTrendV2.exists()).toBe(true);
+        expect(analyzeTrendV2.find('.analyze-detail-title').text()).toBe('Trend v2');
+        expect(analyzeTrendV2.find('[aria-label="Analyze trend v2 stocks"]').exists()).toBe(true);
+        expect(analyzeTrendV2.find('[aria-label="Edit trend invest amounts"]').exists()).toBe(false);
+        expect(analyzeTrendV2.find('[aria-label="Edit trend max invest"]').exists()).toBe(true);
+        expect(analyzeTrendV2.findAll('.analyze-trend-table th').map((heading) => heading.text())).toEqual([
+            'Date',
+            'Price',
+            'Day %',
+        ]);
+        expect(analyzeTrendV2.find('.analyze-trend-summary').exists()).toBe(false);
+        const trendV2RowsControl = analyzeTrendV2.find('[aria-label="Edit trend row count"]');
+        expect(trendV2RowsControl.exists()).toBe(true);
+        expect(trendV2RowsControl.classes()).toContain('analyze-trend-invest-info');
+        expect(trendV2RowsControl.text()).toContain('Rows: 200');
+        expect(analyzeTrendV2.find('.analyze-trend-optimization-info').exists()).toBe(false);
+        expect(analyzeTrendV2.find('.analyze-trend-rec').exists()).toBe(false);
+        expect(analyzeTrendV2.find('.analyze-holding-card-stat').exists()).toBe(false);
+        expect(analyzeTrendV2.findAll('.analyze-trend-table tbody tr')[0].findAll('td')).toHaveLength(3);
+
+        const trendTab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Trend');
         await trendTab.trigger('click');
         await flushPromises();
 
         expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
         expect(window.location.search).toBe('?stock=1');
         expect(fetchMock.mock.calls.some(([path]) => (
-            path === '/admin/watchlist/holdings?page=1&include_charts=1&all_chart_holdings=1&chart_range=1y'
+            path === '/admin/watchlist/holdings?page=1&include_charts=1&all_chart_holdings=1&all=1&chart_range=1y'
         ))).toBe(true);
         const analyzeTrend = wrapper.find('[aria-label="Analyze trend"]');
         const trendStockMenu = wrapper.find('[aria-label="Analyze trend stocks"]');
+        expect(analyzeTrend.find('[aria-label="Edit trend invest amounts"]').exists()).toBe(true);
         expect(analyzeTrend.exists()).toBe(true);
         expect(analyzeTrend.find('.analyze-detail-title').text()).toBe('Trend');
         expect(analyzeTrend.find('.analyze-selected-stock-name').text()).toBe('Apple');
@@ -1904,9 +1922,7 @@ describe('App', () => {
         expect(appleTrendCard.attributes('aria-pressed')).toBe('true');
         expect(analyzeTrend.text()).toContain('04.06.2026');
 
-        const intradayTab = wrapper.findAll('.v-tab')
-            .find((tab) => tab.text().includes('Intraday'));
-        await intradayTab.trigger('click');
+        wrapper.vm.navigateAnalyzeSubsection('intraday');
         await flushPromises();
 
         expect(window.location.pathname).toBe('/admin/menu/analyze/intraday');
@@ -1969,8 +1985,6 @@ describe('App', () => {
             '+4.77%',
             '+4.77%',
         ]);
-        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/holdings/1/intraday-candles')).toBe(true);
-
         const intradayAppleCard = wrapper.find('[aria-label="Analyze intraday stocks"]').findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Apple'));
         await intradayAppleCard.trigger('click');
@@ -2581,13 +2595,12 @@ describe('App', () => {
         expect(analyzeOverview.find('.analyze-holding-card--all').exists()).toBe(false);
         expect(analyzeOverview.text()).toContain('1 year');
 
-        const detailTab = wrapper.findAll('.v-tab')
-            .find((tab) => tab.text().includes('Detail'));
-        await detailTab.trigger('click');
+        wrapper.vm.navigateAnalyzeSubsection('detail');
         await flushPromises();
 
         expect(window.location.pathname).toBe('/admin/menu/analyze/detail');
         expect(window.location.search).toBe('?stock=1');
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/holdings/1/intraday-candles')).toBe(true);
         expect(wrapper.find('[aria-label="Analyze detail"] .analyze-detail-title').text()).toBe('Details');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Apple');
         expect(wrapper.find('[aria-label="Analyze detail"]').text()).toContain('Intraday 05.06.2026');
@@ -2716,7 +2729,7 @@ describe('App', () => {
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/3/intraday-candles', expect.anything());
     });
 
-    it('selects the first stock when Analyze intraday opens with stock all', async () => {
+    it('keeps the removed Analyze intraday view available internally', async () => {
         window.history.pushState({}, '', '/admin/menu/analyze/intraday?stock=all');
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
         const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
@@ -2787,6 +2800,9 @@ describe('App', () => {
         vi.stubGlobal('fetch', fetchMock);
 
         const wrapper = mountApp();
+        await flushPromises();
+
+        wrapper.vm.navigateAnalyzeSubsection('intraday');
         await flushPromises();
 
         const analyzeIntraday = wrapper.find('[aria-label="Analyze intraday"]');
@@ -2954,6 +2970,9 @@ describe('App', () => {
         await flushPromises();
         await flushPromises();
 
+        wrapper.vm.navigateAnalyzeSubsection('tests');
+        await flushPromises();
+
         const testsPage = wrapper.find('[aria-label="Analyze tests"]');
         expect(testsPage.exists()).toBe(true);
         expect(testsPage.text()).toContain('Stocks');
@@ -2964,7 +2983,7 @@ describe('App', () => {
         expect(testsPage.find('[aria-label="Ticker result"]').exists()).toBe(false);
         expect(window.location.pathname).toBe('/admin/menu/analyze/tests');
         expect(wrapper.find('.dashboard-navigation-drawer').text()).not.toContain('Tests');
-        expect(wrapper.findAll('.v-tab').map((tab) => tab.text()).some((label) => label.includes('Tests'))).toBe(true);
+        expect(wrapper.findAll('.v-tab').map((tab) => tab.text()).some((label) => label.includes('Tests'))).toBe(false);
         expect(wrapper.vm.testOptions.stocks).toHaveLength(12);
         expect(fetchMock).toHaveBeenCalledWith('/admin/tests/options', expect.any(Object));
         expect(fetchMock).toHaveBeenCalledWith('/admin/tests/stocks/1/intraday', expect.any(Object));

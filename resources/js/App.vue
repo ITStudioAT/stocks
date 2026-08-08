@@ -164,7 +164,7 @@ const infoTablesLoading = ref(false);
 const infoTablesError = ref('');
 const infoTableSearch = ref('');
 const activeInfoSubsection = ref('eodhd');
-const activeAnalyzeSubsection = ref('overview');
+const activeAnalyzeSubsection = ref('trend');
 const activeDataSubsection = ref('indices');
 const activeDataType = ref('live-data');
 const activeDepotSubsection = ref('overview');
@@ -945,7 +945,15 @@ const selectedAnalyzeTrendRows = computed(() => buildAnalyzeTrendRows(
     analyzeTrendRowLimit.value,
     analyzeTrendTradeAmounts.value,
 ));
-const selectedAnalyzeTrendSummary = computed(() => buildAnalyzeTrendSummary(selectedAnalyzeTrendRows.value));
+const selectedAnalyzeTrendV2Rows = computed(() => buildAnalyzeTrendV2Rows(
+    selectedAnalyzeHolding.value,
+    analyzeTrendRowLimit.value,
+));
+const selectedAnalyzeTrendDisplayRows = computed(() => (
+    activeAnalyzeSubsection.value === 'trend-v2'
+        ? selectedAnalyzeTrendV2Rows.value
+        : selectedAnalyzeTrendRows.value
+));
 const selectedAnalyzeTrendPortfolioSummary = computed(() => buildAnalyzeTrendPortfolioSummary(
     analyzeTrendIncludedRows.value,
     selectedAnalyzeTrendRows.value[0]?.date ?? null,
@@ -1101,6 +1109,26 @@ function buildAnalyzeTrendRows(
     addAnalyzeTrendPortfolioCapital(visibleRows, portfolioCapitalByDate);
 
     return visibleRows.reverse();
+}
+
+function buildAnalyzeTrendV2Rows(holding, rowLimit = defaultAnalyzeTrendRowLimit) {
+    const prices = analyzeTrendDailyPrices(holding);
+
+    return prices
+        .map((price, priceIndex) => {
+            if (priceIndex === 0) {
+                return null;
+            }
+
+            return {
+                date: price.trading_date,
+                price: price.price,
+                dayChangePercent: priceChangePercent(price.price, prices[priceIndex - 1].price),
+            };
+        })
+        .filter((row) => row !== null)
+        .slice(-normalizeAnalyzeTrendRowLimit(rowLimit))
+        .reverse();
 }
 
 function analyzeTrendDepotStateByDate(holding, prices) {
@@ -2548,31 +2576,22 @@ const eodhdUsageItems = computed(() => {
 });
 const analyzeSubmenuItems = [
     {
-        key: 'overview',
-        label: 'Charts',
-        icon: 'mdi-view-grid-outline',
-    },
-    {
-        key: 'intraday',
-        label: 'Intraday',
-        icon: 'mdi-chart-timeline-variant',
-    },
-    {
-        key: 'detail',
-        label: 'Detail',
-        icon: 'mdi-chart-box-outline',
-    },
-    {
         key: 'trend',
         label: 'Trend',
         icon: 'mdi-trending-up',
     },
     {
-        key: 'tests',
-        label: 'Tests',
-        icon: 'mdi-test-tube',
+        key: 'trend-v2',
+        label: 'Trend v2',
+        icon: 'mdi-trending-up',
+    },
+    {
+        key: 'overview',
+        label: 'Charts',
+        icon: 'mdi-view-grid-outline',
     },
 ];
+const analyzeSubsectionKeys = ['trend', 'trend-v2', 'overview', 'intraday', 'detail', 'tests'];
 const dataSubmenuItems = [
     {
         key: 'indices',
@@ -3361,7 +3380,7 @@ function navigateSection(section) {
     activeSection.value = section;
 
     if (section === 'analyze' && !isAnalyzeSubsection(activeAnalyzeSubsection.value)) {
-        activeAnalyzeSubsection.value = 'overview';
+        activeAnalyzeSubsection.value = 'trend';
     }
 
     if (section === 'data' && !isDataSubsection(activeDataSubsection.value)) {
@@ -3518,8 +3537,10 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
     const shouldIncludeAnalyzeCharts = activeSection.value === 'analyze' && selectedAnalyzeHoldingId.value !== null;
     const shouldIncludeStockChart = activeSection.value === 'stocks' && selectedStockWatchItem.value !== null;
     const shouldIncludeCharts = shouldIncludeAnalyzeCharts || shouldIncludeStockChart;
-    const shouldIncludeAllChartHoldings = shouldIncludeAnalyzeCharts && activeAnalyzeSubsection.value === 'trend';
-    const shouldIncludeAllHoldings = activeSection.value === 'stocks'
+    const shouldIncludeAllChartHoldings = shouldIncludeAnalyzeCharts
+        && isAnalyzeTrendSubsection(activeAnalyzeSubsection.value);
+    const shouldIncludeAllHoldings = activeSection.value === 'analyze'
+        || activeSection.value === 'stocks'
         || (activeSection.value === 'data' && activeDataSubsection.value === 'stocks');
 
     return depotsStore.loadWatchlistHoldings(page, {
@@ -4104,7 +4125,7 @@ function applyRouteFromPath() {
             activeSection.value = 'analyze';
             activeAnalyzeSubsection.value = isAnalyzeSubsection(subsectionSegment)
                 ? subsectionSegment
-                : 'overview';
+                : 'trend';
             applyAnalyzeSelectionFromQuery(new URLSearchParams(window.location.search));
             updateUrlPath({ replace: true });
 
@@ -4197,11 +4218,15 @@ function updateUrlPath(options = {}) {
 }
 
 function isAnalyzeSubsection(subsection) {
-    return analyzeSubmenuItems.some((item) => item.key === subsection);
+    return analyzeSubsectionKeys.includes(subsection);
+}
+
+function isAnalyzeTrendSubsection(subsection) {
+    return ['trend', 'trend-v2'].includes(subsection);
 }
 
 function analyzeSubsectionRequiresHolding(subsection) {
-    return ['detail', 'intraday', 'trend'].includes(subsection);
+    return ['detail', 'intraday'].includes(subsection) || isAnalyzeTrendSubsection(subsection);
 }
 
 function ensureAnalyzeHoldingSelection(currentHoldings = holdings.value) {
@@ -14911,13 +14936,15 @@ function formatIndexDataUpdateSchedule(settings) {
                             </div>
                         </section>
                         <section
-                            v-if="activeAnalyzeSubsection === 'trend'"
+                            v-if="isAnalyzeTrendSubsection(activeAnalyzeSubsection)"
                             class="analyze-detail-page"
-                            aria-label="Analyze trend"
+                            :aria-label="activeAnalyzeSubsection === 'trend-v2' ? 'Analyze trend v2' : 'Analyze trend'"
                         >
                             <div class="analyze-detail-header">
                                 <div>
-                                    <h2 class="analyze-detail-title">Trend</h2>
+                                    <h2 class="analyze-detail-title">
+                                        {{ activeAnalyzeSubsection === 'trend-v2' ? 'Trend v2' : 'Trend' }}
+                                    </h2>
                                     <div class="analyze-detail-scope">
                                         {{ selectedAnalyzeScopeLabel }}
                                     </div>
@@ -14941,7 +14968,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                     />
                                 </button>
                             </h3>
-                            <div class="index-watch-strip analyze-detail-stock-menu" aria-label="Analyze trend stocks">
+                            <div
+                                class="index-watch-strip analyze-detail-stock-menu"
+                                :aria-label="activeAnalyzeSubsection === 'trend-v2' ? 'Analyze trend v2 stocks' : 'Analyze trend stocks'"
+                            >
                                 <div
                                     v-for="holding in holdings"
                                     :key="holding.id"
@@ -14987,14 +15017,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                             {{ formatHoldingCardPrice(holding) }}
                                         </span>
                                         <span
-                                            v-if="isAnalyzeTrendHoldingIncluded(holding.id)"
+                                            v-if="activeAnalyzeSubsection !== 'trend-v2' && isAnalyzeTrendHoldingIncluded(holding.id)"
                                             class="analyze-holding-card-stat"
                                             :class="priceChangePercentClass(analyzeTrendHoldingStats.get(holding.id)?.winAmount ?? 0)"
                                         >
                                             {{ formatAnalyzeTrendSignedWin(analyzeTrendHoldingStats.get(holding.id)?.winAmount ?? 0) }}
                                         </span>
                                         <span
-                                            v-if="isAnalyzeTrendHoldingIncluded(holding.id)"
+                                            v-if="activeAnalyzeSubsection !== 'trend-v2' && isAnalyzeTrendHoldingIncluded(holding.id)"
                                             class="analyze-holding-card-stat"
                                         >
                                             Rank: {{ formatAnalyzeTrendHoldingRank(analyzeTrendHoldingStats.get(holding.id)) }}
@@ -15015,13 +15045,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                 No stock selected.
                             </v-alert>
                             <div
-                                v-else-if="selectedAnalyzeTrendRows.length === 0"
+                                v-else-if="selectedAnalyzeTrendDisplayRows.length === 0"
                                 class="analyze-detail-empty"
                             >
                                 No daily prices stored for this stock.
                             </div>
                             <div v-else class="analyze-trend-panel">
-                                <div class="analyze-trend-summary" aria-label="Trend analysis summary">
+                                <div
+                                    v-if="activeAnalyzeSubsection !== 'trend-v2'"
+                                    class="analyze-trend-summary"
+                                    aria-label="Trend analysis summary"
+                                >
                                     <button
                                         type="button"
                                         class="analyze-trend-summary-item analyze-trend-summary-item--button"
@@ -15030,39 +15064,52 @@ function formatIndexDataUpdateSchedule(settings) {
                                     >
                                         <span class="analyze-trend-summary-label">Rows</span>
                                         <strong class="analyze-trend-summary-value-with-icon">
-                                            {{ selectedAnalyzeTrendSummary.rows }}
+                                            {{ selectedAnalyzeTrendDisplayRows.length }}
                                             <v-icon icon="mdi-pencil" size="16" />
                                         </strong>
                                     </button>
-                                    <div class="analyze-trend-summary-item">
-                                        <span class="analyze-trend-summary-label">Total +/- over all checked stocks</span>
-                                        <strong :class="priceChangePercentClass(selectedAnalyzeTrendPortfolioSummary.changeAmount)">
-                                            {{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.changeAmount) }}
-                                        </strong>
-                                    </div>
-                                    <div class="analyze-trend-summary-item">
-                                        <span class="analyze-trend-summary-label">All amount</span>
-                                        <strong>{{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.amount) }}</strong>
-                                    </div>
-                                    <div class="analyze-trend-summary-item">
-                                        <span class="analyze-trend-summary-label">Max invest at same time</span>
-                                        <strong>{{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.maximumAmount) }}</strong>
-                                        <span
-                                            v-if="selectedAnalyzeTrendPortfolioSummary.maximumAmountDate"
-                                            class="analyze-trend-summary-note"
-                                        >
-                                            {{ formatAnalyzeTrendDate(selectedAnalyzeTrendPortfolioSummary.maximumAmountDate) }}
-                                        </span>
-                                    </div>
-                                    <div class="analyze-trend-summary-item">
-                                        <span class="analyze-trend-summary-label">Actual +/- amount</span>
-                                        <strong :class="priceChangePercentClass(selectedAnalyzeTrendPortfolioSummary.actualChangeAmount)">
-                                            {{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.actualChangeAmount) }}
-                                        </strong>
-                                    </div>
+                                    <template v-if="activeAnalyzeSubsection !== 'trend-v2'">
+                                        <div class="analyze-trend-summary-item">
+                                            <span class="analyze-trend-summary-label">Total +/- over all checked stocks</span>
+                                            <strong :class="priceChangePercentClass(selectedAnalyzeTrendPortfolioSummary.changeAmount)">
+                                                {{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.changeAmount) }}
+                                            </strong>
+                                        </div>
+                                        <div class="analyze-trend-summary-item">
+                                            <span class="analyze-trend-summary-label">All amount</span>
+                                            <strong>{{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.amount) }}</strong>
+                                        </div>
+                                        <div class="analyze-trend-summary-item">
+                                            <span class="analyze-trend-summary-label">Max invest at same time</span>
+                                            <strong>{{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.maximumAmount) }}</strong>
+                                            <span
+                                                v-if="selectedAnalyzeTrendPortfolioSummary.maximumAmountDate"
+                                                class="analyze-trend-summary-note"
+                                            >
+                                                {{ formatAnalyzeTrendDate(selectedAnalyzeTrendPortfolioSummary.maximumAmountDate) }}
+                                            </span>
+                                        </div>
+                                        <div class="analyze-trend-summary-item">
+                                            <span class="analyze-trend-summary-label">Actual +/- amount</span>
+                                            <strong :class="priceChangePercentClass(selectedAnalyzeTrendPortfolioSummary.actualChangeAmount)">
+                                                {{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.actualChangeAmount) }}
+                                            </strong>
+                                        </div>
+                                    </template>
                                 </div>
                                 <div class="analyze-trend-invest-actions">
                                     <button
+                                        v-if="activeAnalyzeSubsection === 'trend-v2'"
+                                        type="button"
+                                        class="analyze-trend-invest-info"
+                                        aria-label="Edit trend row count"
+                                        @click="editAnalyzeTrendRowLimit"
+                                    >
+                                        <span>Rows: {{ analyzeTrendRowLimit }}</span>
+                                        <v-icon icon="mdi-pencil" size="14" />
+                                    </button>
+                                    <button
+                                        v-if="activeAnalyzeSubsection !== 'trend-v2'"
                                         type="button"
                                         class="analyze-trend-invest-info"
                                         aria-label="Edit trend invest amounts"
@@ -15080,7 +15127,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <span>{{ analyzeTrendMaxInvestAmountInfo }}</span>
                                         <v-icon icon="mdi-pencil" size="14" />
                                     </button>
-                                    <span class="analyze-trend-optimization-info">
+                                    <span
+                                        v-if="activeAnalyzeSubsection !== 'trend-v2'"
+                                        class="analyze-trend-optimization-info"
+                                    >
                                         {{ analyzeTrendInvestmentOptimizationInfo }}
                                     </span>
                                 </div>
@@ -15092,19 +15142,21 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 <th>Date</th>
                                                 <th class="text-right">Price</th>
                                                 <th class="text-right">Day %</th>
-                                                <th class="text-right">-Streak</th>
-                                                <th>Rec</th>
-                                                <th>DEP</th>
-                                                <th class="text-right">Evoluation</th>
-                                                <th class="text-right">Next %</th>
-                                                <th class="text-right">Wins</th>
-                                                <th class="text-right">CAP</th>
-                                                <th class="text-right">Total</th>
+                                                <template v-if="activeAnalyzeSubsection !== 'trend-v2'">
+                                                    <th class="text-right">-Streak</th>
+                                                    <th>Rec</th>
+                                                    <th>DEP</th>
+                                                    <th class="text-right">Evoluation</th>
+                                                    <th class="text-right">Next %</th>
+                                                    <th class="text-right">Wins</th>
+                                                    <th class="text-right">CAP</th>
+                                                    <th class="text-right">Total</th>
+                                                </template>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             <tr
-                                                v-for="trendRow in selectedAnalyzeTrendRows"
+                                                v-for="trendRow in selectedAnalyzeTrendDisplayRows"
                                                 :key="trendRow.date"
                                             >
                                                 <td>{{ formatAnalyzeTrendDate(trendRow.date) }}</td>
@@ -15112,10 +15164,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 <td class="text-right" :class="priceChangePercentClass(trendRow.dayChangePercent)">
                                                     {{ formatPriceChangePercent(trendRow.dayChangePercent) }}
                                                 </td>
-                                                <td class="text-right" :class="priceChangePercentClass(trendRow.negativeStreak.changePercent)">
+                                                <td
+                                                    v-if="activeAnalyzeSubsection !== 'trend-v2'"
+                                                    class="text-right"
+                                                    :class="priceChangePercentClass(trendRow.negativeStreak.changePercent)"
+                                                >
                                                     {{ formatAnalyzeTrendNegativeStreak(trendRow.negativeStreak) }}
                                                 </td>
-                                                <td>
+                                                <td v-if="activeAnalyzeSubsection !== 'trend-v2'">
                                                     <span
                                                         v-for="recommendationItem in trendRow.streakRecommendations"
                                                         :key="recommendationItem.label"
@@ -15128,7 +15184,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         {{ recommendationItem.label }}
                                                     </span>
                                                 </td>
-                                                <td>
+                                                <td v-if="activeAnalyzeSubsection !== 'trend-v2'">
                                                     <span
                                                         v-for="depotAction in trendRow.depot.actions"
                                                         :key="depotAction.type"
@@ -15148,7 +15204,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         {{ formatAnalyzeTrendSignedWin(trendRow.depot.changeAmount, trendRow.depot.currency) }}
                                                     </span>
                                                 </td>
-                                                <td class="text-right">
+                                                <td v-if="activeAnalyzeSubsection !== 'trend-v2'" class="text-right">
                                                     <span
                                                         v-for="evolutionItem in formatAnalyzeTrendStreakEvolutionItems(trendRow.streakEvolution)"
                                                         :key="evolutionItem"
@@ -15157,11 +15213,21 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         {{ evolutionItem }}
                                                     </span>
                                                 </td>
-                                                <td class="text-right" :class="priceChangePercentClass(trendRow.nextDayChangePercent)">
+                                                <td
+                                                    v-if="activeAnalyzeSubsection !== 'trend-v2'"
+                                                    class="text-right"
+                                                    :class="priceChangePercentClass(trendRow.nextDayChangePercent)"
+                                                >
                                                     {{ formatPriceChangePercent(trendRow.nextDayChangePercent) }}
                                                 </td>
-                                                <td class="text-right">{{ formatAnalyzeTrendWin(trendRow.streakWin) }}</td>
-                                                <td class="text-right" :class="priceChangePercentClass(trendRow.streakCapital)">
+                                                <td v-if="activeAnalyzeSubsection !== 'trend-v2'" class="text-right">
+                                                    {{ formatAnalyzeTrendWin(trendRow.streakWin) }}
+                                                </td>
+                                                <td
+                                                    v-if="activeAnalyzeSubsection !== 'trend-v2'"
+                                                    class="text-right"
+                                                    :class="priceChangePercentClass(trendRow.streakCapital)"
+                                                >
                                                     <span v-if="trendRow.streakCapital !== null">
                                                         {{ formatAnalyzeTrendWin(trendRow.streakCapital) }}
                                                     </span>
@@ -15172,7 +15238,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         {{ formatAnalyzeTrendWin(trendRow.streakCapitalAmount) }}
                                                     </span>
                                                 </td>
-                                                <td class="text-right">{{ formatAnalyzeTrendWin(trendRow.streakTotalWin) }}</td>
+                                                <td v-if="activeAnalyzeSubsection !== 'trend-v2'" class="text-right">
+                                                    {{ formatAnalyzeTrendWin(trendRow.streakTotalWin) }}
+                                                </td>
                                             </tr>
                                         </tbody>
                                     </v-table>
@@ -19942,6 +20010,9 @@ function formatIndexDataUpdateSchedule(settings) {
     font-size: 0.95rem;
     font-weight: 700;
     margin-top: 4px;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
 }
 
 .analyze-detail-stock-menu {
@@ -19958,6 +20029,12 @@ function formatIndexDataUpdateSchedule(settings) {
     gap: 8px;
     line-height: 1.25;
     margin: -6px 0 8px;
+}
+
+.analyze-selected-stock-name {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: normal;
 }
 
 .analyze-selected-stock-isin-copy {
@@ -21326,6 +21403,17 @@ function formatIndexDataUpdateSchedule(settings) {
     align-items: stretch;
     display: flex;
     gap: 4px;
+}
+
+.analyze-trend-holding-item .analyze-holding-card {
+    height: auto;
+    min-height: 146px;
+}
+
+.analyze-trend-holding-item .analyze-holding-card-name {
+    display: block;
+    overflow: visible;
+    -webkit-line-clamp: unset;
 }
 
 .analyze-trend-include-toggle {
