@@ -359,11 +359,21 @@ const editingFlatexHoldingId = ref(null);
 const flatexPriceEditValue = ref('');
 const flatexPriceEditInput = ref(null);
 const depotPriceSource = ref('latest');
+const cloudwaysCheckLoading = ref(false);
+const cloudwaysCheckMessage = ref('');
+const cloudwaysCheckError = ref('');
+const cloudwaysCheckResult = ref(null);
+const cloudwaysExecutionStatus = ref(null);
+const cloudwaysExecutionStatusLoading = ref(false);
+const cloudwaysCheckProgress = ref(emptyCloudwaysProgress());
+const cloudwaysCheckProgressMessage = ref('');
 const cloudwaysSyncLoading = ref(false);
 const cloudwaysSyncMessage = ref('');
 const cloudwaysSyncError = ref('');
+const cloudwaysSyncProgress = ref(emptyCloudwaysProgress());
 const cloudwaysSyncProgressMessage = ref('');
 const cloudwaysSyncResult = ref(null);
+const isCloudwaysSyncDialogOpen = ref(false);
 let selectedDataHistoricIntradayCoverageRequestId = 0;
 let selectedDataLiveLatestEntriesRequestId = 0;
 let dataRealtimeLatestPricesRequestId = 0;
@@ -962,6 +972,9 @@ const selectedAnalyzeTrendV2Rows = computed(() => buildAnalyzeTrendV2Rows(
     selectedAnalyzeHolding.value,
     analyzeTrendRowLimit.value,
 ));
+const selectedAnalyzeTrendV2RealizedTotal = computed(() => analyzeTrendDepotRealizedTotal(
+    selectedAnalyzeHolding.value,
+));
 const selectedAnalyzeTrendDisplayRows = computed(() => (
     activeAnalyzeSubsection.value === 'trend-v2'
         ? selectedAnalyzeTrendV2Rows.value
@@ -1126,6 +1139,7 @@ function buildAnalyzeTrendRows(
 
 function buildAnalyzeTrendV2Rows(holding, rowLimit = defaultAnalyzeTrendRowLimit) {
     const prices = analyzeTrendDailyPrices(holding);
+    const depotStateByDate = analyzeTrendDepotStateByDate(holding, prices);
 
     return prices
         .map((price, priceIndex) => {
@@ -1137,6 +1151,11 @@ function buildAnalyzeTrendV2Rows(holding, rowLimit = defaultAnalyzeTrendRowLimit
                 date: price.trading_date,
                 price: price.price,
                 dayChangePercent: priceChangePercent(price.price, prices[priceIndex - 1].price),
+                depot: depotStateByDate.get(price.trading_date) ?? {
+                    actions: [],
+                    changeAmount: null,
+                    currency: null,
+                },
             };
         })
         .filter((row) => row !== null)
@@ -1304,6 +1323,32 @@ function analyzeTrendDepotActions(transactions) {
 
         return actions;
     }, []);
+}
+
+function analyzeTrendDepotRealizedTotal(holding) {
+    const transactions = analyzeTrendDepotTransactions(holding);
+    let openPieces = 0;
+    let openCost = 0;
+    let openCurrency = null;
+    let realizedAmount = null;
+    let realizedCurrency = null;
+
+    transactions.forEach((transaction) => {
+        const transactionResult = applyAnalyzeTrendDepotTransaction(transaction, openPieces, openCost, openCurrency);
+        openPieces = transactionResult.openPieces;
+        openCost = transactionResult.openCost;
+        openCurrency = transactionResult.openCurrency;
+
+        if (transactionResult.realizedAmount !== null) {
+            realizedAmount = (realizedAmount ?? 0) + transactionResult.realizedAmount;
+            realizedCurrency = transactionResult.currency ?? realizedCurrency;
+        }
+    });
+
+    return {
+        changeAmount: normalizeCurrencyAmount(realizedAmount),
+        currency: realizedCurrency,
+    };
 }
 
 function buildAnalyzeTrendHoldingRows(
@@ -2621,7 +2666,15 @@ const dataSubmenuItems = [
         label: 'Health',
         icon: 'mdi-heart-pulse',
     },
+    {
+        key: 'cloudways',
+        label: 'Cloudways',
+        icon: 'mdi-cloud-outline',
+    },
 ];
+const visibleDataSubmenuItems = computed(() => dataSubmenuItems.filter(
+    item => item.key !== 'cloudways' || canManageUsers.value,
+));
 const dataTypeSubmenuItems = [
     {
         key: 'live-data',
@@ -2821,13 +2874,6 @@ const menuItems = computed(() => [
                         icon: 'mdi-shield-account-outline',
                     },
                 ] : []),
-                ...(canManageUsers.value ? [
-                    {
-                        key: 'cloudways',
-                        label: 'Cloudways',
-                        icon: 'mdi-cloud-outline',
-                    },
-                ] : []),
             ],
         },
     ] : []),
@@ -3011,6 +3057,10 @@ watch(
 
         if (section === 'data' && dataSubsection === 'health' && stockTradingTimeHealthCheck.value === null) {
             loadStockTradingTimeHealthCheck().catch(() => {});
+        }
+
+        if (section === 'data' && dataSubsection === 'cloudways' && cloudwaysExecutionStatus.value === null) {
+            loadCloudwaysExecutionStatus().catch(() => {});
         }
 
         if (section === 'stocks') {
@@ -3595,25 +3645,150 @@ function loadSelectedAnalyzeChartData() {
     loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page, { silent: true }).catch(() => {});
 }
 
+async function loadCloudwaysExecutionStatus() {
+    if (cloudwaysExecutionStatusLoading.value) {
+        return;
+    }
+
+    cloudwaysExecutionStatusLoading.value = true;
+    cloudwaysCheckError.value = '';
+
+    try {
+        const data = await request('/admin/cloudways/status');
+        cloudwaysExecutionStatus.value = data.execution_status ?? emptyCloudwaysExecutionStatus();
+    } catch (error) {
+        cloudwaysCheckError.value = error.message;
+    } finally {
+        cloudwaysExecutionStatusLoading.value = false;
+    }
+}
+
 async function syncCloudwaysDatabase() {
     if (cloudwaysSyncLoading.value) {
+        return;
+    }
+
+    if (!cloudwaysCheckResult.value?.checked_at) {
+        cloudwaysSyncError.value = 'Run the Cloudways check before syncing differences.';
+
+        return;
+    }
+
+    const checkedDifferentTables = cloudwaysDifferentTableNames();
+
+    if (checkedDifferentTables.length === 0) {
+        cloudwaysSyncError.value = 'The latest check found no differing tables to sync.';
+
         return;
     }
 
     cloudwaysSyncLoading.value = true;
     cloudwaysSyncMessage.value = '';
     cloudwaysSyncError.value = '';
+    cloudwaysSyncProgress.value = emptyCloudwaysProgress();
     cloudwaysSyncProgressMessage.value = 'Starting Cloudways sync...';
     cloudwaysSyncResult.value = emptyCloudwaysSyncResult();
 
     try {
-        await streamCloudwaysDatabaseSync();
+        await streamCloudwaysDatabaseSync(checkedDifferentTables);
+        cloudwaysCheckResult.value = null;
+        cloudwaysCheckMessage.value = '';
     } catch (error) {
         cloudwaysSyncError.value = error.message;
     } finally {
-        cloudwaysSyncProgressMessage.value = '';
         cloudwaysSyncLoading.value = false;
     }
+}
+
+async function checkCloudwaysDatabase() {
+    if (cloudwaysCheckLoading.value) {
+        return;
+    }
+
+    cloudwaysCheckLoading.value = true;
+    cloudwaysCheckMessage.value = '';
+    cloudwaysCheckError.value = '';
+    cloudwaysCheckProgress.value = emptyCloudwaysProgress();
+    cloudwaysCheckProgressMessage.value = 'Connecting to Cloudways...';
+    cloudwaysCheckResult.value = emptyCloudwaysComparisonResult();
+
+    try {
+        await streamCloudwaysDatabaseCheck();
+    } catch (error) {
+        cloudwaysCheckError.value = error.message;
+        throw error;
+    } finally {
+        cloudwaysCheckLoading.value = false;
+    }
+}
+
+function emptyCloudwaysComparisonResult() {
+    return {
+        total_tables: 0,
+        identical_tables: 0,
+        different_tables: 0,
+        checked_at: null,
+        tables: [],
+    };
+}
+
+function emptyCloudwaysExecutionStatus() {
+    return {
+        last_checked_at: null,
+        last_synced_at: null,
+        timezone: 'Europe/Vienna',
+    };
+}
+
+function rememberCloudwaysExecutionStatus(executionStatus) {
+    const currentStatus = cloudwaysExecutionStatus.value ?? emptyCloudwaysExecutionStatus();
+    const definedStatus = Object.fromEntries(
+        Object.entries(executionStatus).filter(([, value]) => value !== undefined),
+    );
+
+    cloudwaysExecutionStatus.value = {
+        ...currentStatus,
+        ...definedStatus,
+    };
+}
+
+function emptyCloudwaysProgress() {
+    return {
+        phase: 'connecting',
+        table: null,
+        position: 0,
+        completed: 0,
+        total: 0,
+    };
+}
+
+function cloudwaysDifferentTableNames() {
+    return (cloudwaysCheckResult.value?.tables ?? [])
+        .filter(table => table.status === 'different')
+        .map(table => table.name);
+}
+
+function cloudwaysUnchangedTableDetails() {
+    return (cloudwaysSyncResult.value?.skipped_table_details ?? [])
+        .filter(table => table.reason === 'already_identical');
+}
+
+function cloudwaysSyncIssueTableDetails() {
+    return (cloudwaysSyncResult.value?.skipped_table_details ?? [])
+        .filter(table => table.reason !== 'already_identical');
+}
+
+function openCloudwaysSyncDialog() {
+    isCloudwaysSyncDialogOpen.value = true;
+}
+
+function cancelCloudwaysSyncDialog() {
+    isCloudwaysSyncDialogOpen.value = false;
+}
+
+async function confirmCloudwaysDatabaseSync() {
+    isCloudwaysSyncDialogOpen.value = false;
+    await syncCloudwaysDatabase();
 }
 
 function emptyCloudwaysSyncResult() {
@@ -3628,7 +3803,32 @@ function emptyCloudwaysSyncResult() {
     };
 }
 
-async function streamCloudwaysDatabaseSync() {
+async function streamCloudwaysDatabaseCheck() {
+    const response = await fetch('/admin/cloudways/check', {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: {
+            Accept: 'application/x-ndjson',
+        },
+    });
+
+    if (!response.ok) {
+        await throwCloudwaysResponseError(response);
+    }
+
+    if (!response.body?.getReader) {
+        const data = await response.json();
+        cloudwaysCheckMessage.value = data.message ?? '';
+        cloudwaysCheckResult.value = data.comparison ?? null;
+        rememberCloudwaysExecutionStatus({ last_checked_at: data.comparison?.checked_at });
+
+        return;
+    }
+
+    await consumeCloudwaysStream(response, handleCloudwaysCheckEvent);
+}
+
+async function streamCloudwaysDatabaseSync(checkedDifferentTables) {
     const response = await fetch('/admin/cloudways/sync', {
         method: 'POST',
         credentials: 'same-origin',
@@ -3637,23 +3837,33 @@ async function streamCloudwaysDatabaseSync() {
             'Content-Type': 'application/json',
             'X-CSRF-TOKEN': csrfToken(),
         },
+        body: JSON.stringify({ tables: checkedDifferentTables }),
     });
 
     if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        const message = data.message ?? Object.values(data.errors ?? {})?.[0]?.[0] ?? 'The request failed.';
-
-        throw new Error(message);
+        await throwCloudwaysResponseError(response);
     }
 
     if (!response.body?.getReader) {
         const data = await response.json();
         cloudwaysSyncMessage.value = data.message;
         cloudwaysSyncResult.value = data.sync;
+        rememberCloudwaysExecutionStatus({ last_synced_at: data.sync?.synced_at });
 
         return;
     }
 
+    await consumeCloudwaysStream(response, handleCloudwaysSyncEvent);
+}
+
+async function throwCloudwaysResponseError(response) {
+    const data = await response.json().catch(() => ({}));
+    const message = data.message ?? Object.values(data.errors ?? {})?.[0]?.[0] ?? 'The request failed.';
+
+    throw new Error(message);
+}
+
+async function consumeCloudwaysStream(response, handleEvent) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -3666,32 +3876,91 @@ async function streamCloudwaysDatabaseSync() {
         }
 
         buffer += decoder.decode(value, { stream: true });
-        buffer = processCloudwaysSyncBuffer(buffer);
+        buffer = processCloudwaysStreamBuffer(buffer, handleEvent);
     }
 
     buffer += decoder.decode();
 
     if (buffer.trim() !== '') {
-        handleCloudwaysSyncEvent(JSON.parse(buffer));
+        handleEvent(JSON.parse(buffer));
     }
 }
 
-function processCloudwaysSyncBuffer(buffer) {
+function processCloudwaysStreamBuffer(buffer, handleEvent) {
     const lines = buffer.split('\n');
     const remainingBuffer = lines.pop() ?? '';
 
     lines
         .map(line => line.trim())
         .filter(line => line !== '')
-        .forEach(line => handleCloudwaysSyncEvent(JSON.parse(line)));
+        .forEach(line => handleEvent(JSON.parse(line)));
 
     return remainingBuffer;
 }
 
-function handleCloudwaysSyncEvent(event) {
+function handleCloudwaysCheckEvent(event) {
+    if (event.type === 'progress') {
+        cloudwaysCheckProgress.value = {
+            ...cloudwaysCheckProgress.value,
+            ...event.progress,
+        };
+        cloudwaysCheckProgressMessage.value = `Checking table ${event.progress.position} of ${event.progress.total}: ${event.progress.table}`;
+
+        return;
+    }
+
     if (event.type === 'table') {
-        appendCloudwaysSyncedTable(event.table);
-        cloudwaysSyncProgressMessage.value = event.table?.message ?? `Imported ${event.table?.name ?? 'table'}.`;
+        appendCloudwaysComparedTable(event.table, event.total);
+        cloudwaysCheckProgress.value = {
+            phase: 'checking',
+            table: event.table?.name ?? null,
+            position: event.completed ?? 0,
+            completed: event.completed ?? 0,
+            total: event.total ?? 0,
+        };
+        cloudwaysCheckProgressMessage.value = `Checked ${event.completed} of ${event.total}: ${event.table?.name ?? 'table'} — ${event.table?.message ?? 'finished'}`;
+
+        return;
+    }
+
+    if (event.type === 'finished') {
+        cloudwaysCheckMessage.value = event.message;
+        cloudwaysCheckResult.value = event.comparison;
+        rememberCloudwaysExecutionStatus({ last_checked_at: event.comparison?.checked_at });
+        cloudwaysCheckProgress.value = {
+            phase: 'finished',
+            table: null,
+            position: event.comparison?.total_tables ?? 0,
+            completed: event.comparison?.total_tables ?? 0,
+            total: event.comparison?.total_tables ?? 0,
+        };
+        cloudwaysCheckProgressMessage.value = `Finished checking ${event.comparison?.total_tables ?? 0} table(s).`;
+
+        return;
+    }
+
+    if (event.type === 'error') {
+        throw new Error(event.message ?? 'The Cloudways check failed.');
+    }
+}
+
+function handleCloudwaysSyncEvent(event) {
+    if (event.type === 'progress') {
+        handleCloudwaysSyncProgress(event.progress);
+
+        return;
+    }
+
+    if (event.type === 'table') {
+        appendCloudwaysSyncedTable(event.table, event.total);
+        cloudwaysSyncProgress.value = {
+            phase: 'importing',
+            table: event.table?.name ?? null,
+            position: event.completed ?? 0,
+            completed: event.completed ?? 0,
+            total: event.total ?? 0,
+        };
+        cloudwaysSyncProgressMessage.value = `Imported ${event.completed} of ${event.total}: ${event.table?.name ?? 'table'} — ${event.table?.message ?? 'finished'}`;
 
         return;
     }
@@ -3699,6 +3968,15 @@ function handleCloudwaysSyncEvent(event) {
     if (event.type === 'finished') {
         cloudwaysSyncMessage.value = event.message;
         cloudwaysSyncResult.value = event.sync;
+        rememberCloudwaysExecutionStatus({ last_synced_at: event.sync?.synced_at });
+        cloudwaysSyncProgress.value = {
+            phase: 'finished',
+            table: null,
+            position: event.sync?.total_tables ?? 0,
+            completed: event.sync?.synced_tables ?? 0,
+            total: event.sync?.total_tables ?? 0,
+        };
+        cloudwaysSyncProgressMessage.value = `Finished importing ${event.sync?.synced_tables ?? 0} table(s) with ${event.sync?.rows ?? 0} row(s).`;
 
         return;
     }
@@ -3708,7 +3986,50 @@ function handleCloudwaysSyncEvent(event) {
     }
 }
 
-function appendCloudwaysSyncedTable(table) {
+function handleCloudwaysSyncProgress(progress) {
+    cloudwaysSyncProgress.value = {
+        ...cloudwaysSyncProgress.value,
+        ...progress,
+    };
+
+    if (progress.phase === 'planned') {
+        const currentResult = cloudwaysSyncResult.value ?? emptyCloudwaysSyncResult();
+        cloudwaysSyncResult.value = {
+            ...currentResult,
+            total_tables: progress.total ?? 0,
+            skipped_tables: (progress.skipped_table_details ?? []).map(table => table.name),
+            skipped_table_details: progress.skipped_table_details ?? [],
+        };
+        cloudwaysSyncProgressMessage.value = `Prepared ${progress.total ?? 0} table(s) for synchronization.`;
+
+        return;
+    }
+
+    const phaseLabel = progress.phase === 'clearing' ? 'Clearing local table' : 'Importing Cloudways table';
+    cloudwaysSyncProgressMessage.value = `${phaseLabel} ${progress.position} of ${progress.total}: ${progress.table}`;
+}
+
+function appendCloudwaysComparedTable(table, total) {
+    if (!table) {
+        return;
+    }
+
+    const currentResult = cloudwaysCheckResult.value ?? emptyCloudwaysComparisonResult();
+    const tables = [
+        ...currentResult.tables.filter(existingTable => existingTable.name !== table.name),
+        table,
+    ];
+
+    cloudwaysCheckResult.value = {
+        ...currentResult,
+        total_tables: total ?? tables.length,
+        identical_tables: tables.filter(comparedTable => comparedTable.status === 'identical').length,
+        different_tables: tables.filter(comparedTable => comparedTable.status !== 'identical').length,
+        tables,
+    };
+}
+
+function appendCloudwaysSyncedTable(table, total) {
     if (!table) {
         return;
     }
@@ -3722,10 +4043,18 @@ function appendCloudwaysSyncedTable(table) {
     cloudwaysSyncResult.value = {
         ...currentResult,
         synced_tables: tables.length,
-        total_tables: Math.max(currentResult.total_tables ?? 0, tables.length),
+        total_tables: total ?? Math.max(currentResult.total_tables ?? 0, tables.length),
         rows: tables.reduce((sum, syncedTable) => sum + Number(syncedTable.rows ?? 0), 0),
         tables,
     };
+}
+
+function cloudwaysProgressPercentage(progress) {
+    if (!progress?.total) {
+        return 0;
+    }
+
+    return Math.min(100, Math.round((Number(progress.completed ?? 0) / Number(progress.total)) * 100));
 }
 
 function cloudwaysTableStatusColor(table) {
@@ -3734,6 +4063,19 @@ function cloudwaysTableStatusColor(table) {
 
 function cloudwaysTableStatusLabel(table) {
     return table?.status === 'imported' ? 'Imported' : 'Skipped';
+}
+
+function cloudwaysCheckStatusColor(table) {
+    return table?.status === 'identical' ? 'success' : 'warning';
+}
+
+function cloudwaysCheckStatusLabel(table) {
+    return {
+        identical: 'Identical',
+        different: 'Different',
+        missing_local: 'Missing locally',
+        missing_cloudways: 'Missing on Cloudways',
+    }[table?.status] ?? 'Unknown';
 }
 
 function navigateAnalyzeSubsection(subsection) {
@@ -4205,7 +4547,9 @@ function updateUrlPath(options = {}) {
             : activeSection.value === 'analyze'
                 ? `/admin/menu/analyze/${activeAnalyzeSubsection.value}`
                 : activeSection.value === 'data'
-                    ? `/admin/menu/data/${activeDataSubsection.value}/${activeDataType.value}`
+                    ? activeDataSubsection.value === 'cloudways'
+                        ? '/admin/menu/data/cloudways'
+                        : `/admin/menu/data/${activeDataSubsection.value}/${activeDataType.value}`
                     : activeSection.value === 'infos'
                         ? `/admin/menu/infos/${activeInfoSubsection.value}`
                         : activeSection.value === 'depot'
@@ -4264,7 +4608,7 @@ function ensureAnalyzeHoldingSelection(currentHoldings = holdings.value) {
 }
 
 function isDataSubsection(subsection) {
-    return dataSubmenuItems.some((item) => item.key === subsection);
+    return visibleDataSubmenuItems.value.some((item) => item.key === subsection);
 }
 
 function isInstrumentDataSubsection(subsection) {
@@ -15001,7 +15345,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                 </div>
                             </div>
 
-                            <h3 class="analyze-selected-stock-title">
+                            <h3
+                                v-if="activeAnalyzeSubsection !== 'trend-v2'"
+                                class="analyze-selected-stock-title"
+                            >
                                 <span class="analyze-selected-stock-name">{{ selectedAnalyzeScopeLabel }}</span>
                                 <button
                                     v-if="selectedAnalyzeHolding?.isin"
@@ -15020,6 +15367,7 @@ function formatIndexDataUpdateSchedule(settings) {
                             </h3>
                             <div
                                 class="index-watch-strip analyze-detail-stock-menu"
+                                :class="{ 'analyze-detail-stock-menu--compact': activeAnalyzeSubsection === 'trend-v2' }"
                                 :aria-label="activeAnalyzeSubsection === 'trend-v2' ? 'Analyze trend v2 stocks' : 'Analyze trend stocks'"
                             >
                                 <div
@@ -15028,6 +15376,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     class="analyze-trend-holding-item"
                                 >
                                     <button
+                                        v-if="activeAnalyzeSubsection !== 'trend-v2'"
                                         type="button"
                                         class="analyze-trend-include-toggle"
                                         :class="{ 'analyze-trend-include-toggle--active': isAnalyzeTrendHoldingIncluded(holding.id) }"
@@ -15045,11 +15394,18 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <button
                                         type="button"
                                         class="index-watch-card analyze-holding-card"
-                                        :class="{ 'analyze-holding-card--active': selectedAnalyzeHoldingId === holding.id }"
+                                        :class="{
+                                            'analyze-holding-card--active': selectedAnalyzeHoldingId === holding.id,
+                                            'analyze-holding-card--compact': activeAnalyzeSubsection === 'trend-v2',
+                                        }"
                                         :aria-pressed="selectedAnalyzeHoldingId === holding.id"
+                                        :title="stockDisplayLabel(holding, 'stock')"
                                         @click="selectAnalyzeHolding(holding.id)"
                                     >
-                                        <span class="analyze-holding-card-header">
+                                        <span
+                                            v-if="activeAnalyzeSubsection !== 'trend-v2'"
+                                            class="analyze-holding-card-header"
+                                        >
                                             <span class="analyze-holding-card-symbol">
                                                 {{ holding.symbol || '-' }}
                                             </span>
@@ -15060,10 +15416,24 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 {{ holding.isin }}
                                             </span>
                                         </span>
-                                        <span class="index-watch-card-label analyze-holding-card-name">
-                                            {{ stockDisplayLabel(holding) }}
+                                        <span
+                                            class="index-watch-card-label analyze-holding-card-name"
+                                            :class="{ 'analyze-holding-card-name--compact': activeAnalyzeSubsection === 'trend-v2' }"
+                                        >
+                                            {{ activeAnalyzeSubsection === 'trend-v2'
+                                                ? stockDisplayName(holding)
+                                                : stockDisplayLabel(holding) }}
                                         </span>
-                                        <span class="index-watch-card-price analyze-holding-card-price">
+                                        <span
+                                            v-if="activeAnalyzeSubsection === 'trend-v2' && (holding.subtitle || holding.stock_subtitle)"
+                                            class="analyze-holding-card-subtitle--compact"
+                                        >
+                                            {{ holding.subtitle || holding.stock_subtitle }}
+                                        </span>
+                                        <span
+                                            v-if="activeAnalyzeSubsection !== 'trend-v2'"
+                                            class="index-watch-card-price analyze-holding-card-price"
+                                        >
                                             {{ formatHoldingCardPrice(holding) }}
                                         </span>
                                         <span
@@ -15079,7 +15449,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                         >
                                             Rank: {{ formatAnalyzeTrendHoldingRank(analyzeTrendHoldingStats.get(holding.id)) }}
                                         </span>
-                                        <span class="analyze-holding-card-pieces">
+                                        <span
+                                            v-if="activeAnalyzeSubsection !== 'trend-v2'"
+                                            class="analyze-holding-card-pieces"
+                                        >
                                             Pieces: {{ formatPositionPieces(holding) }}
                                         </span>
                                     </button>
@@ -15192,6 +15565,19 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 <th>Date</th>
                                                 <th class="text-right">Price</th>
                                                 <th class="text-right">Day %</th>
+                                                <th v-if="activeAnalyzeSubsection === 'trend-v2'">
+                                                    BUY/SELL
+                                                    <span
+                                                        v-if="selectedAnalyzeTrendV2RealizedTotal.changeAmount !== null"
+                                                        class="analyze-trend-dep-change"
+                                                        :class="priceChangePercentClass(selectedAnalyzeTrendV2RealizedTotal.changeAmount)"
+                                                    >
+                                                        {{ formatAnalyzeTrendSignedWin(
+                                                            selectedAnalyzeTrendV2RealizedTotal.changeAmount,
+                                                            selectedAnalyzeTrendV2RealizedTotal.currency,
+                                                        ) }}
+                                                    </span>
+                                                </th>
                                                 <template v-if="activeAnalyzeSubsection !== 'trend-v2'">
                                                     <th class="text-right">-Streak</th>
                                                     <th>Rec</th>
@@ -15213,6 +15599,26 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 <td class="text-right">{{ formatAnalyzeTrendPrice(trendRow.price, selectedAnalyzeHolding) }}</td>
                                                 <td class="text-right" :class="priceChangePercentClass(trendRow.dayChangePercent)">
                                                     {{ formatPriceChangePercent(trendRow.dayChangePercent) }}
+                                                </td>
+                                                <td v-if="activeAnalyzeSubsection === 'trend-v2'">
+                                                    <span
+                                                        v-for="depotAction in trendRow.depot.actions"
+                                                        :key="depotAction.type"
+                                                        class="analyze-trend-rec"
+                                                        :class="{
+                                                            'analyze-trend-rec--buy': depotAction.type === 'buy',
+                                                            'analyze-trend-rec--sell': depotAction.type === 'sell',
+                                                        }"
+                                                    >
+                                                        {{ depotAction.label }}
+                                                    </span>
+                                                    <span
+                                                        v-if="trendRow.depot.changeAmount !== null"
+                                                        class="analyze-trend-dep-change"
+                                                        :class="priceChangePercentClass(trendRow.depot.changeAmount)"
+                                                    >
+                                                        {{ formatAnalyzeTrendSignedWin(trendRow.depot.changeAmount, trendRow.depot.currency) }}
+                                                    </span>
                                                 </td>
                                                 <td
                                                     v-if="activeAnalyzeSubsection !== 'trend-v2'"
@@ -15764,7 +16170,7 @@ function formatIndexDataUpdateSchedule(settings) {
                     </v-dialog>
 
                     <v-tabs
-                        v-if="(activeSection === 'depots' || activeSection === 'users' || activeSection === 'roles' || activeSection === 'cloudways') && canManageDashboardAdmin"
+                        v-if="(activeSection === 'depots' || activeSection === 'users' || activeSection === 'roles') && canManageDashboardAdmin"
                         :model-value="activeSection"
                         color="primary"
                         class="mb-6"
@@ -15773,7 +16179,6 @@ function formatIndexDataUpdateSchedule(settings) {
                         <v-tab value="depots" prepend-icon="mdi-briefcase-outline">Depots</v-tab>
                         <v-tab v-if="canManageUsers" value="users" prepend-icon="mdi-account-group-outline">Users</v-tab>
                         <v-tab v-if="canManageUsers" value="roles" prepend-icon="mdi-shield-account-outline">Roles</v-tab>
-                        <v-tab v-if="canManageUsers" value="cloudways" prepend-icon="mdi-cloud-outline">Cloudways</v-tab>
                     </v-tabs>
 
                     <section v-if="activeSection === 'data' && canManageDashboardAdmin">
@@ -15784,7 +16189,7 @@ function formatIndexDataUpdateSchedule(settings) {
                             @update:model-value="navigateDataSubsection"
                         >
                             <v-tab
-                                v-for="item in dataSubmenuItems"
+                                v-for="item in visibleDataSubmenuItems"
                                 :key="item.key"
                                 :value="item.key"
                                 :prepend-icon="item.icon"
@@ -15966,6 +16371,297 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </v-alert>
                                 </v-card-text>
                             </v-card>
+                        </section>
+
+                        <section
+                            v-if="activeDataSubsection === 'cloudways' && canManageUsers"
+                            aria-label="Data Cloudways"
+                        >
+                            <div class="dashboard-heading mb-6">
+                                <div>
+                                    <p class="text-overline text-primary mb-1">Data</p>
+                                    <h2 class="text-h4">Cloudways</h2>
+                                </div>
+                            </div>
+
+                            <v-card class="mb-6" variant="outlined" aria-label="Cloudways check">
+                                <v-card-text>
+                                    <div class="index-update-schedule-row d-flex flex-wrap align-center justify-space-between ga-3">
+                                        <div class="flex-grow-1">
+                                            <div class="text-body-2 font-weight-bold">Cloudways check</div>
+                                            <div class="text-body-2">
+                                                Compare configured business and market-data tables with Cloudways and list content differences.
+                                            </div>
+                                            <div v-if="cloudwaysCheckProgressMessage" class="text-body-2 text-primary mt-2">
+                                                {{ cloudwaysCheckProgressMessage }}
+                                            </div>
+                                            <v-progress-linear
+                                                v-if="cloudwaysCheckLoading"
+                                                class="mt-2"
+                                                color="primary"
+                                                height="8"
+                                                :indeterminate="cloudwaysCheckProgress.total === 0"
+                                                :model-value="cloudwaysProgressPercentage(cloudwaysCheckProgress)"
+                                            />
+                                            <div
+                                                v-if="cloudwaysCheckLoading && cloudwaysCheckProgress.total > 0"
+                                                class="text-caption text-medium-emphasis mt-1"
+                                            >
+                                                {{ cloudwaysCheckProgress.completed }} of {{ cloudwaysCheckProgress.total }} tables completed
+                                                · {{ cloudwaysProgressPercentage(cloudwaysCheckProgress) }}%
+                                            </div>
+                                            <div
+                                                class="d-flex flex-column ga-1 mt-2 text-caption text-medium-emphasis"
+                                                aria-label="Cloudways execution history"
+                                            >
+                                                <div>
+                                                    Check · Last executed:
+                                                    {{ cloudwaysExecutionStatus?.last_checked_at
+                                                        ? formatDateTime(cloudwaysExecutionStatus.last_checked_at)
+                                                        : 'never' }}
+                                                    · {{ cloudwaysExecutionStatus?.timezone ?? 'Europe/Vienna' }}
+                                                </div>
+                                                <div>
+                                                    Sync · Last executed:
+                                                    {{ cloudwaysExecutionStatus?.last_synced_at
+                                                        ? formatDateTime(cloudwaysExecutionStatus.last_synced_at)
+                                                        : 'never' }}
+                                                    · {{ cloudwaysExecutionStatus?.timezone ?? 'Europe/Vienna' }}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <v-btn
+                                            prepend-icon="mdi-cloud-search-outline"
+                                            size="small"
+                                            type="button"
+                                            variant="text"
+                                            :disabled="cloudwaysSyncLoading || cloudwaysExecutionStatusLoading"
+                                            :loading="cloudwaysCheckLoading"
+                                            @click="checkCloudwaysDatabase"
+                                        >
+                                            Cloudways check
+                                        </v-btn>
+                                    </div>
+
+                                    <v-alert
+                                        v-if="cloudwaysCheckError || cloudwaysSyncError"
+                                        class="mt-4"
+                                        density="compact"
+                                        type="error"
+                                        variant="tonal"
+                                    >
+                                        {{ cloudwaysCheckError || cloudwaysSyncError }}
+                                    </v-alert>
+                                    <v-alert
+                                        v-if="cloudwaysCheckMessage"
+                                        class="mt-4"
+                                        density="compact"
+                                        type="success"
+                                        variant="tonal"
+                                    >
+                                        {{ cloudwaysCheckMessage }}
+                                    </v-alert>
+                                    <v-alert
+                                        v-if="cloudwaysSyncMessage"
+                                        class="mt-4"
+                                        density="compact"
+                                        type="success"
+                                        variant="tonal"
+                                    >
+                                        {{ cloudwaysSyncMessage }}
+                                    </v-alert>
+                                    <v-alert
+                                        v-if="cloudwaysSyncProgressMessage"
+                                        class="mt-4"
+                                        density="compact"
+                                        type="info"
+                                        variant="tonal"
+                                    >
+                                        {{ cloudwaysSyncProgressMessage }}
+                                    </v-alert>
+
+                                    <div
+                                        v-if="cloudwaysCheckResult && (cloudwaysCheckLoading || cloudwaysCheckResult.checked_at)"
+                                        class="mt-4"
+                                        aria-label="Cloudways comparison result"
+                                    >
+                                        <div class="d-flex flex-wrap ga-3 mb-4">
+                                            <v-chip color="primary" variant="tonal">
+                                                {{ cloudwaysCheckResult.tables.length }} / {{ cloudwaysCheckResult.total_tables }} table(s) checked
+                                            </v-chip>
+                                            <v-chip color="success" variant="tonal">
+                                                {{ cloudwaysCheckResult.identical_tables }} identical
+                                            </v-chip>
+                                            <v-chip
+                                                :color="cloudwaysCheckResult.different_tables > 0 ? 'warning' : 'success'"
+                                                variant="tonal"
+                                            >
+                                                {{ cloudwaysCheckResult.different_tables }} different
+                                            </v-chip>
+                                        </div>
+
+                                        <v-table v-if="cloudwaysCheckResult.tables.length > 0" density="compact">
+                                            <thead>
+                                                <tr>
+                                                    <th>Table</th>
+                                                    <th>Status</th>
+                                                    <th class="text-right">Cloudways rows</th>
+                                                    <th class="text-right">Local rows</th>
+                                                    <th>Result</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="table in cloudwaysCheckResult.tables" :key="table.name">
+                                                    <td>{{ table.name }}</td>
+                                                    <td>
+                                                        <v-chip
+                                                            :color="cloudwaysCheckStatusColor(table)"
+                                                            size="small"
+                                                            variant="tonal"
+                                                        >
+                                                            {{ cloudwaysCheckStatusLabel(table) }}
+                                                        </v-chip>
+                                                    </td>
+                                                    <td class="text-right">{{ table.cloudways_rows ?? '–' }}</td>
+                                                    <td class="text-right">{{ table.local_rows ?? '–' }}</td>
+                                                    <td>{{ table.message }}</td>
+                                                </tr>
+                                            </tbody>
+                                        </v-table>
+                                    </div>
+
+                                    <div
+                                        v-if="cloudwaysSyncResult && (cloudwaysSyncLoading || cloudwaysSyncResult.synced_at)"
+                                        class="mt-4"
+                                        aria-label="Cloudways sync result"
+                                    >
+                                        <div class="d-flex flex-wrap ga-3 mb-3">
+                                            <v-chip color="primary" variant="tonal">
+                                                Tables imported: {{ cloudwaysSyncResult.synced_tables }}
+                                            </v-chip>
+                                            <v-chip color="success" variant="tonal">
+                                                Rows imported: {{ cloudwaysSyncResult.rows }}
+                                            </v-chip>
+                                            <v-chip
+                                                v-if="cloudwaysUnchangedTableDetails().length > 0"
+                                                color="success"
+                                                variant="tonal"
+                                            >
+                                                No changes needed: {{ cloudwaysUnchangedTableDetails().length }}
+                                            </v-chip>
+                                            <v-chip
+                                                v-if="cloudwaysSyncIssueTableDetails().length > 0"
+                                                color="warning"
+                                                variant="tonal"
+                                            >
+                                                Not imported: {{ cloudwaysSyncIssueTableDetails().length }}
+                                            </v-chip>
+                                        </div>
+
+                                        <v-progress-linear
+                                            v-if="cloudwaysSyncLoading"
+                                            class="mb-3"
+                                            color="primary"
+                                            height="8"
+                                            :indeterminate="cloudwaysSyncProgress.total === 0"
+                                            :model-value="cloudwaysProgressPercentage(cloudwaysSyncProgress)"
+                                        />
+
+                                        <v-table v-if="cloudwaysSyncResult.tables.length > 0" density="compact">
+                                            <thead>
+                                                <tr>
+                                                    <th>Table</th>
+                                                    <th>Status</th>
+                                                    <th class="text-right">Rows imported</th>
+                                                    <th>Result</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="table in cloudwaysSyncResult.tables" :key="table.name">
+                                                    <td>{{ table.name }}</td>
+                                                    <td>
+                                                        <v-chip
+                                                            :color="cloudwaysTableStatusColor(table)"
+                                                            size="small"
+                                                            variant="tonal"
+                                                        >
+                                                            {{ cloudwaysTableStatusLabel(table) }}
+                                                        </v-chip>
+                                                    </td>
+                                                    <td class="text-right">{{ table.rows ?? 0 }}</td>
+                                                    <td>{{ table.message }}</td>
+                                                </tr>
+                                            </tbody>
+                                        </v-table>
+
+                                        <v-alert
+                                            v-if="cloudwaysSyncIssueTableDetails().length > 0"
+                                            class="mt-3"
+                                            density="compact"
+                                            type="warning"
+                                            variant="tonal"
+                                        >
+                                            <div
+                                                v-for="table in cloudwaysSyncIssueTableDetails()"
+                                                :key="table.name"
+                                            >
+                                                {{ table.message }}
+                                            </div>
+                                        </v-alert>
+                                    </div>
+
+                                    <div
+                                        v-if="cloudwaysCheckResult?.checked_at && !cloudwaysCheckLoading"
+                                        class="d-flex justify-end mt-4"
+                                    >
+                                        <v-btn
+                                            color="warning"
+                                            prepend-icon="mdi-database-sync-outline"
+                                            type="button"
+                                            variant="flat"
+                                            :disabled="cloudwaysCheckLoading || cloudwaysDifferentTableNames().length === 0"
+                                            :loading="cloudwaysSyncLoading"
+                                            @click="openCloudwaysSyncDialog"
+                                        >
+                                            Sync differences
+                                        </v-btn>
+                                    </div>
+                                </v-card-text>
+                            </v-card>
+
+                            <v-dialog
+                                v-model="isCloudwaysSyncDialogOpen"
+                                class="cloudways-sync-dialog"
+                                persistent
+                                max-width="560"
+                            >
+                                <v-card>
+                                    <v-card-title>Sync checked differences from Cloudways?</v-card-title>
+                                    <v-card-text>
+                                        Tables selected: {{ cloudwaysDifferentTableNames().length }}.
+                                        Only tables marked Different by the latest check will be replaced with Cloudways rows.
+                                        Identical and unavailable tables will not be touched.
+                                        <div class="font-weight-medium mt-2">
+                                            {{ cloudwaysDifferentTableNames().join(', ') }}
+                                        </div>
+                                        This action cannot be undone from this screen.
+                                    </v-card-text>
+                                    <v-card-actions>
+                                        <v-spacer />
+                                        <v-btn type="button" variant="text" @click="cancelCloudwaysSyncDialog">
+                                            Cancel
+                                        </v-btn>
+                                        <v-btn
+                                            color="warning"
+                                            type="button"
+                                            variant="flat"
+                                            @click="confirmCloudwaysDatabaseSync"
+                                        >
+                                            Sync differences
+                                        </v-btn>
+                                    </v-card-actions>
+                                </v-card>
+                            </v-dialog>
                         </section>
 
                         <v-card
@@ -20078,6 +20774,11 @@ function formatIndexDataUpdateSchedule(settings) {
     margin-bottom: 18px;
 }
 
+.analyze-detail-stock-menu--compact {
+    gap: 5px;
+    margin-bottom: 10px;
+}
+
 .analyze-selected-stock-title {
     align-items: center;
     color: #145b4b;
@@ -21473,6 +22174,37 @@ function formatIndexDataUpdateSchedule(settings) {
     display: block;
     overflow: visible;
     -webkit-line-clamp: unset;
+}
+
+.analyze-trend-holding-item .analyze-holding-card--compact {
+    gap: 0;
+    height: 54px;
+    min-height: 54px;
+    padding: 4px 6px 0;
+    width: 108px;
+}
+
+.analyze-trend-holding-item .analyze-holding-card--compact .analyze-holding-card-name {
+    color: rgba(var(--v-theme-on-surface), 0.88);
+    display: -webkit-box;
+    font-size: 0.64rem;
+    line-height: 1.08;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    text-overflow: ellipsis;
+}
+
+.analyze-holding-card-subtitle--compact {
+    color: rgb(var(--v-theme-info));
+    display: -webkit-box;
+    font-size: 0.6rem;
+    font-weight: 600;
+    line-height: 1.08;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    text-overflow: ellipsis;
 }
 
 .analyze-trend-include-toggle {

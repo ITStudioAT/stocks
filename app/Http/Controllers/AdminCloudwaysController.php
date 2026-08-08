@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\AdminCloudwaysSyncRequest;
 use App\Services\CloudwaysDatabaseSync;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -10,13 +11,38 @@ use Throwable;
 
 class AdminCloudwaysController extends Controller
 {
-    public function sync(Request $request, CloudwaysDatabaseSync $cloudwaysDatabaseSync): JsonResponse|StreamedResponse
+    public function status(CloudwaysDatabaseSync $cloudwaysDatabaseSync): JsonResponse
     {
-        if ($this->wantsStreamedSync($request)) {
-            return $this->streamSync($cloudwaysDatabaseSync);
+        return response()->json([
+            'execution_status' => $cloudwaysDatabaseSync->executionStatus(),
+        ]);
+    }
+
+    public function show(Request $request, CloudwaysDatabaseSync $cloudwaysDatabaseSync): JsonResponse|StreamedResponse
+    {
+        if ($this->wantsStreamedResponse($request)) {
+            return $this->streamCheck($cloudwaysDatabaseSync);
         }
 
-        $sync = $cloudwaysDatabaseSync->syncAllTables();
+        $comparison = $cloudwaysDatabaseSync->compareAllTables();
+
+        return response()->json([
+            'message' => "Checked {$comparison['total_tables']} table(s); {$comparison['different_tables']} differ.",
+            'comparison' => $comparison,
+        ]);
+    }
+
+    public function sync(
+        AdminCloudwaysSyncRequest $request,
+        CloudwaysDatabaseSync $cloudwaysDatabaseSync,
+    ): JsonResponse|StreamedResponse {
+        $checkedDifferentTables = $request->validated('tables');
+
+        if ($this->wantsStreamedResponse($request)) {
+            return $this->streamSync($cloudwaysDatabaseSync, $checkedDifferentTables);
+        }
+
+        $sync = $cloudwaysDatabaseSync->syncAllTables(checkedDifferentTables: $checkedDifferentTables);
 
         return response()->json([
             'message' => "Synced {$sync['synced_tables']} table(s) and {$sync['rows']} row(s) from Cloudways.",
@@ -24,20 +50,65 @@ class AdminCloudwaysController extends Controller
         ]);
     }
 
-    private function wantsStreamedSync(Request $request): bool
+    private function wantsStreamedResponse(Request $request): bool
     {
         return str_contains((string) $request->header('Accept'), 'application/x-ndjson');
     }
 
-    private function streamSync(CloudwaysDatabaseSync $cloudwaysDatabaseSync): StreamedResponse
+    private function streamCheck(CloudwaysDatabaseSync $cloudwaysDatabaseSync): StreamedResponse
     {
         return response()->stream(function () use ($cloudwaysDatabaseSync): void {
             try {
-                $sync = $cloudwaysDatabaseSync->syncAllTables(
-                    onTableSynced: fn (array $table): bool => $this->streamCloudwaysEvent([
+                $comparison = $cloudwaysDatabaseSync->compareAllTables(
+                    onTableCompared: fn (array $table, int $completed, int $total): bool => $this->streamCloudwaysEvent([
                         'type' => 'table',
                         'table' => $table,
+                        'completed' => $completed,
+                        'total' => $total,
                     ]),
+                    onProgress: fn (array $progress): bool => $this->streamCloudwaysEvent([
+                        'type' => 'progress',
+                        'progress' => $progress,
+                    ]),
+                );
+
+                $this->streamCloudwaysEvent([
+                    'type' => 'finished',
+                    'message' => "Checked {$comparison['total_tables']} table(s); {$comparison['different_tables']} differ.",
+                    'comparison' => $comparison,
+                ]);
+            } catch (Throwable $exception) {
+                report($exception);
+
+                $this->streamCloudwaysEvent([
+                    'type' => 'error',
+                    'message' => $exception->getMessage(),
+                ]);
+            }
+        }, 200, $this->streamHeaders());
+    }
+
+    /**
+     * @param  array<int, string>  $checkedDifferentTables
+     */
+    private function streamSync(
+        CloudwaysDatabaseSync $cloudwaysDatabaseSync,
+        array $checkedDifferentTables,
+    ): StreamedResponse {
+        return response()->stream(function () use ($cloudwaysDatabaseSync, $checkedDifferentTables): void {
+            try {
+                $sync = $cloudwaysDatabaseSync->syncAllTables(
+                    onTableSynced: fn (array $table, int $completed, int $total): bool => $this->streamCloudwaysEvent([
+                        'type' => 'table',
+                        'table' => $table,
+                        'completed' => $completed,
+                        'total' => $total,
+                    ]),
+                    onProgress: fn (array $progress): bool => $this->streamCloudwaysEvent([
+                        'type' => 'progress',
+                        'progress' => $progress,
+                    ]),
+                    checkedDifferentTables: $checkedDifferentTables,
                 );
 
                 $this->streamCloudwaysEvent([
@@ -53,11 +124,19 @@ class AdminCloudwaysController extends Controller
                     'message' => $exception->getMessage(),
                 ]);
             }
-        }, 200, [
+        }, 200, $this->streamHeaders());
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function streamHeaders(): array
+    {
+        return [
             'Cache-Control' => 'no-cache',
             'Content-Type' => 'application/x-ndjson',
             'X-Accel-Buffering' => 'no',
-        ]);
+        ];
     }
 
     /**

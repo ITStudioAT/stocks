@@ -4,6 +4,12 @@
 
 - Summe Woche, Monat, Jahr hinzugefügt
 
+### Data
+- Sync Cloudways to local
+
+### Analyze
+- Trend v2
+
 ## 0.8.6
 
 ### Dashboard

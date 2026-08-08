@@ -143,6 +143,9 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::view('/admin/menu/cloudways', 'app')
         ->middleware('role:super_admin')
         ->name('admin.menu.cloudways');
+    Route::view('/admin/menu/data/cloudways', 'app')
+        ->middleware('role:super_admin')
+        ->name('admin.menu.data.cloudways');
     Route::view('/admin/menu/depots', 'app')->name('admin.menu.depots');
     Route::view('/admin/menu/{adminSection}/{adminSubSection?}/{adminDataType?}', 'app')
         ->where([
@@ -249,6 +252,8 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::match(['GET', 'POST'], '/admin/logout', [AdminAuthController::class, 'logout'])->name('admin.logout');
 
     Route::middleware('role:super_admin')->group(function (): void {
+        Route::get('/admin/cloudways/status', [AdminCloudwaysController::class, 'status'])->name('admin.cloudways.status');
+        Route::get('/admin/cloudways/check', [AdminCloudwaysController::class, 'show'])->name('admin.cloudways.show');
         Route::post('/admin/cloudways/sync', [AdminCloudwaysController::class, 'sync'])->name('admin.cloudways.sync');
         Route::get('/admin/users', [AdminUserController::class, 'index'])->name('admin.users.index');
         Route::post('/admin/users', [AdminUserController::class, 'store'])->name('admin.users.store');

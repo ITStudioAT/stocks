@@ -211,17 +211,17 @@ class AdminDepotTest extends TestCase
             ->assertSee('<title>GKStocks</title>', false);
     }
 
-    public function test_only_super_admin_can_open_cloudways_menu_page(): void
+    public function test_only_super_admin_can_open_cloudways_data_menu_page(): void
     {
         $admin = $this->adminUser();
         $superAdmin = $this->superAdminUser();
 
         $this->actingAs($admin)
-            ->get('/admin/menu/cloudways')
+            ->get('/admin/menu/data/cloudways')
             ->assertForbidden();
 
         $this->actingAs($superAdmin)
-            ->get('/admin/menu/cloudways')
+            ->get('/admin/menu/data/cloudways')
             ->assertOk()
             ->assertSee('<title>GKStocks</title>', false);
     }

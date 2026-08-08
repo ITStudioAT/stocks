@@ -2,12 +2,14 @@
 
 namespace App\Services;
 
+use App\Models\AppConfig;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use PDO;
 use RuntimeException;
+use stdClass;
 
 class CloudwaysDatabaseSync
 {
@@ -15,7 +17,100 @@ class CloudwaysDatabaseSync
 
     private const InsertChunkSize = 500;
 
+    private const CheckConfigKey = 'cloudways.database_check';
+
+    private const SyncConfigKey = 'cloudways.database_sync';
+
+    private const Timezone = 'Europe/Vienna';
+
     /**
+     * @return array{
+     *     source_connection: string,
+     *     target_connection: string,
+     *     tables: array<int, array{
+     *         name: string,
+     *         status: string,
+     *         cloudways_rows: ?int,
+     *         local_rows: ?int,
+     *         cloudways_hash: ?string,
+     *         local_hash: ?string,
+     *         cloudways_only_columns: array<int, string>,
+     *         local_only_columns: array<int, string>,
+     *         message: string,
+     *     }>,
+     *     total_tables: int,
+     *     identical_tables: int,
+     *     different_tables: int,
+     *     checked_at: string,
+     * }
+     */
+    public function compareAllTables(
+        ?string $sourceConnectionName = null,
+        ?string $targetConnectionName = null,
+        ?callable $onTableCompared = null,
+        ?callable $onProgress = null,
+    ): array {
+        $sourceConnectionName ??= $this->sourceConnectionName();
+        $targetConnectionName ??= (string) config('database.default');
+
+        $synchronizableTables = $this->synchronizableTableNames();
+        $sourceTables = array_values(array_intersect(
+            $synchronizableTables,
+            $this->tableNames($sourceConnectionName),
+        ));
+        $targetTables = array_values(array_intersect(
+            $synchronizableTables,
+            $this->tableNames($targetConnectionName),
+        ));
+        $tablesToCompare = collect($synchronizableTables)
+            ->filter(fn (string $table): bool => in_array($table, $sourceTables, true)
+                || in_array($table, $targetTables, true))
+            ->values();
+        $tables = [];
+        $totalTables = $tablesToCompare->count();
+
+        foreach ($tablesToCompare as $index => $table) {
+            if ($onProgress !== null) {
+                $onProgress([
+                    'phase' => 'checking',
+                    'table' => $table,
+                    'position' => $index + 1,
+                    'completed' => $index,
+                    'total' => $totalTables,
+                ]);
+            }
+
+            $comparison = $this->compareTable(
+                $sourceConnectionName,
+                $targetConnectionName,
+                $table,
+                in_array($table, $sourceTables, true),
+                in_array($table, $targetTables, true),
+            );
+            $tables[] = $comparison;
+
+            if ($onTableCompared !== null) {
+                $onTableCompared($comparison, $index + 1, $totalTables);
+            }
+        }
+
+        $comparison = [
+            'source_connection' => $sourceConnectionName,
+            'target_connection' => $targetConnectionName,
+            'tables' => $tables,
+            'total_tables' => count($tables),
+            'identical_tables' => collect($tables)->where('status', 'identical')->count(),
+            'different_tables' => collect($tables)->where('status', '!=', 'identical')->count(),
+            'checked_at' => now(self::Timezone)->toIso8601String(),
+        ];
+
+        $this->persistExecution(self::CheckConfigKey, $comparison['checked_at']);
+
+        return $comparison;
+    }
+
+    /**
+     * @param  array<int, string>  $checkedDifferentTables
      * @return array{
      *     source_connection: string,
      *     target_connection: string,
@@ -29,51 +124,105 @@ class CloudwaysDatabaseSync
      * }
      */
     public function syncAllTables(
+        array $checkedDifferentTables,
         ?string $sourceConnectionName = null,
         ?string $targetConnectionName = null,
         ?callable $onTableSynced = null,
+        ?callable $onProgress = null,
     ): array {
         $sourceConnectionName ??= $this->sourceConnectionName();
         $targetConnectionName ??= (string) config('database.default');
 
-        $sourceTables = $this->tableNames($sourceConnectionName);
-        $targetTables = $this->tableNames($targetConnectionName);
-        $syncPlan = $this->syncPlan($sourceConnectionName, $targetConnectionName, $sourceTables, $targetTables);
+        $synchronizableTables = array_values(array_intersect(
+            $this->synchronizableTableNames(),
+            $checkedDifferentTables,
+        ));
+
+        $sourceTables = array_values(array_intersect(
+            $synchronizableTables,
+            $this->tableNames($sourceConnectionName),
+        ));
+        $targetTables = array_values(array_intersect(
+            $synchronizableTables,
+            $this->tableNames($targetConnectionName),
+        ));
+        $syncPlan = $this->syncPlan(
+            $sourceConnectionName,
+            $targetConnectionName,
+            $sourceTables,
+            $targetTables,
+        );
         $syncTables = $syncPlan['tables'];
         $skippedTableDetails = $syncPlan['skipped'];
         $skippedTables = array_column($skippedTableDetails, 'name');
         $syncedTables = [];
+        $totalSyncTables = count($syncTables);
 
-        Schema::connection($targetConnectionName)->disableForeignKeyConstraints();
-
-        try {
-            DB::connection($targetConnectionName)->transaction(function () use (
-                $sourceConnectionName,
-                $targetConnectionName,
-                $syncTables,
-                $onTableSynced,
-                &$syncedTables,
-            ): void {
-                foreach ($syncTables as $table) {
-                    DB::connection($targetConnectionName)->table($table)->delete();
-                }
-
-                foreach ($syncTables as $table) {
-                    $syncedTable = $this->syncTable($sourceConnectionName, $targetConnectionName, $table);
-                    $syncedTables[] = $syncedTable;
-
-                    if ($onTableSynced !== null) {
-                        $onTableSynced($syncedTable);
-                    }
-                }
-
-                $this->repairLatestRealtimePriceLinks($targetConnectionName);
-            });
-        } finally {
-            Schema::connection($targetConnectionName)->enableForeignKeyConstraints();
+        if ($onProgress !== null) {
+            $onProgress([
+                'phase' => 'planned',
+                'completed' => 0,
+                'total' => $totalSyncTables,
+                'skipped_table_details' => $skippedTableDetails,
+            ]);
         }
 
-        return [
+        if ($syncTables !== []) {
+            Schema::connection($targetConnectionName)->disableForeignKeyConstraints();
+
+            try {
+                DB::connection($targetConnectionName)->transaction(function () use (
+                    $sourceConnectionName,
+                    $targetConnectionName,
+                    $syncTables,
+                    $onTableSynced,
+                    $onProgress,
+                    $totalSyncTables,
+                    &$syncedTables,
+                ): void {
+                    foreach ($syncTables as $index => $table) {
+                        if ($onProgress !== null) {
+                            $onProgress([
+                                'phase' => 'clearing',
+                                'table' => $table,
+                                'position' => $index + 1,
+                                'completed' => $index,
+                                'total' => $totalSyncTables,
+                            ]);
+                        }
+
+                        DB::connection($targetConnectionName)->table($table)->delete();
+                    }
+
+                    foreach ($syncTables as $index => $table) {
+                        if ($onProgress !== null) {
+                            $onProgress([
+                                'phase' => 'importing',
+                                'table' => $table,
+                                'position' => $index + 1,
+                                'completed' => $index,
+                                'total' => $totalSyncTables,
+                            ]);
+                        }
+
+                        $syncedTable = $this->syncTable($sourceConnectionName, $targetConnectionName, $table);
+                        $syncedTables[] = $syncedTable;
+
+                        if ($onTableSynced !== null) {
+                            $onTableSynced($syncedTable, $index + 1, $totalSyncTables);
+                        }
+                    }
+
+                    if (array_intersect(['stock_holdings', 'stock_realtime_prices'], $syncTables) !== []) {
+                        $this->repairLatestRealtimePriceLinks($targetConnectionName);
+                    }
+                });
+            } finally {
+                Schema::connection($targetConnectionName)->enableForeignKeyConstraints();
+            }
+        }
+
+        $sync = [
             'source_connection' => $sourceConnectionName,
             'target_connection' => $targetConnectionName,
             'tables' => $syncedTables,
@@ -82,7 +231,28 @@ class CloudwaysDatabaseSync
             'synced_tables' => count($syncedTables),
             'total_tables' => count($sourceTables),
             'rows' => array_sum(array_column($syncedTables, 'rows')),
-            'synced_at' => now()->toIso8601String(),
+            'synced_at' => now(self::Timezone)->toIso8601String(),
+        ];
+
+        $this->persistExecution(self::SyncConfigKey, $sync['synced_at']);
+
+        return $sync;
+    }
+
+    /**
+     * @return array{last_checked_at: ?string, last_synced_at: ?string, timezone: string}
+     */
+    public function executionStatus(): array
+    {
+        $configurations = AppConfig::query()
+            ->whereIn('key', [self::CheckConfigKey, self::SyncConfigKey])
+            ->get(['key', 'value'])
+            ->keyBy('key');
+
+        return [
+            'last_checked_at' => $this->lastExecutedAt($configurations->get(self::CheckConfigKey)?->value),
+            'last_synced_at' => $this->lastExecutedAt($configurations->get(self::SyncConfigKey)?->value),
+            'timezone' => self::Timezone,
         ];
     }
 
@@ -123,6 +293,307 @@ class CloudwaysDatabaseSync
         DB::purge(self::SourceConnectionName);
 
         return self::SourceConnectionName;
+    }
+
+    private function persistExecution(string $configKey, string $executedAt): void
+    {
+        AppConfig::query()->updateOrCreate(
+            ['key' => $configKey],
+            ['value' => ['last_executed_at' => $executedAt]],
+        );
+    }
+
+    private function lastExecutedAt(mixed $value): ?string
+    {
+        $lastExecutedAt = is_array($value) ? ($value['last_executed_at'] ?? null) : null;
+
+        return is_string($lastExecutedAt) ? $lastExecutedAt : null;
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function synchronizableTableNames(): array
+    {
+        return collect(config('services.cloudways.sync_tables', []))
+            ->filter(fn (mixed $table): bool => is_string($table) && $table !== '')
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array{
+     *     name: string,
+     *     status: string,
+     *     cloudways_rows: ?int,
+     *     local_rows: ?int,
+     *     cloudways_hash: ?string,
+     *     local_hash: ?string,
+     *     cloudways_only_columns: array<int, string>,
+     *     local_only_columns: array<int, string>,
+     *     message: string,
+     * }
+     */
+    private function compareTable(
+        string $sourceConnectionName,
+        string $targetConnectionName,
+        string $table,
+        bool $existsOnCloudways,
+        bool $existsLocally,
+    ): array {
+        if (! $existsOnCloudways) {
+            return $this->missingComparisonTable($table, 'missing_cloudways', 'Missing on Cloudways.');
+        }
+
+        if (! $existsLocally) {
+            return $this->missingComparisonTable($table, 'missing_local', 'Missing locally.');
+        }
+
+        $sourceColumnDefinitions = Schema::connection($sourceConnectionName)->getColumns($table);
+        $targetColumnDefinitions = Schema::connection($targetConnectionName)->getColumns($table);
+        $sourceColumns = array_column($sourceColumnDefinitions, 'name');
+        $targetColumns = array_column($targetColumnDefinitions, 'name');
+        $matchingColumns = array_values(array_intersect($sourceColumns, $targetColumns));
+        $cloudwaysOnlyColumns = array_values(array_diff($sourceColumns, $targetColumns));
+        $localOnlyColumns = array_values(array_diff($targetColumns, $sourceColumns));
+
+        if ($matchingColumns === []) {
+            return [
+                'name' => $table,
+                'status' => 'different',
+                'cloudways_rows' => null,
+                'local_rows' => null,
+                'cloudways_hash' => null,
+                'local_hash' => null,
+                'cloudways_only_columns' => $cloudwaysOnlyColumns,
+                'local_only_columns' => $localOnlyColumns,
+                'message' => 'No matching columns can be compared.',
+            ];
+        }
+
+        $jsonColumns = $this->comparisonJsonColumns(
+            $sourceColumnDefinitions,
+            $targetColumnDefinitions,
+            $matchingColumns,
+        );
+        $cloudways = $this->tableFingerprint($sourceConnectionName, $table, $matchingColumns, $jsonColumns);
+        $local = $this->tableFingerprint($targetConnectionName, $table, $matchingColumns, $jsonColumns);
+        $hasSchemaDifferences = $cloudwaysOnlyColumns !== [] || $localOnlyColumns !== [];
+        $hasContentDifferences = $cloudways['rows'] !== $local['rows'] || $cloudways['hash'] !== $local['hash'];
+        $isIdentical = ! $hasSchemaDifferences && ! $hasContentDifferences;
+
+        return [
+            'name' => $table,
+            'status' => $isIdentical ? 'identical' : 'different',
+            'cloudways_rows' => $cloudways['rows'],
+            'local_rows' => $local['rows'],
+            'cloudways_hash' => $cloudways['hash'],
+            'local_hash' => $local['hash'],
+            'cloudways_only_columns' => $cloudwaysOnlyColumns,
+            'local_only_columns' => $localOnlyColumns,
+            'message' => $this->comparisonMessage(
+                $isIdentical,
+                $hasContentDifferences,
+                $cloudways['rows'],
+                $local['rows'],
+                $cloudwaysOnlyColumns,
+                $localOnlyColumns,
+            ),
+        ];
+    }
+
+    /**
+     * @return array{
+     *     name: string,
+     *     status: string,
+     *     cloudways_rows: null,
+     *     local_rows: null,
+     *     cloudways_hash: null,
+     *     local_hash: null,
+     *     cloudways_only_columns: array<int, string>,
+     *     local_only_columns: array<int, string>,
+     *     message: string,
+     * }
+     */
+    private function missingComparisonTable(string $table, string $status, string $message): array
+    {
+        return [
+            'name' => $table,
+            'status' => $status,
+            'cloudways_rows' => null,
+            'local_rows' => null,
+            'cloudways_hash' => null,
+            'local_hash' => null,
+            'cloudways_only_columns' => [],
+            'local_only_columns' => [],
+            'message' => $message,
+        ];
+    }
+
+    /**
+     * @param  array<int, string>  $columns
+     * @param  array<int, string>  $jsonColumns
+     * @return array{rows: int, hash: string}
+     */
+    private function tableFingerprint(
+        string $connectionName,
+        string $table,
+        array $columns,
+        array $jsonColumns,
+    ): array {
+        $hash = hash_init('sha256');
+        $rows = 0;
+        $query = DB::connection($connectionName)->table($table)->select($columns);
+        $jsonColumnLookup = array_fill_keys($jsonColumns, true);
+
+        foreach ($this->comparisonOrderColumns($connectionName, $table, $columns) as $column) {
+            $query->orderBy($column);
+        }
+
+        foreach ($query->cursor() as $row) {
+            $encodedRow = [];
+
+            foreach ($columns as $column) {
+                $value = $row->{$column};
+                $encodedRow[$column] = $this->encodedComparisonValue(
+                    $value,
+                    isset($jsonColumnLookup[$column]),
+                );
+            }
+
+            hash_update($hash, json_encode($encodedRow, JSON_THROW_ON_ERROR)."\n");
+            $rows++;
+        }
+
+        return [
+            'rows' => $rows,
+            'hash' => hash_final($hash),
+        ];
+    }
+
+    /**
+     * @param  array<int, array{name: string, type_name: string}>  $sourceColumns
+     * @param  array<int, array{name: string, type_name: string}>  $targetColumns
+     * @param  array<int, string>  $matchingColumns
+     * @return array<int, string>
+     */
+    private function comparisonJsonColumns(
+        array $sourceColumns,
+        array $targetColumns,
+        array $matchingColumns,
+    ): array {
+        return collect([
+            ...$sourceColumns,
+            ...$targetColumns,
+        ])
+            ->filter(fn (array $column): bool => in_array(
+                strtolower((string) ($column['type_name'] ?? '')),
+                ['json', 'jsonb'],
+                true,
+            ))
+            ->pluck('name')
+            ->intersect($matchingColumns)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function encodedComparisonValue(mixed $value, bool $isJson): ?string
+    {
+        if ($value === null) {
+            return null;
+        }
+
+        $normalizedValue = $isJson
+            ? $this->canonicalJson((string) $value)
+            : (string) $value;
+
+        return base64_encode($normalizedValue);
+    }
+
+    private function canonicalJson(string $value): string
+    {
+        $decoded = json_decode(
+            $value,
+            flags: JSON_THROW_ON_ERROR | JSON_BIGINT_AS_STRING,
+        );
+
+        return json_encode(
+            $this->canonicalJsonValue($decoded),
+            JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
+        );
+    }
+
+    private function canonicalJsonValue(mixed $value): mixed
+    {
+        if (is_array($value)) {
+            return array_map(
+                fn (mixed $item): mixed => $this->canonicalJsonValue($item),
+                $value,
+            );
+        }
+
+        if (! $value instanceof stdClass) {
+            return $value;
+        }
+
+        $properties = get_object_vars($value);
+        ksort($properties, SORT_STRING);
+        $canonicalObject = new stdClass;
+
+        foreach ($properties as $key => $property) {
+            $canonicalObject->{$key} = $this->canonicalJsonValue($property);
+        }
+
+        return $canonicalObject;
+    }
+
+    /**
+     * @param  array<int, string>  $columns
+     * @return array<int, string>
+     */
+    private function comparisonOrderColumns(string $connectionName, string $table, array $columns): array
+    {
+        $primaryIndex = collect(Schema::connection($connectionName)->getIndexes($table))
+            ->first(fn (array $index): bool => ($index['primary'] ?? false) === true);
+        $primaryColumns = array_values(array_intersect($primaryIndex['columns'] ?? [], $columns));
+
+        return $primaryColumns !== [] ? $primaryColumns : $columns;
+    }
+
+    /**
+     * @param  array<int, string>  $cloudwaysOnlyColumns
+     * @param  array<int, string>  $localOnlyColumns
+     */
+    private function comparisonMessage(
+        bool $isIdentical,
+        bool $hasContentDifferences,
+        int $cloudwaysRows,
+        int $localRows,
+        array $cloudwaysOnlyColumns,
+        array $localOnlyColumns,
+    ): string {
+        if ($isIdentical) {
+            return 'Contents match.';
+        }
+
+        $messages = [];
+
+        if ($hasContentDifferences) {
+            $messages[] = "Content differs: Cloudways {$cloudwaysRows} row(s), local {$localRows} row(s).";
+        }
+
+        if ($cloudwaysOnlyColumns !== []) {
+            $messages[] = 'Cloudways-only columns: '.implode(', ', $cloudwaysOnlyColumns).'.';
+        }
+
+        if ($localOnlyColumns !== []) {
+            $messages[] = 'Local-only columns: '.implode(', ', $localOnlyColumns).'.';
+        }
+
+        return implode(' ', $messages);
     }
 
     /**
@@ -265,6 +736,24 @@ class CloudwaysDatabaseSync
                 continue;
             }
 
+            $comparison = $this->compareTable(
+                $sourceConnectionName,
+                $targetConnectionName,
+                $table,
+                existsOnCloudways: true,
+                existsLocally: true,
+            );
+
+            if ($comparison['status'] === 'identical') {
+                $skippedTables[] = $this->skippedTable(
+                    table: $table,
+                    reason: 'already_identical',
+                    message: "Skipped {$table}: contents already match.",
+                );
+
+                continue;
+            }
+
             $syncTables[] = $table;
         }
 
@@ -362,6 +851,8 @@ class CloudwaysDatabaseSync
                         ->table('stock_realtime_prices')
                         ->where('stock_holding_id', $holding->id)
                         ->whereNotNull('price')
+                        ->whereIn('validation_status', ['valid', 'suspicious'])
+                        ->whereNotIn('freshness_status', ['stale', 'unavailable', 'invalid'])
                         ->orderByDesc('as_of')
                         ->orderByDesc('id')
                         ->value('id');

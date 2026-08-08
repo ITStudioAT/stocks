@@ -1141,6 +1141,7 @@ describe('App', () => {
                             id: 4,
                             symbol: 'TINY',
                             name: 'Tiny Price Fund',
+                            subtitle: 'Global diversified small-price holdings',
                             currency: 'EUR',
                             latest_price: '2.680000',
                             daily_prices: [],
@@ -1230,6 +1231,22 @@ describe('App', () => {
                             currency: 'EUR',
                             latest_price: '95.000000',
                             depot_transactions: [
+                                {
+                                    id: 799,
+                                    type: 'buy',
+                                    pieces: '10.00000000',
+                                    total_amount: '1000.00',
+                                    currency: 'EUR',
+                                    booked_at: '2026-05-01T00:00:00+00:00',
+                                },
+                                {
+                                    id: 800,
+                                    type: 'sell',
+                                    pieces: '10.00000000',
+                                    total_amount: '1100.00',
+                                    currency: 'EUR',
+                                    booked_at: '2026-05-02T00:00:00+00:00',
+                                },
                                 {
                                     id: 801,
                                     type: 'buy',
@@ -1518,13 +1535,29 @@ describe('App', () => {
         const analyzeTrendV2 = wrapper.find('[aria-label="Analyze trend v2"]');
         expect(analyzeTrendV2.exists()).toBe(true);
         expect(analyzeTrendV2.find('.analyze-detail-title').text()).toBe('Trend v2');
+        expect(analyzeTrendV2.find('.analyze-selected-stock-title').exists()).toBe(false);
         expect(analyzeTrendV2.find('[aria-label="Analyze trend v2 stocks"]').exists()).toBe(true);
+        expect(analyzeTrendV2.find('[aria-label="Analyze trend v2 stocks"]')
+            .classes()).toContain('analyze-detail-stock-menu--compact');
+        expect(analyzeTrendV2.find('.analyze-trend-include-toggle').exists()).toBe(false);
+        expect(analyzeTrendV2.find('.analyze-holding-card--compact').exists()).toBe(true);
+        expect(analyzeTrendV2.find('.analyze-holding-card-name--compact').exists()).toBe(true);
+        expect(analyzeTrendV2.find('.analyze-holding-card-symbol').exists()).toBe(false);
+        expect(analyzeTrendV2.find('.analyze-holding-card-isin').exists()).toBe(false);
+        expect(analyzeTrendV2.find('.analyze-holding-card-price').exists()).toBe(false);
+        expect(analyzeTrendV2.find('.analyze-holding-card-pieces').exists()).toBe(false);
+        const trendV2TinyCard = analyzeTrendV2.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Tiny Price Fund'));
+        expect(trendV2TinyCard.find('.analyze-holding-card-name--compact').text()).toBe('Tiny Price Fund');
+        expect(trendV2TinyCard.find('.analyze-holding-card-subtitle--compact').text())
+            .toBe('Global diversified small-price holdings');
         expect(analyzeTrendV2.find('[aria-label="Edit trend invest amounts"]').exists()).toBe(false);
         expect(analyzeTrendV2.find('[aria-label="Edit trend max invest"]').exists()).toBe(true);
         expect(analyzeTrendV2.findAll('.analyze-trend-table th').map((heading) => heading.text())).toEqual([
             'Date',
             'Price',
             'Day %',
+            'BUY/SELL',
         ]);
         expect(analyzeTrendV2.find('.analyze-trend-summary').exists()).toBe(false);
         const trendV2RowsControl = analyzeTrendV2.find('[aria-label="Edit trend row count"]');
@@ -1534,7 +1567,34 @@ describe('App', () => {
         expect(analyzeTrendV2.find('.analyze-trend-optimization-info').exists()).toBe(false);
         expect(analyzeTrendV2.find('.analyze-trend-rec').exists()).toBe(false);
         expect(analyzeTrendV2.find('.analyze-holding-card-stat').exists()).toBe(false);
-        expect(analyzeTrendV2.findAll('.analyze-trend-table tbody tr')[0].findAll('td')).toHaveLength(3);
+        expect(analyzeTrendV2.findAll('.analyze-trend-table tbody tr')[0].findAll('td')).toHaveLength(4);
+
+        const trendV2StockMenu = analyzeTrendV2.find('[aria-label="Analyze trend v2 stocks"]');
+        const trendV2BuyStreakCard = trendV2StockMenu.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Buy Streak Fund'));
+        await trendV2BuyStreakCard.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/trend-v2');
+        expect(window.location.search).toBe('?stock=8');
+        const trendV2BuySellHeading = analyzeTrendV2.findAll('.analyze-trend-table th')[3];
+        expect(trendV2BuySellHeading.text()).toBe('BUY/SELL +308.48 EUR');
+        expect(trendV2BuySellHeading.find('.analyze-trend-dep-change').classes()).toContain('text-success');
+        const trendV2BuyStreakRows = analyzeTrendV2.findAll('.analyze-trend-table tbody tr');
+        expect(trendV2BuyStreakRows[0].findAll('td')[3].text()).toBe('SELL+208.48 EUR');
+        expect(trendV2BuyStreakRows[0].find('.analyze-trend-rec--sell').exists()).toBe(true);
+        expect(trendV2BuyStreakRows[0].find('.analyze-trend-dep-change').classes()).toContain('text-success');
+        expect(trendV2BuyStreakRows[1].findAll('td')[3].text()).toBe('-2.03 EUR');
+        expect(trendV2BuyStreakRows[2].findAll('td')[3].text()).toBe('-135.18 EUR');
+        expect(trendV2BuyStreakRows[3].findAll('td')[3].text()).toBe('-67.93 EUR');
+        expect(trendV2BuyStreakRows[1].find('.analyze-trend-dep-change').classes()).toContain('text-error');
+        expect(trendV2BuyStreakRows[4].findAll('td')[3].text()).toBe('BUY');
+        expect(trendV2BuyStreakRows[4].find('.analyze-trend-rec--buy').exists()).toBe(true);
+
+        const trendV2AppleCard = trendV2StockMenu.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Apple'));
+        await trendV2AppleCard.trigger('click');
+        await flushPromises();
 
         const trendTab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Trend');
         await trendTab.trigger('click');
@@ -6460,7 +6520,7 @@ describe('App', () => {
         }));
     });
 
-    it('shows Data as a main dashboard item and Admin group with Users, Roles, and Cloudways submenu chips for super_admin', async () => {
+    it('shows Cloudways after Health in Data for super_admin and syncs after confirmation', async () => {
         window.history.pushState({}, '', '/admin/menu/users');
         localStorage.removeItem('data_intraday_refresh_info_dismissed');
         let mockedIndexPriceRefreshSettings = indexPriceRefreshSettings();
@@ -7152,20 +7212,51 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/cloudways/status' && !options?.method) {
+                return Promise.resolve(jsonResponse({
+                    execution_status: {
+                        last_checked_at: '2026-08-07T10:00:00+02:00',
+                        last_synced_at: '2026-08-06T09:00:00+02:00',
+                        timezone: 'Europe/Vienna',
+                    },
+                }));
+            }
+
             if (path === '/admin/cloudways/sync' && options?.method === 'POST') {
                 return Promise.resolve(ndjsonResponse([
                     {
-                        type: 'table',
-                        table: {
-                            name: 'users',
-                            rows: 1,
-                            columns: 9,
-                            status: 'imported',
-                            message: 'Imported users: 1 row(s), 9 column(s).',
+                        type: 'progress',
+                        progress: {
+                            phase: 'planned',
+                            completed: 0,
+                            total: 1,
+                            skipped_table_details: [],
+                        },
+                    },
+                    {
+                        type: 'progress',
+                        progress: {
+                            phase: 'clearing',
+                            table: 'depots',
+                            position: 1,
+                            completed: 0,
+                            total: 1,
+                        },
+                    },
+                    {
+                        type: 'progress',
+                        progress: {
+                            phase: 'importing',
+                            table: 'depots',
+                            position: 1,
+                            completed: 0,
+                            total: 1,
                         },
                     },
                     {
                         type: 'table',
+                        completed: 1,
+                        total: 1,
                         table: {
                             name: 'depots',
                             rows: 14,
@@ -7176,30 +7267,15 @@ describe('App', () => {
                     },
                     {
                         type: 'finished',
-                        message: 'Synced 2 table(s) and 15 row(s) from Cloudways.',
+                        message: 'Synced 1 table(s) and 14 row(s) from Cloudways.',
                         sync: {
-                            synced_tables: 2,
-                            total_tables: 3,
-                            rows: 15,
+                            synced_tables: 1,
+                            total_tables: 1,
+                            rows: 14,
                             synced_at: '2026-06-13T12:00:00+00:00',
-                            skipped_tables: ['remote_only_items'],
-                            skipped_table_details: [
-                                {
-                                    name: 'remote_only_items',
-                                    status: 'skipped',
-                                    reason: 'missing_local_table',
-                                    message: 'Skipped remote_only_items: no matching local table.',
-                                    missing_required_columns: [],
-                                },
-                            ],
+                            skipped_tables: [],
+                            skipped_table_details: [],
                             tables: [
-                                {
-                                    name: 'users',
-                                    rows: 1,
-                                    columns: 9,
-                                    status: 'imported',
-                                    message: 'Imported users: 1 row(s), 9 column(s).',
-                                },
                                 {
                                     name: 'depots',
                                     rows: 14,
@@ -7208,6 +7284,64 @@ describe('App', () => {
                                     message: 'Imported depots: 14 row(s), 6 column(s).',
                                 },
                             ],
+                        },
+                    },
+                ]));
+            }
+
+            if (path === '/admin/cloudways/check' && options?.method === 'GET') {
+                const tables = [
+                    {
+                        name: 'users',
+                        status: 'identical',
+                        cloudways_rows: 1,
+                        local_rows: 1,
+                        message: 'Contents match.',
+                    },
+                    {
+                        name: 'depots',
+                        status: 'different',
+                        cloudways_rows: 14,
+                        local_rows: 12,
+                        message: 'Content differs: Cloudways 14 row(s), local 12 row(s).',
+                    },
+                    {
+                        name: 'remote_only_items',
+                        status: 'missing_local',
+                        cloudways_rows: null,
+                        local_rows: null,
+                        message: 'Missing locally.',
+                    },
+                ];
+
+                return Promise.resolve(ndjsonResponse([
+                    ...tables.flatMap((table, index) => [
+                        {
+                            type: 'progress',
+                            progress: {
+                                phase: 'checking',
+                                table: table.name,
+                                position: index + 1,
+                                completed: index,
+                                total: tables.length,
+                            },
+                        },
+                        {
+                            type: 'table',
+                            table,
+                            completed: index + 1,
+                            total: tables.length,
+                        },
+                    ]),
+                    {
+                        type: 'finished',
+                        message: 'Checked 3 table(s); 2 differ.',
+                        comparison: {
+                            total_tables: 3,
+                            identical_tables: 1,
+                            different_tables: 2,
+                            checked_at: '2026-08-08T12:00:00+02:00',
+                            tables,
                         },
                     },
                 ]));
@@ -7271,7 +7405,7 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Roles');
         expect(wrapper.text()).toContain('Data');
         expect(wrapper.text()).not.toContain('Updates');
-        expect(wrapper.text()).toContain('Cloudways');
+        expect(wrapper.text()).not.toContain('Cloudways');
         expect(wrapper.find('.dashboard-navigation-drawer').text()).toContain('Data');
 
         const tabs = wrapper.findAll('.v-tab');
@@ -7280,7 +7414,7 @@ describe('App', () => {
         expect(tabLabels.some((l) => l.includes('Roles'))).toBe(true);
         expect(tabLabels.some((l) => l.includes('Data'))).toBe(false);
         expect(tabLabels.some((l) => l.includes('Updates'))).toBe(false);
-        expect(tabLabels.some((l) => l.includes('Cloudways'))).toBe(true);
+        expect(tabLabels.some((l) => l.includes('Cloudways'))).toBe(false);
 
         const rolesTab = wrapper.findAll('.v-tab').find((t) => t.text().includes('Roles'));
         await rolesTab.trigger('click');
@@ -7289,32 +7423,6 @@ describe('App', () => {
         expect(window.location.pathname).toBe('/admin/menu/roles');
         expect(wrapper.text()).toContain('admin');
 
-        const cloudwaysTab = wrapper.findAll('.v-tab').find((t) => t.text().includes('Cloudways'));
-        await cloudwaysTab.trigger('click');
-        await flushPromises();
-
-        expect(window.location.pathname).toBe('/admin/menu/cloudways');
-        expect(wrapper.text()).toContain('Replace local table rows with matching Cloudways table rows.');
-
-        const syncButton = wrapper.findAll('button').find((button) => button.text().includes('Sync'));
-        await syncButton.trigger('click');
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/cloudways/sync', expect.objectContaining({
-            method: 'POST',
-            headers: expect.objectContaining({
-                Accept: 'application/x-ndjson',
-            }),
-        }));
-        expect(wrapper.text()).toContain('Synced 2 table(s) and 15 row(s) from Cloudways.');
-        expect(wrapper.text()).toContain('2 table(s)');
-        expect(wrapper.text()).toContain('15 row(s)');
-        expect(wrapper.text()).toContain('users');
-        expect(wrapper.text()).toContain('depots');
-        expect(wrapper.text()).toContain('Imported users: 1 row(s), 9 column(s).');
-        expect(wrapper.text()).toContain('Imported depots: 14 row(s), 6 column(s).');
-        expect(wrapper.text()).toContain('Skipped remote_only_items: no matching local table.');
-
         const dataMenuItem = wrapper.find('.dashboard-navigation-drawer')
             .findAll('.v-list-item')
             .find((item) => item.text().includes('Data'));
@@ -7322,8 +7430,70 @@ describe('App', () => {
         await flushPromises();
 
         const dataTabs = wrapper.findAll('.v-tab').map((tab) => tab.text());
-        expect(dataTabs).toEqual(['Indizes', 'Stocks', 'Health', 'Live-Daten', 'Intraday-Daten', 'EOD-Daten']);
+        expect(dataTabs).toEqual(['Indizes', 'Stocks', 'Health', 'Cloudways', 'Live-Daten', 'Intraday-Daten', 'EOD-Daten']);
         expect(window.location.pathname).toBe('/admin/menu/data/indices/live-data');
+
+        const cloudwaysTab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Cloudways');
+        await cloudwaysTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/data/cloudways');
+        expect(fetchMock).toHaveBeenCalledWith('/admin/cloudways/status', expect.anything());
+        expect(fetchMock).not.toHaveBeenCalledWith('/admin/cloudways/check', expect.anything());
+        expect(wrapper.find('[aria-label="Cloudways comparison result"]').exists()).toBe(false);
+        expect(wrapper.findAll('button').some((button) => button.text().trim() === 'Sync differences')).toBe(false);
+        const executionHistory = wrapper.get('[aria-label="Cloudways execution history"]');
+        expect(executionHistory.text()).toContain('Check · Last executed:');
+        expect(executionHistory.text()).toContain('Sync · Last executed:');
+        expect(executionHistory.text()).not.toContain('never');
+
+        const cloudwaysCheckButton = wrapper.findAll('button')
+            .find((button) => button.text().trim() === 'Cloudways check');
+        await cloudwaysCheckButton.trigger('click');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/cloudways/check', expect.anything());
+        expect(wrapper.get('[aria-label="Cloudways check"]').text()).toContain('Cloudways check');
+        expect(wrapper.get('[aria-label="Cloudways check"]').text()).toContain('business and market-data tables');
+        expect(wrapper.get('[aria-label="Cloudways comparison result"]').text()).toContain('1 identical');
+        expect(wrapper.get('[aria-label="Cloudways comparison result"]').text()).toContain('2 different');
+        expect(wrapper.get('[aria-label="Cloudways comparison result"]').text()).toContain('3 / 3 table(s) checked');
+        expect(wrapper.text()).toContain('Finished checking 3 table(s).');
+        expect(wrapper.text()).toContain('Content differs: Cloudways 14 row(s), local 12 row(s).');
+        expect(wrapper.text()).toContain('Missing locally.');
+        expect(wrapper.findAll('button').some((button) => button.text().trim() === 'Sync differences')).toBe(true);
+
+        const openSyncButton = wrapper.findAll('button')
+            .find((button) => button.text().trim() === 'Sync differences');
+        await openSyncButton.trigger('click');
+        await flushPromises();
+
+        const cloudwaysSyncDialog = document.body.querySelector('.cloudways-sync-dialog');
+        expect(cloudwaysSyncDialog).not.toBeNull();
+        expect(cloudwaysSyncDialog.textContent).toContain('Tables selected: 1.');
+        const confirmSyncButton = Array.from(cloudwaysSyncDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.trim() === 'Sync differences');
+        confirmSyncButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/cloudways/sync', expect.objectContaining({
+            method: 'POST',
+            body: JSON.stringify({ tables: ['depots'] }),
+            headers: expect.objectContaining({
+                Accept: 'application/x-ndjson',
+            }),
+        }));
+        expect(wrapper.text()).toContain('Synced 1 table(s) and 14 row(s) from Cloudways.');
+        expect(wrapper.get('[aria-label="Cloudways sync result"]').text()).toContain('Tables imported: 1');
+        expect(wrapper.get('[aria-label="Cloudways sync result"]').text()).toContain('Rows imported: 14');
+        expect(wrapper.get('[aria-label="Cloudways sync result"]').text()).not.toContain('Not imported');
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/cloudways/check')).toHaveLength(1);
+        expect(wrapper.find('[aria-label="Cloudways comparison result"]').exists()).toBe(false);
+
+        const indicesTab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Indizes');
+        await indicesTab.trigger('click');
+        await flushPromises();
+
         const indexDataTypeTabs = wrapper.get('[aria-label="Data indices data types"]');
         expect(indexDataTypeTabs.text()).toContain('Live-Daten');
         expect(indexDataTypeTabs.text()).toContain('Intraday-Daten');
