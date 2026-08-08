@@ -55,7 +55,9 @@ const dashboardPerformanceCardLabels = [
 ];
 const dashboardPerformanceSumLabels = [
     { key: 'week', label: 'Week' },
+    { key: 'last_week', label: 'Last Week' },
     { key: 'month', label: 'Month' },
+    { key: 'last_month', label: 'Last Month' },
     { key: 'year', label: 'Year' },
 ];
 
@@ -11956,7 +11958,7 @@ function formatIndexDataUpdateSchedule(settings) {
 
                                 <div
                                     class="dashboard-performance-sum-grid"
-                                    aria-label="Performance sums for week, month, and year"
+                                    aria-label="Performance sums for current and previous week and month, plus year"
                                 >
                                     <v-card
                                         v-for="card in dashboardPerformanceSumCards"
@@ -19226,7 +19228,7 @@ function formatIndexDataUpdateSchedule(settings) {
 .dashboard-performance-sum-grid {
     display: grid;
     gap: 10px;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     margin-top: 10px;
 }
 

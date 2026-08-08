@@ -72,7 +72,7 @@ class AdminDepotTransactionController extends Controller
 
         return response()->json([
             'days' => $this->dailyPerformancePayloads($depot, $depotHoldings),
-            'sums' => $this->dashboardPerformanceSumPayloads($depotValuation),
+            'sums' => $this->dashboardPerformanceSumPayloads($depot, $depotValuation),
         ]);
     }
 
@@ -642,24 +642,62 @@ class AdminDepotTransactionController extends Controller
      * @param  array<string, string>  $depotValuation
      * @return array<int, array{period: string, change_amount: string, change_percent: string}>
      */
-    private function dashboardPerformanceSumPayloads(array $depotValuation): array
+    private function dashboardPerformanceSumPayloads(Depot $depot, array $depotValuation): array
     {
+        $lastWeekStart = now()->startOfWeek(Carbon::MONDAY)->subWeek()->startOfDay();
+        $lastMonthStart = now()->startOfMonth()->subMonth()->startOfDay();
+
         return [
             [
                 'period' => 'week',
                 'change_amount' => $depotValuation['one_week_change_amount'],
                 'change_percent' => $depotValuation['one_week_change_percent'],
             ],
+            $this->historicalPerformanceSumPayload(
+                $depot,
+                'last_week',
+                $lastWeekStart,
+                $lastWeekStart->copy()->addDays(6)->endOfDay(),
+            ),
             [
                 'period' => 'month',
                 'change_amount' => $depotValuation['month_change_amount'],
                 'change_percent' => $depotValuation['month_change_percent'],
             ],
+            $this->historicalPerformanceSumPayload(
+                $depot,
+                'last_month',
+                $lastMonthStart,
+                $lastMonthStart->copy()->endOfMonth(),
+            ),
             [
                 'period' => 'year',
                 'change_amount' => $depotValuation['balance_change_amount'],
                 'change_percent' => $depotValuation['balance_change_percent'],
             ],
+        ];
+    }
+
+    /**
+     * @return array{period: string, change_amount: string, change_percent: string}
+     */
+    private function historicalPerformanceSumPayload(
+        Depot $depot,
+        string $period,
+        Carbon $start,
+        Carbon $end,
+    ): array {
+        $previousBalance = $this->performanceAccountBalanceAt($depot, $start->copy()->subSecond(), $end);
+        $accountBalance = $this->performanceAccountBalanceAt($depot, $end, $end);
+        $changeAmount = $accountBalance - $previousBalance;
+        $changePercent = $previousBalance === 0.0
+            ? 0.0
+            : ($changeAmount / $previousBalance) * 100;
+
+        return [
+            'period' => $period,
+            'change_amount' => $this->decimal($changeAmount, 2),
+            'change_percent' => $this->decimal($changePercent, 2),
         ];
     }
 
@@ -755,11 +793,11 @@ class AdminDepotTransactionController extends Controller
             ->exists();
     }
 
-    private function performanceAccountBalanceAt(Depot $depot, Carbon $cutoff): float
+    private function performanceAccountBalanceAt(Depot $depot, Carbon $cutoff, ?Carbon $cashFlowEnd = null): float
     {
         return $this->cashBalanceAt($depot, $cutoff)
             + $this->stockMarketBalanceAt($depot, $cutoff)
-            + $this->externalCashFlowAfter($depot, $cutoff);
+            + $this->externalCashFlowAfter($depot, $cutoff, $cashFlowEnd);
     }
 
     /**
@@ -847,13 +885,13 @@ class AdminDepotTransactionController extends Controller
             ->sum(fn (DepotTransaction $transaction): float => abs((float) $transaction->{$amountColumn}));
     }
 
-    private function externalCashFlowAfter(Depot $depot, Carbon $cutoff): float
+    private function externalCashFlowAfter(Depot $depot, Carbon $cutoff, ?Carbon $cashFlowEnd = null): float
     {
         return (float) DepotTransaction::query()
             ->where('depot_id', $depot->id)
             ->whereIn('type', DepotTransaction::ExternalCashflowTypes)
             ->where('booked_at', '>', $cutoff)
-            ->where('booked_at', '<=', now()->endOfDay())
+            ->where('booked_at', '<=', $cashFlowEnd ?? now()->endOfDay())
             ->sum('cash_delta');
     }
 

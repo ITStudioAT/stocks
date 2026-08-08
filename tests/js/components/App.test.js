@@ -5875,9 +5875,19 @@ describe('App', () => {
                             change_percent: '0.25',
                         },
                         {
+                            period: 'last_week',
+                            change_amount: '-20.10',
+                            change_percent: '-0.07',
+                        },
+                        {
                             period: 'month',
                             change_amount: '-140.20',
                             change_percent: '-0.47',
+                        },
+                        {
+                            period: 'last_month',
+                            change_amount: '940.25',
+                            change_percent: '3.13',
                         },
                         {
                             period: 'year',
@@ -5941,16 +5951,22 @@ describe('App', () => {
         expect(wrapper.findAll('.dashboard-performance-day-card')[4].text()).toContain('07.08.2026');
         expect(wrapper.findAll('.dashboard-performance-day-card')[4].text()).toContain('+125.40 EUR');
         expect(wrapper.findAll('.dashboard-performance-day-card')[4].text()).toContain('+0.42%');
-        expect(wrapper.findAll('.dashboard-performance-sum-card')).toHaveLength(3);
+        expect(wrapper.findAll('.dashboard-performance-sum-card')).toHaveLength(5);
         expect(wrapper.findAll('.dashboard-performance-sum-card')[0].text()).toContain('Week');
         expect(wrapper.findAll('.dashboard-performance-sum-card')[0].text()).toContain('+75.05 EUR');
         expect(wrapper.findAll('.dashboard-performance-sum-card')[0].text()).toContain('+0.25%');
-        expect(wrapper.findAll('.dashboard-performance-sum-card')[1].text()).toContain('Month');
-        expect(wrapper.findAll('.dashboard-performance-sum-card')[1].text()).toContain('-140.20 EUR');
-        expect(wrapper.findAll('.dashboard-performance-sum-card')[1].text()).toContain('-0.47%');
-        expect(wrapper.findAll('.dashboard-performance-sum-card')[2].text()).toContain('Year');
-        expect(wrapper.findAll('.dashboard-performance-sum-card')[2].text()).toContain('+3,240.80 EUR');
-        expect(wrapper.findAll('.dashboard-performance-sum-card')[2].text()).toContain('+10.80%');
+        expect(wrapper.findAll('.dashboard-performance-sum-card')[1].text()).toContain('Last Week');
+        expect(wrapper.findAll('.dashboard-performance-sum-card')[1].text()).toContain('-20.10 EUR');
+        expect(wrapper.findAll('.dashboard-performance-sum-card')[1].text()).toContain('-0.07%');
+        expect(wrapper.findAll('.dashboard-performance-sum-card')[2].text()).toContain('Month');
+        expect(wrapper.findAll('.dashboard-performance-sum-card')[2].text()).toContain('-140.20 EUR');
+        expect(wrapper.findAll('.dashboard-performance-sum-card')[2].text()).toContain('-0.47%');
+        expect(wrapper.findAll('.dashboard-performance-sum-card')[3].text()).toContain('Last Month');
+        expect(wrapper.findAll('.dashboard-performance-sum-card')[3].text()).toContain('+940.25 EUR');
+        expect(wrapper.findAll('.dashboard-performance-sum-card')[3].text()).toContain('+3.13%');
+        expect(wrapper.findAll('.dashboard-performance-sum-card')[4].text()).toContain('Year');
+        expect(wrapper.findAll('.dashboard-performance-sum-card')[4].text()).toContain('+3,240.80 EUR');
+        expect(wrapper.findAll('.dashboard-performance-sum-card')[4].text()).toContain('+10.80%');
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/version')).toHaveLength(1);
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/performance')).toHaveLength(1);
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);

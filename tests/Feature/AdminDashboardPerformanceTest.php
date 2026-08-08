@@ -29,7 +29,7 @@ class AdminDashboardPerformanceTest extends TestCase
                 'is_active' => true,
             ]);
             $holding = StockHolding::factory()->create([
-                'latest_price' => '110.000000',
+                'latest_price' => '130.000000',
                 'currency' => 'EUR',
             ]);
 
@@ -42,17 +42,19 @@ class AdminDashboardPerformanceTest extends TestCase
                 'unit_price' => '100.00000000',
                 'cash_delta' => '-100.00',
                 'balance_after' => '900.00',
-                'booked_at' => '2026-08-03 00:00:00',
+                'booked_at' => '2026-06-30 00:00:00',
             ]);
 
             $instrumentKey = app(StockPriceCatalog::class)->instrumentKeyForHolding($holding);
 
             collect([
-                ['date' => '2026-07-31', 'price' => '100.00000000'],
-                ['date' => '2026-08-03', 'price' => '100.00000000'],
-                ['date' => '2026-08-04', 'price' => '100.00000000'],
-                ['date' => '2026-08-05', 'price' => '105.00000000'],
-                ['date' => '2026-08-06', 'price' => '100.00000000'],
+                ['date' => '2026-06-30', 'price' => '100.00000000'],
+                ['date' => '2026-07-24', 'price' => '110.00000000'],
+                ['date' => '2026-07-31', 'price' => '120.00000000'],
+                ['date' => '2026-08-03', 'price' => '120.00000000'],
+                ['date' => '2026-08-04', 'price' => '120.00000000'],
+                ['date' => '2026-08-05', 'price' => '125.00000000'],
+                ['date' => '2026-08-06', 'price' => '120.00000000'],
             ])->each(fn (array $price): StockPrice => StockPrice::factory()->create([
                 'instrument_key' => $instrumentKey,
                 'source_key' => 'eodhd_eod',
@@ -66,7 +68,7 @@ class AdminDashboardPerformanceTest extends TestCase
             $livePrice = StockRealtimePrice::factory()->create([
                 'stock_holding_id' => $holding->id,
                 'currency' => 'EUR',
-                'price' => '110.00000000',
+                'price' => '130.00000000',
                 'as_of' => Carbon::parse('2026-08-07 12:00:00', 'Europe/Vienna'),
                 'fetched_at' => Carbon::parse('2026-08-07 12:01:00', 'Europe/Vienna'),
                 'freshness_status' => 'realtime',
@@ -88,24 +90,30 @@ class AdminDashboardPerformanceTest extends TestCase
                 ->assertJsonPath('days.1.change_amount', '0.00')
                 ->assertJsonPath('days.2.date', '2026-08-05')
                 ->assertJsonPath('days.2.change_amount', '5.00')
-                ->assertJsonPath('days.2.change_percent', '0.50')
+                ->assertJsonPath('days.2.change_percent', '0.49')
                 ->assertJsonPath('days.3.date', '2026-08-06')
                 ->assertJsonPath('days.3.change_amount', '-5.00')
-                ->assertJsonPath('days.3.change_percent', '-0.50')
+                ->assertJsonPath('days.3.change_percent', '-0.49')
                 ->assertJsonPath('days.4.date', '2026-08-07')
                 ->assertJsonPath('days.4.is_live', true)
                 ->assertJsonPath('days.4.change_amount', '10.00')
-                ->assertJsonPath('days.4.change_percent', '1.00')
-                ->assertJsonCount(3, 'sums')
+                ->assertJsonPath('days.4.change_percent', '0.98')
+                ->assertJsonCount(5, 'sums')
                 ->assertJsonPath('sums.0.period', 'week')
                 ->assertJsonPath('sums.0.change_amount', '10.00')
-                ->assertJsonPath('sums.0.change_percent', '1.00')
-                ->assertJsonPath('sums.1.period', 'month')
+                ->assertJsonPath('sums.0.change_percent', '0.98')
+                ->assertJsonPath('sums.1.period', 'last_week')
                 ->assertJsonPath('sums.1.change_amount', '10.00')
-                ->assertJsonPath('sums.1.change_percent', '1.00')
-                ->assertJsonPath('sums.2.period', 'year')
+                ->assertJsonPath('sums.1.change_percent', '0.99')
+                ->assertJsonPath('sums.2.period', 'month')
                 ->assertJsonPath('sums.2.change_amount', '10.00')
-                ->assertJsonPath('sums.2.change_percent', '1.00');
+                ->assertJsonPath('sums.2.change_percent', '0.98')
+                ->assertJsonPath('sums.3.period', 'last_month')
+                ->assertJsonPath('sums.3.change_amount', '20.00')
+                ->assertJsonPath('sums.3.change_percent', '2.00')
+                ->assertJsonPath('sums.4.period', 'year')
+                ->assertJsonPath('sums.4.change_amount', '30.00')
+                ->assertJsonPath('sums.4.change_percent', '3.00');
         } finally {
             Carbon::setTestNow();
         }
@@ -120,6 +128,54 @@ class AdminDashboardPerformanceTest extends TestCase
                 'days' => [],
                 'sums' => [],
             ]);
+    }
+
+    public function test_last_month_percentage_excludes_later_external_cash_flows(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-08-07 12:00:00', 'Europe/Vienna'));
+
+        try {
+            $depot = Depot::factory()->create([
+                'account_balance' => '2100.00',
+                'is_active' => true,
+            ]);
+
+            collect([
+                [
+                    'type' => 'opening_balance',
+                    'total_amount' => '1000.00',
+                    'cash_delta' => '1000.00',
+                    'balance_after' => '1000.00',
+                    'booked_at' => '2026-01-01 00:00:00',
+                ],
+                [
+                    'type' => 'dividend',
+                    'total_amount' => '100.00',
+                    'cash_delta' => '100.00',
+                    'balance_after' => '1100.00',
+                    'booked_at' => '2026-07-15 00:00:00',
+                ],
+                [
+                    'type' => 'deposit',
+                    'total_amount' => '1000.00',
+                    'cash_delta' => '1000.00',
+                    'balance_after' => '2100.00',
+                    'booked_at' => '2026-08-04 00:00:00',
+                ],
+            ])->each(fn (array $transaction): DepotTransaction => DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                ...$transaction,
+            ]));
+
+            $this->actingAs($this->adminUser())
+                ->getJson('/admin/dashboard/performance')
+                ->assertOk()
+                ->assertJsonPath('sums.3.period', 'last_month')
+                ->assertJsonPath('sums.3.change_amount', '100.00')
+                ->assertJsonPath('sums.3.change_percent', '10.00');
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     public function test_guest_cannot_view_dashboard_performance(): void
