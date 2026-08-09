@@ -402,7 +402,7 @@ function indexMonthPrices(direction = 'up') {
 }
 
 const dashboardWatchlistHoldingsPath = '/admin/watchlist/holdings/charts?page=1&include_charts=1&all_chart_holdings=1&all=1&chart_range=1y';
-const stocksWatchlistHoldingsPath = '/admin/watchlist/holdings?page=1&all=1';
+const stocksWatchlistHoldingsPath = '/admin/watchlist/holdings/charts?page=1&include_charts=1&all_chart_holdings=1&all=1';
 
 function isWatchlistHoldingsRequest(path) {
     return path.startsWith('/admin/watchlist/holdings?page=1')
@@ -754,6 +754,7 @@ describe('App', () => {
         const headers = watchListTable.findAll('thead th').map((header) => header.text());
         expect(headers).not.toContain('Symbol');
         expect(headers[0]).toBe('Name');
+        expect(headers[1]).toBe('BUY/SELL');
         expect(headers).toContain('Latest price');
         expect(headers.some((header) => header.includes('Last day'))).toBe(true);
         expect(headers.some((header) => header.includes('End price'))).toBe(false);
@@ -764,8 +765,9 @@ describe('App', () => {
         expect(firstRowCells[0].text()).toContain('Pieces: 2');
         expect(firstRowCells[0].text()).not.toContain('US0378331005');
         expect(firstRowCells[0].text()).not.toContain('WKN: 865985');
-        expect(firstRowCells[1].text()).toContain('306.32');
-        expect(firstRowCells[1].text()).toContain('03.06. 17:35');
+        expect(firstRowCells[1].text()).toBe('');
+        expect(firstRowCells[2].text()).toContain('306.32');
+        expect(firstRowCells[2].text()).toContain('03.06. 17:35');
         expect(wrapper.get('.mobile-stock-price-row').text()).toContain('03.06. 17:35');
 
         setViewportSize(852, 393);
@@ -780,12 +782,12 @@ describe('App', () => {
         const landscapeRows = watchListTable.findAll('.stock-holding-row');
         const appleCells = landscapeRows[0].findAll('td');
         const microsoftCells = landscapeRows[1].findAll('td');
-        expect(appleCells[1].text()).toContain('306.32');
-        expect(appleCells[1].text()).toContain('03.06. 17:35');
-        expect(appleCells[1].text()).toContain('+2.28% · 299.50');
-        expect(appleCells[1].find('[aria-label="Day indicator: Price increased"]').exists()).toBe(true);
-        expect(appleCells[1].find('.recent-price-trend-dot--day').classes()).toContain('recent-price-trend-dot-up');
-        expect(microsoftCells[1].text()).toBe('-');
+        expect(appleCells[2].text()).toContain('306.32');
+        expect(appleCells[2].text()).toContain('03.06. 17:35');
+        expect(appleCells[2].text()).toContain('+2.28% · 299.50');
+        expect(appleCells[2].find('[aria-label="Day indicator: Price increased"]').exists()).toBe(true);
+        expect(appleCells[2].find('.recent-price-trend-dot--day').classes()).toContain('recent-price-trend-dot-up');
+        expect(microsoftCells[2].text()).toBe('-');
     });
 
     it('renders the depots menu section with paginated depot data', async () => {
@@ -1087,22 +1089,13 @@ describe('App', () => {
         }));
     });
 
-    it('shows Trend as the default Analyze page with only the supported submenu items', async () => {
+    it('shows Trend v2 as the default Analyze page with only the supported submenu items', async () => {
         window.history.pushState({}, '', '/admin/menu/analyze');
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
         const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
-        const clipboardWriteText = vi.fn(() => Promise.resolve());
-        Object.defineProperty(navigator, 'clipboard', {
-            configurable: true,
-            value: {
-                writeText: clipboardWriteText,
-            },
-        });
         let currentUiPreferences = {
             depot_price_source: 'latest',
             analyze_trend_row_limit: 200,
-            analyze_trend_excluded_holding_ids: [],
-            analyze_trend_trade_amounts: [7000, 5000, 3000],
             analyze_trend_max_invest_amount: 0,
             analyze_trend_virtual_buy_amount: 7000,
             analyze_trend_streak_buy_thresholds: [-4, -3, -2, -1, 0],
@@ -1360,6 +1353,7 @@ describe('App', () => {
                             name: 'Overlap Streak Fund',
                             currency: 'EUR',
                             latest_price: '99.843970',
+                            position_pieces: '2.00000000',
                             daily_prices: overlappingStreakRecommendationDailyPrices(),
                         },
                         {
@@ -1393,20 +1387,6 @@ describe('App', () => {
                     currentUiPreferences = {
                         ...currentUiPreferences,
                         analyze_trend_row_limit: payload.analyze_trend_row_limit,
-                    };
-                }
-
-                if (Object.hasOwn(payload, 'analyze_trend_excluded_holding_ids')) {
-                    currentUiPreferences = {
-                        ...currentUiPreferences,
-                        analyze_trend_excluded_holding_ids: payload.analyze_trend_excluded_holding_ids,
-                    };
-                }
-
-                if (Object.hasOwn(payload, 'analyze_trend_trade_amounts')) {
-                    currentUiPreferences = {
-                        ...currentUiPreferences,
-                        analyze_trend_trade_amounts: payload.analyze_trend_trade_amounts,
                     };
                 }
 
@@ -1621,16 +1601,23 @@ describe('App', () => {
             'admin',
             'profile',
         ]);
-        expect(wrapper.find('[aria-label="Analyze trend"]').exists()).toBe(true);
-        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
+        expect(wrapper.find('[aria-label="Analyze trend v2"]').exists()).toBe(true);
+        expect(window.location.pathname).toBe('/admin/menu/analyze/trend-v2');
         expect(window.location.search).toBe('?stock=1');
-        expect(wrapper.find('[aria-label="Analyze trend stocks"]').find('.analyze-holding-card--all').exists()).toBe(false);
+        expect(wrapper.find('[aria-label="Analyze trend v2 stocks"]')
+            .find('.analyze-holding-card--all').exists()).toBe(false);
         expect(wrapper.findAll('.v-tab').map((tab) => tab.text())).toEqual([
-            'Trend',
             'Trend v2',
             'Research',
             'Charts',
         ]);
+
+        window.history.pushState({}, '', '/admin/menu/analyze/trend?stock=1');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/trend-v2');
+        expect(wrapper.find('[aria-label="Analyze trend"]').exists()).toBe(false);
 
         const researchTab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Research');
         await researchTab.trigger('click');
@@ -1897,6 +1884,12 @@ describe('App', () => {
         expect(analyzeTrendV2.find('.analyze-holding-card-isin').exists()).toBe(false);
         expect(analyzeTrendV2.find('.analyze-holding-card-price').exists()).toBe(false);
         expect(analyzeTrendV2.find('.analyze-holding-card-pieces').exists()).toBe(false);
+        const trendV2AppleHoldingCard = analyzeTrendV2.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Apple'));
+        const trendV2MicrosoftHoldingCard = analyzeTrendV2.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Microsoft'));
+        expect(trendV2AppleHoldingCard.classes()).toContain('analyze-holding-card--held');
+        expect(trendV2MicrosoftHoldingCard.classes()).not.toContain('analyze-holding-card--held');
         const trendV2TinyCard = analyzeTrendV2.findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Tiny Price Fund'));
         expect(trendV2TinyCard.find('.analyze-holding-card-name--compact').text()).toBe('Tiny Price Fund');
@@ -1971,6 +1964,7 @@ describe('App', () => {
         const trendV2BuyStreakRows = analyzeTrendV2.findAll('.analyze-trend-table tbody tr');
         expect(trendV2BuyStreakRows[0].findAll('td')[3].text()).toBe('SELL+208.48 EUR');
         expect(trendV2BuyStreakRows[0].find('.analyze-trend-rec--sell').exists()).toBe(true);
+        expect(trendV2BuyStreakRows[0].find('.analyze-trend-calculated-sell').exists()).toBe(false);
         expect(trendV2BuyStreakRows[0].find('.analyze-trend-dep-change').classes()).toContain('text-success');
         expect(trendV2BuyStreakRows[1].findAll('td')[3].text()).toBe('-2.03 EUR');
         expect(trendV2BuyStreakRows[2].findAll('td')[3].text()).toBe('-135.18 EUR');
@@ -1990,6 +1984,19 @@ describe('App', () => {
         expect(trendV2BuyStreakRows.every((row) => row.findAll('td')[5].text() === '')).toBe(true);
         expect(analyzeTrendV2.find('[aria-label="Virtual buy rules"]').exists()).toBe(true);
         expect(analyzeTrendV2.find('[aria-label="Virtual sell rules"]').exists()).toBe(true);
+
+        const trendV2OverlapStreakCard = trendV2StockMenu.findAll('.analyze-holding-card')
+            .find((button) => button.text().includes('Overlap Streak Fund'));
+        await trendV2OverlapStreakCard.trigger('click');
+        await flushPromises();
+
+        const trendV2OverlapStreakLatestRow = analyzeTrendV2.findAll('.analyze-trend-table tbody tr')[0];
+        const trendV2CalculatedSell = trendV2OverlapStreakLatestRow.find('.analyze-trend-calculated-sell');
+        expect(trendV2CalculatedSell.exists()).toBe(true);
+        expect(trendV2CalculatedSell.text()).toBe('SELL');
+        expect(trendV2CalculatedSell.attributes('title'))
+            .toBe('Calculated SELL signal for the current holding');
+        expect(trendV2OverlapStreakLatestRow.findAll('td')[4].text()).toContain('VSELL');
 
         const trendV2TrendSignalCard = trendV2StockMenu.findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Trend Signal Fund'));
@@ -2012,469 +2019,6 @@ describe('App', () => {
             .find((button) => button.text().includes('Apple'));
         await trendV2AppleCard.trigger('click');
         await flushPromises();
-
-        const trendTab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Trend');
-        await trendTab.trigger('click');
-        await flushPromises();
-
-        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
-        expect(window.location.search).toBe('?stock=1');
-        expect(fetchMock.mock.calls.some(([path]) => (
-            path === '/admin/watchlist/holdings/charts?page=1&include_charts=1&all_chart_holdings=1&all=1&chart_range=1y'
-        ))).toBe(true);
-        const analyzeTrend = wrapper.find('[aria-label="Analyze trend"]');
-        const trendStockMenu = wrapper.find('[aria-label="Analyze trend stocks"]');
-        expect(analyzeTrend.find('[aria-label="Edit virtual buy invest amount"]').exists()).toBe(true);
-        expect(analyzeTrend.exists()).toBe(true);
-        expect(analyzeTrend.find('.analyze-detail-title').text()).toBe('Trend');
-        expect(analyzeTrend.find('.analyze-selected-stock-name').text()).toBe('Apple');
-        const appleIsinCopyButton = analyzeTrend.find('[aria-label="Copy ISIN US0378331005"]');
-        expect(appleIsinCopyButton.exists()).toBe(true);
-
-        await appleIsinCopyButton.trigger('click');
-        await flushPromises();
-
-        expect(clipboardWriteText).toHaveBeenCalledWith('US0378331005');
-        expect(analyzeTrend.find('[aria-label="Copy ISIN US0378331005"]').classes())
-            .toContain('analyze-selected-stock-isin-copy--copied');
-        expect(trendStockMenu.find('.analyze-holding-card--all').exists()).toBe(false);
-        expect(trendStockMenu.text()).toContain('Apple');
-        expect(trendStockMenu.text()).toContain('306.32 EUR');
-        expect(trendStockMenu.text()).toContain('Pieces: 2');
-        expect(trendStockMenu.text()).toContain('Microsoft');
-        expect(trendStockMenu.text()).toContain('429.95 USD');
-        expect(trendStockMenu.text()).toContain('Pieces: 0');
-        expect(trendStockMenu.text()).toContain('Trend Signal Fund');
-        expect(analyzeTrend.text()).toContain('Rows');
-        expect(analyzeTrend.text()).toContain('2');
-        expect(analyzeTrend.findAll('.analyze-trend-summary-label').map((label) => label.text())).toEqual([
-            'Rows',
-            'Total +/- over all checked stocks',
-            'All amount',
-            'Max invest at same time',
-            'Actual +/- amount',
-        ]);
-        expect(analyzeTrend.find('.analyze-trend-invest-info').text()).toBe('Invest: 7,000 EUR');
-        expect(analyzeTrend.find('.analyze-trend-max-invest-info').text()).toBe('Max invest: 0 EUR');
-        expect(analyzeTrend.find('.analyze-trend-optimization-info').text())
-            .toBe('Optimal profit: 0.00 EUR with 1st 0 EUR | 2nd 0 EUR | 3rd+ 0 EUR');
-        expect(analyzeTrend.find('.analyze-trend-summary-detail').exists()).toBe(false);
-        expect(analyzeTrend.find('.analyze-trend-table').findAll('th').map((heading) => heading.text())).toEqual([
-            'Date',
-            'Price',
-            'Day %',
-            '-Streak',
-            'Rec',
-            'VBUY/VSELL',
-            'DEP',
-            'Evoluation',
-            'Next %',
-            'Wins',
-            'CAP',
-            'Total',
-        ]);
-        expect(analyzeTrend.text()).not.toContain('Trend line');
-        expect(analyzeTrend.text()).not.toContain('Up/Down');
-        expect(analyzeTrend.text()).not.toContain('Volume');
-        expect(analyzeTrend.text()).not.toContain('Reason');
-        expect(analyzeTrend.text()).not.toContain('Day +/-');
-        expect(analyzeTrend.text()).not.toContain('Right?');
-        const firstTrendRowCells = analyzeTrend.find('.analyze-trend-table tbody tr').findAll('td');
-        expect(firstTrendRowCells).toHaveLength(12);
-        expect(firstTrendRowCells[3].text()).toBe('');
-        expect(firstTrendRowCells[4].text()).toBe('');
-        expect(firstTrendRowCells[5].text()).toBe('');
-        expect(firstTrendRowCells[6].text()).toBe('');
-        expect(firstTrendRowCells[7].text()).toBe('');
-        expect(firstTrendRowCells[9].text()).toBe('');
-        expect(firstTrendRowCells[10].text()).toBe('');
-        expect(firstTrendRowCells[11].text()).toBe('');
-        expect(analyzeTrend.text()).toContain('04.06.2026');
-        expect(analyzeTrend.text()).toContain('+1.60%');
-        expect(analyzeTrend.text()).not.toContain('Sell');
-        expect(analyzeTrend.text()).not.toContain('0/0');
-        expect(analyzeTrend.text()).not.toContain('No clear pattern');
-        expect(analyzeTrend.text()).not.toContain('See');
-        expect(analyzeTrend.text()).not.toContain('Wrong');
-
-        const trendSignalCard = trendStockMenu.findAll('.analyze-holding-card')
-            .find((button) => button.text().includes('Trend Signal Fund'));
-        await trendSignalCard.trigger('click');
-        await flushPromises();
-
-        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
-        expect(window.location.search).toBe('?stock=7');
-        expect(trendSignalCard.attributes('aria-pressed')).toBe('true');
-        expect(analyzeTrend.text()).toMatch(/1 \(-0\.\d{2}%\)/);
-        expect(analyzeTrend.text()).not.toContain('Sell');
-        const trendSignalDepotChange = analyzeTrend.find('.analyze-trend-dep-change');
-        expect(trendSignalDepotChange.exists()).toBe(true);
-        expect(trendSignalDepotChange.text()).toContain('USD');
-        expect(trendSignalDepotChange.text()).not.toContain('EUR');
-
-        const buyStreakCard = trendStockMenu.findAll('.analyze-holding-card')
-            .find((button) => button.text().includes('Buy Streak Fund'));
-        await buyStreakCard.trigger('click');
-        await flushPromises();
-
-        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
-        expect(window.location.search).toBe('?stock=8');
-        expect(buyStreakCard.attributes('aria-pressed')).toBe('true');
-        expect(analyzeTrend.find('.analyze-selected-stock-name').text()).toBe('Buy Streak Fund');
-        expect(analyzeTrend.find('[aria-label="Copy ISIN IE00BUY00008"]').exists()).toBe(true);
-        const buyStreakRows = analyzeTrend.findAll('.analyze-trend-table tbody tr');
-        expect(buyStreakRows).toHaveLength(14);
-        expect(buyStreakRows[0].findAll('td')[3].text()).toBe('');
-        expect(buyStreakRows[0].findAll('td')[4].text()).toBe('SELL 1');
-        expect(buyStreakRows[0].findAll('td')[5].text()).toBe('VSELL 1 · 7,000 EUR+217.00 EUR');
-        expect(buyStreakRows[0].findAll('td')[5].find('.analyze-trend-rec--sell').exists()).toBe(true);
-        expect(buyStreakRows[0].findAll('td')[5].find('.analyze-trend-dep-change').text()).toBe('+217.00 EUR');
-        expect(buyStreakRows[0].findAll('td')[6].text()).toBe('SELL+208.48 EUR');
-        expect(buyStreakRows[0].findAll('td')[6].find('.analyze-trend-rec--sell').exists()).toBe(true);
-        expect(buyStreakRows[0].findAll('td')[6].find('.analyze-trend-dep-change').text()).toBe('+208.48 EUR');
-        expect(buyStreakRows[0].findAll('td')[6].find('.analyze-trend-dep-change').classes()).toContain('text-success');
-        expect(buyStreakRows[0].findAll('td')[7].text()).toBe('1: +3.10%');
-        expect(buyStreakRows[0].findAll('td')[9].text()).toBe('217.00 EUR');
-        expect(buyStreakRows[0].findAll('td')[10].text()).toBe('');
-        expect(buyStreakRows[0].findAll('td')[11].text()).toBe('434.00 EUR');
-        const totalTrendSummaryCard = analyzeTrend.findAll('.analyze-trend-summary-item')[1];
-        expect(totalTrendSummaryCard.text()).toContain('994.00 EUR');
-        expect(totalTrendSummaryCard.text()).not.toContain('%');
-        const maxInvestTrendSummaryCard = analyzeTrend.findAll('.analyze-trend-summary-item')[3];
-        expect(maxInvestTrendSummaryCard.text()).toContain('28,000.00 EUR');
-        expect(maxInvestTrendSummaryCard.text()).toContain('12.08.2026');
-        expect(buyStreakCard.text()).toContain('+434.00 EUR');
-        expect(buyStreakCard.text()).toContain('Rank: 2/12');
-        const overlapStreakCard = trendStockMenu.findAll('.analyze-holding-card')
-            .find((button) => button.text().includes('Overlap Streak Fund'));
-        expect(overlapStreakCard.text()).toContain('+560.00 EUR');
-        expect(overlapStreakCard.text()).toContain('Rank: 1/12');
-        const overlapStreakIncludeToggle = trendStockMenu.find('[aria-label="Exclude Overlap Streak Fund from All amount"]');
-        expect(overlapStreakIncludeToggle.exists()).toBe(true);
-
-        await overlapStreakIncludeToggle.trigger('click');
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/ui-preferences', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({
-                analyze_trend_excluded_holding_ids: [9],
-            }),
-        }));
-        expect(analyzeTrend.findAll('.analyze-trend-summary-item')[1].text()).toContain('434.00 EUR');
-        const excludedOverlapStreakCard = trendStockMenu.findAll('.analyze-holding-card')
-            .find((button) => button.text().includes('Overlap Streak Fund'));
-        expect(excludedOverlapStreakCard.text()).not.toContain('+560.00 EUR');
-        expect(excludedOverlapStreakCard.text()).not.toContain('Rank:');
-        const overlapStreakIncludeAgainToggle = trendStockMenu.find('[aria-label="Include Overlap Streak Fund in All amount"]');
-        expect(overlapStreakIncludeAgainToggle.exists()).toBe(true);
-
-        await overlapStreakIncludeAgainToggle.trigger('click');
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/ui-preferences', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({
-                analyze_trend_excluded_holding_ids: [],
-            }),
-        }));
-        expect(analyzeTrend.findAll('.analyze-trend-summary-item')[1].text()).toContain('994.00 EUR');
-        expect(buyStreakRows[1].findAll('td')[3].text()).toBe('');
-        expect(buyStreakRows[1].findAll('td')[4].text()).toBe('');
-        expect(buyStreakRows[1].findAll('td')[5].text()).toBe('+0.00 EUR');
-        expect(buyStreakRows[1].findAll('td')[6].text()).toBe('-2.03 EUR');
-        expect(buyStreakRows[1].findAll('td')[6].find('.analyze-trend-dep-change').classes()).toContain('text-error');
-        expect(buyStreakRows[1].findAll('td')[7].text()).toBe('1: 0.00%');
-        expect(buyStreakRows[1].findAll('td')[10].text()).toContain('0.00 EUR');
-        expect(buyStreakRows[1].findAll('td')[10].find('.analyze-trend-cap-amount').text()).toBe('7,000.00 EUR');
-        const openStreakIncludeToggle = trendStockMenu.find('[aria-label="Exclude Open Streak Fund from All amount"]');
-        expect(openStreakIncludeToggle.exists()).toBe(true);
-
-        await openStreakIncludeToggle.trigger('click');
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/ui-preferences', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({
-                analyze_trend_excluded_holding_ids: [11],
-            }),
-        }));
-        expect(window.location.search).toBe('?stock=8');
-        const buyStreakRowsAfterExclude = analyzeTrend.findAll('.analyze-trend-table tbody tr');
-        expect(buyStreakRowsAfterExclude[1].findAll('td')[6].text()).toBe('-2.03 EUR');
-        const openStreakIncludeAgainToggle = trendStockMenu.find('[aria-label="Include Open Streak Fund in All amount"]');
-        expect(openStreakIncludeAgainToggle.exists()).toBe(true);
-
-        await openStreakIncludeAgainToggle.trigger('click');
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/ui-preferences', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({
-                analyze_trend_excluded_holding_ids: [],
-            }),
-        }));
-        expect(analyzeTrend.findAll('.analyze-trend-table tbody tr')[1].findAll('td')[6].text()).toBe('-2.03 EUR');
-        expect(buyStreakRows[2].findAll('td')[3].text()).toBe('5 (-5.00%)');
-        expect(buyStreakRows[2].findAll('td')[4].text()).toBe('');
-        expect(buyStreakRows[2].findAll('td')[5].text()).toBe('-140.00 EUR');
-        expect(buyStreakRows[2].findAll('td')[6].text()).toBe('-135.18 EUR');
-        expect(buyStreakRows[2].findAll('td')[7].text()).toBe('1: -2.00%');
-        expect(buyStreakRows[2].findAll('td')[10].text()).toContain('-140.00 EUR');
-        expect(buyStreakRows[2].findAll('td')[10].find('.analyze-trend-cap-amount').text()).toBe('7,000.00 EUR');
-        expect(buyStreakRows[3].findAll('td')[3].text()).toBe('4 (-4.00%)');
-        expect(buyStreakRows[3].findAll('td')[4].text()).toBe('');
-        expect(buyStreakRows[3].findAll('td')[5].text()).toBe('-70.00 EUR');
-        expect(buyStreakRows[3].findAll('td')[6].text()).toBe('-67.93 EUR');
-        expect(buyStreakRows[3].findAll('td')[7].text()).toBe('1: -1.00%');
-        expect(buyStreakRows[3].findAll('td')[10].text()).toContain('-70.00 EUR');
-        expect(buyStreakRows[3].findAll('td')[10].find('.analyze-trend-cap-amount').text()).toBe('7,000.00 EUR');
-        expect(buyStreakRows[4].findAll('td')[3].text()).toBe('3 (-3.00%)');
-        expect(buyStreakRows[4].findAll('td')[4].text()).toBe('BUY 1');
-        expect(buyStreakRows[4].findAll('td')[5].text()).toBe('VBUY 1 · 7,000 EUR0.00 EUR');
-        expect(buyStreakRows[4].findAll('td')[5].find('.analyze-trend-rec--buy').exists()).toBe(true);
-        expect(buyStreakRows[4].findAll('td')[6].text()).toBe('BUY');
-        expect(buyStreakRows[4].findAll('td')[6].find('.analyze-trend-rec--buy').exists()).toBe(true);
-        expect(buyStreakRows[4].findAll('td')[7].text()).toBe('');
-        expect(buyStreakRows[4].findAll('td')[10].text()).toContain('0.00 EUR');
-        expect(buyStreakRows[4].findAll('td')[10].find('.analyze-trend-cap-amount').text()).toBe('7,000.00 EUR');
-        expect(buyStreakRows[4].find('.analyze-trend-rec--buy').exists()).toBe(true);
-        expect(buyStreakRows[4].text()).not.toContain('BUY 2');
-        expect(buyStreakRows[5].findAll('td')[3].text()).toBe('2 (-2.00%)');
-        expect(buyStreakRows[5].findAll('td')[4].text()).toBe('');
-        expect(buyStreakRows[6].findAll('td')[3].text()).toBe('1 (-1.00%)');
-        expect(buyStreakRows[6].findAll('td')[4].text()).toBe('');
-        expect(buyStreakRows[7].findAll('td')[4].text()).toBe('SELL 1');
-        expect(buyStreakRows[7].findAll('td')[5].text()).toBe('VSELL 1 · 7,000 EUR+217.00 EUR');
-        expect(buyStreakRows[7].findAll('td')[6].text()).toBe('');
-        expect(buyStreakRows[7].findAll('td')[7].text()).toBe('1: +3.10%');
-        expect(buyStreakRows[7].findAll('td')[9].text()).toBe('217.00 EUR');
-        expect(buyStreakRows[7].findAll('td')[10].text()).toBe('');
-        expect(buyStreakRows[7].findAll('td')[11].text()).toBe('217.00 EUR');
-        expect(buyStreakRows[11].findAll('td')[3].text()).toBe('3 (-3.00%)');
-        expect(buyStreakRows[11].findAll('td')[4].text()).toBe('BUY 1');
-        expect(buyStreakRows[11].text()).not.toContain('BUY 2');
-
-        const selectedOverlapStreakCard = trendStockMenu.findAll('.analyze-holding-card')
-            .find((button) => button.text().includes('Overlap Streak Fund'));
-        await selectedOverlapStreakCard.trigger('click');
-        await flushPromises();
-
-        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
-        expect(window.location.search).toBe('?stock=9');
-        expect(selectedOverlapStreakCard.attributes('aria-pressed')).toBe('true');
-        const overlapRows = analyzeTrend.findAll('.analyze-trend-table tbody tr');
-        expect(overlapRows).toHaveLength(8);
-        expect(overlapRows[1].findAll('td')[4].text()).toBe('BUY 2');
-        expect(overlapRows[1].findAll('td')[5].text()).toContain('VBUY 2');
-        expect(overlapRows[1].findAll('td')[5].text()).toContain('7,000 EUR');
-        expect(overlapRows[1].findAll('td')[5].text()).toContain('-140.00 EUR');
-        expect(overlapRows[1].findAll('td')[6].text()).toBe('');
-        expect(overlapRows[1].findAll('td')[7].text()).toBe('1: -2.00%');
-        expect(overlapRows[1].findAll('td')[10].text()).toContain('-140.00 EUR');
-        expect(overlapRows[1].findAll('td')[10].find('.analyze-trend-cap-amount').text()).toBe('14,000.00 EUR');
-        expect(overlapRows[0].findAll('td')[4].text()).toContain('SELL 1');
-        expect(overlapRows[0].findAll('td')[4].text()).toContain('SELL 2');
-        expect(overlapRows[0].findAll('td')[5].text()).toContain('VSELL 1');
-        expect(overlapRows[0].findAll('td')[5].text()).toContain('VSELL 2');
-        expect(overlapRows[0].findAll('td')[5].text()).toContain('+560.00 EUR');
-        expect(overlapRows[0].findAll('td')[6].text()).toBe('');
-        expect(overlapRows[0].findAll('td')[9].text()).toBe('560.00 EUR');
-        expect(overlapRows[0].findAll('td')[10].text()).toBe('');
-        expect(overlapRows[0].findAll('td')[11].text()).toBe('560.00 EUR');
-
-        const tripleStreakCard = trendStockMenu.findAll('.analyze-holding-card')
-            .find((button) => button.text().includes('Triple Streak Fund'));
-        await tripleStreakCard.trigger('click');
-        await flushPromises();
-
-        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
-        expect(window.location.search).toBe('?stock=12');
-        expect(tripleStreakCard.attributes('aria-pressed')).toBe('true');
-        const tripleRows = analyzeTrend.findAll('.analyze-trend-table tbody tr');
-        expect(tripleRows[0].findAll('td')[4].text()).toBe('BUY 3');
-        expect(tripleRows[0].findAll('td')[5].text()).toContain('VBUY 3');
-        expect(tripleRows[0].findAll('td')[5].text()).toContain('7,000 EUR');
-        expect(tripleRows[0].findAll('td')[10].find('.analyze-trend-cap-amount').text()).toBe('21,000.00 EUR');
-
-        const hiddenPreAnalysisCard = trendStockMenu.findAll('.analyze-holding-card')
-            .find((button) => button.text().includes('Hidden Pre Analysis Fund'));
-        await hiddenPreAnalysisCard.trigger('click');
-        await flushPromises();
-
-        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
-        expect(window.location.search).toBe('?stock=10');
-        expect(hiddenPreAnalysisCard.attributes('aria-pressed')).toBe('true');
-        const hiddenPreAnalysisRows = analyzeTrend.findAll('.analyze-trend-table tbody tr');
-        expect(hiddenPreAnalysisRows).toHaveLength(200);
-        const hiddenPreAnalysisFirstRowCells = hiddenPreAnalysisRows[199].findAll('td');
-        expect(hiddenPreAnalysisFirstRowCells[4].text()).toBe('');
-        expect(hiddenPreAnalysisFirstRowCells[5].text()).toBe('');
-        expect(hiddenPreAnalysisFirstRowCells[6].text()).toBe('');
-        expect(hiddenPreAnalysisFirstRowCells[7].text()).toBe('');
-        expect(hiddenPreAnalysisFirstRowCells[9].text()).toBe('');
-
-        await analyzeTrend.find('.analyze-trend-summary-item--button').trigger('click');
-        await flushPromises();
-
-        const rowsDialog = document.body.querySelector('.analyze-trend-rows-dialog');
-        expect(rowsDialog).not.toBeNull();
-        expect(rowsDialog.textContent).toContain('Edit rows');
-        const rowsInput = rowsDialog.querySelector('input[type="number"]');
-        expect(rowsInput).not.toBeNull();
-
-        rowsInput.value = '50';
-        rowsInput.dispatchEvent(new Event('input', { bubbles: true }));
-        const saveRowsButton = Array.from(rowsDialog.querySelectorAll('button'))
-            .find((button) => button.textContent.trim() === 'Save');
-        expect(saveRowsButton).not.toBeNull();
-        saveRowsButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/ui-preferences', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({
-                analyze_trend_row_limit: 50,
-            }),
-        }));
-        expect(analyzeTrend.findAll('.analyze-trend-table tbody tr')).toHaveLength(50);
-
-        await analyzeTrend.find('.analyze-trend-invest-info').trigger('click');
-        await flushPromises();
-
-        const investDialog = document.body.querySelector('.analyze-trend-invest-dialog');
-        expect(investDialog).not.toBeNull();
-        expect(investDialog.textContent).toContain('Edit invest');
-        const investInputs = investDialog.querySelectorAll('input[type="number"]');
-        expect(investInputs).toHaveLength(1);
-
-        investInputs[0].value = '8000';
-        investInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
-        const saveInvestButton = Array.from(investDialog.querySelectorAll('button'))
-            .find((button) => button.textContent.trim() === 'Save');
-        expect(saveInvestButton).not.toBeNull();
-        saveInvestButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/ui-preferences', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({
-                analyze_trend_virtual_buy_amount: 8000,
-            }),
-        }));
-        expect(analyzeTrend.find('.analyze-trend-invest-info').text()).toContain('Invest: 8,000 EUR');
-
-        await analyzeTrend.find('.analyze-trend-max-invest-info').trigger('click');
-        await flushPromises();
-
-        const maxInvestDialog = document.body.querySelector('.analyze-trend-max-invest-dialog');
-        expect(maxInvestDialog).not.toBeNull();
-        expect(maxInvestDialog.textContent).toContain('Edit max invest');
-        const maxInvestInput = maxInvestDialog.querySelector('input[type="number"]');
-        expect(maxInvestInput).not.toBeNull();
-
-        maxInvestInput.value = '25000';
-        maxInvestInput.dispatchEvent(new Event('input', { bubbles: true }));
-        const saveMaxInvestButton = Array.from(maxInvestDialog.querySelectorAll('button'))
-            .find((button) => button.textContent.trim() === 'Save');
-        expect(saveMaxInvestButton).not.toBeNull();
-        saveMaxInvestButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/ui-preferences', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({
-                analyze_trend_max_invest_amount: 25000,
-            }),
-        }));
-        expect(analyzeTrend.find('.analyze-trend-max-invest-info').text()).toContain('Max invest: 25,000 EUR');
-        expect(analyzeTrend.find('.analyze-trend-optimization-info').text()).toContain('Optimal profit:');
-        expect(analyzeTrend.find('.analyze-trend-optimization-info').text()).toContain('1st');
-        expect(analyzeTrend.find('.analyze-trend-optimization-info').text()).toContain('2nd');
-        expect(analyzeTrend.find('.analyze-trend-optimization-info').text()).toContain('3rd+');
-
-        await analyzeTrend.find('[aria-label="Edit virtual trade rules"]').trigger('click');
-        await flushPromises();
-
-        const streakRulesDialog = document.body.querySelector('.analyze-trend-streak-rules-dialog');
-        expect(streakRulesDialog).not.toBeNull();
-        expect(streakRulesDialog.textContent).toContain('Edit virtual trade rules');
-        expect(streakRulesDialog.querySelectorAll('input[type="number"]')).toHaveLength(6);
-        const initialBuyRuleCheckboxes = streakRulesDialog.querySelectorAll('input[type="checkbox"]');
-        expect(initialBuyRuleCheckboxes).toHaveLength(5);
-        initialBuyRuleCheckboxes[0].click();
-        initialBuyRuleCheckboxes[1].click();
-        await flushPromises();
-
-        streakRulesDialog.querySelector('[aria-label="Remove BUY streak rule 4"]')
-            .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        await flushPromises();
-
-        expect(streakRulesDialog.querySelectorAll('input[type="number"]')).toHaveLength(5);
-
-        const addBuyRuleButton = Array.from(streakRulesDialog.querySelectorAll('button'))
-            .find((button) => button.textContent.includes('Add BUY rule'));
-        expect(addBuyRuleButton).not.toBeNull();
-        addBuyRuleButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        await flushPromises();
-
-        const streakRuleInputs = streakRulesDialog.querySelectorAll('input[type="number"]');
-        expect(streakRuleInputs).toHaveLength(6);
-        streakRuleInputs[2].value = '-2.5';
-        streakRuleInputs[2].dispatchEvent(new Event('input', { bubbles: true }));
-        streakRuleInputs[3].value = '-1.5';
-        streakRuleInputs[3].dispatchEvent(new Event('input', { bubbles: true }));
-        streakRuleInputs[4].value = '-1';
-        streakRuleInputs[4].dispatchEvent(new Event('input', { bubbles: true }));
-        streakRuleInputs[5].value = '3.5';
-        streakRuleInputs[5].dispatchEvent(new Event('input', { bubbles: true }));
-
-        const saveStreakRulesButton = Array.from(streakRulesDialog.querySelectorAll('button'))
-            .find((button) => button.textContent.trim() === 'Save');
-        expect(saveStreakRulesButton).not.toBeNull();
-        expect(saveStreakRulesButton.disabled).toBe(false);
-        saveStreakRulesButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/ui-preferences', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({
-                analyze_trend_streak_buy_thresholds: [null, null, -2.5, -1.5, -1],
-                analyze_trend_streak_sell_threshold: 3.5,
-            }),
-        }));
-        expect(analyzeTrend.find('[aria-label="Virtual buy rules"]').text())
-            .toBe('BUY: streak 1: no BUY, streak 2: no BUY, streak 3 ≤ -2.5%, streak 4 ≤ -1.5%, streak 5+ ≤ -1%');
-        expect(analyzeTrend.find('[aria-label="Virtual sell rules"]').text())
-            .toBe('SELL: virtual position ≥ +3.5%');
-
-        await buyStreakCard.trigger('click');
-        await flushPromises();
-
-        const updatedBuyStreakRows = analyzeTrend.findAll('.analyze-trend-table tbody tr');
-        expect(updatedBuyStreakRows[13].findAll('td')[4].text()).toBe('');
-        expect(updatedBuyStreakRows[12].findAll('td')[4].text()).toBe('');
-        expect(updatedBuyStreakRows[11].findAll('td')[4].text()).toBe('BUY 1');
-
-        const microsoftTrendCard = trendStockMenu.findAll('.analyze-holding-card')
-            .find((button) => button.text().includes('Microsoft'));
-        await microsoftTrendCard.trigger('click');
-        await flushPromises();
-
-        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
-        expect(window.location.search).toBe('?stock=2');
-        expect(microsoftTrendCard.attributes('aria-pressed')).toBe('true');
-        expect(analyzeTrend.text()).toContain('No daily prices stored for this stock.');
-
-        const appleTrendCard = trendStockMenu.findAll('.analyze-holding-card')
-            .find((button) => button.text().includes('Apple'));
-        await appleTrendCard.trigger('click');
-        await flushPromises();
-
-        expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
-        expect(window.location.search).toBe('?stock=1');
-        expect(appleTrendCard.attributes('aria-pressed')).toBe('true');
-        expect(analyzeTrend.text()).toContain('04.06.2026');
 
         wrapper.vm.navigateAnalyzeSubsection('intraday');
         await flushPromises();
@@ -4612,6 +4156,7 @@ describe('App', () => {
                             venue: null,
                             price_type: 'intraday',
                             price_spread_pct: null,
+                            daily_prices: streakRecommendationDailyPrices().slice(0, 4),
                             recent_prices: [],
                             validation_errors: [],
                         },
@@ -5385,14 +4930,15 @@ describe('App', () => {
         const dashboardHeaders = wrapper.find('table').findAll('thead th').map((header) => header.text());
         expect(dashboardHeaders[0]).toBe('Symbol');
         expect(dashboardHeaders[1]).toBe('Name');
-        expect(dashboardHeaders[2]).toBe('Latest price');
-        expect(dashboardHeaders[3]).toContain('Start price');
-        expect(dashboardHeaders[3]).toContain('05.06.2026');
-        expect(dashboardHeaders[4]).toContain('Last day');
-        expect(dashboardHeaders[4]).toContain('04.06.2026');
-        expect(dashboardHeaders[4]).not.toContain('Yesterday');
-        expect(dashboardHeaders[5]).toBe('Source time');
-        expect(dashboardHeaders[6]).toBe('Actions');
+        expect(dashboardHeaders[2]).toBe('BUY/SELL');
+        expect(dashboardHeaders[3]).toBe('Latest price');
+        expect(dashboardHeaders[4]).toContain('Start price');
+        expect(dashboardHeaders[4]).toContain('05.06.2026');
+        expect(dashboardHeaders[5]).toContain('Last day');
+        expect(dashboardHeaders[5]).toContain('04.06.2026');
+        expect(dashboardHeaders[5]).not.toContain('Yesterday');
+        expect(dashboardHeaders[6]).toBe('Source time');
+        expect(dashboardHeaders[7]).toBe('Actions');
         expect(wrapper.find('thead th.watch-list-content-cell').exists()).toBe(true);
         expect(wrapper.find('thead th.watch-list-source-time-cell').exists()).toBe(true);
         expect(wrapper.find('thead th.watch-list-actions-cell').exists()).toBe(true);
@@ -5447,24 +4993,30 @@ describe('App', () => {
         expect(wrapper.text()).toContain('100');
 
         const holdingRows = wrapper.findAll('tbody .stock-holding-row');
-        const upPriceValue = holdingRows[0].findAll('td')[2].find('.latest-price-value');
-        const downPriceValue = holdingRows[1].findAll('td')[2].find('.latest-price-value');
-        const intradayPriceValue = holdingRows[2].findAll('td')[2].find('.latest-price-value');
+        const upPriceValue = holdingRows[0].findAll('td')[3].find('.latest-price-value');
+        const downPriceValue = holdingRows[1].findAll('td')[3].find('.latest-price-value');
+        const intradayPriceValue = holdingRows[2].findAll('td')[3].find('.latest-price-value');
         expect(holdingRows[0].findAll('td')[0].text()).toContain('Exchange: NASDAQ');
         expect(holdingRows[0].findAll('td')[0].text()).toContain('Pieces: 0');
         expect(holdingRows[0].findAll('td')[1].text()).not.toContain('Exchange: NASDAQ');
         expect(holdingRows[0].findAll('td')[1].text()).not.toContain('Pieces: 0');
         expect(holdingRows[0].findAll('td')[1].text()).toContain('US0378331005 · WKN: 865985');
-        expect(holdingRows[0].findAll('td')[5].text()).toContain('03.06.2026, 17:35');
-        expect(holdingRows[0].findAll('td')[5].find('.dashboard-trend-badge').exists()).toBe(false);
-        expect(holdingRows[1].findAll('td')[5].find('.dashboard-trend-badge').exists()).toBe(false);
-        expect(holdingRows[5].findAll('td')[5].find('.dashboard-trend-badge').text()).toBe('SELL');
-        expect(holdingRows[5].findAll('td')[5].find('.dashboard-trend-badge').classes()).toContain('dashboard-trend-badge--sell');
-        expect(holdingRows[0].findAll('td')[5].text()).not.toContain('Tradegate Exchange');
-        expect(holdingRows[0].findAll('td')[5].classes()).toContain('watch-list-source-time-cell');
-        expect(holdingRows[0].findAll('td')[6].classes()).toContain('watch-list-actions-cell');
-        expect(holdingRows[0].findAll('td')[2].classes()).not.toContain('bg-success');
-        expect(holdingRows[1].findAll('td')[2].classes()).not.toContain('bg-error');
+        expect(holdingRows[0].findAll('td')[6].text()).toContain('03.06.2026, 17:35');
+        expect(holdingRows[0].findAll('td')[2].find('.stock-trend-signal').exists()).toBe(false);
+        expect(holdingRows[1].findAll('td')[2].find('.stock-trend-signal').exists()).toBe(false);
+        expect(holdingRows[2].findAll('td')[2].get('.stock-trend-signal').text()).toBe('BUY');
+        expect(holdingRows[2].findAll('td')[2].get('.stock-trend-signal').classes()).toEqual(
+            expect.arrayContaining(['text-error', 'font-weight-bold']),
+        );
+        expect(holdingRows[5].findAll('td')[2].get('.stock-trend-signal').text()).toBe('SELL');
+        expect(holdingRows[5].findAll('td')[2].get('.stock-trend-signal').classes()).toEqual(
+            expect.arrayContaining(['text-error', 'font-weight-bold']),
+        );
+        expect(holdingRows[0].findAll('td')[6].text()).not.toContain('Tradegate Exchange');
+        expect(holdingRows[0].findAll('td')[6].classes()).toContain('watch-list-source-time-cell');
+        expect(holdingRows[0].findAll('td')[7].classes()).toContain('watch-list-actions-cell');
+        expect(holdingRows[0].findAll('td')[3].classes()).not.toContain('bg-success');
+        expect(holdingRows[1].findAll('td')[3].classes()).not.toContain('bg-error');
         expect(upPriceValue.classes()).toContain('bg-success');
         expect(upPriceValue.classes()).toContain('text-white');
         expect(upPriceValue.get('.watch-list-live-badge').text()).toBe('LIVE');
@@ -5668,7 +5220,7 @@ describe('App', () => {
         expect(stocksEditButton).toBeUndefined();
         expect(stocksDeleteButton.exists()).toBe(true);
         expect(stocksDeleteButton.attributes('disabled')).toBeDefined();
-        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings?page=1&all=1', expect.any(Object));
+        expect(fetchMock).toHaveBeenCalledWith(stocksWatchlistHoldingsPath, expect.any(Object));
         expect(fetchMock).toHaveBeenCalledWith('/admin/v2/stocks/eodhd-sync', expect.any(Object));
         expect(wrapper.get('.watch-list-section').text()).toContain('Apple');
         expect(wrapper.get('.watch-list-section').text()).toContain('Core technology holding');
@@ -5745,7 +5297,7 @@ describe('App', () => {
         expect(appleStockRow.classes()).toContain('stock-holding-row--selected');
         expect(stocksDeleteButton.attributes('disabled')).toBeUndefined();
         expect(fetchMock).toHaveBeenCalledWith(
-            '/admin/watchlist/holdings/charts?page=1&include_charts=1&all=1&chart_stock_id=1&chart_range=today',
+            '/admin/watchlist/holdings/charts?page=1&include_charts=1&all_chart_holdings=1&all=1&chart_stock_id=1&chart_range=today',
             expect.any(Object),
         );
 
@@ -5808,7 +5360,7 @@ describe('App', () => {
         await flushPromises();
 
         expect(fetchMock).toHaveBeenCalledWith(
-            '/admin/watchlist/holdings/charts?page=1&include_charts=1&all=1&chart_stock_id=1&chart_range=1w',
+            '/admin/watchlist/holdings/charts?page=1&include_charts=1&all_chart_holdings=1&all=1&chart_stock_id=1&chart_range=1w',
             expect.any(Object),
         );
         expect(wrapper.get('.stock-price-range-tabs .v-tab--selected').text()).toBe('1 week');
@@ -6466,8 +6018,27 @@ describe('App', () => {
             if (path === dashboardWatchlistHoldingsPath) {
                 return Promise.resolve(jsonResponse({
                     depot,
-                    holdings: [],
-                    meta: emptyPagination,
+                    holdings: [
+                        {
+                            id: 1,
+                            symbol: 'BUY',
+                            name: 'Buy Signal Fund',
+                            daily_prices: streakRecommendationDailyPrices().slice(0, 4),
+                        },
+                        {
+                            id: 2,
+                            symbol: 'SELL',
+                            name: 'Sell Signal Fund',
+                            daily_prices: streakRecommendationDailyPrices(),
+                        },
+                        {
+                            id: 3,
+                            symbol: 'NONE',
+                            name: 'No Signal Fund',
+                            daily_prices: [],
+                        },
+                    ],
+                    meta: { ...emptyPagination, total: 3, from: 1, to: 3 },
                     price_refresh_settings: priceRefreshSettings(),
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
@@ -6532,10 +6103,19 @@ describe('App', () => {
         expect(wrapper.findAll('.dashboard-performance-sum-card')[4].text()).toContain('Year');
         expect(wrapper.findAll('.dashboard-performance-sum-card')[4].text()).toContain('+3,240.80 EUR');
         expect(wrapper.findAll('.dashboard-performance-sum-card')[4].text()).toContain('+10.80%');
+        const dashboardSignalCards = wrapper.findAll('.dashboard-stock-signal-card');
+        expect(dashboardSignalCards).toHaveLength(2);
+        expect(dashboardSignalCards[0].text()).toContain('Buy Signal Fund');
+        expect(dashboardSignalCards[0].text()).toContain('BUY');
+        expect(dashboardSignalCards[0].classes()).toContain('dashboard-stock-signal-card--buy');
+        expect(dashboardSignalCards[1].text()).toContain('Sell Signal Fund');
+        expect(dashboardSignalCards[1].text()).toContain('SELL');
+        expect(dashboardSignalCards[1].classes()).toContain('dashboard-stock-signal-card--sell');
+        expect(wrapper.get('[aria-label="Stocks with Trend v2 signals"]').text()).not.toContain('No Signal Fund');
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/version')).toHaveLength(1);
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/performance')).toHaveLength(1);
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);
-        expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(0);
+        expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(1);
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(1);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
@@ -6631,7 +6211,7 @@ describe('App', () => {
             await flushPromises();
 
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);
-            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(0);
+            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(1);
 
@@ -6641,7 +6221,7 @@ describe('App', () => {
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/version')).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/performance')).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);
-            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(0);
+            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(1);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
@@ -7969,7 +7549,9 @@ describe('App', () => {
             }),
         }));
         expect(wrapper.get('[aria-label="Cloudways check"]').text()).toContain('Cloudways check');
-        expect(wrapper.get('[aria-label="Cloudways check"]').text()).toContain('business and market-data tables');
+        expect(wrapper.get('[aria-label="Cloudways check"]').text()).toContain(
+            'business, market-data, and analysis settings tables',
+        );
         expect(wrapper.get('[aria-label="Cloudways comparison result"]').text()).toContain('1 identical');
         expect(wrapper.get('[aria-label="Cloudways comparison result"]').text()).toContain('2 different');
         expect(wrapper.get('[aria-label="Cloudways comparison result"]').text()).toContain('3 / 3 table(s) checked');
@@ -8004,6 +7586,17 @@ describe('App', () => {
         expect(wrapper.get('[aria-label="Cloudways sync result"]').text()).not.toContain('Not imported');
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/cloudways/check')).toHaveLength(1);
         expect(wrapper.find('[aria-label="Cloudways comparison result"]').exists()).toBe(false);
+
+        fetchMock.mockImplementationOnce(() => Promise.resolve(ndjsonResponse([{
+            type: 'error',
+            message: 'Cloudways comparison failed safely.',
+        }])));
+        await cloudwaysCheckButton.trigger('click');
+        await flushPromises();
+
+        expect(wrapper.get('[aria-label="Cloudways check"]').text()).toContain(
+            'Cloudways comparison failed safely.',
+        );
 
         const indicesTab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Indizes');
         await indicesTab.trigger('click');
@@ -9738,8 +9331,16 @@ describe('App', () => {
             if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
-                    holdings: [],
-                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null },
+                    holdings: [
+                        {
+                            id: 1,
+                            symbol: 'AAPL',
+                            name: 'Apple Inc.',
+                            currency: 'USD',
+                            daily_prices: streakRecommendationDailyPrices(),
+                        },
+                    ],
+                    meta: { current_page: 1, last_page: 1, per_page: 10, total: 1, from: 1, to: 1 },
                     price_refresh_settings: priceRefreshSettings(),
                 }));
             }
@@ -9824,6 +9425,7 @@ describe('App', () => {
         expect(wrapper.findAll('.depot-performance-card .index-price-chart-x-label')).toHaveLength(13);
         expect(wrapper.text()).toContain('Symbol');
         expect(wrapper.text()).toContain('Name');
+        expect(wrapper.text()).toContain('BUY/SELL');
         expect(wrapper.text()).toContain('Amount');
         expect(wrapper.text()).toContain('Value');
         expect(wrapper.text()).toContain('Latest price');
@@ -9863,6 +9465,12 @@ describe('App', () => {
         expect(wrapper.text()).toContain('↑');
         expect(wrapper.text()).toContain('+9.43%');
         expect(wrapper.text()).toContain('+33.00');
+        const desktopDepotStockTable = wrapper.get('.desktop-depot-stocks-table');
+        const desktopDepotHeaders = desktopDepotStockTable.findAll('thead th').map((header) => header.text());
+        expect(desktopDepotHeaders.slice(0, 4)).toEqual(['Symbol', 'Name', 'BUY/SELL', 'Amount']);
+        const depotTrendSignal = desktopDepotStockTable.get('tbody .stock-trend-signal');
+        expect(depotTrendSignal.text()).toBe('SELL');
+        expect(depotTrendSignal.classes()).toEqual(expect.arrayContaining(['text-error', 'font-weight-bold']));
         const desktopDepotStockSubtitle = wrapper.get('.desktop-depot-stocks-table .stock-subtitle');
         expect(desktopDepotStockSubtitle.text()).toBe('Technology holding');
         expect(desktopDepotStockSubtitle.classes()).toContain('text-info');
@@ -9895,6 +9503,7 @@ describe('App', () => {
         expect(compactDepotHeaders).not.toContain('Symbol');
         expect(compactDepotHeaders).not.toContain('1.1/Buy');
         expect(compactDepotHeaders).toContain('Name');
+        expect(compactDepotHeaders).toContain('BUY/SELL');
         expect(compactDepotHeaders).toContain('Amount');
         expect(compactDepotHeaders).toContain('Value');
         expect(compactDepotHeaders).toContain('Latest price');
@@ -10407,7 +10016,7 @@ describe('App', () => {
             await vi.advanceTimersByTimeAsync(5000);
             await flushPromises();
 
-            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(0);
+            expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(1);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);

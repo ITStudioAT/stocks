@@ -29,6 +29,8 @@ return [
         'ssl_ca' => env('CLOUDWAYS_SSL_CA'),
         'ssl_verify_server_cert' => env('CLOUDWAYS_SSL_VERIFY_SERVER_CERT', true),
         'sync_tables' => [
+            'analyze_research_settings',
+            'app_configs',
             'depot_transactions',
             'depots',
             'eodhd_exchanges',
@@ -44,6 +46,15 @@ return [
             'stock_price_quotes',
             'stock_prices',
             'stock_realtime_prices',
+        ],
+        'sync_table_scopes' => [
+            'analyze_research_settings' => [
+                'excluded_columns' => ['id'],
+            ],
+            'app_configs' => [
+                'excluded_columns' => ['id'],
+                'key_prefixes' => ['ui.preferences.user.'],
+            ],
         ],
         'deployment' => [
             'base_url' => env('CLOUDWAYS_API_BASE_URL', 'https://api.cloudways.com/api/v2'),

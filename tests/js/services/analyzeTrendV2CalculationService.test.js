@@ -7,6 +7,7 @@ import {
     calculateAnalyzeTrendV2SafeInvestmentAmount,
     calculateAnalyzeTrendV2SafeInvestmentTotal,
     calculateAnalyzeTrendV2Total,
+    shouldShowAnalyzeTrendSellRecommendation,
 } from '../../../resources/js/services/analyzeTrendV2CalculationService';
 
 const buyThresholds = [-4, -3, -2, -1, 0];
@@ -25,6 +26,25 @@ function virtualTradePrices() {
 }
 
 describe('analyze Trend V2 calculation service', () => {
+    it('shows a calculated sell recommendation only for a real held position', () => {
+        const sellRow = {
+            virtualTradeActions: [{ type: 'sell', label: 'VSELL', amount: 7000 }],
+            depot: { actions: [] },
+        };
+
+        expect(shouldShowAnalyzeTrendSellRecommendation({ position_pieces: '2.00000000' }, sellRow)).toBe(true);
+        expect(shouldShowAnalyzeTrendSellRecommendation({ position_pieces: '0.00000000' }, sellRow)).toBe(false);
+        expect(shouldShowAnalyzeTrendSellRecommendation({ position_pieces: null }, sellRow)).toBe(false);
+        expect(shouldShowAnalyzeTrendSellRecommendation({ position_pieces: '2.00000000' }, {
+            ...sellRow,
+            depot: { actions: [{ type: 'sell', label: 'SELL' }] },
+        })).toBe(false);
+        expect(shouldShowAnalyzeTrendSellRecommendation({ position_pieces: '2.00000000' }, {
+            ...sellRow,
+            virtualTradeActions: [{ type: 'buy', label: 'VBUY', amount: 7000 }],
+        })).toBe(false);
+    });
+
     it('creates a virtual buy and sell with the configured investment amount', () => {
         const rows = calculateAnalyzeTrendV2Rows(virtualTradePrices(), {
             rowLimit: 200,

@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\AppConfig;
 use Illuminate\Database\Connection;
+use Illuminate\Database\Query\Builder;
 use Illuminate\Support\Collection;
 use Illuminate\Support\ConfigurationUrlParser;
 use Illuminate\Support\Facades\DB;
@@ -196,7 +197,7 @@ class CloudwaysDatabaseSync
                             ]);
                         }
 
-                        DB::connection($targetConnectionName)->table($table)->delete();
+                        $this->deleteTargetTableRows($targetConnectionName, $table);
                     }
 
                     foreach ($syncTables as $index => $table) {
@@ -293,7 +294,13 @@ class CloudwaysDatabaseSync
             );
         }
 
-        $resolvedSslCa = realpath(trim($sslCa));
+        $sslCaPath = trim($sslCa);
+
+        if (! $this->pathIsAbsolute($sslCaPath)) {
+            $sslCaPath = base_path($sslCaPath);
+        }
+
+        $resolvedSslCa = realpath($sslCaPath);
 
         if ($resolvedSslCa === false || ! is_file($resolvedSslCa) || ! is_readable($resolvedSslCa)) {
             throw new RuntimeException('The configured Cloudways TLS CA certificate is not a readable file.');
@@ -642,7 +649,10 @@ class CloudwaysDatabaseSync
         $targetColumnDefinitions = Schema::connection($targetConnectionName)->getColumns($table);
         $sourceColumns = array_column($sourceColumnDefinitions, 'name');
         $targetColumns = array_column($targetColumnDefinitions, 'name');
-        $matchingColumns = array_values(array_intersect($sourceColumns, $targetColumns));
+        $matchingColumns = collect(array_intersect($sourceColumns, $targetColumns))
+            ->diff($this->excludedColumns($table))
+            ->values()
+            ->all();
         $cloudwaysOnlyColumns = array_values(array_diff($sourceColumns, $targetColumns));
         $localOnlyColumns = array_values(array_diff($targetColumns, $sourceColumns));
 
@@ -732,7 +742,7 @@ class CloudwaysDatabaseSync
     ): array {
         $hash = hash_init('sha256');
         $rows = 0;
-        $query = DB::connection($connectionName)->table($table)->select($columns);
+        $query = $this->scopedTableQuery($connectionName, $table)->select($columns);
         $jsonColumnLookup = array_fill_keys($jsonColumns, true);
 
         foreach ($this->comparisonOrderColumns($connectionName, $table, $columns) as $column) {
@@ -942,7 +952,7 @@ class CloudwaysDatabaseSync
             ];
         }
 
-        foreach (DB::connection($sourceConnectionName)->table($table)->select($columns)->cursor() as $row) {
+        foreach ($this->scopedTableQuery($sourceConnectionName, $table)->select($columns)->cursor() as $row) {
             $batch[] = (array) $row;
 
             if (count($batch) < self::InsertChunkSize) {
@@ -1023,6 +1033,22 @@ class CloudwaysDatabaseSync
                 continue;
             }
 
+            $missingLocalUserIds = $this->missingLocalAnalysisSettingUserIds(
+                $sourceConnectionName,
+                $targetConnectionName,
+                $table,
+            );
+
+            if ($missingLocalUserIds !== []) {
+                $skippedTables[] = $this->skippedTable(
+                    table: $table,
+                    reason: 'missing_local_users',
+                    message: "Skipped {$table}: local user(s) ".implode(', ', $missingLocalUserIds).' do not exist.',
+                );
+
+                continue;
+            }
+
             $comparison = $this->compareTable(
                 $sourceConnectionName,
                 $targetConnectionName,
@@ -1057,8 +1083,138 @@ class CloudwaysDatabaseSync
     {
         $sourceColumns = Schema::connection($sourceConnectionName)->getColumnListing($table);
         $targetColumns = Schema::connection($targetConnectionName)->getColumnListing($table);
+        $excludedColumns = $this->excludedColumns($table);
 
-        return array_values(array_intersect($sourceColumns, $targetColumns));
+        return collect(array_intersect($sourceColumns, $targetColumns))
+            ->diff($excludedColumns)
+            ->values()
+            ->all();
+    }
+
+    private function deleteTargetTableRows(string $targetConnectionName, string $table): void
+    {
+        $this->scopedTableQuery($targetConnectionName, $table)->delete();
+    }
+
+    private function scopedTableQuery(string $connectionName, string $table): Builder
+    {
+        $query = DB::connection($connectionName)->table($table);
+        $keyPrefixes = $this->keyPrefixes($table);
+
+        if ($keyPrefixes === [] || ! Schema::connection($connectionName)->hasColumn($table, 'key')) {
+            return $query;
+        }
+
+        return $query->where(function (Builder $query) use ($keyPrefixes): void {
+            foreach ($keyPrefixes as $keyPrefix) {
+                $query->orWhere('key', 'like', $keyPrefix.'%');
+            }
+        });
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function keyPrefixes(string $table): array
+    {
+        return collect(config("services.cloudways.sync_table_scopes.{$table}.key_prefixes", []))
+            ->filter(fn (mixed $prefix): bool => is_string($prefix) && $prefix !== '')
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function excludedColumns(string $table): array
+    {
+        return collect(config("services.cloudways.sync_table_scopes.{$table}.excluded_columns", []))
+            ->filter(fn (mixed $column): bool => is_string($column) && $column !== '')
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function missingLocalAnalysisSettingUserIds(
+        string $sourceConnectionName,
+        string $targetConnectionName,
+        string $table,
+    ): array {
+        $sourceUserIds = match ($table) {
+            'analyze_research_settings' => $this->researchSettingUserIds($sourceConnectionName),
+            'app_configs' => $this->analysisPreferenceUserIds($sourceConnectionName),
+            default => [],
+        };
+
+        if ($sourceUserIds === []) {
+            return [];
+        }
+
+        if (! Schema::connection($targetConnectionName)->hasTable('users')) {
+            return $sourceUserIds;
+        }
+
+        $localUserIds = DB::connection($targetConnectionName)
+            ->table('users')
+            ->whereIn('id', $sourceUserIds)
+            ->pluck('id')
+            ->map(fn (mixed $userId): int => (int) $userId)
+            ->all();
+
+        return collect($sourceUserIds)
+            ->diff($localUserIds)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function researchSettingUserIds(string $connectionName): array
+    {
+        if (! Schema::connection($connectionName)->hasColumn('analyze_research_settings', 'user_id')) {
+            return [];
+        }
+
+        return DB::connection($connectionName)
+            ->table('analyze_research_settings')
+            ->distinct()
+            ->pluck('user_id')
+            ->map(fn (mixed $userId): int => (int) $userId)
+            ->sort()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function analysisPreferenceUserIds(string $connectionName): array
+    {
+        return $this->scopedTableQuery($connectionName, 'app_configs')
+            ->pluck('key')
+            ->map(function (mixed $key): ?int {
+                foreach ($this->keyPrefixes('app_configs') as $keyPrefix) {
+                    if (! is_string($key) || ! str_starts_with($key, $keyPrefix)) {
+                        continue;
+                    }
+
+                    $userId = substr($key, strlen($keyPrefix));
+
+                    return ctype_digit($userId) && (int) $userId > 0 ? (int) $userId : null;
+                }
+
+                return null;
+            })
+            ->filter(fn (?int $userId): bool => $userId !== null)
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
     }
 
     /**

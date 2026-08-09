@@ -95,6 +95,17 @@ export function calculateAnalyzeTrendV2Rows(
     return rows.reverse();
 }
 
+export function shouldShowAnalyzeTrendSellRecommendation(holding, row) {
+    const positionPieces = Number(holding?.position_pieces);
+    const virtualTradeActions = Array.isArray(row?.virtualTradeActions) ? row.virtualTradeActions : [];
+    const depotActions = Array.isArray(row?.depot?.actions) ? row.depot.actions : [];
+
+    return Number.isFinite(positionPieces)
+        && positionPieces > 0
+        && virtualTradeActions.some((action) => action.type === 'sell')
+        && !depotActions.some((action) => action.type === 'sell');
+}
+
 export function calculateAnalyzeTrendV2Total(rows) {
     if (!Array.isArray(rows) || rows.length === 0) {
         return null;

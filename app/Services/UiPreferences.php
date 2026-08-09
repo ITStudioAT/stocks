@@ -38,8 +38,6 @@ class UiPreferences
      * @return array{
      *     depot_price_source: string,
      *     analyze_trend_row_limit: int,
-     *     analyze_trend_excluded_holding_ids: array<int, int>,
-     *     analyze_trend_trade_amounts: array<int, int>,
      *     analyze_trend_max_invest_amount: int,
      *     analyze_trend_virtual_buy_amount: int,
      *     analyze_trend_streak_buy_thresholds: array<int, float|int|null>,
@@ -61,8 +59,6 @@ class UiPreferences
         return [
             ...$settings,
             'analyze_trend_row_limit' => $this->userAnalyzeTrendRowLimit($user),
-            'analyze_trend_excluded_holding_ids' => $this->userAnalyzeTrendExcludedHoldingIds($user),
-            'analyze_trend_trade_amounts' => $this->userAnalyzeTrendTradeAmounts($user),
             'analyze_trend_max_invest_amount' => $this->userAnalyzeTrendMaxInvestAmount($user),
             'analyze_trend_virtual_buy_amount' => $this->userAnalyzeTrendVirtualBuyAmount($user),
             'analyze_trend_streak_buy_thresholds' => $this->userAnalyzeTrendStreakBuyThresholds($user),
@@ -74,8 +70,6 @@ class UiPreferences
      * @return array{
      *     depot_price_source: string,
      *     analyze_trend_row_limit: int,
-     *     analyze_trend_excluded_holding_ids: array<int, int>,
-     *     analyze_trend_trade_amounts: array<int, int>,
      *     analyze_trend_max_invest_amount: int,
      *     analyze_trend_virtual_buy_amount: int,
      *     analyze_trend_streak_buy_thresholds: array<int, float|int|null>,
@@ -91,8 +85,6 @@ class UiPreferences
      * @return array{
      *     depot_price_source: string,
      *     analyze_trend_row_limit: int,
-     *     analyze_trend_excluded_holding_ids: array<int, int>,
-     *     analyze_trend_trade_amounts: array<int, int>,
      *     analyze_trend_max_invest_amount: int,
      *     analyze_trend_virtual_buy_amount: int,
      *     analyze_trend_streak_buy_thresholds: array<int, float|int|null>,
@@ -157,8 +149,6 @@ class UiPreferences
      * @return array{
      *     depot_price_source: string,
      *     analyze_trend_row_limit: int,
-     *     analyze_trend_excluded_holding_ids: array<int, int>,
-     *     analyze_trend_trade_amounts: array<int, int>,
      *     analyze_trend_max_invest_amount: int,
      *     analyze_trend_virtual_buy_amount: int,
      *     analyze_trend_streak_buy_thresholds: array<int, float|int|null>,
@@ -179,56 +169,9 @@ class UiPreferences
     }
 
     /**
-     * @param  array<int, mixed>  $holdingIds
      * @return array{
      *     depot_price_source: string,
      *     analyze_trend_row_limit: int,
-     *     analyze_trend_excluded_holding_ids: array<int, int>,
-     *     analyze_trend_trade_amounts: array<int, int>,
-     *     analyze_trend_max_invest_amount: int,
-     *     analyze_trend_virtual_buy_amount: int,
-     *     analyze_trend_streak_buy_thresholds: array<int, float|int|null>,
-     *     analyze_trend_streak_sell_threshold: float|int,
-     * }
-     */
-    public function updateAnalyzeTrendExcludedHoldingIds(User $user, array $holdingIds): array
-    {
-        $settings = $this->userSettings($user);
-        $settings['analyze_trend_excluded_holding_ids'] = $this->normalizeAnalyzeTrendExcludedHoldingIds($holdingIds);
-
-        AppConfig::query()->updateOrCreate(
-            ['key' => $this->userConfigKey($user)],
-            ['value' => $settings],
-        );
-
-        return $this->payload($user);
-    }
-
-    /**
-     * @param  array<int, mixed>  $tradeAmounts
-     * @return array{
-     *     depot_price_source: string,
-     *     analyze_trend_row_limit: int,
-     *     analyze_trend_excluded_holding_ids: array<int, int>,
-     *     analyze_trend_trade_amounts: array<int, int>,
-     *     analyze_trend_max_invest_amount: int,
-     *     analyze_trend_virtual_buy_amount: int,
-     *     analyze_trend_streak_buy_thresholds: array<int, float|int|null>,
-     *     analyze_trend_streak_sell_threshold: float|int,
-     * }
-     */
-    public function updateAnalyzeTrendTradeAmounts(User $user, array $tradeAmounts): array
-    {
-        return $this->updateAnalyzeTrendInvestmentSettings($user, $tradeAmounts, null, null);
-    }
-
-    /**
-     * @param  array<int, mixed>|null  $tradeAmounts
-     * @return array{
-     *     depot_price_source: string,
-     *     analyze_trend_row_limit: int,
-     *     analyze_trend_excluded_holding_ids: array<int, int>,
-     *     analyze_trend_trade_amounts: array<int, int>,
      *     analyze_trend_max_invest_amount: int,
      *     analyze_trend_virtual_buy_amount: int,
      *     analyze_trend_streak_buy_thresholds: array<int, float|int|null>,
@@ -237,15 +180,10 @@ class UiPreferences
      */
     public function updateAnalyzeTrendInvestmentSettings(
         User $user,
-        ?array $tradeAmounts,
         ?int $maxInvestAmount,
         ?int $virtualBuyAmount,
     ): array {
         $settings = $this->userSettings($user);
-
-        if ($tradeAmounts !== null) {
-            $settings['analyze_trend_trade_amounts'] = $this->normalizeAnalyzeTrendTradeAmounts($tradeAmounts);
-        }
 
         if ($maxInvestAmount !== null) {
             $settings['analyze_trend_max_invest_amount'] = $this->normalizeAnalyzeTrendMaxInvestAmount($maxInvestAmount);
@@ -270,8 +208,6 @@ class UiPreferences
      * @return array{
      *     depot_price_source: string,
      *     analyze_trend_row_limit: int,
-     *     analyze_trend_excluded_holding_ids: array<int, int>,
-     *     analyze_trend_trade_amounts: array<int, int>,
      *     analyze_trend_max_invest_amount: int,
      *     analyze_trend_virtual_buy_amount: int,
      *     analyze_trend_streak_buy_thresholds: array<int, float|int|null>,
@@ -308,8 +244,6 @@ class UiPreferences
     /**
      * @return array{
      *     analyze_trend_row_limit: int,
-     *     analyze_trend_excluded_holding_ids: array<int, int>,
-     *     analyze_trend_trade_amounts: array<int, int>,
      *     analyze_trend_max_invest_amount: int,
      *     analyze_trend_virtual_buy_amount: int,
      *     analyze_trend_streak_buy_thresholds: array<int, float|int|null>,
@@ -338,30 +272,6 @@ class UiPreferences
         }
 
         return $this->userSettings($user)['analyze_trend_row_limit'];
-    }
-
-    /**
-     * @return array<int, int>
-     */
-    private function userAnalyzeTrendExcludedHoldingIds(?User $user): array
-    {
-        if (! $user) {
-            return [];
-        }
-
-        return $this->userSettings($user)['analyze_trend_excluded_holding_ids'];
-    }
-
-    /**
-     * @return array<int, int>
-     */
-    private function userAnalyzeTrendTradeAmounts(?User $user): array
-    {
-        if (! $user) {
-            return $this->defaultAnalyzeTrendTradeAmounts();
-        }
-
-        return $this->userSettings($user)['analyze_trend_trade_amounts'];
     }
 
     private function userAnalyzeTrendMaxInvestAmount(?User $user): int
@@ -406,8 +316,6 @@ class UiPreferences
     /**
      * @return array{
      *     analyze_trend_row_limit: int,
-     *     analyze_trend_excluded_holding_ids: array<int, int>,
-     *     analyze_trend_trade_amounts: array<int, int>,
      *     analyze_trend_max_invest_amount: int,
      *     analyze_trend_virtual_buy_amount: int,
      *     analyze_trend_streak_buy_thresholds: array<int, float|int|null>,
@@ -418,8 +326,6 @@ class UiPreferences
     {
         return [
             'analyze_trend_row_limit' => self::DefaultAnalyzeTrendRowLimit,
-            'analyze_trend_excluded_holding_ids' => [],
-            'analyze_trend_trade_amounts' => $this->defaultAnalyzeTrendTradeAmounts(),
             'analyze_trend_max_invest_amount' => self::DefaultAnalyzeTrendMaxInvestAmount,
             'analyze_trend_virtual_buy_amount' => self::DefaultAnalyzeTrendVirtualBuyAmount,
             'analyze_trend_streak_buy_thresholds' => self::DefaultAnalyzeTrendStreakBuyThresholds,
@@ -431,8 +337,6 @@ class UiPreferences
      * @param  array<string, mixed>|null  $value
      * @return array{
      *     analyze_trend_row_limit: int,
-     *     analyze_trend_excluded_holding_ids: array<int, int>,
-     *     analyze_trend_trade_amounts: array<int, int>,
      *     analyze_trend_max_invest_amount: int,
      *     analyze_trend_virtual_buy_amount: int,
      *     analyze_trend_streak_buy_thresholds: array<int, float|int|null>,
@@ -443,12 +347,6 @@ class UiPreferences
     {
         return [
             'analyze_trend_row_limit' => $this->normalizeAnalyzeTrendRowLimit($value['analyze_trend_row_limit'] ?? null),
-            'analyze_trend_excluded_holding_ids' => $this->normalizeAnalyzeTrendExcludedHoldingIds(
-                $value['analyze_trend_excluded_holding_ids'] ?? null,
-            ),
-            'analyze_trend_trade_amounts' => $this->normalizeAnalyzeTrendTradeAmounts(
-                $value['analyze_trend_trade_amounts'] ?? null,
-            ),
             'analyze_trend_max_invest_amount' => $this->normalizeAnalyzeTrendMaxInvestAmount(
                 $value['analyze_trend_max_invest_amount'] ?? null,
             ),
@@ -471,23 +369,6 @@ class UiPreferences
         }
 
         return min(max((int) $rowLimit, 1), self::MaxAnalyzeTrendRowLimit);
-    }
-
-    /**
-     * @return array<int, int>
-     */
-    private function normalizeAnalyzeTrendExcludedHoldingIds(mixed $holdingIds): array
-    {
-        if (! is_array($holdingIds)) {
-            return [];
-        }
-
-        return collect($holdingIds)
-            ->map(fn (mixed $holdingId): int => (int) $holdingId)
-            ->filter(fn (int $holdingId): bool => $holdingId > 0)
-            ->unique()
-            ->values()
-            ->all();
     }
 
     private function normalizeAnalyzeTrendMaxInvestAmount(mixed $maxInvestAmount): int
@@ -545,30 +426,6 @@ class UiPreferences
         return floor($normalizedPercentage) === $normalizedPercentage
             ? (int) $normalizedPercentage
             : $normalizedPercentage;
-    }
-
-    /**
-     * @return array<int, int>
-     */
-    private function normalizeAnalyzeTrendTradeAmounts(mixed $tradeAmounts): array
-    {
-        if (! is_array($tradeAmounts) || count($tradeAmounts) !== 3) {
-            return $this->defaultAnalyzeTrendTradeAmounts();
-        }
-
-        return collect($tradeAmounts)
-            ->map(fn (mixed $tradeAmount): int => (int) $tradeAmount)
-            ->map(fn (int $tradeAmount): int => min(max($tradeAmount, 0), 1000000))
-            ->values()
-            ->all();
-    }
-
-    /**
-     * @return array<int, int>
-     */
-    private function defaultAnalyzeTrendTradeAmounts(): array
-    {
-        return [7000, 5000, 3000];
     }
 
     private function userConfigKey(User $user): string

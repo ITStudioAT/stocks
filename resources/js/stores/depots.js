@@ -57,8 +57,6 @@ export const useDepotStore = defineStore('depots', {
         uiPreferences: {
             depot_price_source: 'latest',
             analyze_trend_row_limit: 200,
-            analyze_trend_excluded_holding_ids: [],
-            analyze_trend_trade_amounts: [7000, 5000, 3000],
             analyze_trend_max_invest_amount: 0,
             analyze_trend_virtual_buy_amount: 7000,
             analyze_trend_streak_buy_thresholds: [-4, -3, -2, -1, 0],

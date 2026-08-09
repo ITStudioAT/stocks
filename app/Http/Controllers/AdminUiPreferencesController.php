@@ -22,10 +22,6 @@ class AdminUiPreferencesController extends Controller
         $validated = $request->validate([
             'depot_price_source' => ['sometimes', 'string', Rule::in(UiPreferences::DepotPriceSources)],
             'analyze_trend_row_limit' => ['sometimes', 'integer', 'min:1', 'max:2000'],
-            'analyze_trend_excluded_holding_ids' => ['sometimes', 'array'],
-            'analyze_trend_excluded_holding_ids.*' => ['integer', 'min:1'],
-            'analyze_trend_trade_amounts' => ['sometimes', 'array', 'size:3'],
-            'analyze_trend_trade_amounts.*' => ['integer', 'min:0', 'max:1000000'],
             'analyze_trend_max_invest_amount' => ['sometimes', 'integer', 'min:0', 'max:1000000'],
             'analyze_trend_virtual_buy_amount' => ['sometimes', 'integer', 'min:0', 'max:1000000'],
             'analyze_trend_streak_buy_thresholds' => ['sometimes', 'array', 'min:1', 'max:20'],
@@ -36,8 +32,6 @@ class AdminUiPreferencesController extends Controller
         if (
             ! array_key_exists('depot_price_source', $validated)
             && ! array_key_exists('analyze_trend_row_limit', $validated)
-            && ! array_key_exists('analyze_trend_excluded_holding_ids', $validated)
-            && ! array_key_exists('analyze_trend_trade_amounts', $validated)
             && ! array_key_exists('analyze_trend_max_invest_amount', $validated)
             && ! array_key_exists('analyze_trend_virtual_buy_amount', $validated)
             && ! array_key_exists('analyze_trend_streak_buy_thresholds', $validated)
@@ -66,15 +60,13 @@ class AdminUiPreferencesController extends Controller
         }
 
         if (
-            array_key_exists('analyze_trend_trade_amounts', $validated)
-            || array_key_exists('analyze_trend_max_invest_amount', $validated)
+            array_key_exists('analyze_trend_max_invest_amount', $validated)
             || array_key_exists('analyze_trend_virtual_buy_amount', $validated)
         ) {
             return response()->json([
                 'message' => 'UI preferences updated.',
                 'ui_preferences' => $uiPreferences->updateAnalyzeTrendInvestmentSettings(
                     $request->user(),
-                    $validated['analyze_trend_trade_amounts'] ?? null,
                     $validated['analyze_trend_max_invest_amount'] ?? null,
                     $validated['analyze_trend_virtual_buy_amount'] ?? null,
                 ),
@@ -95,12 +87,8 @@ class AdminUiPreferencesController extends Controller
             ]);
         }
 
-        return response()->json([
-            'message' => 'UI preferences updated.',
-            'ui_preferences' => $uiPreferences->updateAnalyzeTrendExcludedHoldingIds(
-                $request->user(),
-                $validated['analyze_trend_excluded_holding_ids'],
-            ),
+        throw ValidationException::withMessages([
+            'ui_preferences' => 'Provide a UI preference to update.',
         ]);
     }
 }

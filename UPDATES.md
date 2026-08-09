@@ -1,3 +1,20 @@
+## 1.0.0 x
+
+### AI-ANALYSIS !!!
+
+- Show this under Stocks and under Depot and on the Dashboard
+
+## 0.8.9
+
+### BUY/SELL-Signals
+
+- Show this under Stocks and under Depot and on the Dashboard
+
+### Analyse
+
+- Signal, if a holded stock, should be sold
+- Research/Settings: Count of rows !!!
+
 ## 0.8.8
 
 ### System

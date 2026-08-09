@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\AnalyzeResearchSetting;
 use App\Models\AppConfig;
 use App\Models\User;
 use App\Services\CloudwaysDatabaseSync;
@@ -48,18 +49,148 @@ class AdminCloudwaysSyncTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_cloudways_sync_configuration_includes_v2_data_and_excludes_operational_tables(): void
+    public function test_cloudways_sync_configuration_includes_analysis_data_and_scoped_preferences(): void
     {
         $tables = config('services.cloudways.sync_tables');
 
+        $this->assertContains('analyze_research_settings', $tables);
+        $this->assertContains('app_configs', $tables);
         $this->assertContains('index_watch_item_realtime_prices', $tables);
         $this->assertContains('stock_realtime_prices', $tables);
+        $this->assertSame(
+            ['ui.preferences.user.'],
+            config('services.cloudways.sync_table_scopes.app_configs.key_prefixes'),
+        );
         $this->assertNotContains('index_eodhd_sync_runs', $tables);
         $this->assertNotContains('stock_eodhd_sync_runs', $tables);
-        $this->assertNotContains('app_configs', $tables);
         $this->assertNotContains('jobs', $tables);
         $this->assertNotContains('migrations', $tables);
         $this->assertNotContains('sessions', $tables);
+    }
+
+    public function test_cloudways_check_and_sync_include_analysis_settings_without_replacing_operational_configs(): void
+    {
+        $this->configureCloudwaysTestingConnection();
+        $this->createCloudAnalysisSettingsTables();
+        Config::set('services.cloudways.sync_tables', ['analyze_research_settings', 'app_configs']);
+
+        $admin = $this->superAdminUser();
+        $preferenceKey = "ui.preferences.user.{$admin->id}";
+
+        AnalyzeResearchSetting::factory()->for($admin)->create([
+            'settings' => ['rows' => 100, 'buy_step' => 0.1],
+        ]);
+        AppConfig::query()->create([
+            'key' => $preferenceKey,
+            'value' => ['analyze_trend_row_limit' => 100],
+        ]);
+        AppConfig::query()->create([
+            'key' => 'price_refresh.schedule',
+            'value' => ['interval_minutes' => 15],
+        ]);
+
+        DB::connection('cloudways_testing')->table('analyze_research_settings')->insert([
+            'id' => 900,
+            'user_id' => $admin->id,
+            'settings' => json_encode(['rows' => 500, 'buy_step' => 0.25], JSON_THROW_ON_ERROR),
+            'created_at' => '2026-08-10 08:00:00',
+            'updated_at' => '2026-08-10 08:00:00',
+        ]);
+        DB::connection('cloudways_testing')->table('app_configs')->insert([
+            [
+                'id' => 901,
+                'key' => $preferenceKey,
+                'value' => json_encode([
+                    'analyze_trend_row_limit' => 500,
+                    'analyze_trend_virtual_buy_amount' => 8000,
+                ], JSON_THROW_ON_ERROR),
+                'created_at' => '2026-08-10 08:00:00',
+                'updated_at' => '2026-08-10 08:00:00',
+            ],
+            [
+                'id' => 902,
+                'key' => 'price_refresh.schedule',
+                'value' => json_encode(['interval_minutes' => 99], JSON_THROW_ON_ERROR),
+                'created_at' => '2026-08-10 08:00:00',
+                'updated_at' => '2026-08-10 08:00:00',
+            ],
+        ]);
+
+        $checkResponse = $this->actingAs($admin)
+            ->postJson('/admin/cloudways/check')
+            ->assertOk();
+
+        $comparison = collect($checkResponse->json('comparison.tables'))->keyBy('name');
+        $this->assertSame('different', $comparison->get('analyze_research_settings')['status']);
+        $this->assertSame('different', $comparison->get('app_configs')['status']);
+        $this->assertSame(1, $comparison->get('app_configs')['cloudways_rows']);
+        $this->assertSame(1, $comparison->get('app_configs')['local_rows']);
+
+        $this->postJson('/admin/cloudways/sync', [
+            'tables' => ['analyze_research_settings', 'app_configs'],
+        ])
+            ->assertOk()
+            ->assertJsonPath('sync.synced_tables', 2)
+            ->assertJsonPath('sync.rows', 2);
+
+        $this->assertSame(
+            ['rows' => 500, 'buy_step' => 0.25],
+            AnalyzeResearchSetting::query()->whereBelongsTo($admin)->firstOrFail()->settings,
+        );
+        $this->assertSame(
+            [
+                'analyze_trend_row_limit' => 500,
+                'analyze_trend_virtual_buy_amount' => 8000,
+            ],
+            AppConfig::query()->where('key', $preferenceKey)->firstOrFail()->value,
+        );
+        $this->assertSame(
+            ['interval_minutes' => 15],
+            AppConfig::query()->where('key', 'price_refresh.schedule')->firstOrFail()->value,
+        );
+    }
+
+    public function test_cloudways_sync_skips_analysis_settings_for_missing_local_users(): void
+    {
+        $this->configureCloudwaysTestingConnection();
+        $this->createCloudAnalysisSettingsTables();
+        Config::set('services.cloudways.sync_tables', ['analyze_research_settings', 'app_configs']);
+
+        $admin = $this->superAdminUser();
+        $preferenceKey = "ui.preferences.user.{$admin->id}";
+        AppConfig::query()->create([
+            'key' => $preferenceKey,
+            'value' => ['analyze_trend_row_limit' => 200],
+        ]);
+
+        DB::connection('cloudways_testing')->table('analyze_research_settings')->insert([
+            'id' => 900,
+            'user_id' => 999999,
+            'settings' => json_encode(['rows' => 500], JSON_THROW_ON_ERROR),
+            'created_at' => '2026-08-10 08:00:00',
+            'updated_at' => '2026-08-10 08:00:00',
+        ]);
+        DB::connection('cloudways_testing')->table('app_configs')->insert([
+            'id' => 901,
+            'key' => 'ui.preferences.user.999999',
+            'value' => json_encode(['analyze_trend_row_limit' => 500], JSON_THROW_ON_ERROR),
+            'created_at' => '2026-08-10 08:00:00',
+            'updated_at' => '2026-08-10 08:00:00',
+        ]);
+
+        $this->actingAs($admin)
+            ->postJson('/admin/cloudways/sync', [
+                'tables' => ['analyze_research_settings', 'app_configs'],
+            ])
+            ->assertOk()
+            ->assertJsonPath('sync.synced_tables', 0)
+            ->assertJsonPath('sync.skipped_table_details.0.reason', 'missing_local_users')
+            ->assertJsonPath('sync.skipped_table_details.1.reason', 'missing_local_users');
+
+        $this->assertSame(
+            ['analyze_trend_row_limit' => 200],
+            AppConfig::query()->where('key', $preferenceKey)->firstOrFail()->value,
+        );
     }
 
     public function test_cloudways_execution_status_is_stored_and_remembered(): void
@@ -967,6 +1098,36 @@ class AdminCloudwaysSyncTest extends TestCase
         DB::purge('cloudways');
     }
 
+    public function test_cloudways_dynamic_connection_resolves_a_relative_tls_ca_from_the_application_root(): void
+    {
+        $this->cloudwaysSslCaPath = storage_path('framework/testing-cloudways-ca-'.Str::uuid().'.pem');
+        file_put_contents($this->cloudwaysSslCaPath, 'test certificate authority');
+
+        $this->configureDynamicCloudwaysCredentials();
+        Config::set(
+            'services.cloudways.ssl_ca',
+            Str::after($this->cloudwaysSslCaPath, base_path().DIRECTORY_SEPARATOR),
+        );
+        Config::set('services.cloudways.ssl_verify_server_cert', true);
+
+        $sourceConnectionName = new ReflectionMethod(CloudwaysDatabaseSync::class, 'sourceConnectionName');
+        $sourceConnectionName->setAccessible(true);
+        $originalWorkingDirectory = getcwd() ?: base_path();
+
+        try {
+            chdir(public_path());
+
+            $this->assertSame('cloudways', $sourceConnectionName->invoke(app(CloudwaysDatabaseSync::class)));
+            $this->assertSame(
+                realpath($this->cloudwaysSslCaPath),
+                config('database.connections.cloudways.options')[Mysql::ATTR_SSL_CA],
+            );
+        } finally {
+            chdir($originalWorkingDirectory);
+            DB::purge('cloudways');
+        }
+    }
+
     public function test_cloudways_dynamic_connection_fails_closed_without_a_tls_ca(): void
     {
         $this->configureDynamicCloudwaysCredentials();
@@ -1112,6 +1273,23 @@ class AdminCloudwaysSyncTest extends TestCase
         }
 
         Schema::connection($connection)->create('cloud_items', $createTable);
+    }
+
+    private function createCloudAnalysisSettingsTables(): void
+    {
+        Schema::connection('cloudways_testing')->create('analyze_research_settings', function (Blueprint $table): void {
+            $table->id();
+            $table->unsignedBigInteger('user_id')->unique();
+            $table->json('settings');
+            $table->timestamps();
+        });
+
+        Schema::connection('cloudways_testing')->create('app_configs', function (Blueprint $table): void {
+            $table->id();
+            $table->string('key')->unique();
+            $table->json('value');
+            $table->timestamps();
+        });
     }
 
     private function createCloudItemsTableWithRequiredLocalColumn(): void

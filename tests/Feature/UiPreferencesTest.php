@@ -21,12 +21,12 @@ class UiPreferencesTest extends TestCase
             ->assertOk()
             ->assertJsonPath('ui_preferences.depot_price_source', 'latest')
             ->assertJsonPath('ui_preferences.analyze_trend_row_limit', 200)
-            ->assertJsonPath('ui_preferences.analyze_trend_excluded_holding_ids', [])
-            ->assertJsonPath('ui_preferences.analyze_trend_trade_amounts', [7000, 5000, 3000])
             ->assertJsonPath('ui_preferences.analyze_trend_max_invest_amount', 0)
             ->assertJsonPath('ui_preferences.analyze_trend_virtual_buy_amount', 7000)
             ->assertJsonPath('ui_preferences.analyze_trend_streak_buy_thresholds', [-4, -3, -2, -1, 0])
-            ->assertJsonPath('ui_preferences.analyze_trend_streak_sell_threshold', 3);
+            ->assertJsonPath('ui_preferences.analyze_trend_streak_sell_threshold', 3)
+            ->assertJsonMissingPath('ui_preferences.analyze_trend_excluded_holding_ids')
+            ->assertJsonMissingPath('ui_preferences.analyze_trend_trade_amounts');
 
         $this->actingAs($admin)
             ->patchJson('/admin/ui-preferences', [
@@ -59,29 +59,15 @@ class UiPreferencesTest extends TestCase
 
         $this->actingAs($admin)
             ->patchJson('/admin/ui-preferences', [
-                'analyze_trend_excluded_holding_ids' => [11, 8, 8],
-            ])
-            ->assertOk()
-            ->assertJsonPath('ui_preferences.analyze_trend_excluded_holding_ids', [11, 8]);
-
-        $config->refresh();
-
-        $this->assertSame([11, 8], $config->value['analyze_trend_excluded_holding_ids']);
-
-        $this->actingAs($admin)
-            ->patchJson('/admin/ui-preferences', [
-                'analyze_trend_trade_amounts' => [8000, 0, 0],
                 'analyze_trend_max_invest_amount' => 25000,
                 'analyze_trend_virtual_buy_amount' => 8000,
             ])
             ->assertOk()
-            ->assertJsonPath('ui_preferences.analyze_trend_trade_amounts', [8000, 0, 0])
             ->assertJsonPath('ui_preferences.analyze_trend_max_invest_amount', 25000)
             ->assertJsonPath('ui_preferences.analyze_trend_virtual_buy_amount', 8000);
 
         $config->refresh();
 
-        $this->assertSame([8000, 0, 0], $config->value['analyze_trend_trade_amounts']);
         $this->assertSame(25000, $config->value['analyze_trend_max_invest_amount']);
         $this->assertSame(8000, $config->value['analyze_trend_virtual_buy_amount']);
 
@@ -103,8 +89,6 @@ class UiPreferencesTest extends TestCase
             ->getJson('/admin/ui-preferences')
             ->assertOk()
             ->assertJsonPath('ui_preferences.analyze_trend_row_limit', 200)
-            ->assertJsonPath('ui_preferences.analyze_trend_excluded_holding_ids', [])
-            ->assertJsonPath('ui_preferences.analyze_trend_trade_amounts', [7000, 5000, 3000])
             ->assertJsonPath('ui_preferences.analyze_trend_max_invest_amount', 0)
             ->assertJsonPath('ui_preferences.analyze_trend_virtual_buy_amount', 7000)
             ->assertJsonPath('ui_preferences.analyze_trend_streak_buy_thresholds', [-4, -3, -2, -1, 0])
@@ -144,6 +128,19 @@ class UiPreferencesTest extends TestCase
             ])
             ->assertUnprocessable()
             ->assertJsonValidationErrors('analyze_trend_virtual_buy_amount');
+    }
+
+    public function test_admin_cannot_update_removed_analyze_trend_preferences(): void
+    {
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->patchJson('/admin/ui-preferences', [
+                'analyze_trend_excluded_holding_ids' => [11],
+                'analyze_trend_trade_amounts' => [8000, 0, 0],
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('ui_preferences');
     }
 
     public function test_admin_must_provide_a_valid_depot_price_source(): void

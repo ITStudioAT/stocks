@@ -15,6 +15,7 @@ import {
     calculateAnalyzeTrendV2SafeInvestmentAmount,
     calculateAnalyzeTrendV2SafeInvestmentTotal,
     calculateAnalyzeTrendV2Total,
+    shouldShowAnalyzeTrendSellRecommendation,
 } from './services/analyzeTrendV2CalculationService';
 import {
     calculateAnalyzeResearchCombinationCount,
@@ -201,7 +202,7 @@ const infoTablesLoading = ref(false);
 const infoTablesError = ref('');
 const infoTableSearch = ref('');
 const activeInfoSubsection = ref('eodhd');
-const activeAnalyzeSubsection = ref('trend');
+const activeAnalyzeSubsection = ref('trend-v2');
 const activeAnalyzeResearchSubsection = ref('settings');
 const activeDataSubsection = ref('indices');
 const activeDataType = ref('live-data');
@@ -214,13 +215,10 @@ const stockTradingTimeHealthError = ref('');
 const selectedAnalyzeHistoryRange = ref('1y');
 const selectedAnalyzeHistoryWindowOffset = ref(0);
 const selectedAnalyzeHoldingId = ref(null);
-const excludedAnalyzeTrendHoldingIds = ref([]);
 const analyzeTrendRowLimit = ref(defaultAnalyzeTrendRowLimit);
 const analyzeTrendRowLimitEditValue = ref(String(defaultAnalyzeTrendRowLimit));
 const isAnalyzeTrendRowLimitDialogOpen = ref(false);
 const isAnalyzeTrendRowLimitSaving = ref(false);
-const selectedAnalyzeCopiedIsin = ref(null);
-const analyzeIsinCopiedTimer = ref(null);
 const analyzeTrendMaxInvestAmount = ref(defaultAnalyzeTrendMaxInvestAmount);
 const analyzeTrendMaxInvestAmountEditValue = ref(String(defaultAnalyzeTrendMaxInvestAmount));
 const isAnalyzeTrendMaxInvestAmountDialogOpen = ref(false);
@@ -480,15 +478,21 @@ const isCompactDepotStocksTable = computed(() => isHandsetLandscape.value);
 const isCompactCashLedgerTable = computed(() => isHandsetLandscape.value);
 const watchListTableColumnCount = computed(() => {
     const columnCount = isHandsetLandscape.value
-        ? 5
-        : (isCompactWatchListTable.value ? 5 : 7);
+        ? 6
+        : (isCompactWatchListTable.value ? 6 : 8);
 
     return columnCount;
 });
 const dashboardTrendRecommendations = computed(() => new Map(holdings.value.map((holding) => [
     holding.id,
-    latestAnalyzeTrendMarker(holding, analyzeTrendRowLimit.value, analyzeTrendVirtualBuyAmount.value),
+    latestAnalyzeTrendV2Marker(holding),
 ])));
+const dashboardTrendSignalCards = computed(() => holdings.value
+    .map((holding) => ({
+        holding,
+        recommendation: dashboardTrendRecommendations.value.get(holding.id) ?? null,
+    }))
+    .filter(({ recommendation }) => ['buy', 'sell'].includes(recommendation?.key)));
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
 const selectedTestStock = computed(() => testOptions.value.stocks
     .find((stock) => stock.id === selectedTestStockId.value) ?? null);
@@ -1014,23 +1018,6 @@ const selectedAnalyzeSparkline = computed(() => buildAnalyzeSparkline(
 const selectedAnalyzeRangeCaptureLabel = computed(() => (
     analyzeHistoryRangeItems.find((item) => item.key === selectedAnalyzeHistoryRange.value)?.captureLabel ?? ''
 ));
-const includedAnalyzeTrendHoldings = computed(() => holdings.value
-    .filter((holding) => isAnalyzeTrendHoldingIncluded(holding.id)));
-const analyzeTrendIncludedRows = computed(() => buildAnalyzeTrendHoldingRows(
-    includedAnalyzeTrendHoldings.value,
-    analyzeTrendRowLimit.value,
-    analyzeTrendVirtualBuyAmount.value,
-));
-const analyzeTrendHoldingStats = computed(() => buildAnalyzeTrendHoldingStats(analyzeTrendIncludedRows.value));
-const analyzeTrendPortfolioCapitalByDate = computed(() => buildAnalyzeTrendPortfolioCapitalByDate(
-    analyzeTrendIncludedRows.value,
-));
-const selectedAnalyzeTrendRows = computed(() => buildAnalyzeTrendRows(
-    selectedAnalyzeHolding.value,
-    analyzeTrendPortfolioCapitalByDate.value,
-    analyzeTrendRowLimit.value,
-    analyzeTrendVirtualBuyAmount.value,
-));
 const selectedAnalyzeTrendV2Rows = computed(() => buildAnalyzeTrendV2Rows(
     selectedAnalyzeHolding.value,
     analyzeTrendRowLimit.value,
@@ -1136,26 +1123,9 @@ const selectedAnalyzeTrendV2DepotTotal = computed(() => analyzeTrendDepotTotal(
     selectedAnalyzeHolding.value,
     selectedAnalyzeTrendV2Rows.value[0]?.price ?? null,
 ));
-const selectedAnalyzeTrendDisplayRows = computed(() => (
-    activeAnalyzeSubsection.value === 'trend-v2'
-        ? selectedAnalyzeTrendV2Rows.value
-        : selectedAnalyzeTrendRows.value
-));
-const selectedAnalyzeTrendPortfolioSummary = computed(() => buildAnalyzeTrendPortfolioSummary(
-    analyzeTrendIncludedRows.value,
-    selectedAnalyzeTrendRows.value[0]?.date ?? null,
-    analyzeTrendPortfolioCapitalByDate.value,
-));
-const analyzeTrendInvestmentOptimization = computed(() => buildAnalyzeTrendInvestmentOptimization(
-    analyzeTrendIncludedRows.value,
-    analyzeTrendMaxInvestAmount.value,
-));
 const analyzeTrendMaxInvestAmountInfo = computed(() => analyzeTrendMaxInvestAmountLabel(analyzeTrendMaxInvestAmount.value));
 const analyzeTrendVirtualBuyAmountInfo = computed(() => analyzeTrendVirtualBuyAmountLabel(
     analyzeTrendVirtualBuyAmount.value,
-));
-const analyzeTrendInvestmentOptimizationInfo = computed(() => analyzeTrendInvestmentOptimizationLabel(
-    analyzeTrendInvestmentOptimization.value,
 ));
 const analyzeTrendVirtualBuyRulesInfo = computed(() => analyzeTrendVirtualBuyRulesLabel(
     analyzeTrendStreakBuyThresholds.value,
@@ -1297,68 +1267,6 @@ function priceChangePercent(price, referencePrice) {
     }
 
     return ((price - referencePrice) / referencePrice) * 100;
-}
-
-function buildAnalyzeTrendRows(
-    holding,
-    portfolioCapitalByDate = null,
-    rowLimit = defaultAnalyzeTrendRowLimit,
-    virtualBuyAmount = defaultAnalyzeTrendVirtualBuyAmount,
-) {
-    const prices = analyzeTrendDailyPrices(holding);
-    const depotStateByDate = analyzeTrendDepotStateByDate(holding, prices);
-    const patternStats = {};
-    const rows = [];
-
-    prices.forEach((price, priceIndex) => {
-        if (priceIndex === 0) {
-            return;
-        }
-
-        const previousPrice = prices[priceIndex - 1];
-        const nextPrice = prices[priceIndex + 1] ?? null;
-        const dayChangePercent = priceChangePercent(price.price, previousPrice.price);
-        const negativeStreak = analyzeTrendNegativeStreak(prices, priceIndex);
-        const previousNegativeStreak = analyzeTrendNegativeStreak(prices, priceIndex - 1);
-        const streakBuySignal = analyzeTrendStreakBuySignal(negativeStreak, previousNegativeStreak);
-        const indicators = analyzeTrendIndicators(prices, priceIndex, dayChangePercent);
-        const nextDayChangePercent = nextPrice ? priceChangePercent(nextPrice.price, price.price) : null;
-        const recommendation = analyzeTrendRecommendation(prices, priceIndex, patternStats, indicators);
-        const result = analyzeTrendRecommendationResult(recommendation.key, nextDayChangePercent);
-
-        rows.push({
-            date: price.trading_date,
-            price: price.price,
-            volume: price.volume,
-            dayChangePercent,
-            negativeStreak,
-            streakBuySignal,
-            streakRecommendations: [],
-            virtualTradeActions: [],
-            streakEvolution: [],
-            streakWin: null,
-            streakCapital: null,
-            streakCapitalAmount: null,
-            streakPortfolioCapitalAmount: null,
-            streakTotalWin: null,
-            depot: depotStateByDate.get(price.trading_date) ?? { actions: [], changeAmount: null },
-            recommendation,
-            result,
-            nextDayChangePercent,
-            trendLine: indicators.trendLine,
-            upDownCounts: indicators.upDownCounts,
-            volumeSignal: indicators.volumeSignal,
-        });
-
-        addAnalyzeTrendPatternStats(patternStats, prices, priceIndex, indicators);
-    });
-
-    const visibleRows = rows.slice(-normalizeAnalyzeTrendRowLimit(rowLimit));
-
-    addAnalyzeTrendStreakTrades(visibleRows, virtualBuyAmount);
-    addAnalyzeTrendPortfolioCapital(visibleRows, portfolioCapitalByDate);
-
-    return visibleRows.reverse();
 }
 
 function buildAnalyzeTrendV2Rows(
@@ -1596,343 +1504,6 @@ function analyzeTrendDepotTotal(holding, currentPrice) {
     };
 }
 
-function buildAnalyzeTrendHoldingRows(
-    holdings,
-    rowLimit = defaultAnalyzeTrendRowLimit,
-    virtualBuyAmount = defaultAnalyzeTrendVirtualBuyAmount,
-) {
-    if (!Array.isArray(holdings) || holdings.length === 0) {
-        return [];
-    }
-
-    return holdings.map((holding) => ({
-        holding,
-        rows: buildAnalyzeTrendRows(holding, null, rowLimit, virtualBuyAmount).slice().reverse(),
-    }));
-}
-
-function buildAnalyzeTrendPortfolioCapitalByDate(holdingTrendRows) {
-    if (!Array.isArray(holdingTrendRows) || holdingTrendRows.length === 0) {
-        return new Map();
-    }
-
-    const dates = [...new Set(holdingTrendRows.flatMap(({ rows }) => rows.map((row) => row.date)))]
-        .sort((firstDate, secondDate) => firstDate.localeCompare(secondDate));
-
-    return new Map(dates.map((date) => [
-        date,
-        holdingTrendRows.reduce((capital, { rows }) => (
-            capital + analyzeTrendCapitalAmountAsOf(rows, date)
-        ), 0),
-    ]));
-}
-
-function analyzeTrendCapitalAmountAsOf(rows, date) {
-    const row = rows
-        .filter((trendRow) => trendRow.date <= date)
-        .at(-1);
-
-    return row?.streakCapitalAmount ?? 0;
-}
-
-function analyzeTrendCapitalChangeAsOf(rows, date) {
-    const row = rows
-        .filter((trendRow) => trendRow.date <= date)
-        .at(-1);
-
-    return row?.streakCapital ?? 0;
-}
-
-function analyzeTrendWinAmount(rows) {
-    return rows.reduce((wins, row) => wins + (row.streakWin ?? 0), 0);
-}
-
-function buildAnalyzeTrendHoldingStats(holdingTrendRows) {
-    if (!Array.isArray(holdingTrendRows) || holdingTrendRows.length === 0) {
-        return new Map();
-    }
-
-    const holdingStats = holdingTrendRows.map(({ holding, rows }) => ({
-        holdingId: holding.id,
-        label: stockDisplayLabel(holding, ''),
-        winAmount: analyzeTrendWinAmount(rows),
-    }));
-
-    const rankedStats = [...holdingStats].sort((firstHolding, secondHolding) => {
-        if (secondHolding.winAmount !== firstHolding.winAmount) {
-            return secondHolding.winAmount - firstHolding.winAmount;
-        }
-
-        return firstHolding.label.localeCompare(secondHolding.label);
-    });
-
-    return new Map(rankedStats.map((holding, index) => [
-        holding.holdingId,
-        {
-            winAmount: holding.winAmount,
-            rank: index + 1,
-            total: rankedStats.length,
-        },
-    ]));
-}
-
-function buildAnalyzeTrendPortfolioSummary(holdingTrendRows, date, portfolioCapitalByDate = null) {
-    if (!Array.isArray(holdingTrendRows) || holdingTrendRows.length === 0) {
-        return {
-            amount: 0,
-            actualChangeAmount: 0,
-            changeAmount: 0,
-            changePercent: null,
-            maximumAmount: 0,
-            maximumAmountDate: null,
-            winAmount: 0,
-        };
-    }
-
-    const winAmount = holdingTrendRows.reduce((wins, { rows }) => (
-        wins + analyzeTrendWinAmount(rows)
-    ), 0);
-    const maximumPortfolioCapital = analyzeTrendMaximumPortfolioCapital(portfolioCapitalByDate);
-
-    if (!date) {
-        return {
-            amount: 0,
-            actualChangeAmount: 0,
-            changeAmount: winAmount,
-            changePercent: null,
-            maximumAmount: maximumPortfolioCapital.amount,
-            maximumAmountDate: maximumPortfolioCapital.date,
-            winAmount,
-        };
-    }
-
-    const amount = holdingTrendRows.reduce((capital, { rows }) => (
-        capital + analyzeTrendCapitalAmountAsOf(rows, date)
-    ), 0);
-    const changeAmount = holdingTrendRows.reduce((change, { rows }) => (
-        change + analyzeTrendCapitalChangeAsOf(rows, date)
-    ), 0);
-
-    return {
-        amount,
-        actualChangeAmount: changeAmount,
-        changeAmount: winAmount,
-        changePercent: amount > 0 ? (winAmount / amount) * 100 : null,
-        maximumAmount: maximumPortfolioCapital.amount,
-        maximumAmountDate: maximumPortfolioCapital.date,
-        winAmount,
-    };
-}
-
-function analyzeTrendMaximumPortfolioCapital(portfolioCapitalByDate) {
-    if (!(portfolioCapitalByDate instanceof Map) || portfolioCapitalByDate.size === 0) {
-        return {
-            amount: 0,
-            date: null,
-        };
-    }
-
-    return [...portfolioCapitalByDate.entries()].reduce((maximum, [date, amount]) => {
-        if (amount <= maximum.amount) {
-            return maximum;
-        }
-
-        return {
-            amount,
-            date,
-        };
-    }, {
-        amount: 0,
-        date: null,
-    });
-}
-
-function buildAnalyzeTrendInvestmentOptimization(holdingTrendRows, maxInvestAmount) {
-    const normalizedMaxInvestAmount = normalizeAnalyzeTrendMaxInvestAmount(maxInvestAmount);
-
-    if (!Array.isArray(holdingTrendRows) || holdingTrendRows.length === 0) {
-        return null;
-    }
-
-    const basis = buildAnalyzeTrendInvestmentOptimizationBasis(holdingTrendRows);
-    const maximumCandidateAmount = Math.floor(normalizedMaxInvestAmount / 1000) * 1000;
-    const analyzedTradeAmountKeys = new Set();
-    let bestOptimization = null;
-
-    for (let firstAmount = 0; firstAmount <= maximumCandidateAmount; firstAmount += 1000) {
-        for (let secondAmount = 0; secondAmount <= maximumCandidateAmount; secondAmount += 1000) {
-            for (let laterAmount = 0; laterAmount <= maximumCandidateAmount; laterAmount += 1000) {
-                const tradeAmounts = analyzeTrendNoBuyAdjustedTradeAmounts([
-                    firstAmount,
-                    secondAmount,
-                    laterAmount,
-                ]);
-                const tradeAmountKey = tradeAmounts.join('|');
-
-                if (analyzedTradeAmountKeys.has(tradeAmountKey)) {
-                    continue;
-                }
-
-                analyzedTradeAmountKeys.add(tradeAmountKey);
-
-                const maximumAmount = analyzeTrendMaximumCapitalForTradeAmounts(
-                    basis.capitalCounts,
-                    tradeAmounts,
-                    normalizedMaxInvestAmount,
-                );
-
-                if (maximumAmount === null) {
-                    continue;
-                }
-
-                const optimization = {
-                    profitAmount: analyzeTrendProfitForTradeAmounts(basis.winCoefficients, tradeAmounts),
-                    tradeAmounts,
-                    maximumAmount,
-                };
-
-                if (isBetterAnalyzeTrendInvestmentOptimization(optimization, bestOptimization)) {
-                    bestOptimization = optimization;
-                }
-            }
-        }
-    }
-
-    return bestOptimization;
-}
-
-function analyzeTrendNoBuyAdjustedTradeAmounts(tradeAmounts) {
-    const firstNoBuyIndex = tradeAmounts.findIndex((amount) => amount <= 0);
-
-    if (firstNoBuyIndex === -1) {
-        return tradeAmounts;
-    }
-
-    return tradeAmounts.map((amount, index) => (index >= firstNoBuyIndex ? 0 : amount));
-}
-
-function buildAnalyzeTrendInvestmentOptimizationBasis(holdingTrendRows) {
-    const winCoefficients = [0, 0, 0];
-    const capitalCountsByDate = new Map();
-
-    holdingTrendRows.forEach(({ rows }) => {
-        const holdingBasis = buildAnalyzeTrendHoldingInvestmentOptimizationBasis(rows);
-
-        holdingBasis.winCoefficients.forEach((winCoefficient, index) => {
-            winCoefficients[index] += winCoefficient;
-        });
-
-        holdingBasis.capitalCountsByDate.forEach((capitalCounts, date) => {
-            const portfolioCapitalCounts = capitalCountsByDate.get(date) ?? [0, 0, 0];
-
-            capitalCountsByDate.set(date, portfolioCapitalCounts.map((count, index) => (
-                count + capitalCounts[index]
-            )));
-        });
-    });
-
-    return {
-        capitalCounts: [...capitalCountsByDate.values()],
-        winCoefficients,
-    };
-}
-
-function buildAnalyzeTrendHoldingInvestmentOptimizationBasis(rows) {
-    const winCoefficients = [0, 0, 0];
-    const capitalCountsByDate = new Map();
-    let activeTrades = [];
-
-    rows.forEach((row) => {
-        activeTrades.forEach((trade) => {
-            trade.changePercent += row.dayChangePercent ?? 0;
-
-            if (trade.changePercent >= analyzeTrendStreakSellThreshold.value) {
-                winCoefficients[trade.bucket] += trade.changePercent / 100;
-                trade.isClosed = true;
-            }
-        });
-
-        activeTrades = activeTrades.filter((trade) => !trade.isClosed);
-
-        if (row.streakBuySignal) {
-            const tradeNumber = nextAnalyzeTrendStreakTradeNumber(activeTrades);
-
-            activeTrades.push({
-                number: tradeNumber,
-                bucket: analyzeTrendStreakTradeBucket(tradeNumber),
-                changePercent: 0,
-                isClosed: false,
-            });
-        }
-
-        capitalCountsByDate.set(row.date, activeTrades.reduce((capitalCounts, trade) => {
-            capitalCounts[trade.bucket] += 1;
-
-            return capitalCounts;
-        }, [0, 0, 0]));
-    });
-
-    return {
-        capitalCountsByDate,
-        winCoefficients,
-    };
-}
-
-function analyzeTrendMaximumCapitalForTradeAmounts(capitalCounts, tradeAmounts, maxInvestAmount) {
-    let maximumAmount = 0;
-
-    for (const counts of capitalCounts) {
-        const amount = counts.reduce((capital, count, index) => (
-            capital + count * tradeAmounts[index]
-        ), 0);
-
-        if (amount > maxInvestAmount) {
-            return null;
-        }
-
-        maximumAmount = Math.max(maximumAmount, amount);
-    }
-
-    return maximumAmount;
-}
-
-function analyzeTrendProfitForTradeAmounts(winCoefficients, tradeAmounts) {
-    return winCoefficients.reduce((profit, winCoefficient, index) => (
-        profit + winCoefficient * tradeAmounts[index]
-    ), 0);
-}
-
-function isBetterAnalyzeTrendInvestmentOptimization(optimization, bestOptimization) {
-    if (bestOptimization === null) {
-        return true;
-    }
-
-    if (optimization.profitAmount !== bestOptimization.profitAmount) {
-        return optimization.profitAmount > bestOptimization.profitAmount;
-    }
-
-    if (optimization.maximumAmount !== bestOptimization.maximumAmount) {
-        return optimization.maximumAmount < bestOptimization.maximumAmount;
-    }
-
-    return analyzeTrendTradeAmountTotal(optimization.tradeAmounts)
-        < analyzeTrendTradeAmountTotal(bestOptimization.tradeAmounts);
-}
-
-function analyzeTrendTradeAmountTotal(tradeAmounts) {
-    return tradeAmounts.reduce((total, amount) => total + amount, 0);
-}
-
-function addAnalyzeTrendPortfolioCapital(rows, portfolioCapitalByDate) {
-    if (!(portfolioCapitalByDate instanceof Map)) {
-        return;
-    }
-
-    rows.forEach((row) => {
-        row.streakPortfolioCapitalAmount = portfolioCapitalByDate.get(row.date) ?? 0;
-    });
-}
-
 function analyzeTrendDailyPrices(holding) {
     if (!Array.isArray(holding?.daily_prices)) {
         return [];
@@ -1948,347 +1519,20 @@ function analyzeTrendDailyPrices(holding) {
         .sort((firstPrice, secondPrice) => firstPrice.trading_date.localeCompare(secondPrice.trading_date));
 }
 
-function addAnalyzeTrendPatternStats(patternStats, prices, priceIndex, indicators) {
-    const nextPrice = prices[priceIndex + 1] ?? null;
-
-    if (!nextPrice) {
-        return;
-    }
-
-    const nextDayChangePercent = priceChangePercent(nextPrice.price, prices[priceIndex].price);
-
-    if (nextDayChangePercent === null || nextDayChangePercent === 0) {
-        return;
-    }
-
-    analyzeTrendPatternLabels(prices, priceIndex, indicators).forEach((label) => {
-        if (!patternStats[label]) {
-            patternStats[label] = {
-                label,
-                n: 0,
-                up: 0,
-                down: 0,
-            };
-        }
-
-        patternStats[label].n += 1;
-
-        if (nextDayChangePercent > 0) {
-            patternStats[label].up += 1;
-        } else {
-            patternStats[label].down += 1;
-        }
-    });
-}
-
-function analyzeTrendRecommendation(prices, priceIndex, patternStats, indicators) {
-    const bestPattern = analyzeTrendBestPattern(prices, priceIndex, patternStats, indicators);
-    const scoreParts = analyzeTrendScoreParts(indicators, bestPattern);
-    const score = analyzeTrendRecommendationScore(scoreParts, indicators, prices, priceIndex);
-    const key = score >= 0.35 ? 'buy' : (score <= -0.35 ? 'sell' : 'none');
-
-    return {
-        key,
-        label: analyzeTrendRecommendationLabel(key),
-        reason: analyzeTrendRecommendationReason(score, scoreParts, bestPattern),
-        confidence: analyzeTrendScoreConfidence(score),
-        score,
-        pattern: bestPattern,
-    };
-}
-
-function analyzeTrendRecommendationLabel(key) {
-    if (key === 'buy') {
-        return 'Buy';
-    }
-
-    if (key === 'sell') {
-        return 'Sell';
-    }
-
-    return '';
-}
-
-function analyzeTrendBestPattern(prices, priceIndex, patternStats, indicators) {
-    const minimumPatternCount = 25;
-    const minimumWilsonEdge = 0.04;
-
-    return analyzeTrendPatternLabels(prices, priceIndex, indicators)
-        .map((label) => {
-            const pattern = patternStats[label] ?? null;
-
-            if (!pattern) {
-                return null;
-            }
-
-            const rate = pattern.n === 0 ? 0.5 : pattern.up / pattern.n;
-            const wilson = wilsonScoreInterval(pattern.up, pattern.n);
-            const buyEdge = wilson.lower - 0.5;
-            const sellEdge = 0.5 - wilson.upper;
-            const direction = buyEdge >= sellEdge ? 'buy' : 'sell';
-            const meaningfulEdge = Math.max(buyEdge, sellEdge);
-
-            return {
-                ...pattern,
-                rate,
-                wilson,
-                direction,
-                edge: meaningfulEdge,
-                strength: 1.6 + meaningfulEdge * 7,
-            };
-        })
-        .filter((pattern) => pattern
-            && pattern.n >= minimumPatternCount
-            && pattern.edge >= minimumWilsonEdge)
-        .sort((firstPattern, secondPattern) => (
-            secondPattern.edge - firstPattern.edge
-                || secondPattern.n - firstPattern.n
-        ))[0] ?? null;
-}
-
-function analyzeTrendPatternLabels(prices, priceIndex, indicators = null) {
-    const price = prices[priceIndex];
-    const previousPrice = prices[priceIndex - 1] ?? null;
-
-    if (!previousPrice) {
-        return [];
-    }
-
-    const dayChangePercent = priceChangePercent(price.price, previousPrice.price);
-
-    if (dayChangePercent === null) {
-        return [];
-    }
-
-    const labels = [
-        dayChangePercent > 0 ? 'day up' : (dayChangePercent < 0 ? 'day down' : 'day flat'),
-        `weekday ${analyzeTrendWeekday(price.trading_date)}`,
-        analyzeTrendDayChangeBucket(dayChangePercent),
-    ];
-    const twoDayChangePercent = analyzeTrendLookbackChangePercent(prices, priceIndex, 2);
-    const threeDayChangePercent = analyzeTrendLookbackChangePercent(prices, priceIndex, 3);
-    const fiveDayChangePercent = analyzeTrendLookbackChangePercent(prices, priceIndex, 5);
-    const tenDayChangePercent = analyzeTrendLookbackChangePercent(prices, priceIndex, 10);
-    const upStreak = analyzeTrendDirectionalStreak(prices, priceIndex, 'up');
-    const downStreak = analyzeTrendDirectionalStreak(prices, priceIndex, 'down');
-    const trendIndicators = indicators ?? analyzeTrendIndicators(prices, priceIndex, dayChangePercent);
-
-    if (twoDayChangePercent !== null) {
-        labels.push(twoDayChangePercent >= 0 ? '2d positive' : '2d negative');
-
-        if (twoDayChangePercent >= 1.5) {
-            labels.push('2d gain >=1.5');
-        }
-
-        if (twoDayChangePercent <= -1.5) {
-            labels.push('2d loss <=-1.5');
-        }
-    }
-
-    if (threeDayChangePercent !== null) {
-        labels.push(threeDayChangePercent >= 0 ? '3d positive' : '3d negative');
-
-        if (threeDayChangePercent >= 2) {
-            labels.push('3d gain >=2');
-        }
-
-        if (threeDayChangePercent <= -2) {
-            labels.push('3d loss <=-2');
-        }
-    }
-
-    if (fiveDayChangePercent !== null) {
-        labels.push(fiveDayChangePercent >= 0 ? '5d positive' : '5d negative');
-
-        if (fiveDayChangePercent >= 3) {
-            labels.push('5d gain >=3');
-        }
-
-        if (fiveDayChangePercent <= -3) {
-            labels.push('5d loss <=-3');
-        }
-    }
-
-    if (tenDayChangePercent !== null) {
-        labels.push(tenDayChangePercent >= 0 ? '10d positive' : '10d negative');
-
-        if (tenDayChangePercent >= 5) {
-            labels.push('10d gain >=5');
-        }
-
-        if (tenDayChangePercent <= -5) {
-            labels.push('10d loss <=-5');
-        }
-    }
-
-    if (upStreak >= 2) {
-        labels.push('up streak >=2');
-    }
-
-    if (upStreak >= 3) {
-        labels.push('up streak >=3');
-    }
-
-    if (downStreak >= 2) {
-        labels.push('down streak >=2');
-    }
-
-    if (downStreak >= 3) {
-        labels.push('down streak >=3');
-    }
-
-    if (trendIndicators.trendLine.meaningful) {
-        labels.push(`trendline ${trendIndicators.trendLine.position}`);
-        labels.push(`trendline ${trendIndicators.trendLine.slopeDirection}`);
-
-        if (trendIndicators.trendLine.cross) {
-            labels.push(`trendline ${trendIndicators.trendLine.cross}`);
-        }
-    }
-
-    if (trendIndicators.upDownCounts.long.total >= 10) {
-        if (trendIndicators.upDownCounts.long.up > trendIndicators.upDownCounts.long.down) {
-            labels.push('20d more up days');
-        }
-
-        if (trendIndicators.upDownCounts.long.down > trendIndicators.upDownCounts.long.up) {
-            labels.push('20d more down days');
-        }
-    }
-
-    if (trendIndicators.volumeSignal.meaningful) {
-        labels.push(`volume ${trendIndicators.volumeSignal.key}`);
-    }
-
-    return labels;
-}
-
-function analyzeTrendIndicators(prices, priceIndex, dayChangePercent) {
-    return {
-        trendLine: analyzeTrendLine(prices, priceIndex),
-        upDownCounts: analyzeTrendUpDownCounts(prices, priceIndex),
-        volumeSignal: analyzeTrendVolumeSignal(prices, priceIndex, dayChangePercent),
-    };
-}
-
-function analyzeTrendScoreParts(indicators, bestPattern) {
-    const scoreParts = [];
-
-    if (bestPattern) {
-        scoreParts.push({
-            key: 'pattern',
-            label: 'pattern',
-            score: bestPattern.direction === 'buy' ? bestPattern.strength : -bestPattern.strength,
-        });
-    }
-
-    if (indicators.trendLine.meaningful && indicators.trendLine.score !== 0) {
-        scoreParts.push({
-            key: 'trendline',
-            label: 'trend line',
-            score: indicators.trendLine.score,
-        });
-    }
-
-    if (indicators.upDownCounts.meaningful && indicators.upDownCounts.score !== 0) {
-        scoreParts.push({
-            key: 'updown',
-            label: 'up/down',
-            score: indicators.upDownCounts.score,
-        });
-    }
-
-    if (indicators.volumeSignal.meaningful && indicators.volumeSignal.score !== 0) {
-        scoreParts.push({
-            key: 'volume',
-            label: 'volume',
-            score: indicators.volumeSignal.score,
-        });
-    }
-
-    return scoreParts;
-}
-
-function analyzeTrendRecommendationScore(scoreParts, indicators, prices, priceIndex) {
-    const score = scoreParts.reduce((total, scorePart) => total + scorePart.score, 0);
-
-    if (score !== 0) {
-        return score;
-    }
-
-    if (indicators.trendLine.meaningful && indicators.trendLine.fallbackScore !== 0) {
-        return indicators.trendLine.fallbackScore;
-    }
-
-    const dayChangePercent = priceChangePercent(prices[priceIndex].price, prices[priceIndex - 1]?.price ?? null);
-
-    if (dayChangePercent !== null && dayChangePercent !== 0) {
-        return dayChangePercent > 0 ? 0.2 : -0.2;
-    }
-
-    return 0.1;
-}
-
-function analyzeTrendRecommendationReason(score, scoreParts, bestPattern) {
-    const direction = score >= 0 ? '+' : '';
-    const scoreLabel = `${direction}${score.toFixed(1)}`;
-
-    if (score <= -0.35) {
-        if (bestPattern?.direction === 'sell') {
-            return `${scoreLabel}: ${analyzeTrendPatternReason(bestPattern)}`;
-        }
-
-        const negativeScoreParts = scoreParts.filter((scorePart) => scorePart.score < 0);
-
-        if (negativeScoreParts.length === 0) {
-            return `${scoreLabel}: downside signal`;
-        }
-
-        return `${scoreLabel}: ${negativeScoreParts.map((scorePart) => scorePart.label).join(', ')}`;
-    }
-
-    if (score < 0.35) {
-        if (bestPattern) {
-            return `${scoreLabel}: no trade signal (${analyzeTrendPatternReason(bestPattern)})`;
-        }
-
-        return `${scoreLabel}: no trade signal`;
-    }
-
-    if (bestPattern?.direction === 'buy') {
-        return `${scoreLabel}: ${analyzeTrendPatternReason(bestPattern)}`;
-    }
-
-    if (scoreParts.length === 0) {
-        return `${scoreLabel}: trend fallback`;
-    }
-
-    const positiveScoreParts = scoreParts.filter((scorePart) => scorePart.score > 0);
-    const reasonScoreParts = positiveScoreParts.length > 0 ? positiveScoreParts : scoreParts;
-
-    return `${scoreLabel}: ${reasonScoreParts.map((scorePart) => scorePart.label).join(', ')}`;
-}
-
-function analyzeTrendScoreConfidence(score) {
-    return Math.min(95, 50 + Math.abs(score) * 10);
-}
-
-function latestAnalyzeTrendMarker(
-    holding,
-    rowLimit = defaultAnalyzeTrendRowLimit,
-    virtualBuyAmount = defaultAnalyzeTrendVirtualBuyAmount,
-) {
-    const latestRow = buildAnalyzeTrendRows(holding, null, rowLimit, virtualBuyAmount)[0] ?? null;
+function latestAnalyzeTrendV2Marker(holding) {
+    const latestRow = buildAnalyzeTrendV2Rows(
+        holding,
+        analyzeTrendRowLimit.value,
+        analyzeTrendVirtualBuyAmount.value,
+        analyzeTrendStreakBuyThresholds.value,
+        analyzeTrendStreakSellThreshold.value,
+    )[0] ?? null;
 
     if (!latestRow) {
         return null;
     }
 
-    const recommendationMarker = latestRow.streakRecommendations.find((recommendationItem) => (
-        ['buy', 'sell'].includes(recommendationItem.type)
-    ));
-    const depotMarker = latestRow.depot.actions.find((depotAction) => ['buy', 'sell'].includes(depotAction.type));
-    const marker = recommendationMarker ?? depotMarker;
+    const marker = latestRow.virtualTradeActions.find((action) => ['buy', 'sell'].includes(action.type));
 
     if (!marker) {
         return null;
@@ -2321,388 +1565,6 @@ function dashboardTrendRecommendationClass(holding) {
         'dashboard-trend-badge--sell': recommendation?.key === 'sell',
     };
 }
-
-function analyzeTrendLine(prices, priceIndex) {
-    const lookbackPrices = prices.slice(Math.max(0, priceIndex - 29), priceIndex + 1);
-
-    if (lookbackPrices.length < 3) {
-        return {
-            meaningful: false,
-            summary: 'Short history',
-            score: 0,
-            fallbackScore: 0,
-            position: 'near',
-            slopeDirection: 'flat',
-            cross: null,
-        };
-    }
-
-    const regression = linearRegression(lookbackPrices.map((price, index) => ({
-        x: index,
-        y: price.price,
-    })));
-    const currentLine = regression.intercept + regression.slope * (lookbackPrices.length - 1);
-    const previousLine = regression.intercept + regression.slope * (lookbackPrices.length - 2);
-    const currentPrice = lookbackPrices[lookbackPrices.length - 1];
-    const previousPrice = lookbackPrices[lookbackPrices.length - 2];
-    const distancePercent = priceChangePercent(currentPrice.price, currentLine);
-    const previousDistancePercent = priceChangePercent(previousPrice.price, previousLine);
-    const slopePercentPerDay = currentLine === 0 ? 0 : (regression.slope / currentLine) * 100;
-    const slopeDirection = slopePercentPerDay > 0.05
-        ? 'rising'
-        : (slopePercentPerDay < -0.05 ? 'falling' : 'flat');
-    const position = distancePercent > 0.2
-        ? 'above'
-        : (distancePercent < -0.2 ? 'below' : 'near');
-    const cross = analyzeTrendLineCross(distancePercent, previousDistancePercent);
-    const slopeScore = clamp(slopePercentPerDay / 0.4, -1.1, 1.1);
-    const distanceScore = clamp((distancePercent ?? 0) / 1.2, -0.9, 0.9);
-    const crossScore = cross === 'crossed up'
-        ? 0.9
-        : (cross === 'crossed down' ? -0.9 : 0);
-    const score = slopeScore + distanceScore + crossScore;
-
-    return {
-        meaningful: true,
-        summary: analyzeTrendLineSummary(position, slopeDirection, slopePercentPerDay, cross),
-        score,
-        fallbackScore: score === 0 ? (slopePercentPerDay >= 0 ? 0.1 : -0.1) : score,
-        position,
-        slopeDirection,
-        cross,
-        distancePercent,
-        slopePercentPerDay,
-    };
-}
-
-function analyzeTrendLineCross(distancePercent, previousDistancePercent) {
-    if (distancePercent === null || previousDistancePercent === null) {
-        return null;
-    }
-
-    if (previousDistancePercent <= 0 && distancePercent > 0.2) {
-        return 'crossed up';
-    }
-
-    if (previousDistancePercent >= 0 && distancePercent < -0.2) {
-        return 'crossed down';
-    }
-
-    return null;
-}
-
-function analyzeTrendLineSummary(position, slopeDirection, slopePercentPerDay, cross) {
-    const slope = `${slopePercentPerDay > 0 ? '+' : ''}${slopePercentPerDay.toFixed(2)}%/d`;
-    const crossSummary = cross ? `, ${cross}` : '';
-
-    return `${capitalizeFirst(position)} ${slopeDirection} line (${slope})${crossSummary}`;
-}
-
-function analyzeTrendUpDownCounts(prices, priceIndex) {
-    const short = analyzeTrendDirectionCounts(prices, priceIndex, 5);
-    const long = analyzeTrendDirectionCounts(prices, priceIndex, 20);
-    const shortScore = analyzeTrendDirectionCountScore(short, 1.1);
-    const longScore = analyzeTrendDirectionCountScore(long, 0.8);
-
-    return {
-        meaningful: short.total >= 3 || long.total >= 10,
-        short,
-        long,
-        score: shortScore + longScore,
-        summary: `5d ${short.up}/${short.down}; 20d ${long.up}/${long.down}`,
-    };
-}
-
-function analyzeTrendDirectionCounts(prices, priceIndex, days) {
-    const startIndex = Math.max(1, priceIndex - days + 1);
-    const counts = {
-        up: 0,
-        down: 0,
-        flat: 0,
-        total: 0,
-    };
-
-    for (let index = startIndex; index <= priceIndex; index += 1) {
-        const changePercent = priceChangePercent(prices[index].price, prices[index - 1].price);
-
-        if (changePercent === null) {
-            continue;
-        }
-
-        if (changePercent > 0) {
-            counts.up += 1;
-        } else if (changePercent < 0) {
-            counts.down += 1;
-        } else {
-            counts.flat += 1;
-        }
-
-        counts.total += 1;
-    }
-
-    return counts;
-}
-
-function analyzeTrendDirectionCountScore(counts, weight) {
-    if (counts.total === 0) {
-        return 0;
-    }
-
-    return ((counts.up - counts.down) / counts.total) * weight;
-}
-
-function analyzeTrendVolumeSignal(prices, priceIndex, dayChangePercent) {
-    const currentVolume = prices[priceIndex].volume;
-
-    if (currentVolume === null || currentVolume <= 0) {
-        return analyzeTrendEmptyVolumeSignal();
-    }
-
-    const previousVolumes = prices
-        .slice(Math.max(0, priceIndex - 20), priceIndex)
-        .map((price) => price.volume)
-        .filter((volume) => volume !== null && volume > 0);
-
-    if (previousVolumes.length < 8) {
-        return analyzeTrendEmptyVolumeSignal();
-    }
-
-    const averageVolume = previousVolumes.reduce((total, volume) => total + volume, 0) / previousVolumes.length;
-    const ratio = averageVolume === 0 ? null : currentVolume / averageVolume;
-
-    if (ratio === null) {
-        return analyzeTrendEmptyVolumeSignal();
-    }
-
-    const direction = dayChangePercent > 0 ? 'up' : (dayChangePercent < 0 ? 'down' : 'flat');
-    const directionScore = direction === 'up' ? 1 : (direction === 'down' ? -1 : 0);
-
-    if (ratio >= 1.25 && Math.abs(dayChangePercent ?? 0) >= 0.15) {
-        return {
-            meaningful: true,
-            key: `confirms ${direction}`,
-            summary: `${ratio.toFixed(1)}x avg, confirms ${direction}`,
-            score: directionScore * clamp((ratio - 1) * 0.9, 0.35, 1.4),
-            ratio,
-        };
-    }
-
-    if (ratio <= 0.7 && Math.abs(dayChangePercent ?? 0) >= 0.15) {
-        return {
-            meaningful: true,
-            key: `weak ${direction}`,
-            summary: `${ratio.toFixed(1)}x avg, weak ${direction}`,
-            score: directionScore * -0.35,
-            ratio,
-        };
-    }
-
-    return {
-        meaningful: false,
-        key: 'normal',
-        summary: '-',
-        score: 0,
-        ratio,
-    };
-}
-
-function analyzeTrendEmptyVolumeSignal() {
-    return {
-        meaningful: false,
-        key: 'missing',
-        summary: '-',
-        score: 0,
-        ratio: null,
-    };
-}
-
-function linearRegression(points) {
-    const count = points.length;
-    const sumX = points.reduce((total, point) => total + point.x, 0);
-    const sumY = points.reduce((total, point) => total + point.y, 0);
-    const sumXY = points.reduce((total, point) => total + point.x * point.y, 0);
-    const sumXX = points.reduce((total, point) => total + point.x * point.x, 0);
-    const denominator = count * sumXX - sumX * sumX;
-
-    if (denominator === 0) {
-        return {
-            slope: 0,
-            intercept: points[0]?.y ?? 0,
-        };
-    }
-
-    const slope = (count * sumXY - sumX * sumY) / denominator;
-
-    return {
-        slope,
-        intercept: (sumY - slope * sumX) / count,
-    };
-}
-
-function wilsonScoreInterval(successes, total) {
-    if (total <= 0) {
-        return {
-            lower: 0,
-            upper: 1,
-        };
-    }
-
-    const z = 1.64;
-    const probability = successes / total;
-    const zSquared = z * z;
-    const denominator = 1 + zSquared / total;
-    const centre = probability + zSquared / (2 * total);
-    const margin = z * Math.sqrt((probability * (1 - probability) + zSquared / (4 * total)) / total);
-
-    return {
-        lower: (centre - margin) / denominator,
-        upper: (centre + margin) / denominator,
-    };
-}
-
-function clamp(value, minimum, maximum) {
-    return Math.min(maximum, Math.max(minimum, value));
-}
-
-function capitalizeFirst(value) {
-    if (!value) {
-        return '';
-    }
-
-    return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
-}
-
-function analyzeTrendDayChangeBucket(dayChangePercent) {
-    if (dayChangePercent <= -1) {
-        return 'loss <= -1';
-    }
-
-    if (dayChangePercent <= -0.3) {
-        return 'loss -1..-.3';
-    }
-
-    if (dayChangePercent < 0) {
-        return 'loss -.3..0';
-    }
-
-    if (dayChangePercent < 0.3) {
-        return 'gain 0...3';
-    }
-
-    if (dayChangePercent < 1) {
-        return 'gain .3..1';
-    }
-
-    return 'gain >=1';
-}
-
-function analyzeTrendLookbackChangePercent(prices, priceIndex, days) {
-    const previousPrice = prices[priceIndex - days] ?? null;
-
-    if (!previousPrice) {
-        return null;
-    }
-
-    return priceChangePercent(prices[priceIndex].price, previousPrice.price);
-}
-
-function analyzeTrendDirectionalStreak(prices, priceIndex, direction) {
-    let streak = 0;
-
-    for (let index = priceIndex; index > 0; index -= 1) {
-        const changePercent = priceChangePercent(prices[index].price, prices[index - 1].price);
-
-        if (changePercent === null) {
-            break;
-        }
-
-        if (direction === 'up' && changePercent <= 0) {
-            break;
-        }
-
-        if (direction === 'down' && changePercent >= 0) {
-            break;
-        }
-
-        streak += 1;
-    }
-
-    return streak;
-}
-
-function analyzeTrendNegativeStreak(prices, priceIndex) {
-    let count = 0;
-    let changePercent = 0;
-
-    for (let index = priceIndex; index > 0; index -= 1) {
-        const dayChangePercent = priceChangePercent(prices[index].price, prices[index - 1].price);
-
-        if (dayChangePercent === null || dayChangePercent >= 0) {
-            break;
-        }
-
-        count += 1;
-        changePercent += dayChangePercent;
-    }
-
-    return {
-        count,
-        changePercent,
-    };
-}
-
-function analyzeTrendWeekday(dateString) {
-    const date = new Date(`${dateString}T00:00:00.000Z`);
-
-    if (Number.isNaN(date.getTime())) {
-        return '-';
-    }
-
-    return new Intl.DateTimeFormat('en-US', {
-        timeZone: 'UTC',
-        weekday: 'short',
-    }).format(date);
-}
-
-function analyzeTrendPatternReason(pattern) {
-    const percent = `${(pattern.rate * 100).toFixed(0)}% up`;
-    const interval = `${(pattern.wilson.lower * 100).toFixed(0)}-${(pattern.wilson.upper * 100).toFixed(0)}%`;
-
-    return `${pattern.label}: ${pattern.up}/${pattern.down} up/down (${percent}, ${pattern.n}x, ${interval})`;
-}
-
-function analyzeTrendRecommendationResult(recommendationKey, nextDayChangePercent) {
-    if (nextDayChangePercent === null) {
-        return {
-            key: 'pending',
-            label: '-',
-        };
-    }
-
-    if (recommendationKey === 'buy') {
-        return nextDayChangePercent > 0
-            ? { key: 'right', label: 'Right' }
-            : { key: 'wrong', label: 'Wrong' };
-    }
-
-    if (recommendationKey === 'sell') {
-        return nextDayChangePercent < 0
-            ? { key: 'right', label: 'Right' }
-            : { key: 'wrong', label: 'Wrong' };
-    }
-
-    return {
-        key: 'pending',
-        label: '',
-    };
-}
-
-function buildAnalyzeTrendSummary(rows) {
-    return {
-        rows: rows.length,
-    };
-}
-
 function isRealtimePriceRow(priceRow) {
     const sourceName = typeof priceRow.source_name === 'string' ? priceRow.source_name.toLowerCase() : '';
 
@@ -2879,11 +1741,6 @@ const eodhdUsageItems = computed(() => {
 });
 const analyzeSubmenuItems = [
     {
-        key: 'trend',
-        label: 'Trend',
-        icon: 'mdi-trending-up',
-    },
-    {
         key: 'trend-v2',
         label: 'Trend v2',
         icon: 'mdi-trending-up',
@@ -2912,7 +1769,7 @@ const analyzeResearchSubmenuItems = [
     },
 ];
 const analyzeResearchSubsectionKeys = analyzeResearchSubmenuItems.map((item) => item.key);
-const analyzeSubsectionKeys = ['trend', 'trend-v2', 'research', 'overview', 'intraday', 'detail', 'tests'];
+const analyzeSubsectionKeys = ['trend-v2', 'research', 'overview', 'intraday', 'detail', 'tests'];
 const dataSubmenuItems = [
     {
         key: 'indices',
@@ -3246,9 +2103,6 @@ watch(
         analyzeTrendStreakSellThreshold.value = normalizeAnalyzeTrendStreakSellThreshold(
             preferences?.analyze_trend_streak_sell_threshold,
         );
-        excludedAnalyzeTrendHoldingIds.value = normalizeAnalyzeTrendExcludedHoldingIds(
-            preferences?.analyze_trend_excluded_holding_ids,
-        );
     },
     { immediate: true },
 );
@@ -3274,10 +2128,6 @@ watch(
                 (holding) => holding.id === selectedStockWatchItem.value.id,
             ) ?? null;
         }
-
-        const currentHoldingIds = new Set(currentHoldings.map((holding) => holding.id));
-        excludedAnalyzeTrendHoldingIds.value = excludedAnalyzeTrendHoldingIds.value
-            .filter((holdingId) => currentHoldingIds.has(holdingId));
 
         if (ensureAnalyzeHoldingSelection(currentHoldings)) {
             return;
@@ -3477,9 +2327,7 @@ onMounted(async () => {
     }
 
     await Promise.all([
-        activeSection.value === 'dashboard'
-            ? Promise.resolve()
-            : loadWatchlistHoldingsForActiveSection().catch(() => {}),
+        loadWatchlistHoldingsForActiveSection().catch(() => {}),
         depotsStore.loadIndexWatchItems().catch(() => {}),
         activeSection.value === 'indices'
             ? depotsStore.loadIndexEodhdSyncSettings().catch(() => {})
@@ -3518,7 +2366,6 @@ onBeforeUnmount(() => {
     stopIndexRealtimeOverdueMonitoring();
     stopActiveItemRefresh();
     stopHoldingDialogKeyboardShortcuts();
-    clearAnalyzeIsinCopiedTimer();
     clearDataHistoricIsinCopiedTimer();
     window.removeEventListener('resize', updateViewportMetrics);
     window.removeEventListener('popstate', applyRouteFromPath);
@@ -3737,7 +2584,7 @@ function navigateSection(section) {
     activeSection.value = section;
 
     if (section === 'analyze' && !isAnalyzeSubsection(activeAnalyzeSubsection.value)) {
-        activeAnalyzeSubsection.value = 'trend';
+        activeAnalyzeSubsection.value = 'trend-v2';
     }
 
     if (section === 'data' && !isDataSubsection(activeDataSubsection.value)) {
@@ -3770,6 +2617,10 @@ function navigateSection(section) {
             depotsStore.loadTransactions();
         }
 
+        if (activeDepotSubsection.value === 'overview') {
+            loadWatchlistHoldingsForActiveSection(1).catch(() => {});
+        }
+
         if (isDepotStockPeriodPage()) {
             depotsStore.loadDepotStockPeriod(activeDepotStocksSubsection.value);
         }
@@ -3791,6 +2642,10 @@ function navigateSection(section) {
     }
 
     if (section === 'stocks') {
+        loadWatchlistHoldingsForActiveSection(1).catch(() => {});
+    }
+
+    if (section === 'dashboard') {
         loadWatchlistHoldingsForActiveSection(1).catch(() => {});
     }
 
@@ -3897,14 +2752,19 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
     const shouldIncludeAnalyzeCharts = activeSection.value === 'analyze'
         && (selectedAnalyzeHoldingId.value !== null || shouldIncludeResearchSimulationCharts);
     const shouldIncludeStockChart = activeSection.value === 'stocks' && selectedStockWatchItem.value !== null;
-    const shouldIncludeCharts = shouldIncludeAnalyzeCharts || shouldIncludeStockChart;
-    const shouldIncludeAllChartHoldings = shouldIncludeAnalyzeCharts
-        && (
+    const shouldIncludeDashboardTrendSignals = activeSection.value === 'dashboard';
+    const shouldIncludeTrendSignals = shouldIncludeDashboardTrendSignals
+        || activeSection.value === 'stocks'
+        || (activeSection.value === 'depot' && activeDepotSubsection.value === 'overview');
+    const shouldIncludeCharts = shouldIncludeAnalyzeCharts || shouldIncludeStockChart || shouldIncludeTrendSignals;
+    const shouldIncludeAllChartHoldings = shouldIncludeTrendSignals
+        || (shouldIncludeAnalyzeCharts && (
             isAnalyzeTrendSubsection(activeAnalyzeSubsection.value)
             || shouldIncludeResearchSimulationCharts
-        );
+        ));
     const shouldIncludeAllHoldings = activeSection.value === 'analyze'
         || activeSection.value === 'stocks'
+        || shouldIncludeTrendSignals
         || (activeSection.value === 'data' && activeDataSubsection.value === 'stocks');
 
     if (shouldIncludeResearchSimulationCharts && analyzeResearchSimulationDataRequest !== null) {
@@ -3921,7 +2781,9 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
             : (shouldIncludeAnalyzeCharts && !shouldIncludeAllChartHoldings ? selectedAnalyzeHoldingId.value : null),
         chartRange: shouldIncludeStockChart
             ? stockChartRequestRange(selectedStockPriceRange.value)
-            : (shouldIncludeAnalyzeCharts ? selectedAnalyzeHistoryRange.value : null),
+            : shouldIncludeDashboardTrendSignals
+                ? '1y'
+                : (shouldIncludeAnalyzeCharts ? selectedAnalyzeHistoryRange.value : null),
     });
 
     if (!shouldIncludeResearchSimulationCharts) {
@@ -4052,7 +2914,6 @@ async function checkCloudwaysDatabase() {
         await streamCloudwaysDatabaseCheck();
     } catch (error) {
         cloudwaysCheckError.value = error.message;
-        throw error;
     } finally {
         cloudwaysCheckLoading.value = false;
     }
@@ -4537,6 +3398,10 @@ function navigateDepotSubsection(subsection) {
         depotsStore.loadTransactions();
     }
 
+    if (subsection === 'overview') {
+        loadWatchlistHoldingsForActiveSection(1).catch(() => {});
+    }
+
     if (subsection === 'all-stocks') {
         depotsStore.loadDepotStockPeriod(activeDepotStocksSubsection.value);
     }
@@ -4581,22 +3446,6 @@ function selectAnalyzeHolding(holdingId) {
     updateUrlPath();
 }
 
-function copySelectedAnalyzeIsin() {
-    const isin = selectedAnalyzeHolding.value?.isin;
-
-    if (!isin) {
-        return;
-    }
-
-    copyToClipboard(isin);
-    selectedAnalyzeCopiedIsin.value = isin;
-    clearAnalyzeIsinCopiedTimer();
-    analyzeIsinCopiedTimer.value = window.setTimeout(() => {
-        selectedAnalyzeCopiedIsin.value = null;
-        analyzeIsinCopiedTimer.value = null;
-    }, 1600);
-}
-
 function copySelectedDataHistoricIsin() {
     const isin = selectedDataHistoricStock.value?.isin;
 
@@ -4620,39 +3469,6 @@ function clearDataHistoricIsinCopiedTimer() {
 
     window.clearTimeout(dataHistoricIsinCopiedTimer.value);
     dataHistoricIsinCopiedTimer.value = null;
-}
-
-function clearAnalyzeIsinCopiedTimer() {
-    if (!analyzeIsinCopiedTimer.value) {
-        return;
-    }
-
-    window.clearTimeout(analyzeIsinCopiedTimer.value);
-    analyzeIsinCopiedTimer.value = null;
-}
-
-function isAnalyzeTrendHoldingIncluded(holdingId) {
-    return !excludedAnalyzeTrendHoldingIds.value.includes(holdingId);
-}
-
-async function toggleAnalyzeTrendHoldingInclusion(holdingId) {
-    const previousExcludedHoldingIds = excludedAnalyzeTrendHoldingIds.value;
-
-    if (isAnalyzeTrendHoldingIncluded(holdingId)) {
-        excludedAnalyzeTrendHoldingIds.value = [...excludedAnalyzeTrendHoldingIds.value, holdingId];
-    } else {
-        excludedAnalyzeTrendHoldingIds.value = excludedAnalyzeTrendHoldingIds.value
-            .filter((excludedHoldingId) => excludedHoldingId !== holdingId);
-    }
-
-    try {
-        await depotsStore.updateUiPreferences({
-            analyze_trend_excluded_holding_ids: excludedAnalyzeTrendHoldingIds.value,
-        });
-    } catch (error) {
-        excludedAnalyzeTrendHoldingIds.value = previousExcludedHoldingIds;
-        transactionsError.value = error.message;
-    }
 }
 
 function normalizeAnalyzeTrendRowLimit(value) {
@@ -4735,16 +3551,6 @@ function isValidAnalyzeTrendStreakSellThreshold(value) {
     const threshold = Number(value);
 
     return value !== '' && Number.isFinite(threshold) && threshold >= 0 && threshold <= 100;
-}
-
-function normalizeAnalyzeTrendExcludedHoldingIds(value) {
-    if (!Array.isArray(value)) {
-        return [];
-    }
-
-    return [...new Set(value
-        .map((holdingId) => Number(holdingId))
-        .filter((holdingId) => Number.isInteger(holdingId) && holdingId > 0))];
 }
 
 function editAnalyzeTrendRowLimit() {
@@ -5322,7 +4128,7 @@ function applyRouteFromPath() {
             activeSection.value = 'analyze';
             activeAnalyzeSubsection.value = isAnalyzeSubsection(subsectionSegment)
                 ? subsectionSegment
-                : 'trend';
+                : 'trend-v2';
             activeAnalyzeResearchSubsection.value = activeAnalyzeSubsection.value === 'research'
                 && isAnalyzeResearchSubsection(detailSegment)
                 ? detailSegment
@@ -5431,7 +4237,7 @@ function isAnalyzeResearchSubsection(subsection) {
 }
 
 function isAnalyzeTrendSubsection(subsection) {
-    return ['trend', 'trend-v2'].includes(subsection);
+    return subsection === 'trend-v2';
 }
 
 function analyzeSubsectionRequiresHolding(subsection) {
@@ -11428,133 +10234,6 @@ function formatAnalyzeTrendPrice(value, holding) {
     return formatPriceValue(value, holding?.currency);
 }
 
-function formatAnalyzeTrendNegativeStreak(streak) {
-    if (!streak || streak.count === 0) {
-        return '';
-    }
-
-    return `${streak.count} (${formatPriceChangePercent(streak.changePercent)})`;
-}
-
-function addAnalyzeTrendStreakTrades(rows, virtualBuyAmount = defaultAnalyzeTrendVirtualBuyAmount) {
-    let totalWin = 0;
-    let activeTrades = [];
-    const normalizedVirtualBuyAmount = normalizeAnalyzeTrendVirtualBuyAmount(virtualBuyAmount);
-
-    rows.forEach((row) => {
-        activeTrades.forEach((trade) => {
-            trade.changePercent += row.dayChangePercent ?? 0;
-
-            row.streakEvolution.push({
-                number: trade.number,
-                changePercent: trade.changePercent,
-            });
-
-            if (trade.changePercent >= analyzeTrendStreakSellThreshold.value) {
-                const win = trade.amount * (trade.changePercent / 100);
-                totalWin += win;
-                row.streakWin = (row.streakWin ?? 0) + win;
-                row.streakTotalWin = totalWin;
-
-                row.streakRecommendations.push({
-                    type: 'sell',
-                    label: `SELL ${trade.number}`,
-                });
-                row.virtualTradeActions.push({
-                    type: 'sell',
-                    label: `VSELL ${trade.number}`,
-                    amount: trade.amount,
-                });
-
-                trade.isClosed = true;
-            }
-        });
-
-        activeTrades = activeTrades.filter((trade) => !trade.isClosed);
-
-        if (row.streakBuySignal) {
-            const tradeNumber = nextAnalyzeTrendStreakTradeNumber(activeTrades);
-
-            if (normalizedVirtualBuyAmount > 0) {
-                activeTrades.push({
-                    number: tradeNumber,
-                    amount: normalizedVirtualBuyAmount,
-                    changePercent: 0,
-                    isClosed: false,
-                });
-
-                row.streakRecommendations.push({
-                    type: 'buy',
-                    label: `BUY ${tradeNumber}`,
-                });
-                row.virtualTradeActions.push({
-                    type: 'buy',
-                    label: `VBUY ${tradeNumber}`,
-                    amount: normalizedVirtualBuyAmount,
-                });
-            }
-        }
-
-        if (activeTrades.length > 0) {
-            row.streakCapital = activeTrades.reduce(
-                (capital, trade) => capital + trade.amount * (trade.changePercent / 100),
-                0,
-            );
-            row.streakCapitalAmount = activeTrades.reduce(
-                (amount, trade) => amount + trade.amount,
-                0,
-            );
-        }
-    });
-}
-
-function analyzeTrendStreakTradeBucket(tradeNumber) {
-    return Math.min(Math.max(tradeNumber, 1), 3) - 1;
-}
-
-function nextAnalyzeTrendStreakTradeNumber(activeTrades) {
-    const activeNumbers = new Set(activeTrades.map((trade) => trade.number));
-    let tradeNumber = 1;
-
-    while (activeNumbers.has(tradeNumber)) {
-        tradeNumber += 1;
-    }
-
-    return tradeNumber;
-}
-
-function analyzeTrendStreakBuySignal(streak, previousStreak = null) {
-    if (!analyzeTrendStreakQualifiesForBuy(streak)) {
-        return false;
-    }
-
-    return !analyzeTrendStreakQualifiesForBuy(previousStreak);
-}
-
-function analyzeTrendStreakQualifiesForBuy(streak) {
-    if (!streak || streak.count <= 0) {
-        return false;
-    }
-
-    const thresholdIndex = Math.min(streak.count, analyzeTrendStreakBuyThresholds.value.length) - 1;
-    const threshold = analyzeTrendStreakBuyThresholds.value[thresholdIndex];
-
-    return threshold !== null && streak.changePercent <= threshold;
-}
-
-function formatAnalyzeTrendStreakEvolutionItems(evolutionItems) {
-    if (!Array.isArray(evolutionItems) || evolutionItems.length === 0) {
-        return [];
-    }
-
-    return evolutionItems
-        .map((item) => {
-            const changePercent = Math.abs(item.changePercent) < 0.005 ? 0 : item.changePercent;
-
-            return `${item.number}: ${formatPriceChangePercent(changePercent)}`;
-        });
-}
-
 function formatAnalyzeTrendWin(value, currency = 'EUR') {
     if (value === null || value === undefined) {
         return '';
@@ -11597,28 +10276,6 @@ function analyzeTrendMaxInvestAmountLabel(maxInvestAmount) {
     return `Max invest: ${formatWholeEuroAmount(normalizeAnalyzeTrendMaxInvestAmount(maxInvestAmount))}`;
 }
 
-function analyzeTrendInvestmentOptimizationLabel(optimization) {
-    if (!optimization) {
-        return 'Optimal: no valid combination';
-    }
-
-    const [firstAmount, secondAmount, laterAmount] = optimization.tradeAmounts;
-    const profit = formatAnalyzeTrendSignedWin(optimization.profitAmount);
-    const firstAmountLabel = formatWholeEuroAmount(firstAmount);
-    const secondAmountLabel = formatWholeEuroAmount(secondAmount);
-    const laterAmountLabel = formatWholeEuroAmount(laterAmount);
-
-    return `Optimal profit: ${profit} with 1st ${firstAmountLabel} | 2nd ${secondAmountLabel} | 3rd+ ${laterAmountLabel}`;
-}
-
-function formatAnalyzeTrendHoldingRank(stats) {
-    if (!stats) {
-        return '';
-    }
-
-    return `${stats.rank}/${stats.total}`;
-}
-
 function formatWholeEuroAmount(value) {
     return `${Number(value).toLocaleString('en-US', {
         maximumFractionDigits: 0,
@@ -11631,22 +10288,6 @@ function priceChangePercentClass(changePercent) {
         'text-success': changePercent !== null && changePercent > 0,
         'text-error': changePercent !== null && changePercent < 0,
         'text-medium-emphasis': changePercent === null || changePercent === 0,
-    };
-}
-
-function analyzeTrendRecommendationClass(recommendation) {
-    return {
-        'analyze-trend-badge--buy': recommendation.key === 'buy',
-        'analyze-trend-badge--sell': recommendation.key === 'sell',
-        'analyze-trend-badge--empty': recommendation.key === 'none',
-    };
-}
-
-function analyzeTrendResultClass(result) {
-    return {
-        'analyze-trend-result--right': result.key === 'right',
-        'analyze-trend-result--wrong': result.key === 'wrong',
-        'analyze-trend-result--pending': result.key === 'pending',
     };
 }
 
@@ -13208,6 +11849,47 @@ function formatIndexDataUpdateSchedule(settings) {
                                 </div>
                             </div>
 
+                            <section
+                                v-if="dashboardTrendSignalCards.length > 0"
+                                class="dashboard-stock-signal-section"
+                                aria-label="Stocks with Trend v2 signals"
+                            >
+                                <p class="text-overline text-primary mb-2">Trend v2 signals</p>
+                                <div class="dashboard-stock-signal-grid">
+                                    <v-card
+                                        v-for="card in dashboardTrendSignalCards"
+                                        :key="card.holding.id"
+                                        class="dashboard-stock-signal-card"
+                                        :class="{
+                                            'dashboard-stock-signal-card--buy': card.recommendation.key === 'buy',
+                                            'dashboard-stock-signal-card--sell': card.recommendation.key === 'sell',
+                                        }"
+                                        flat
+                                        border
+                                        rounded="xl"
+                                    >
+                                        <v-card-text class="pa-4">
+                                            <div class="dashboard-stock-signal-card-heading">
+                                                <div>
+                                                    <div class="dashboard-stock-signal-card-name">
+                                                        {{ stockDisplayName(card.holding) }}
+                                                    </div>
+                                                    <div class="dashboard-stock-signal-card-symbol">
+                                                        {{ card.holding.symbol || '-' }}
+                                                    </div>
+                                                </div>
+                                                <strong
+                                                    class="dashboard-stock-signal-card-action"
+                                                    :title="card.recommendation.reason"
+                                                >
+                                                    {{ card.recommendation.label }}
+                                                </strong>
+                                            </div>
+                                        </v-card-text>
+                                    </v-card>
+                                </div>
+                            </section>
+
                         </div>
 
                         <div v-if="activeSection === 'stocks'" aria-label="Stocks dashboard">
@@ -14156,6 +12838,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                 <tr>
                                     <th v-if="!isCompactWatchListTable" class="watch-list-content-cell">Symbol</th>
                                     <th class="watch-list-content-cell">Name</th>
+                                    <th class="watch-list-content-cell">BUY/SELL</th>
                                     <th v-if="isHandsetLandscape" class="watch-list-content-cell">Price</th>
                                     <th v-else class="watch-list-content-cell">Latest price</th>
                                     <th class="watch-list-content-cell">
@@ -14237,6 +12920,15 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 />
                                             </div>
                                         </td>
+                                        <td class="watch-list-content-cell">
+                                            <span
+                                                v-if="dashboardTrendRecommendation(holding)"
+                                                class="stock-trend-signal text-error font-weight-bold"
+                                                :title="dashboardTrendRecommendationTitle(holding)"
+                                            >
+                                                {{ dashboardTrendRecommendationLabel(holding) }}
+                                            </span>
+                                        </td>
                                         <td v-if="isHandsetLandscape" class="watch-list-content-cell">
                                             <span class="handset-landscape-price">
                                                 <span
@@ -14270,14 +12962,6 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     >
                                                         {{ mobileHoldingPriceChangeText(holding) }}
                                                     </span>
-                                                    <span
-                                                        v-if="dashboardTrendRecommendation(holding)"
-                                                        class="dashboard-trend-badge"
-                                                        :class="dashboardTrendRecommendationClass(holding)"
-                                                        :title="dashboardTrendRecommendationTitle(holding)"
-                                                    >
-                                                        {{ dashboardTrendRecommendationLabel(holding) }}
-                                                    </span>
                                                 </span>
                                             </span>
                                         </td>
@@ -14305,14 +12989,6 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     class="latest-price-change"
                                                 >
                                                     {{ formatLatestPriceChangePercent(holding) }}
-                                                </span>
-                                                <span
-                                                    v-if="isCompactWatchListTable && dashboardTrendRecommendation(holding)"
-                                                    class="dashboard-trend-badge"
-                                                    :class="dashboardTrendRecommendationClass(holding)"
-                                                    :title="dashboardTrendRecommendationTitle(holding)"
-                                                >
-                                                    {{ dashboardTrendRecommendationLabel(holding) }}
                                                 </span>
                                             </span>
                                         </td>
@@ -14350,14 +13026,6 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     {{ stockHoldingRefreshSchedule(holding).status }}
                                                 </v-chip>
                                             </div>
-                                            <span
-                                                v-if="dashboardTrendRecommendation(holding)"
-                                                class="dashboard-trend-badge"
-                                                :class="dashboardTrendRecommendationClass(holding)"
-                                                :title="dashboardTrendRecommendationTitle(holding)"
-                                            >
-                                                {{ dashboardTrendRecommendationLabel(holding) }}
-                                            </span>
                                         </td>
                                         <td v-if="activeSection === 'stocks'" class="text-right watch-list-actions-cell">
                                             <v-btn
@@ -16949,43 +15617,20 @@ function formatIndexDataUpdateSchedule(settings) {
                         <section
                             v-if="isAnalyzeTrendSubsection(activeAnalyzeSubsection)"
                             class="analyze-detail-page"
-                            :aria-label="activeAnalyzeSubsection === 'trend-v2' ? 'Analyze trend v2' : 'Analyze trend'"
+                            aria-label="Analyze trend v2"
                         >
                             <div class="analyze-detail-header">
                                 <div>
-                                    <h2 class="analyze-detail-title">
-                                        {{ activeAnalyzeSubsection === 'trend-v2' ? 'Trend v2' : 'Trend' }}
-                                    </h2>
+                                    <h2 class="analyze-detail-title">Trend v2</h2>
                                     <div class="analyze-detail-scope">
                                         {{ selectedAnalyzeScopeLabel }}
                                     </div>
                                 </div>
                             </div>
 
-                            <h3
-                                v-if="activeAnalyzeSubsection !== 'trend-v2'"
-                                class="analyze-selected-stock-title"
-                            >
-                                <span class="analyze-selected-stock-name">{{ selectedAnalyzeScopeLabel }}</span>
-                                <button
-                                    v-if="selectedAnalyzeHolding?.isin"
-                                    type="button"
-                                    class="analyze-selected-stock-isin-copy"
-                                    :class="{ 'analyze-selected-stock-isin-copy--copied': selectedAnalyzeCopiedIsin === selectedAnalyzeHolding.isin }"
-                                    :aria-label="`Copy ISIN ${selectedAnalyzeHolding.isin}`"
-                                    @click="copySelectedAnalyzeIsin"
-                                >
-                                    <span>{{ selectedAnalyzeHolding.isin }}</span>
-                                    <v-icon
-                                        :icon="selectedAnalyzeCopiedIsin === selectedAnalyzeHolding.isin ? 'mdi-check-circle-outline' : 'mdi-content-copy'"
-                                        size="15"
-                                    />
-                                </button>
-                            </h3>
                             <div
-                                class="index-watch-strip analyze-detail-stock-menu"
-                                :class="{ 'analyze-detail-stock-menu--compact': activeAnalyzeSubsection === 'trend-v2' }"
-                                :aria-label="activeAnalyzeSubsection === 'trend-v2' ? 'Analyze trend v2 stocks' : 'Analyze trend stocks'"
+                                class="index-watch-strip analyze-detail-stock-menu analyze-detail-stock-menu--compact"
+                                aria-label="Analyze trend v2 stocks"
                             >
                                 <div
                                     v-for="holding in holdings"
@@ -16993,34 +15638,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                     class="analyze-trend-holding-item"
                                 >
                                     <button
-                                        v-if="activeAnalyzeSubsection !== 'trend-v2'"
                                         type="button"
-                                        class="analyze-trend-include-toggle"
-                                        :class="{ 'analyze-trend-include-toggle--active': isAnalyzeTrendHoldingIncluded(holding.id) }"
-                                        :aria-pressed="isAnalyzeTrendHoldingIncluded(holding.id)"
-                                        :aria-label="isAnalyzeTrendHoldingIncluded(holding.id)
-                                            ? `Exclude ${stockDisplayLabel(holding, 'stock')} from All amount`
-                                            : `Include ${stockDisplayLabel(holding, 'stock')} in All amount`"
-                                        @click="toggleAnalyzeTrendHoldingInclusion(holding.id)"
-                                    >
-                                        <v-icon
-                                            :icon="isAnalyzeTrendHoldingIncluded(holding.id) ? 'mdi-checkbox-marked' : 'mdi-checkbox-blank-outline'"
-                                            size="18"
-                                        />
-                                    </button>
-                                    <button
-                                        type="button"
-                                        class="index-watch-card analyze-holding-card"
+                                        class="index-watch-card analyze-holding-card analyze-holding-card--compact"
                                         :class="{
                                             'analyze-holding-card--active': selectedAnalyzeHoldingId === holding.id,
-                                            'analyze-holding-card--compact': activeAnalyzeSubsection === 'trend-v2',
+                                            'analyze-holding-card--held': hasPositionPieces(holding),
                                         }"
                                         :aria-pressed="selectedAnalyzeHoldingId === holding.id"
                                         :title="stockDisplayLabel(holding, 'stock')"
                                         @click="selectAnalyzeHolding(holding.id)"
                                     >
                                         <span
-                                            v-if="activeAnalyzeSubsection === 'trend-v2'"
                                             class="analyze-holding-card-v2-rank"
                                             :aria-label="`Constrained virtual investment rank ${
                                                 analyzeTrendV2ConstrainedHoldingStats.get(holding.id)?.rank
@@ -17029,57 +15657,15 @@ function formatIndexDataUpdateSchedule(settings) {
                                             #{{ analyzeTrendV2ConstrainedHoldingStats.get(holding.id)?.rank }}
                                         </span>
                                         <span
-                                            v-if="activeAnalyzeSubsection !== 'trend-v2'"
-                                            class="analyze-holding-card-header"
+                                            class="index-watch-card-label analyze-holding-card-name analyze-holding-card-name--compact"
                                         >
-                                            <span class="analyze-holding-card-symbol">
-                                                {{ holding.symbol || '-' }}
-                                            </span>
-                                            <span
-                                                v-if="holding.isin"
-                                                class="analyze-holding-card-isin"
-                                            >
-                                                {{ holding.isin }}
-                                            </span>
+                                            {{ stockDisplayName(holding) }}
                                         </span>
                                         <span
-                                            class="index-watch-card-label analyze-holding-card-name"
-                                            :class="{ 'analyze-holding-card-name--compact': activeAnalyzeSubsection === 'trend-v2' }"
-                                        >
-                                            {{ activeAnalyzeSubsection === 'trend-v2'
-                                                ? stockDisplayName(holding)
-                                                : stockDisplayLabel(holding) }}
-                                        </span>
-                                        <span
-                                            v-if="activeAnalyzeSubsection === 'trend-v2' && (holding.subtitle || holding.stock_subtitle)"
+                                            v-if="holding.subtitle || holding.stock_subtitle"
                                             class="analyze-holding-card-subtitle--compact"
                                         >
                                             {{ holding.subtitle || holding.stock_subtitle }}
-                                        </span>
-                                        <span
-                                            v-if="activeAnalyzeSubsection !== 'trend-v2'"
-                                            class="index-watch-card-price analyze-holding-card-price"
-                                        >
-                                            {{ formatHoldingCardPrice(holding) }}
-                                        </span>
-                                        <span
-                                            v-if="activeAnalyzeSubsection !== 'trend-v2' && isAnalyzeTrendHoldingIncluded(holding.id)"
-                                            class="analyze-holding-card-stat"
-                                            :class="priceChangePercentClass(analyzeTrendHoldingStats.get(holding.id)?.winAmount ?? 0)"
-                                        >
-                                            {{ formatAnalyzeTrendSignedWin(analyzeTrendHoldingStats.get(holding.id)?.winAmount ?? 0) }}
-                                        </span>
-                                        <span
-                                            v-if="activeAnalyzeSubsection !== 'trend-v2' && isAnalyzeTrendHoldingIncluded(holding.id)"
-                                            class="analyze-holding-card-stat"
-                                        >
-                                            Rank: {{ formatAnalyzeTrendHoldingRank(analyzeTrendHoldingStats.get(holding.id)) }}
-                                        </span>
-                                        <span
-                                            v-if="activeAnalyzeSubsection !== 'trend-v2'"
-                                            class="analyze-holding-card-pieces"
-                                        >
-                                            Pieces: {{ formatPositionPieces(holding) }}
                                         </span>
                                     </button>
                                 </div>
@@ -17094,60 +15680,13 @@ function formatIndexDataUpdateSchedule(settings) {
                                 No stock selected.
                             </v-alert>
                             <div
-                                v-else-if="selectedAnalyzeTrendDisplayRows.length === 0"
+                                v-else-if="selectedAnalyzeTrendV2Rows.length === 0"
                                 class="analyze-detail-empty"
                             >
                                 No daily prices stored for this stock.
                             </div>
                             <div v-else class="analyze-trend-panel">
                                 <div
-                                    v-if="activeAnalyzeSubsection !== 'trend-v2'"
-                                    class="analyze-trend-summary"
-                                    aria-label="Trend analysis summary"
-                                >
-                                    <button
-                                        type="button"
-                                        class="analyze-trend-summary-item analyze-trend-summary-item--button"
-                                        aria-label="Edit trend row count"
-                                        @click="editAnalyzeTrendRowLimit"
-                                    >
-                                        <span class="analyze-trend-summary-label">Rows</span>
-                                        <strong class="analyze-trend-summary-value-with-icon">
-                                            {{ selectedAnalyzeTrendDisplayRows.length }}
-                                            <v-icon icon="mdi-pencil" size="16" />
-                                        </strong>
-                                    </button>
-                                    <template v-if="activeAnalyzeSubsection !== 'trend-v2'">
-                                        <div class="analyze-trend-summary-item">
-                                            <span class="analyze-trend-summary-label">Total +/- over all checked stocks</span>
-                                            <strong :class="priceChangePercentClass(selectedAnalyzeTrendPortfolioSummary.changeAmount)">
-                                                {{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.changeAmount) }}
-                                            </strong>
-                                        </div>
-                                        <div class="analyze-trend-summary-item">
-                                            <span class="analyze-trend-summary-label">All amount</span>
-                                            <strong>{{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.amount) }}</strong>
-                                        </div>
-                                        <div class="analyze-trend-summary-item">
-                                            <span class="analyze-trend-summary-label">Max invest at same time</span>
-                                            <strong>{{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.maximumAmount) }}</strong>
-                                            <span
-                                                v-if="selectedAnalyzeTrendPortfolioSummary.maximumAmountDate"
-                                                class="analyze-trend-summary-note"
-                                            >
-                                                {{ formatAnalyzeTrendDate(selectedAnalyzeTrendPortfolioSummary.maximumAmountDate) }}
-                                            </span>
-                                        </div>
-                                        <div class="analyze-trend-summary-item">
-                                            <span class="analyze-trend-summary-label">Actual +/- amount</span>
-                                            <strong :class="priceChangePercentClass(selectedAnalyzeTrendPortfolioSummary.actualChangeAmount)">
-                                                {{ formatAnalyzeTrendWin(selectedAnalyzeTrendPortfolioSummary.actualChangeAmount) }}
-                                            </strong>
-                                        </div>
-                                    </template>
-                                </div>
-                                <div
-                                    v-else
                                     class="analyze-trend-summary analyze-trend-summary--compact"
                                     aria-label="Trend v2 analysis summary"
                                 >
@@ -17197,7 +15736,6 @@ function formatIndexDataUpdateSchedule(settings) {
                                 </div>
                                 <div class="analyze-trend-invest-actions">
                                     <button
-                                        v-if="activeAnalyzeSubsection === 'trend-v2'"
                                         type="button"
                                         class="analyze-trend-invest-info"
                                         aria-label="Edit trend row count"
@@ -17245,12 +15783,6 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <span>Edit</span>
                                         <v-icon icon="mdi-pencil" size="14" />
                                     </button>
-                                    <span
-                                        v-if="activeAnalyzeSubsection !== 'trend-v2'"
-                                        class="analyze-trend-optimization-info"
-                                    >
-                                        {{ analyzeTrendInvestmentOptimizationInfo }}
-                                    </span>
                                 </div>
 
                                 <div class="analyze-detail-table-wrap">
@@ -17260,7 +15792,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 <th>Date</th>
                                                 <th class="text-right">Price</th>
                                                 <th class="text-right">Day %</th>
-                                                <th v-if="activeAnalyzeSubsection === 'trend-v2'">
+                                                <th>
                                                     BUY/SELL
                                                     <span
                                                         v-if="selectedAnalyzeTrendV2DepotTotal.changeAmount !== null"
@@ -17273,7 +15805,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         ) }}
                                                     </span>
                                                 </th>
-                                                <th v-if="activeAnalyzeSubsection === 'trend-v2'">
+                                                <th>
                                                     VBUY/VSELL
                                                     <span
                                                         v-if="selectedAnalyzeTrendV2Total !== null"
@@ -17283,7 +15815,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         {{ formatAnalyzeTrendSignedWin(selectedAnalyzeTrendV2Total) }}
                                                     </span>
                                                 </th>
-                                                <th v-if="activeAnalyzeSubsection === 'trend-v2'">
+                                                <th>
                                                     VBUY/VSELL
                                                     <span class="analyze-trend-dep-change">MAX INVEST</span>
                                                     <span
@@ -17297,22 +15829,11 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         ) }}
                                                     </span>
                                                 </th>
-                                                <template v-if="activeAnalyzeSubsection !== 'trend-v2'">
-                                                    <th class="text-right">-Streak</th>
-                                                    <th>Rec</th>
-                                                    <th>VBUY/VSELL</th>
-                                                    <th>DEP</th>
-                                                    <th class="text-right">Evoluation</th>
-                                                    <th class="text-right">Next %</th>
-                                                    <th class="text-right">Wins</th>
-                                                    <th class="text-right">CAP</th>
-                                                    <th class="text-right">Total</th>
-                                                </template>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             <tr
-                                                v-for="trendRow in selectedAnalyzeTrendDisplayRows"
+                                                v-for="trendRow in selectedAnalyzeTrendV2Rows"
                                                 :key="trendRow.date"
                                             >
                                                 <td>{{ formatAnalyzeTrendDate(trendRow.date) }}</td>
@@ -17320,7 +15841,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 <td class="text-right" :class="priceChangePercentClass(trendRow.dayChangePercent)">
                                                     {{ formatPriceChangePercent(trendRow.dayChangePercent) }}
                                                 </td>
-                                                <td v-if="activeAnalyzeSubsection === 'trend-v2'">
+                                                <td>
                                                     <div
                                                         v-for="depotAction in trendRow.depot.actions"
                                                         :key="depotAction.type"
@@ -17341,6 +15862,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                                             {{ formatAnalyzeTrendWin(depotAction.amount, depotAction.currency) }}
                                                         </span>
                                                     </div>
+                                                    <div v-if="shouldShowAnalyzeTrendSellRecommendation(selectedAnalyzeHolding, trendRow)">
+                                                        <span
+                                                            class="analyze-trend-rec analyze-trend-rec--sell analyze-trend-calculated-sell"
+                                                            title="Calculated SELL signal for the current holding"
+                                                        >
+                                                            SELL
+                                                        </span>
+                                                    </div>
                                                     <span
                                                         v-if="trendRow.depot.changeAmount !== null"
                                                         class="analyze-trend-dep-change"
@@ -17349,7 +15878,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         {{ formatAnalyzeTrendSignedWin(trendRow.depot.changeAmount, trendRow.depot.currency) }}
                                                     </span>
                                                 </td>
-                                                <td v-if="activeAnalyzeSubsection === 'trend-v2'">
+                                                <td>
                                                     <div
                                                         v-for="virtualTradeAction in trendRow.virtualTradeActions"
                                                         :key="virtualTradeAction.label"
@@ -17385,13 +15914,12 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         {{ formatAnalyzeTrendSignedWin(trendRow.virtualChangeAmount) }}
                                                     </span>
                                                 </td>
-                                                <template v-if="activeAnalyzeSubsection === 'trend-v2'">
-                                                    <td
-                                                        v-for="maxInvestTrendRow in [
-                                                            selectedAnalyzeTrendV2ConstrainedRowsByDate.get(trendRow.date),
-                                                        ]"
-                                                        :key="`max-invest-${trendRow.date}`"
-                                                    >
+                                                <td
+                                                    v-for="maxInvestTrendRow in [
+                                                        selectedAnalyzeTrendV2ConstrainedRowsByDate.get(trendRow.date),
+                                                    ]"
+                                                    :key="`max-invest-${trendRow.date}`"
+                                                >
                                                         <template v-if="maxInvestTrendRow">
                                                             <div
                                                                 v-for="virtualTradeAction in maxInvestTrendRow.virtualTradeActions"
@@ -17434,112 +15962,6 @@ function formatIndexDataUpdateSchedule(settings) {
                                                                 ) }}
                                                             </span>
                                                         </template>
-                                                    </td>
-                                                </template>
-                                                <td
-                                                    v-if="activeAnalyzeSubsection !== 'trend-v2'"
-                                                    class="text-right"
-                                                    :class="priceChangePercentClass(trendRow.negativeStreak.changePercent)"
-                                                >
-                                                    {{ formatAnalyzeTrendNegativeStreak(trendRow.negativeStreak) }}
-                                                </td>
-                                                <td v-if="activeAnalyzeSubsection !== 'trend-v2'">
-                                                    <span
-                                                        v-for="recommendationItem in trendRow.streakRecommendations"
-                                                        :key="recommendationItem.label"
-                                                        class="analyze-trend-rec"
-                                                        :class="{
-                                                            'analyze-trend-rec--buy': recommendationItem.type === 'buy',
-                                                            'analyze-trend-rec--sell': recommendationItem.type === 'sell',
-                                                        }"
-                                                    >
-                                                        {{ recommendationItem.label }}
-                                                    </span>
-                                                </td>
-                                                <td v-if="activeAnalyzeSubsection !== 'trend-v2'">
-                                                    <div
-                                                        v-for="virtualTradeAction in trendRow.virtualTradeActions"
-                                                        :key="virtualTradeAction.label"
-                                                    >
-                                                        <span
-                                                            class="analyze-trend-rec"
-                                                            :class="{
-                                                                'analyze-trend-rec--buy': virtualTradeAction.type === 'buy',
-                                                                'analyze-trend-rec--sell': virtualTradeAction.type === 'sell',
-                                                            }"
-                                                        >
-                                                            {{ virtualTradeAction.label }} ·
-                                                            {{ formatWholeEuroAmount(virtualTradeAction.amount) }}
-                                                        </span>
-                                                    </div>
-                                                    <span
-                                                        v-if="trendRow.streakWin !== null || trendRow.streakCapital !== null"
-                                                        class="analyze-trend-dep-change"
-                                                        :class="priceChangePercentClass(
-                                                            trendRow.streakWin ?? trendRow.streakCapital,
-                                                        )"
-                                                    >
-                                                        {{ formatAnalyzeTrendSignedWin(
-                                                            trendRow.streakWin ?? trendRow.streakCapital,
-                                                        ) }}
-                                                    </span>
-                                                </td>
-                                                <td v-if="activeAnalyzeSubsection !== 'trend-v2'">
-                                                    <span
-                                                        v-for="depotAction in trendRow.depot.actions"
-                                                        :key="depotAction.type"
-                                                        class="analyze-trend-rec"
-                                                        :class="{
-                                                            'analyze-trend-rec--buy': depotAction.type === 'buy',
-                                                            'analyze-trend-rec--sell': depotAction.type === 'sell',
-                                                        }"
-                                                    >
-                                                        {{ depotAction.label }}
-                                                    </span>
-                                                    <span
-                                                        v-if="trendRow.depot.changeAmount !== null"
-                                                        class="analyze-trend-dep-change"
-                                                        :class="priceChangePercentClass(trendRow.depot.changeAmount)"
-                                                    >
-                                                        {{ formatAnalyzeTrendSignedWin(trendRow.depot.changeAmount, trendRow.depot.currency) }}
-                                                    </span>
-                                                </td>
-                                                <td v-if="activeAnalyzeSubsection !== 'trend-v2'" class="text-right">
-                                                    <span
-                                                        v-for="evolutionItem in formatAnalyzeTrendStreakEvolutionItems(trendRow.streakEvolution)"
-                                                        :key="evolutionItem"
-                                                        class="analyze-trend-evolution-item"
-                                                    >
-                                                        {{ evolutionItem }}
-                                                    </span>
-                                                </td>
-                                                <td
-                                                    v-if="activeAnalyzeSubsection !== 'trend-v2'"
-                                                    class="text-right"
-                                                    :class="priceChangePercentClass(trendRow.nextDayChangePercent)"
-                                                >
-                                                    {{ formatPriceChangePercent(trendRow.nextDayChangePercent) }}
-                                                </td>
-                                                <td v-if="activeAnalyzeSubsection !== 'trend-v2'" class="text-right">
-                                                    {{ formatAnalyzeTrendWin(trendRow.streakWin) }}
-                                                </td>
-                                                <td
-                                                    v-if="activeAnalyzeSubsection !== 'trend-v2'"
-                                                    class="text-right"
-                                                    :class="priceChangePercentClass(trendRow.streakCapital)"
-                                                >
-                                                    <span v-if="trendRow.streakCapital !== null">
-                                                        {{ formatAnalyzeTrendWin(trendRow.streakCapital) }}
-                                                    </span>
-                                                    <span
-                                                        v-if="trendRow.streakCapitalAmount !== null"
-                                                        class="analyze-trend-cap-amount"
-                                                    >
-                                                        {{ formatAnalyzeTrendWin(trendRow.streakCapitalAmount) }}
-                                                    </span>
-                                                </td>
-                                                <td v-if="activeAnalyzeSubsection !== 'trend-v2'" class="text-right">
-                                                    {{ formatAnalyzeTrendWin(trendRow.streakTotalWin) }}
                                                 </td>
                                             </tr>
                                         </tbody>
@@ -18311,7 +16733,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <div class="flex-grow-1">
                                             <div class="text-body-2 font-weight-bold">Cloudways check</div>
                                             <div class="text-body-2">
-                                                Compare configured business and market-data tables with Cloudways and list content differences.
+                                                Compare configured business, market-data, and analysis settings tables with Cloudways and list content differences.
                                             </div>
                                             <div v-if="cloudwaysCheckProgressMessage" class="text-body-2 text-primary mt-2">
                                                 {{ cloudwaysCheckProgressMessage }}
@@ -20802,6 +19224,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <tr>
                                         <th v-if="!isCompactDepotStocksTable">Symbol</th>
                                         <th>Name</th>
+                                        <th>BUY/SELL</th>
                                         <th class="text-right">Amount</th>
                                         <th class="text-right">Value</th>
                                         <th class="text-right">
@@ -20846,6 +19269,15 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 {{ holding.subtitle }}
                                             </div>
                                             <div class="depot-stock-isin">{{ holding.isin || '-' }}</div>
+                                        </td>
+                                        <td>
+                                            <span
+                                                v-if="dashboardTrendRecommendation(holding)"
+                                                class="stock-trend-signal text-error font-weight-bold"
+                                                :title="dashboardTrendRecommendationTitle(holding)"
+                                            >
+                                                {{ dashboardTrendRecommendationLabel(holding) }}
+                                            </span>
                                         </td>
                                         <td class="text-right">{{ formatPositionPieces(holding) }}</td>
                                         <td class="text-right">{{ formatStockHoldingValue(holding) }}</td>
@@ -20916,7 +19348,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                 </tbody>
                                 <tfoot>
                                     <tr>
-                                        <td :colspan="isCompactDepotStocksTable ? 8 : 10" class="text-right font-weight-bold">Sum</td>
+                                        <td :colspan="isCompactDepotStocksTable ? 9 : 11" class="text-right font-weight-bold">Sum</td>
                                         <td class="text-right">
                                             <span class="font-weight-bold" :class="depotHoldingsChangeAmountTotalClass()">
                                                 {{ formatDepotHoldingsChangeAmountTotal() }}
@@ -21914,6 +20346,56 @@ function formatIndexDataUpdateSchedule(settings) {
     font-size: 0.76rem;
     font-weight: 650;
     margin-top: 3px;
+}
+
+.dashboard-stock-signal-section {
+    margin-top: 24px;
+}
+
+.dashboard-stock-signal-grid {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.dashboard-stock-signal-card {
+    min-width: 0;
+}
+
+.dashboard-stock-signal-card--buy {
+    background: rgba(var(--v-theme-success), 0.2);
+    border-color: rgba(var(--v-theme-success), 0.72);
+}
+
+.dashboard-stock-signal-card--sell {
+    background: rgba(var(--v-theme-error), 0.2);
+    border-color: rgba(var(--v-theme-error), 0.72);
+}
+
+.dashboard-stock-signal-card-heading {
+    align-items: flex-start;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.dashboard-stock-signal-card-name {
+    font-size: 0.9rem;
+    font-weight: 750;
+    line-height: 1.2;
+}
+
+.dashboard-stock-signal-card-symbol {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    font-size: 0.68rem;
+    font-weight: 650;
+    margin-top: 4px;
+}
+
+.dashboard-stock-signal-card-action {
+    color: rgb(var(--v-theme-error));
+    font-size: 0.78rem;
+    font-weight: 900;
 }
 
 .dashboard-version-card {
@@ -23043,21 +21525,6 @@ function formatIndexDataUpdateSchedule(settings) {
     border-color: #82afe0;
 }
 
-.analyze-trend-summary-item--button {
-    cursor: pointer;
-}
-
-.analyze-trend-summary-item--button:hover {
-    border-color: rgba(20, 91, 75, 0.32);
-}
-
-.analyze-trend-summary-value-with-icon {
-    align-items: center;
-    display: flex;
-    gap: 6px;
-    justify-content: space-between;
-}
-
 .analyze-trend-summary-label {
     color: #667480;
     display: block;
@@ -23563,13 +22030,6 @@ function formatIndexDataUpdateSchedule(settings) {
     }
 }
 
-.analyze-trend-optimization-info {
-    color: #145b4b;
-    font-size: 0.78rem;
-    font-weight: 700;
-    line-height: 1.2;
-}
-
 .analyze-trend-table {
     min-width: max-content;
     width: max-content;
@@ -23609,47 +22069,6 @@ function formatIndexDataUpdateSchedule(settings) {
     font-weight: 400;
     line-height: 1.15;
     white-space: nowrap;
-}
-
-.analyze-trend-evolution-item {
-    display: block;
-}
-
-.analyze-trend-cap-amount {
-    color: #667480;
-    display: block;
-    font-size: 0.68rem;
-    line-height: 1.2;
-    margin-left: auto;
-    text-align: right;
-}
-
-.analyze-trend-badge,
-.analyze-trend-result {
-    border-radius: 999px;
-    display: inline-flex;
-    font-size: 0.72rem;
-    font-weight: 800;
-    line-height: 1;
-    padding: 5px 8px;
-}
-
-.analyze-trend-badge--buy,
-.analyze-trend-result--right {
-    background: rgba(var(--v-theme-success), 0.12);
-    color: rgb(var(--v-theme-success));
-}
-
-.analyze-trend-badge--sell,
-.analyze-trend-result--wrong {
-    background: rgba(var(--v-theme-error), 0.12);
-    color: rgb(var(--v-theme-error));
-}
-
-.analyze-trend-badge--empty,
-.analyze-trend-result--pending {
-    background: rgba(var(--v-theme-on-surface), 0.08);
-    color: rgba(var(--v-theme-on-surface), 0.68);
 }
 
 .analyze-intraday-card-grid {
@@ -24663,21 +23082,6 @@ function formatIndexDataUpdateSchedule(settings) {
     text-overflow: ellipsis;
 }
 
-.analyze-trend-include-toggle {
-    align-items: center;
-    background: rgb(var(--v-theme-surface));
-    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-    border-radius: 4px;
-    color: rgba(var(--v-theme-on-surface), 0.54);
-    display: inline-flex;
-    justify-content: center;
-    min-width: 34px;
-}
-
-.analyze-trend-include-toggle--active {
-    color: rgb(var(--v-theme-primary));
-}
-
 .analyze-holding-card--all {
     gap: 0;
 }
@@ -24685,6 +23089,12 @@ function formatIndexDataUpdateSchedule(settings) {
 .analyze-holding-card--active {
     background: rgba(var(--v-theme-primary), 0.08);
     border-color: rgba(var(--v-theme-primary), 0.72);
+}
+
+.analyze-holding-card--held,
+.analyze-holding-card--held.analyze-holding-card--active {
+    background: rgba(var(--v-theme-success), 0.18);
+    border-color: rgba(var(--v-theme-success), 0.72);
 }
 
 .analyze-holding-card-header {
@@ -24730,12 +23140,6 @@ function formatIndexDataUpdateSchedule(settings) {
 .analyze-holding-card-price {
     color: rgb(var(--v-theme-primary));
     font-size: 0.76rem;
-}
-
-.analyze-holding-card-stat {
-    font-size: 0.66rem;
-    font-weight: 700;
-    line-height: 1;
 }
 
 .analyze-holding-card-pieces {
