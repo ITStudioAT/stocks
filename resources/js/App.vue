@@ -249,6 +249,8 @@ const isAnalyzeResearchSettingsDialogOpen = ref(false);
 const analyzeResearchEditSection = ref('');
 const isAnalyzeResearchSimulationRunning = ref(false);
 const isAnalyzeResearchSimulationPaused = ref(false);
+const isAnalyzeResearchSimulationDataLoading = ref(false);
+const isAnalyzeResearchSimulationDataLoaded = ref(false);
 const analyzeResearchSimulationDescription = ref('');
 const analyzeResearchSimulationResult = ref(null);
 const analyzeResearchSimulationBestResults = ref([]);
@@ -256,6 +258,7 @@ const analyzeResearchSimulationMessage = ref('');
 const analyzeResearchSimulationCompletedCount = ref(0n);
 const analyzeResearchSimulationTotalCount = ref(0n);
 let analyzeResearchSimulationRunId = 0;
+let analyzeResearchSimulationDataRequest = null;
 const selectedTestStockId = ref(null);
 const selectedDataIntradayStockId = ref(null);
 const selectedDataIndexId = ref(null);
@@ -3353,11 +3356,17 @@ watch(
 );
 
 watch(
-    [activeAnalyzeSubsection, activeAnalyzeResearchSubsection],
-    ([subsection, researchSubsection]) => {
+    [activeSection, activeAnalyzeSubsection, activeAnalyzeResearchSubsection],
+    ([section, subsection, researchSubsection]) => {
+        if (section === 'analyze' && subsection === 'research' && researchSubsection === 'simulation') {
+            loadWatchlistHoldingsForActiveSection().catch(() => {});
+
+            return;
+        }
+
         if (
             isAnalyzeResearchSimulationRunning.value
-            && (subsection !== 'research' || researchSubsection !== 'simulation')
+            && (section !== 'analyze' || subsection !== 'research' || researchSubsection !== 'simulation')
         ) {
             stopAnalyzeResearchSimulation();
         }
@@ -3895,7 +3904,11 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
         || activeSection.value === 'stocks'
         || (activeSection.value === 'data' && activeDataSubsection.value === 'stocks');
 
-    return depotsStore.loadWatchlistHoldings(page, {
+    if (shouldIncludeResearchSimulationCharts && analyzeResearchSimulationDataRequest !== null) {
+        return analyzeResearchSimulationDataRequest;
+    }
+
+    const holdingsRequest = depotsStore.loadWatchlistHoldings(page, {
         ...options,
         allHoldings: shouldIncludeAllHoldings,
         includeCharts: shouldIncludeCharts,
@@ -3907,6 +3920,37 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
             ? stockChartRequestRange(selectedStockPriceRange.value)
             : (shouldIncludeAnalyzeCharts ? selectedAnalyzeHistoryRange.value : null),
     });
+
+    if (!shouldIncludeResearchSimulationCharts) {
+        return holdingsRequest;
+    }
+
+    isAnalyzeResearchSimulationDataLoading.value = true;
+    isAnalyzeResearchSimulationDataLoaded.value = false;
+    analyzeResearchSimulationMessage.value = '';
+
+    const trackedRequest = holdingsRequest
+        .then((response) => {
+            isAnalyzeResearchSimulationDataLoaded.value = true;
+
+            return response;
+        })
+        .catch((error) => {
+            analyzeResearchSimulationMessage.value = `Historical price data could not be loaded: ${error.message}`;
+
+            throw error;
+        })
+        .finally(() => {
+            isAnalyzeResearchSimulationDataLoading.value = false;
+
+            if (analyzeResearchSimulationDataRequest === trackedRequest) {
+                analyzeResearchSimulationDataRequest = null;
+            }
+        });
+
+    analyzeResearchSimulationDataRequest = trackedRequest;
+
+    return trackedRequest;
 }
 
 async function loadDashboardVersions() {
@@ -5208,12 +5252,12 @@ function stopAnalyzeResearchSimulation() {
 function analyzeResearchSimulationVariantDescription(variant) {
     const buyRules = variant.buyThresholds.map((threshold, index) => (
         threshold === null
-            ? `S${index + 1} off`
-            : `S${index + 1} ${formatAnalyzeResearchDecimal(threshold)}%`
-    )).join(', ');
+            ? `Streak ${index + 1}: No BUY`
+            : `Streak ${index + 1}: BUY at ${formatAnalyzeResearchDecimal(threshold)}%`
+    )).join('; ');
     const maxInvest = `Max ${formatAnalyzeResearchDecimal(variant.maxInvestment)} EUR`;
 
-    return `BUY ${buyRules} · SELL ${formatAnalyzeResearchDecimal(variant.sellThreshold)}%`
+    return `BUY streaks: ${buyRules} · SELL ${formatAnalyzeResearchDecimal(variant.sellThreshold)}%`
         + ` · Invest ${formatAnalyzeResearchDecimal(variant.virtualBuyAmount)} EUR · ${maxInvest}`;
 }
 
@@ -15994,7 +16038,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                         prepend-icon="mdi-play-outline"
                                         type="button"
                                         variant="flat"
-                                        :disabled="isAnalyzeResearchSimulationRunning"
+                                        :disabled="isAnalyzeResearchSimulationRunning
+                                            || isAnalyzeResearchSimulationDataLoading
+                                            || !isAnalyzeResearchSimulationDataLoaded"
                                         @click="startAnalyzeResearchSimulation"
                                     >
                                         Simulate
@@ -16040,12 +16086,15 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 isAnalyzeResearchSimulationPaused,
                                         }"
                                     />
-                                    <strong>{{ isAnalyzeResearchSimulationPaused ? 'Paused:' : 'Running:' }}</strong>
-                                    <span>
-                                        {{ isAnalyzeResearchSimulationRunning
-                                            ? (analyzeResearchSimulationDescription || 'Research simulation')
-                                            : 'Nothing' }}
-                                    </span>
+                                    <template v-if="isAnalyzeResearchSimulationRunning">
+                                        <strong>{{ isAnalyzeResearchSimulationPaused ? 'Paused:' : 'Running:' }}</strong>
+                                        <span>{{ analyzeResearchSimulationDescription || 'Research simulation' }}</span>
+                                    </template>
+                                    <strong v-else-if="isAnalyzeResearchSimulationDataLoading
+                                        || !isAnalyzeResearchSimulationDataLoaded">
+                                        {{ analyzeResearchSimulationMessage ? 'Data load failed' : 'Loading Data' }}
+                                    </strong>
+                                    <strong v-else>Data ready</strong>
                                 </div>
                                 <v-card
                                     aria-label="Research simulation results"
@@ -16073,27 +16122,45 @@ function formatIndexDataUpdateSchedule(settings) {
                                             </strong>
                                         </div>
                                         <div
-                                            class="analyze-research-simulation-invested-stocks"
+                                            class="analyze-research-simulation-stock-summary"
                                             aria-label="Invested stocks for current simulation result"
+                                            tabindex="0"
                                         >
-                                            <strong>Invested stocks:</strong>
-                                            <span v-if="analyzeResearchSimulationResult.investedStocks.length === 0">
-                                                None
-                                            </span>
-                                            <span
-                                                v-for="stock in analyzeResearchSimulationResult.investedStocks"
-                                                :key="stock.holdingId"
-                                                class="analyze-research-simulation-invested-stock"
+                                            <strong class="analyze-research-simulation-stock-trigger">
+                                                Stocks ({{ analyzeResearchSimulationResult.investedStocks.length }})
+                                            </strong>
+                                            <div
+                                                class="analyze-research-simulation-stock-popover"
+                                                role="tooltip"
                                             >
-                                                {{ stock.label }}
-                                                <strong>{{ formatAnalyzeResearchDecimal(stock.investedAmount) }} EUR</strong>
-                                            </span>
+                                                <strong>Invested stocks</strong>
+                                                <div class="analyze-research-simulation-invested-stocks">
+                                                    <span
+                                                        v-if="analyzeResearchSimulationResult.investedStocks.length === 0"
+                                                    >
+                                                        None
+                                                    </span>
+                                                    <span
+                                                        v-for="stock in analyzeResearchSimulationResult.investedStocks"
+                                                        :key="stock.holdingId"
+                                                        class="analyze-research-simulation-invested-stock"
+                                                    >
+                                                        {{ stock.label }}
+                                                        <strong>
+                                                            {{ formatAnalyzeResearchDecimal(stock.investedAmount) }} EUR
+                                                        </strong>
+                                                    </span>
+                                                </div>
+                                            </div>
                                         </div>
                                         <div class="text-medium-emphasis">
                                             {{ analyzeResearchSimulationResult.settings }}
                                         </div>
                                     </v-card-text>
-                                    <v-card-text v-else class="text-medium-emphasis">
+                                    <v-card-text
+                                        v-else-if="!analyzeResearchSimulationMessage"
+                                        class="text-medium-emphasis"
+                                    >
                                         No simulation results yet.
                                     </v-card-text>
                                     <template v-if="analyzeResearchSimulationBestResults.length > 0">
@@ -16118,25 +16185,40 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         ) }}
                                                     </strong>
                                                     <div
-                                                        class="analyze-research-simulation-invested-stocks"
+                                                        class="analyze-research-simulation-stock-summary"
                                                         :aria-label="`Invested stocks for variant ${result.variantNumber}`"
+                                                        tabindex="0"
                                                     >
-                                                        <strong>Invested stocks:</strong>
-                                                        <span v-if="result.investedStocks.length === 0">None</span>
-                                                        <span
-                                                            v-for="stock in result.investedStocks"
-                                                            :key="stock.holdingId"
-                                                            class="analyze-research-simulation-invested-stock"
+                                                        <strong class="analyze-research-simulation-stock-trigger">
+                                                            Stocks ({{ result.investedStocks.length }})
+                                                        </strong>
+                                                        <div
+                                                            class="analyze-research-simulation-stock-popover"
+                                                            role="tooltip"
                                                         >
-                                                            {{ stock.label }}
-                                                            <strong>
-                                                                {{ formatAnalyzeResearchDecimal(stock.investedAmount) }} EUR
-                                                            </strong>
-                                                        </span>
+                                                            <strong>Invested stocks</strong>
+                                                            <div class="analyze-research-simulation-invested-stocks">
+                                                                <span v-if="result.investedStocks.length === 0">None</span>
+                                                                <span
+                                                                    v-for="stock in result.investedStocks"
+                                                                    :key="stock.holdingId"
+                                                                    class="analyze-research-simulation-invested-stock"
+                                                                >
+                                                                    {{ stock.label }}
+                                                                    <strong>
+                                                                        {{ formatAnalyzeResearchDecimal(
+                                                                            stock.investedAmount,
+                                                                        ) }} EUR
+                                                                    </strong>
+                                                                </span>
+                                                            </div>
+                                                        </div>
                                                     </div>
-                                                    <span class="text-medium-emphasis" :title="result.settings">
+                                                    <div
+                                                        class="analyze-research-simulation-settings-details text-medium-emphasis"
+                                                    >
                                                         {{ result.settings }}
-                                                    </span>
+                                                    </div>
                                                 </li>
                                             </ol>
                                         </v-card-text>
@@ -23181,12 +23263,61 @@ function formatIndexDataUpdateSchedule(settings) {
     justify-content: space-between;
 }
 
+.analyze-research-simulation-results {
+    overflow: visible !important;
+}
+
+.analyze-research-simulation-stock-summary {
+    position: relative;
+    width: fit-content;
+}
+
+.analyze-research-simulation-stock-trigger {
+    border-bottom: 1px dotted currentColor;
+    color: rgb(var(--v-theme-primary));
+    cursor: help;
+    font-size: 0.76rem;
+}
+
+.analyze-research-simulation-stock-popover {
+    background: rgb(var(--v-theme-surface));
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 8px;
+    box-shadow: 0 10px 28px rgba(20, 36, 48, 0.18);
+    left: 0;
+    max-width: min(680px, calc(100vw - 72px));
+    opacity: 0;
+    padding: 10px;
+    pointer-events: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    transform: translateY(-3px);
+    transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+    visibility: hidden;
+    width: max-content;
+    z-index: 30;
+}
+
+.analyze-research-simulation-stock-summary:hover .analyze-research-simulation-stock-popover,
+.analyze-research-simulation-stock-summary:focus-within .analyze-research-simulation-stock-popover {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+    visibility: visible;
+}
+
+.analyze-research-simulation-stock-summary:focus-visible {
+    outline: 2px solid rgba(var(--v-theme-primary), 0.55);
+    outline-offset: 3px;
+}
+
 .analyze-research-simulation-invested-stocks {
     align-items: baseline;
     display: flex;
     flex-wrap: wrap;
     font-size: 0.76rem;
     gap: 5px 8px;
+    margin-top: 7px;
 }
 
 .analyze-research-simulation-invested-stock {
@@ -23226,8 +23357,15 @@ function formatIndexDataUpdateSchedule(settings) {
     white-space: nowrap;
 }
 
-.analyze-research-simulation-best-results li > .analyze-research-simulation-invested-stocks {
+.analyze-research-simulation-best-results li > .analyze-research-simulation-stock-summary {
     grid-column: 1 / -1;
+}
+
+.analyze-research-simulation-best-results li > .analyze-research-simulation-settings-details {
+    grid-column: 1 / -1;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+    white-space: normal;
 }
 
 .analyze-research-simulation-best-rank {

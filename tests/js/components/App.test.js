@@ -1606,6 +1606,10 @@ describe('App', () => {
         expect(analyzeResearch.find('.analyze-research-overview').exists()).toBe(true);
 
         await researchSubmenuTabs.find((tab) => tab.text() === 'Simulation').trigger('click');
+
+        expect(analyzeResearch.find('[aria-label="Simulate research"]').attributes('disabled')).toBeDefined();
+        expect(analyzeResearch.find('.analyze-research-simulation-status').text()).toContain('Loading Data');
+
         await flushPromises();
 
         expect(window.location.pathname).toBe('/admin/menu/analyze/research/simulation');
@@ -1634,6 +1638,11 @@ describe('App', () => {
         expect(simulateResearchButton.exists()).toBe(true);
         expect(simulateResearchButton.text()).toContain('Simulate');
         expect(simulateResearchButton.attributes('disabled')).toBeUndefined();
+        expect(fetchMock.mock.calls.some(([path]) => (
+            path.includes('/admin/watchlist/holdings?page=1')
+            && path.includes('include_charts=1')
+            && path.includes('all_chart_holdings=1')
+        ))).toBe(true);
         const stopResearchSimulationButton = analyzeResearch.find('[aria-label="Stop research simulation"]');
         expect(stopResearchSimulationButton.exists()).toBe(true);
         expect(stopResearchSimulationButton.text()).toContain('Stop Simulate');
@@ -1644,7 +1653,7 @@ describe('App', () => {
         expect(pauseResearchSimulationButton.exists()).toBe(true);
         expect(pauseResearchSimulationButton.text()).toContain('Pause Simulate');
         expect(pauseResearchSimulationButton.attributes('disabled')).toBeDefined();
-        expect(analyzeResearch.find('.analyze-research-simulation-status').text()).toContain('Running:Nothing');
+        expect(analyzeResearch.find('.analyze-research-simulation-status').text()).toContain('Data ready');
         const researchSimulationResults = analyzeResearch.find('[aria-label="Research simulation results"]');
         expect(researchSimulationResults.exists()).toBe(true);
         expect(researchSimulationResults.text()).toContain('Simulation results');
@@ -1665,7 +1674,8 @@ describe('App', () => {
             '[aria-label="Invested stocks for current simulation result"]',
         );
         expect(currentInvestedStocks.exists()).toBe(true);
-        expect(currentInvestedStocks.text()).toContain('Invested stocks:');
+        expect(currentInvestedStocks.find('.analyze-research-simulation-stock-trigger').text()).toBe('Stocks (4)');
+        expect(currentInvestedStocks.find('[role="tooltip"]').exists()).toBe(true);
         expect(currentInvestedStocks.findAll('.analyze-research-simulation-invested-stock').length)
             .toBeGreaterThan(0);
         expect(researchSimulationResults.text()).toContain('Best 10');
@@ -1675,6 +1685,12 @@ describe('App', () => {
         expect(bestResearchSimulationResults.findAll('li')).toHaveLength(1);
         expect(bestResearchSimulationResults.text()).toContain('#1Variant 1329.00 EUR');
         expect(bestResearchSimulationResults.text()).toContain('Max invested: 14,000.00 EUR');
+        const bestResearchSimulationSettings = bestResearchSimulationResults.find(
+            '.analyze-research-simulation-settings-details',
+        );
+        expect(bestResearchSimulationSettings.text()).toContain('BUY streaks: Streak 1: No BUY');
+        expect(bestResearchSimulationSettings.text()).toContain('Streak 2: BUY at -3.00%');
+        expect(bestResearchSimulationSettings.text()).toContain('Streak 5: BUY at 0.00%');
         const bestInvestedStocks = bestResearchSimulationResults.find('[aria-label="Invested stocks for variant 1"]');
         const investedStockLabels = (investedStocks) => investedStocks
             .findAll('.analyze-research-simulation-invested-stock')
@@ -1704,7 +1720,7 @@ describe('App', () => {
         await flushPromises();
 
         expect(researchSimulationResults.text()).toContain('Completed 1 variants.');
-        expect(analyzeResearch.find('.analyze-research-simulation-status').text()).toContain('Running:Nothing');
+        expect(analyzeResearch.find('.analyze-research-simulation-status').text()).toContain('Data ready');
 
         await researchSubmenuTabs.find((tab) => tab.text() === 'Settings').trigger('click');
         await flushPromises();
