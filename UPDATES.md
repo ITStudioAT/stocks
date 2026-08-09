@@ -1,3 +1,9 @@
+## 0.8.8 x
+
+### Analyze
+
+- Research-Menu-Item Added
+
 ## 0.8.7
 
 ### Dashboard

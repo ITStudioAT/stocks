@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\AdminAnalyzeResearchSettingsController;
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminCloudwaysController;
 use App\Http\Controllers\AdminDashboardVersionController;
@@ -170,6 +171,8 @@ Route::middleware(['auth', 'role:admin|super_admin'])->group(function (): void {
     Route::get('/admin/intraday-backfill/{refreshId}', [AdminPriceRefreshSettingsController::class, 'intradayBackfillStatus'])->name('admin.intraday-backfill.status');
     Route::get('/admin/ui-preferences', [AdminUiPreferencesController::class, 'show'])->name('admin.ui-preferences.show');
     Route::patch('/admin/ui-preferences', [AdminUiPreferencesController::class, 'update'])->name('admin.ui-preferences.update');
+    Route::get('/admin/analyze/research-settings', [AdminAnalyzeResearchSettingsController::class, 'show'])->name('admin.analyze.researchSettings.show');
+    Route::patch('/admin/analyze/research-settings', [AdminAnalyzeResearchSettingsController::class, 'update'])->name('admin.analyze.researchSettings.update');
     Route::post('/admin/depots', [AdminDepotController::class, 'store'])->name('admin.depots.store');
     Route::patch('/admin/depots/{depot}', [AdminDepotController::class, 'update'])->name('admin.depots.update');
     Route::patch('/admin/depots/{depot}/activate', [AdminDepotController::class, 'activate'])->name('admin.depots.activate');

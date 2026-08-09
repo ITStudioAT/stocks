@@ -1068,6 +1068,31 @@ describe('App', () => {
             analyze_trend_streak_buy_thresholds: [-4, -3, -2, -1, 0],
             analyze_trend_streak_sell_threshold: 3,
         };
+        let currentResearchSettings = {
+            rows: 200,
+            buy_rules: [-4, -3, -2, -1, 0].map((threshold) => ({
+                enabled: true,
+                from: threshold,
+                to: threshold,
+            })),
+            buy_step: 0.05,
+            sell: {
+                from: 3,
+                to: 3,
+                step: 0.25,
+            },
+            invest: {
+                from: 7000,
+                to: 7000,
+                step: 100,
+            },
+            max_invest: {
+                enabled: false,
+                from: 80000,
+                to: 80000,
+                step: 1000,
+            },
+        };
         const fetchMock = vi.fn((path, options = {}) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -1086,6 +1111,21 @@ describe('App', () => {
                     price_refresh_settings: priceRefreshSettings(),
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                     ui_preferences: currentUiPreferences,
+                }));
+            }
+
+            if (path === '/admin/analyze/research-settings') {
+                if (options.method === 'PATCH') {
+                    currentResearchSettings = JSON.parse(options.body);
+
+                    return Promise.resolve(jsonResponse({
+                        message: 'Research settings saved.',
+                        research_settings: currentResearchSettings,
+                    }));
+                }
+
+                return Promise.resolve(jsonResponse({
+                    research_settings: currentResearchSettings,
                 }));
             }
 
@@ -1548,7 +1588,141 @@ describe('App', () => {
         expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
         expect(window.location.search).toBe('?stock=1');
         expect(wrapper.find('[aria-label="Analyze trend stocks"]').find('.analyze-holding-card--all').exists()).toBe(false);
-        expect(wrapper.findAll('.v-tab').map((tab) => tab.text())).toEqual(['Trend', 'Trend v2', 'Charts']);
+        expect(wrapper.findAll('.v-tab').map((tab) => tab.text())).toEqual([
+            'Trend',
+            'Trend v2',
+            'Research',
+            'Charts',
+        ]);
+
+        const researchTab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Research');
+        await researchTab.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/research/settings');
+        expect(window.location.search).toBe('?stock=1');
+        const analyzeResearch = wrapper.find('[aria-label="Analyze research"]');
+        expect(analyzeResearch.exists()).toBe(true);
+        expect(analyzeResearch.find('.analyze-detail-title').text()).toBe('Research');
+        const researchSubmenuTabs = analyzeResearch.findAll('.v-tab');
+        expect(researchSubmenuTabs.map((tab) => tab.text())).toEqual(['Settings', 'Simulation']);
+        expect(analyzeResearch.find('.analyze-research-overview').exists()).toBe(true);
+
+        await researchSubmenuTabs.find((tab) => tab.text() === 'Simulation').trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/research/simulation');
+        expect(window.location.search).toBe('?stock=1');
+        expect(analyzeResearch.find('[aria-label="Research simulation"]').exists()).toBe(true);
+        expect(analyzeResearch.find('.analyze-research-overview').exists()).toBe(false);
+
+        await researchSubmenuTabs.find((tab) => tab.text() === 'Settings').trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/research/settings');
+        expect(window.location.search).toBe('?stock=1');
+        expect(analyzeResearch.find('.analyze-research-overview').exists()).toBe(true);
+        expect(analyzeResearch.findAll('.analyze-research-value-row')).toHaveLength(5);
+        expect(analyzeResearch.text()).toContain('Virtual Buy rules');
+        expect(analyzeResearch.text()).toContain('Virtual Sell rules');
+        expect(analyzeResearch.text()).not.toContain('Step for all intervals');
+        expect(analyzeResearch.find('[aria-label="Research virtual buy rule values"]').text()).toContain('Step 0.05%');
+        expect(analyzeResearch.find('.analyze-research-sell-values').text()).toContain('Step 0.25%');
+        expect(analyzeResearch.text()).toContain('200');
+        expect(analyzeResearch.text()).toContain('7,000.00 EUR');
+        expect(analyzeResearch.text()).toContain('No max');
+        expect(analyzeResearch.find('[aria-label="Research BUY streak 1 from"]').exists()).toBe(false);
+        [
+            'Edit research rows',
+            'Edit research invest range',
+            'Edit research max invest',
+            'Edit research Virtual Buy rules',
+            'Edit research Virtual Sell rules',
+        ].forEach((ariaLabel) => {
+            expect(analyzeResearch.find(`[aria-label="${ariaLabel}"]`).exists()).toBe(true);
+        });
+
+        await analyzeResearch.find('[aria-label="Edit research invest range"]').trigger('click');
+        await flushPromises();
+
+        let researchSettingsDialog = document.body.querySelector('.analyze-research-settings-dialog');
+        expect(researchSettingsDialog).not.toBeNull();
+        expect(researchSettingsDialog.textContent).toContain('Edit invest range');
+        expect(researchSettingsDialog.querySelector('[aria-label="Research invest from"]')).not.toBeNull();
+        expect(researchSettingsDialog.querySelector('[aria-label="Research rows"]')).toBeNull();
+        expect(researchSettingsDialog.querySelector('[aria-label="Research BUY step"]')).toBeNull();
+        expect(researchSettingsDialog.querySelector('[aria-label="Research SELL step"]')).toBeNull();
+        expect(researchSettingsDialog.querySelector('[aria-label="Research BUY streak 1 from"]')).toBeNull();
+
+        const updateResearchInput = (dialog, ariaLabel, value) => {
+            const input = dialog.querySelector(`[aria-label="${ariaLabel}"]`);
+            input.value = value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        };
+        updateResearchInput(researchSettingsDialog, 'Research invest from', '4500.25');
+        updateResearchInput(researchSettingsDialog, 'Research invest to', '8200.75');
+        updateResearchInput(researchSettingsDialog, 'Research invest step', '250.5');
+        Array.from(researchSettingsDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Save settings'))
+            .click();
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/analyze/research-settings', expect.objectContaining({
+            method: 'PATCH',
+        }));
+        expect(currentResearchSettings.invest).toEqual({ from: 4500.25, to: 8200.75, step: 250.5 });
+
+        await analyzeResearch.find('[aria-label="Edit research max invest"]').trigger('click');
+        await flushPromises();
+        researchSettingsDialog = document.body.querySelector('.analyze-research-settings-dialog');
+        expect(researchSettingsDialog.textContent).toContain('Edit max invest');
+        expect(researchSettingsDialog.textContent).toContain('No max');
+        expect(researchSettingsDialog.querySelector('[aria-label="Research invest from"]')).toBeNull();
+        researchSettingsDialog.querySelector('[aria-label="Use research max invest"]').click();
+        await flushPromises();
+        updateResearchInput(researchSettingsDialog, 'Research max invest from', '60000.5');
+        updateResearchInput(researchSettingsDialog, 'Research max invest to', '90000.75');
+        updateResearchInput(researchSettingsDialog, 'Research max invest step', '5000.25');
+        Array.from(researchSettingsDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Save settings'))
+            .click();
+        await flushPromises();
+
+        expect(currentResearchSettings.max_invest).toEqual({
+            enabled: true,
+            from: 60000.5,
+            to: 90000.75,
+            step: 5000.25,
+        });
+
+        await analyzeResearch.find('[aria-label="Edit research Virtual Buy rules"]').trigger('click');
+        await flushPromises();
+        researchSettingsDialog = document.body.querySelector('.analyze-research-settings-dialog');
+        expect(researchSettingsDialog.querySelector('[aria-label="Research BUY step"]')).not.toBeNull();
+        expect(researchSettingsDialog.querySelector('[aria-label="Research SELL step"]')).toBeNull();
+        Array.from(researchSettingsDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Cancel'))
+            .click();
+        await flushPromises();
+
+        await analyzeResearch.find('[aria-label="Edit research Virtual Sell rules"]').trigger('click');
+        await flushPromises();
+        researchSettingsDialog = document.body.querySelector('.analyze-research-settings-dialog');
+        expect(researchSettingsDialog.querySelector('[aria-label="Research BUY step"]')).toBeNull();
+        expect(researchSettingsDialog.querySelector('[aria-label="Research SELL step"]')).not.toBeNull();
+        Array.from(researchSettingsDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Cancel'))
+            .click();
+        await flushPromises();
+
+        expect(currentResearchSettings.rows).toBe(200);
+        expect(currentResearchSettings.buy_rules[0]).toEqual({ enabled: true, from: -4, to: -4 });
+        expect(currentResearchSettings.buy_step).toBe(0.05);
+        expect(currentResearchSettings.sell).toEqual({ from: 3, to: 3, step: 0.25 });
+        expect(analyzeResearch.text()).toContain('Research settings saved.');
+        expect(analyzeResearch.text()).toContain('4,500.25 EUR');
+        expect(document.body.querySelector('.analyze-research-settings-dialog')
+            .classList.contains('v-overlay--active')).toBe(false);
 
         const trendV2Tab = wrapper.findAll('.v-tab').find((tab) => tab.text() === 'Trend v2');
         await trendV2Tab.trigger('click');

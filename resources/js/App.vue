@@ -36,6 +36,16 @@ const maxAnalyzeTrendVirtualBuyAmount = 1000000;
 const defaultAnalyzeTrendStreakBuyThresholds = [-4, -3, -2, -1, 0];
 const maxAnalyzeTrendStreakBuyThresholdCount = 20;
 const defaultAnalyzeTrendStreakSellThreshold = 3;
+const defaultAnalyzeResearchBuyThresholds = [-4, -3, -2, -1, 0];
+const maxAnalyzeResearchBuyRuleCount = 20;
+const defaultAnalyzeResearchSellThreshold = 3;
+const defaultAnalyzeResearchBuyStep = 0.1;
+const defaultAnalyzeResearchSellStep = 0.1;
+const defaultAnalyzeResearchRowLimit = 200;
+const maxAnalyzeResearchRowLimit = 2000;
+const defaultAnalyzeResearchInvest = { from: 7000, to: 7000, step: 100 };
+const defaultAnalyzeResearchMaxInvest = { enabled: false, from: 80000, to: 80000, step: 1000 };
+const maxAnalyzeResearchInvestment = 1000000;
 const cashLedgerPageSize = 20;
 const indexRealtimeOverdueCheckIntervalMilliseconds = 1000;
 const activeItemRefreshIntervalMilliseconds = 60_000;
@@ -185,6 +195,7 @@ const infoTablesError = ref('');
 const infoTableSearch = ref('');
 const activeInfoSubsection = ref('eodhd');
 const activeAnalyzeSubsection = ref('trend');
+const activeAnalyzeResearchSubsection = ref('settings');
 const activeDataSubsection = ref('indices');
 const activeDataType = ref('live-data');
 const activeDepotSubsection = ref('overview');
@@ -220,6 +231,15 @@ const analyzeTrendStreakSellThreshold = ref(defaultAnalyzeTrendStreakSellThresho
 const analyzeTrendStreakSellThresholdEditValue = ref(String(defaultAnalyzeTrendStreakSellThreshold));
 const isAnalyzeTrendStreakRulesDialogOpen = ref(false);
 const isAnalyzeTrendStreakRulesSaving = ref(false);
+const analyzeResearchSettings = ref(defaultAnalyzeResearchSettings());
+const analyzeResearchForm = ref(defaultAnalyzeResearchForm());
+const analyzeResearchSettingsLoaded = ref(false);
+const analyzeResearchSettingsLoading = ref(false);
+const analyzeResearchSettingsSaving = ref(false);
+const analyzeResearchSettingsMessage = ref('');
+const analyzeResearchSettingsError = ref('');
+const isAnalyzeResearchSettingsDialogOpen = ref(false);
+const analyzeResearchEditSection = ref('');
 const selectedTestStockId = ref(null);
 const selectedDataIntradayStockId = ref(null);
 const selectedDataIndexId = ref(null);
@@ -1125,6 +1145,55 @@ const isAnalyzeTrendStreakRulesFormValid = computed(() => (
     isValidAnalyzeTrendStreakBuyThresholds(analyzeTrendStreakBuyThresholdEditValues.value)
     && isValidAnalyzeTrendStreakSellThreshold(analyzeTrendStreakSellThresholdEditValue.value)
 ));
+const isAnalyzeResearchFormValid = computed(() => {
+    const {
+        rows,
+        buyRules,
+        sellFrom,
+        sellTo,
+        buyStep,
+        sellStep,
+        investFrom,
+        investTo,
+        investStep,
+        maxInvestFrom,
+        maxInvestTo,
+        maxInvestStep,
+    } = analyzeResearchForm.value;
+
+    if (!Array.isArray(buyRules) || buyRules.length < 1 || buyRules.length > maxAnalyzeResearchBuyRuleCount) {
+        return false;
+    }
+
+    const hasValidBuyRules = buyRules.every((buyRule) => (
+        isAnalyzeResearchDecimalInRange(buyRule.from, -100, 0)
+        && isAnalyzeResearchDecimalInRange(buyRule.to, -100, 0)
+        && Number(buyRule.from) <= Number(buyRule.to)
+    ));
+
+    return hasValidBuyRules
+        && isAnalyzeResearchIntegerInRange(rows, 1, maxAnalyzeResearchRowLimit)
+        && isAnalyzeResearchDecimalInRange(sellFrom, 0, 100)
+        && isAnalyzeResearchDecimalInRange(sellTo, 0, 100)
+        && Number(sellFrom) <= Number(sellTo)
+        && isAnalyzeResearchDecimalInRange(buyStep, Number.EPSILON, 100)
+        && isAnalyzeResearchDecimalInRange(sellStep, Number.EPSILON, 100)
+        && isAnalyzeResearchDecimalInRange(investFrom, 0, maxAnalyzeResearchInvestment)
+        && isAnalyzeResearchDecimalInRange(investTo, 0, maxAnalyzeResearchInvestment)
+        && Number(investFrom) <= Number(investTo)
+        && isAnalyzeResearchDecimalInRange(investStep, Number.EPSILON, maxAnalyzeResearchInvestment)
+        && isAnalyzeResearchDecimalInRange(maxInvestFrom, 0, maxAnalyzeResearchInvestment)
+        && isAnalyzeResearchDecimalInRange(maxInvestTo, 0, maxAnalyzeResearchInvestment)
+        && Number(maxInvestFrom) <= Number(maxInvestTo)
+        && isAnalyzeResearchDecimalInRange(maxInvestStep, Number.EPSILON, maxAnalyzeResearchInvestment);
+});
+const analyzeResearchEditTitle = computed(() => ({
+    rows: 'Edit rows',
+    invest: 'Edit invest range',
+    maxInvest: 'Edit max invest',
+    buyRules: 'Edit Virtual Buy rules',
+    sellRules: 'Edit Virtual Sell rules',
+}[analyzeResearchEditSection.value] ?? 'Edit research settings'));
 const showAnalyzeSparklineDots = computed(() => isAnalyzeTodayRange(selectedAnalyzeHistoryRange.value));
 const analyzeIntradayDetail = computed(() => analyzeIntradayCandles.value?.intraday ?? null);
 const analyzeIntradayDetailDays = computed(() => {
@@ -2797,12 +2866,30 @@ const analyzeSubmenuItems = [
         icon: 'mdi-trending-up',
     },
     {
+        key: 'research',
+        label: 'Research',
+        icon: 'mdi-magnify',
+    },
+    {
         key: 'overview',
         label: 'Charts',
         icon: 'mdi-view-grid-outline',
     },
 ];
-const analyzeSubsectionKeys = ['trend', 'trend-v2', 'overview', 'intraday', 'detail', 'tests'];
+const analyzeResearchSubmenuItems = [
+    {
+        key: 'settings',
+        label: 'Settings',
+        icon: 'mdi-cog-outline',
+    },
+    {
+        key: 'simulation',
+        label: 'Simulation',
+        icon: 'mdi-flask-outline',
+    },
+];
+const analyzeResearchSubsectionKeys = analyzeResearchSubmenuItems.map((item) => item.key);
+const analyzeSubsectionKeys = ['trend', 'trend-v2', 'research', 'overview', 'intraday', 'detail', 'tests'];
 const dataSubmenuItems = [
     {
         key: 'indices',
@@ -3206,6 +3293,10 @@ watch(
             depotsStore.loadTestOptions()
                 .then(() => ensureSelectedTestStock())
                 .catch(() => {});
+        }
+
+        if (section === 'analyze' && subsection === 'research') {
+            loadAnalyzeResearchSettings().catch(() => {});
         }
 
         if (section === 'data' && dataSubsection === 'indices') {
@@ -4250,6 +4341,15 @@ function navigateAnalyzeSubsection(subsection) {
     updateUrlPath();
 }
 
+function navigateAnalyzeResearchSubsection(subsection) {
+    if (!isAnalyzeResearchSubsection(subsection) || activeAnalyzeResearchSubsection.value === subsection) {
+        return;
+    }
+
+    activeAnalyzeResearchSubsection.value = subsection;
+    updateUrlPath();
+}
+
 function navigateDataSubsection(subsection) {
     if (!isDataSubsection(subsection) || activeDataSubsection.value === subsection) {
         return;
@@ -4714,6 +4814,226 @@ function cancelAnalyzeTrendStreakRulesEdit() {
     isAnalyzeTrendStreakRulesDialogOpen.value = false;
 }
 
+function defaultAnalyzeResearchSettings() {
+    return {
+        rows: defaultAnalyzeResearchRowLimit,
+        buy_rules: defaultAnalyzeResearchBuyThresholds.map((threshold) => ({
+            enabled: true,
+            from: threshold,
+            to: threshold,
+        })),
+        buy_step: defaultAnalyzeResearchBuyStep,
+        sell: {
+            from: defaultAnalyzeResearchSellThreshold,
+            to: defaultAnalyzeResearchSellThreshold,
+            step: defaultAnalyzeResearchSellStep,
+        },
+        invest: { ...defaultAnalyzeResearchInvest },
+        max_invest: { ...defaultAnalyzeResearchMaxInvest },
+    };
+}
+
+function normalizeAnalyzeResearchDecimal(value, fallback) {
+    const number = Number(value);
+
+    return Number.isFinite(number) ? number : fallback;
+}
+
+function normalizeAnalyzeResearchSettings(settings) {
+    const defaults = defaultAnalyzeResearchSettings();
+    const legacyStep = normalizeAnalyzeResearchDecimal(settings?.step, defaultAnalyzeResearchBuyStep);
+    const buyRules = Array.isArray(settings?.buy_rules) && settings.buy_rules.length > 0
+        ? settings.buy_rules.slice(0, maxAnalyzeResearchBuyRuleCount)
+        : defaults.buy_rules;
+
+    return {
+        rows: Number.isInteger(Number(settings?.rows))
+            ? Number(settings.rows)
+            : defaults.rows,
+        buy_rules: buyRules.map((buyRule, index) => {
+            const fallback = defaults.buy_rules[index] ?? { enabled: true, from: 0, to: 0 };
+
+            return {
+                enabled: typeof buyRule?.enabled === 'boolean' ? buyRule.enabled : fallback.enabled,
+                from: normalizeAnalyzeResearchDecimal(buyRule?.from, fallback.from),
+                to: normalizeAnalyzeResearchDecimal(buyRule?.to, fallback.to),
+            };
+        }),
+        buy_step: normalizeAnalyzeResearchDecimal(settings?.buy_step, legacyStep),
+        sell: {
+            from: normalizeAnalyzeResearchDecimal(settings?.sell?.from, defaults.sell.from),
+            to: normalizeAnalyzeResearchDecimal(settings?.sell?.to, defaults.sell.to),
+            step: normalizeAnalyzeResearchDecimal(settings?.sell?.step, legacyStep),
+        },
+        invest: {
+            from: normalizeAnalyzeResearchDecimal(settings?.invest?.from, defaults.invest.from),
+            to: normalizeAnalyzeResearchDecimal(settings?.invest?.to, defaults.invest.to),
+            step: normalizeAnalyzeResearchDecimal(settings?.invest?.step, defaults.invest.step),
+        },
+        max_invest: {
+            enabled: typeof settings?.max_invest?.enabled === 'boolean'
+                ? settings.max_invest.enabled
+                : defaults.max_invest.enabled,
+            from: normalizeAnalyzeResearchDecimal(settings?.max_invest?.from, defaults.max_invest.from),
+            to: normalizeAnalyzeResearchDecimal(settings?.max_invest?.to, defaults.max_invest.to),
+            step: normalizeAnalyzeResearchDecimal(settings?.max_invest?.step, defaults.max_invest.step),
+        },
+    };
+}
+
+function analyzeResearchFormFromSettings(settings) {
+    const normalizedSettings = normalizeAnalyzeResearchSettings(settings);
+
+    return {
+        rows: String(normalizedSettings.rows),
+        buyRules: normalizedSettings.buy_rules.map((buyRule) => ({
+            enabled: buyRule.enabled,
+            from: String(buyRule.from),
+            to: String(buyRule.to),
+        })),
+        buyStep: String(normalizedSettings.buy_step),
+        sellFrom: String(normalizedSettings.sell.from),
+        sellTo: String(normalizedSettings.sell.to),
+        sellStep: String(normalizedSettings.sell.step),
+        investFrom: String(normalizedSettings.invest.from),
+        investTo: String(normalizedSettings.invest.to),
+        investStep: String(normalizedSettings.invest.step),
+        maxInvestEnabled: normalizedSettings.max_invest.enabled,
+        maxInvestFrom: String(normalizedSettings.max_invest.from),
+        maxInvestTo: String(normalizedSettings.max_invest.to),
+        maxInvestStep: String(normalizedSettings.max_invest.step),
+    };
+}
+
+function defaultAnalyzeResearchForm() {
+    return analyzeResearchFormFromSettings(defaultAnalyzeResearchSettings());
+}
+
+function isAnalyzeResearchDecimalInRange(value, minimum, maximum) {
+    const number = Number(value);
+
+    return String(value).trim() !== '' && Number.isFinite(number) && number >= minimum && number <= maximum;
+}
+
+function isAnalyzeResearchIntegerInRange(value, minimum, maximum) {
+    const number = Number(value);
+
+    return String(value).trim() !== '' && Number.isInteger(number) && number >= minimum && number <= maximum;
+}
+
+function formatAnalyzeResearchDecimal(value) {
+    return Number(value).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 6,
+    });
+}
+
+function editAnalyzeResearchSettings(section) {
+    analyzeResearchForm.value = analyzeResearchFormFromSettings(analyzeResearchSettings.value);
+    analyzeResearchSettingsError.value = '';
+    analyzeResearchEditSection.value = section;
+    isAnalyzeResearchSettingsDialogOpen.value = true;
+}
+
+function cancelAnalyzeResearchSettingsEdit() {
+    analyzeResearchForm.value = analyzeResearchFormFromSettings(analyzeResearchSettings.value);
+    analyzeResearchSettingsError.value = '';
+    isAnalyzeResearchSettingsDialogOpen.value = false;
+    analyzeResearchEditSection.value = '';
+}
+
+function addAnalyzeResearchBuyRule() {
+    if (analyzeResearchForm.value.buyRules.length >= maxAnalyzeResearchBuyRuleCount) {
+        return;
+    }
+
+    analyzeResearchForm.value.buyRules.push({
+        enabled: true,
+        from: '0',
+        to: '0',
+    });
+}
+
+function removeAnalyzeResearchBuyRule(index) {
+    if (analyzeResearchForm.value.buyRules.length <= 1) {
+        return;
+    }
+
+    analyzeResearchForm.value.buyRules.splice(index, 1);
+}
+
+async function loadAnalyzeResearchSettings() {
+    if (analyzeResearchSettingsLoaded.value || analyzeResearchSettingsLoading.value) {
+        return;
+    }
+
+    try {
+        analyzeResearchSettingsLoading.value = true;
+        analyzeResearchSettingsError.value = '';
+        const data = await request('/admin/analyze/research-settings');
+        analyzeResearchSettings.value = normalizeAnalyzeResearchSettings(data.research_settings);
+        analyzeResearchForm.value = analyzeResearchFormFromSettings(analyzeResearchSettings.value);
+        analyzeResearchSettingsLoaded.value = true;
+    } catch (error) {
+        analyzeResearchSettingsError.value = error.message;
+        throw error;
+    } finally {
+        analyzeResearchSettingsLoading.value = false;
+    }
+}
+
+async function saveAnalyzeResearchSettings() {
+    if (!isAnalyzeResearchFormValid.value || analyzeResearchSettingsSaving.value) {
+        return;
+    }
+
+    const payload = {
+        rows: Number(analyzeResearchForm.value.rows),
+        buy_rules: analyzeResearchForm.value.buyRules.map((buyRule) => ({
+            enabled: buyRule.enabled,
+            from: Number(buyRule.from),
+            to: Number(buyRule.to),
+        })),
+        buy_step: Number(analyzeResearchForm.value.buyStep),
+        sell: {
+            from: Number(analyzeResearchForm.value.sellFrom),
+            to: Number(analyzeResearchForm.value.sellTo),
+            step: Number(analyzeResearchForm.value.sellStep),
+        },
+        invest: {
+            from: Number(analyzeResearchForm.value.investFrom),
+            to: Number(analyzeResearchForm.value.investTo),
+            step: Number(analyzeResearchForm.value.investStep),
+        },
+        max_invest: {
+            enabled: analyzeResearchForm.value.maxInvestEnabled,
+            from: Number(analyzeResearchForm.value.maxInvestFrom),
+            to: Number(analyzeResearchForm.value.maxInvestTo),
+            step: Number(analyzeResearchForm.value.maxInvestStep),
+        },
+    };
+
+    try {
+        analyzeResearchSettingsSaving.value = true;
+        analyzeResearchSettingsError.value = '';
+        analyzeResearchSettingsMessage.value = '';
+        const data = await request('/admin/analyze/research-settings', {
+            method: 'PATCH',
+            body: JSON.stringify(payload),
+        });
+        analyzeResearchSettings.value = normalizeAnalyzeResearchSettings(data.research_settings ?? payload);
+        analyzeResearchForm.value = analyzeResearchFormFromSettings(analyzeResearchSettings.value);
+        analyzeResearchSettingsLoaded.value = true;
+        analyzeResearchSettingsMessage.value = data.message ?? 'Research settings saved.';
+        isAnalyzeResearchSettingsDialogOpen.value = false;
+        analyzeResearchEditSection.value = '';
+    } catch (error) {
+        analyzeResearchSettingsError.value = error.message;
+    } finally {
+        analyzeResearchSettingsSaving.value = false;
+    }
+}
+
 function moveAnalyzeChartWindowBackward() {
     if (!canMoveAnalyzeChartBackward.value) {
         return;
@@ -4755,6 +5075,10 @@ function applyRouteFromPath() {
             activeAnalyzeSubsection.value = isAnalyzeSubsection(subsectionSegment)
                 ? subsectionSegment
                 : 'trend';
+            activeAnalyzeResearchSubsection.value = activeAnalyzeSubsection.value === 'research'
+                && isAnalyzeResearchSubsection(detailSegment)
+                ? detailSegment
+                : 'settings';
             applyAnalyzeSelectionFromQuery(new URLSearchParams(window.location.search));
             updateUrlPath({ replace: true });
 
@@ -4819,7 +5143,9 @@ function updateUrlPath(options = {}) {
         : activeSection.value === 'profile'
             ? '/admin/profile'
             : activeSection.value === 'analyze'
-                ? `/admin/menu/analyze/${activeAnalyzeSubsection.value}`
+                ? activeAnalyzeSubsection.value === 'research'
+                    ? `/admin/menu/analyze/research/${activeAnalyzeResearchSubsection.value}`
+                    : `/admin/menu/analyze/${activeAnalyzeSubsection.value}`
                 : activeSection.value === 'data'
                     ? activeDataSubsection.value === 'cloudways'
                         ? '/admin/menu/data/cloudways'
@@ -4850,6 +5176,10 @@ function updateUrlPath(options = {}) {
 
 function isAnalyzeSubsection(subsection) {
     return analyzeSubsectionKeys.includes(subsection);
+}
+
+function isAnalyzeResearchSubsection(subsection) {
+    return analyzeResearchSubsectionKeys.includes(subsection);
 }
 
 function isAnalyzeTrendSubsection(subsection) {
@@ -14913,6 +15243,512 @@ function formatIndexDataUpdateSchedule(settings) {
                         </v-tabs>
 
                         <section
+                            v-if="activeAnalyzeSubsection === 'research'"
+                            class="analyze-detail-page"
+                            aria-label="Analyze research"
+                        >
+                            <div class="analyze-detail-header">
+                                <h2 class="analyze-detail-title">Research</h2>
+                            </div>
+
+                            <v-tabs
+                                :model-value="activeAnalyzeResearchSubsection"
+                                class="analyze-research-submenu mb-6"
+                                color="primary"
+                                density="compact"
+                                @update:model-value="navigateAnalyzeResearchSubsection"
+                            >
+                                <v-tab
+                                    v-for="item in analyzeResearchSubmenuItems"
+                                    :key="item.key"
+                                    :prepend-icon="item.icon"
+                                    :value="item.key"
+                                >
+                                    {{ item.label }}
+                                </v-tab>
+                            </v-tabs>
+
+                            <v-alert
+                                v-if="activeAnalyzeResearchSubsection === 'settings' && analyzeResearchSettingsError"
+                                class="mb-4"
+                                density="compact"
+                                type="error"
+                                variant="tonal"
+                            >
+                                {{ analyzeResearchSettingsError }}
+                            </v-alert>
+                            <v-alert
+                                v-if="activeAnalyzeResearchSubsection === 'settings' && analyzeResearchSettingsMessage"
+                                class="mb-4"
+                                density="compact"
+                                type="success"
+                                variant="tonal"
+                            >
+                                {{ analyzeResearchSettingsMessage }}
+                            </v-alert>
+
+                            <div
+                                v-if="activeAnalyzeResearchSubsection === 'settings' && analyzeResearchSettingsLoading"
+                                class="analyze-research-loading"
+                            >
+                                <v-progress-circular color="primary" indeterminate size="24" />
+                                <span>Loading research settings...</span>
+                            </div>
+                            <div
+                                v-else-if="activeAnalyzeResearchSubsection === 'settings'"
+                                class="analyze-research-overview"
+                            >
+                                <v-card class="analyze-research-summary-card" variant="outlined">
+                                    <v-card-title class="analyze-research-card-title">
+                                        <span>Rows</span>
+                                        <v-btn
+                                            aria-label="Edit research rows"
+                                            prepend-icon="mdi-pencil"
+                                            size="small"
+                                            type="button"
+                                            variant="text"
+                                            @click="editAnalyzeResearchSettings('rows')"
+                                        >
+                                            Edit
+                                        </v-btn>
+                                    </v-card-title>
+                                    <v-card-text>
+                                        <strong class="analyze-research-step-value">
+                                            {{ analyzeResearchSettings.rows }}
+                                        </strong>
+                                        <span class="text-body-2 text-medium-emphasis">
+                                            Separate Research row count.
+                                        </span>
+                                    </v-card-text>
+                                </v-card>
+
+                                <v-card class="analyze-research-summary-card" variant="outlined">
+                                    <v-card-title class="analyze-research-card-title">
+                                        <span>Invest range</span>
+                                        <v-btn
+                                            aria-label="Edit research invest range"
+                                            prepend-icon="mdi-pencil"
+                                            size="small"
+                                            type="button"
+                                            variant="text"
+                                            @click="editAnalyzeResearchSettings('invest')"
+                                        >
+                                            Edit
+                                        </v-btn>
+                                    </v-card-title>
+                                    <v-card-text class="analyze-research-range-values">
+                                        <span>From <strong>{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.invest.from) }} EUR</strong></span>
+                                        <span>To <strong>{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.invest.to) }} EUR</strong></span>
+                                        <span>Step <strong>{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.invest.step) }} EUR</strong></span>
+                                    </v-card-text>
+                                </v-card>
+
+                                <v-card class="analyze-research-summary-card" variant="outlined">
+                                    <v-card-title class="analyze-research-card-title">
+                                        <span>Max invest</span>
+                                        <v-btn
+                                            aria-label="Edit research max invest"
+                                            prepend-icon="mdi-pencil"
+                                            size="small"
+                                            type="button"
+                                            variant="text"
+                                            @click="editAnalyzeResearchSettings('maxInvest')"
+                                        >
+                                            Edit
+                                        </v-btn>
+                                    </v-card-title>
+                                    <v-card-text
+                                        v-if="analyzeResearchSettings.max_invest.enabled"
+                                        class="analyze-research-range-values"
+                                    >
+                                        <span>From <strong>{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.max_invest.from) }} EUR</strong></span>
+                                        <span>To <strong>{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.max_invest.to) }} EUR</strong></span>
+                                        <span>Step <strong>{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.max_invest.step) }} EUR</strong></span>
+                                    </v-card-text>
+                                    <v-card-text v-else>
+                                        <strong class="analyze-research-no-max">No max</strong>
+                                    </v-card-text>
+                                </v-card>
+
+                                <v-card class="analyze-research-summary-card" variant="outlined">
+                                    <v-card-title class="analyze-research-card-title">
+                                        <span>Virtual Buy rules</span>
+                                        <v-btn
+                                            aria-label="Edit research Virtual Buy rules"
+                                            prepend-icon="mdi-pencil"
+                                            size="small"
+                                            type="button"
+                                            variant="text"
+                                            @click="editAnalyzeResearchSettings('buyRules')"
+                                        >
+                                            Edit
+                                        </v-btn>
+                                    </v-card-title>
+                                    <v-card-text
+                                        class="analyze-research-value-list"
+                                        aria-label="Research virtual buy rule values"
+                                    >
+                                        <div class="analyze-research-rule-step">
+                                            Step
+                                            <strong>{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.buy_step) }}%</strong>
+                                        </div>
+                                        <div
+                                            v-for="(buyRule, index) in analyzeResearchSettings.buy_rules"
+                                            :key="index"
+                                            class="analyze-research-value-row"
+                                        >
+                                            <strong>Streak {{ index + 1 }}</strong>
+                                            <span
+                                                class="analyze-research-buy-status"
+                                                :class="buyRule.enabled
+                                                    ? 'analyze-research-buy-status--enabled'
+                                                    : 'analyze-research-buy-status--disabled'"
+                                            >
+                                                {{ buyRule.enabled ? 'BUY' : 'No BUY' }}
+                                            </span>
+                                            <span>From <strong>{{ formatAnalyzeResearchDecimal(buyRule.from) }}%</strong></span>
+                                            <span>To <strong>{{ formatAnalyzeResearchDecimal(buyRule.to) }}%</strong></span>
+                                        </div>
+                                    </v-card-text>
+                                </v-card>
+
+                                <v-card class="analyze-research-summary-card" variant="outlined">
+                                    <v-card-title class="analyze-research-card-title">
+                                        <span>Virtual Sell rules</span>
+                                        <v-btn
+                                            aria-label="Edit research Virtual Sell rules"
+                                            prepend-icon="mdi-pencil"
+                                            size="small"
+                                            type="button"
+                                            variant="text"
+                                            @click="editAnalyzeResearchSettings('sellRules')"
+                                        >
+                                            Edit
+                                        </v-btn>
+                                    </v-card-title>
+                                    <v-card-text class="analyze-research-sell-values">
+                                        <span>From <strong>+{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.sell.from) }}%</strong></span>
+                                        <span>To <strong>+{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.sell.to) }}%</strong></span>
+                                        <span>Step <strong>{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.sell.step) }}%</strong></span>
+                                    </v-card-text>
+                                </v-card>
+                            </div>
+
+                            <v-dialog
+                                v-model="isAnalyzeResearchSettingsDialogOpen"
+                                class="analyze-research-settings-dialog"
+                                persistent
+                                max-width="900"
+                            >
+                                <v-card>
+                                    <v-card-title>{{ analyzeResearchEditTitle }}</v-card-title>
+                                    <v-card-text class="analyze-research-settings-content">
+                                        <v-alert
+                                            v-if="analyzeResearchSettingsError"
+                                            density="compact"
+                                            type="error"
+                                            variant="tonal"
+                                        >
+                                            {{ analyzeResearchSettingsError }}
+                                        </v-alert>
+
+                                        <div
+                                            v-if="analyzeResearchEditSection === 'rows'"
+                                            class="analyze-research-general-editor"
+                                        >
+                                            <div>
+                                                <h3 class="text-subtitle-1 font-weight-bold">Rows</h3>
+                                                <p class="text-body-2 text-medium-emphasis">
+                                                    This row count is independent from Trend v2.
+                                                </p>
+                                            </div>
+                                            <v-text-field
+                                                v-model="analyzeResearchForm.rows"
+                                                aria-label="Research rows"
+                                                label="Rows"
+                                                type="number"
+                                                min="1"
+                                                :max="maxAnalyzeResearchRowLimit"
+                                                step="1"
+                                                inputmode="numeric"
+                                                density="compact"
+                                            />
+                                        </div>
+
+                                        <template v-if="analyzeResearchEditSection === 'invest'">
+                                            <div>
+                                                <h3 class="text-subtitle-1 font-weight-bold">Invest range</h3>
+                                                <p class="text-body-2 text-medium-emphasis">
+                                                    Decimal investment amounts evaluated by the research.
+                                                </p>
+                                            </div>
+                                            <div class="analyze-research-money-editor">
+                                            <v-text-field
+                                                v-model="analyzeResearchForm.investFrom"
+                                                aria-label="Research invest from"
+                                                label="From"
+                                                type="number"
+                                                min="0"
+                                                :max="maxAnalyzeResearchInvestment"
+                                                :step="analyzeResearchForm.investStep || 'any'"
+                                                suffix="EUR"
+                                                inputmode="decimal"
+                                                density="compact"
+                                            />
+                                            <v-text-field
+                                                v-model="analyzeResearchForm.investTo"
+                                                aria-label="Research invest to"
+                                                label="To"
+                                                type="number"
+                                                min="0"
+                                                :max="maxAnalyzeResearchInvestment"
+                                                :step="analyzeResearchForm.investStep || 'any'"
+                                                suffix="EUR"
+                                                inputmode="decimal"
+                                                density="compact"
+                                            />
+                                            <v-text-field
+                                                v-model="analyzeResearchForm.investStep"
+                                                aria-label="Research invest step"
+                                                label="Step"
+                                                type="number"
+                                                min="0.000001"
+                                                :max="maxAnalyzeResearchInvestment"
+                                                step="0.01"
+                                                suffix="EUR"
+                                                inputmode="decimal"
+                                                density="compact"
+                                            />
+                                            </div>
+                                        </template>
+
+                                        <template v-if="analyzeResearchEditSection === 'maxInvest'">
+                                            <div>
+                                                <h3 class="text-subtitle-1 font-weight-bold">Max invest range</h3>
+                                                <p class="text-body-2 text-medium-emphasis">
+                                                    Disable this option to research without a maximum investment.
+                                                </p>
+                                            </div>
+                                            <v-checkbox
+                                                v-model="analyzeResearchForm.maxInvestEnabled"
+                                                aria-label="Use research max invest"
+                                                label="Use max invest"
+                                                density="compact"
+                                                hide-details
+                                            />
+                                            <div
+                                                v-if="analyzeResearchForm.maxInvestEnabled"
+                                                class="analyze-research-money-editor"
+                                            >
+                                            <v-text-field
+                                                v-model="analyzeResearchForm.maxInvestFrom"
+                                                aria-label="Research max invest from"
+                                                label="From"
+                                                type="number"
+                                                min="0"
+                                                :max="maxAnalyzeResearchInvestment"
+                                                :step="analyzeResearchForm.maxInvestStep || 'any'"
+                                                suffix="EUR"
+                                                inputmode="decimal"
+                                                density="compact"
+                                            />
+                                            <v-text-field
+                                                v-model="analyzeResearchForm.maxInvestTo"
+                                                aria-label="Research max invest to"
+                                                label="To"
+                                                type="number"
+                                                min="0"
+                                                :max="maxAnalyzeResearchInvestment"
+                                                :step="analyzeResearchForm.maxInvestStep || 'any'"
+                                                suffix="EUR"
+                                                inputmode="decimal"
+                                                density="compact"
+                                            />
+                                            <v-text-field
+                                                v-model="analyzeResearchForm.maxInvestStep"
+                                                aria-label="Research max invest step"
+                                                label="Step"
+                                                type="number"
+                                                min="0.000001"
+                                                :max="maxAnalyzeResearchInvestment"
+                                                step="0.01"
+                                                suffix="EUR"
+                                                inputmode="decimal"
+                                                density="compact"
+                                            />
+                                            </div>
+                                            <div v-else class="analyze-research-no-max-editor">No max</div>
+                                        </template>
+
+                                        <template v-if="analyzeResearchEditSection === 'buyRules'">
+                                            <div>
+                                                <h3 class="text-subtitle-1 font-weight-bold">Virtual Buy rules</h3>
+                                                <p class="text-body-2 text-medium-emphasis">
+                                                    Define the decimal percentage interval tested for each negative streak.
+                                                </p>
+                                            </div>
+                                            <v-text-field
+                                                v-model="analyzeResearchForm.buyStep"
+                                                aria-label="Research BUY step"
+                                                class="analyze-research-rule-step-input"
+                                                label="Step for virtual buy rules"
+                                                type="number"
+                                                min="0.000001"
+                                                max="100"
+                                                step="0.01"
+                                                suffix="%"
+                                                inputmode="decimal"
+                                                density="compact"
+                                            />
+                                            <div
+                                                class="analyze-research-buy-rule-list"
+                                                aria-label="Edit research virtual buy rules"
+                                            >
+                                            <div
+                                                v-for="(buyRule, index) in analyzeResearchForm.buyRules"
+                                                :key="index"
+                                                class="analyze-research-buy-rule-row"
+                                            >
+                                                <strong class="analyze-research-streak-label">Streak {{ index + 1 }}</strong>
+                                                <v-checkbox
+                                                    v-model="buyRule.enabled"
+                                                    class="analyze-research-buy-toggle"
+                                                    :aria-label="`Enable research BUY for streak ${index + 1}`"
+                                                    label="BUY"
+                                                    density="compact"
+                                                    hide-details
+                                                />
+                                                <v-text-field
+                                                    v-model="buyRule.from"
+                                                    class="analyze-research-buy-from"
+                                                    :aria-label="`Research BUY streak ${index + 1} from`"
+                                                    label="From"
+                                                    type="number"
+                                                    min="-100"
+                                                    max="0"
+                                                    :step="analyzeResearchForm.buyStep || 'any'"
+                                                    suffix="%"
+                                                    inputmode="decimal"
+                                                    density="compact"
+                                                    :disabled="!buyRule.enabled"
+                                                />
+                                                <v-text-field
+                                                    v-model="buyRule.to"
+                                                    class="analyze-research-buy-to"
+                                                    :aria-label="`Research BUY streak ${index + 1} to`"
+                                                    label="To"
+                                                    type="number"
+                                                    min="-100"
+                                                    max="0"
+                                                    :step="analyzeResearchForm.buyStep || 'any'"
+                                                    suffix="%"
+                                                    inputmode="decimal"
+                                                    density="compact"
+                                                    :disabled="!buyRule.enabled"
+                                                />
+                                                <v-btn
+                                                    :aria-label="`Remove research BUY streak ${index + 1}`"
+                                                    class="analyze-research-buy-remove"
+                                                    color="error"
+                                                    icon="mdi-delete-outline"
+                                                    size="small"
+                                                    type="button"
+                                                    variant="text"
+                                                    :disabled="analyzeResearchForm.buyRules.length <= 1"
+                                                    @click="removeAnalyzeResearchBuyRule(index)"
+                                                />
+                                            </div>
+                                            </div>
+                                            <v-btn
+                                                class="align-self-start"
+                                                prepend-icon="mdi-plus"
+                                                type="button"
+                                                variant="text"
+                                                :disabled="analyzeResearchForm.buyRules.length >= maxAnalyzeResearchBuyRuleCount"
+                                                @click="addAnalyzeResearchBuyRule"
+                                            >
+                                                Add BUY rule
+                                            </v-btn>
+                                        </template>
+
+                                        <template v-if="analyzeResearchEditSection === 'sellRules'">
+                                            <div>
+                                                <h3 class="text-subtitle-1 font-weight-bold">Virtual Sell rules</h3>
+                                                <p class="text-body-2 text-medium-emphasis">Define the decimal SELL interval.</p>
+                                            </div>
+                                            <div class="analyze-research-sell-editor">
+                                            <v-text-field
+                                                v-model="analyzeResearchForm.sellFrom"
+                                                aria-label="Research SELL from"
+                                                label="From"
+                                                type="number"
+                                                min="0"
+                                                max="100"
+                                                :step="analyzeResearchForm.sellStep || 'any'"
+                                                prefix="+"
+                                                suffix="%"
+                                                inputmode="decimal"
+                                                density="compact"
+                                            />
+                                            <v-text-field
+                                                v-model="analyzeResearchForm.sellTo"
+                                                aria-label="Research SELL to"
+                                                label="To"
+                                                type="number"
+                                                min="0"
+                                                max="100"
+                                                :step="analyzeResearchForm.sellStep || 'any'"
+                                                prefix="+"
+                                                suffix="%"
+                                                inputmode="decimal"
+                                                density="compact"
+                                            />
+                                            <v-text-field
+                                                v-model="analyzeResearchForm.sellStep"
+                                                aria-label="Research SELL step"
+                                                label="Step for Virtual Sell rules"
+                                                type="number"
+                                                min="0.000001"
+                                                max="100"
+                                                step="0.01"
+                                                suffix="%"
+                                                inputmode="decimal"
+                                                density="compact"
+                                            />
+                                            </div>
+                                        </template>
+                                    </v-card-text>
+                                    <v-card-actions>
+                                        <v-spacer />
+                                        <v-btn
+                                            type="button"
+                                            variant="text"
+                                            :disabled="analyzeResearchSettingsSaving"
+                                            @click="cancelAnalyzeResearchSettingsEdit"
+                                        >
+                                            Cancel
+                                        </v-btn>
+                                        <v-btn
+                                            color="primary"
+                                            type="button"
+                                            variant="flat"
+                                            :disabled="!isAnalyzeResearchFormValid"
+                                            :loading="analyzeResearchSettingsSaving"
+                                            @click="saveAnalyzeResearchSettings"
+                                        >
+                                            Save settings
+                                        </v-btn>
+                                    </v-card-actions>
+                                </v-card>
+                            </v-dialog>
+                            <section
+                                v-if="activeAnalyzeResearchSubsection === 'simulation'"
+                                class="analyze-research-simulation"
+                                aria-label="Research simulation"
+                            />
+                        </section>
+
+                        <section
                             v-if="activeAnalyzeSubsection === 'overview'"
                             class="analyze-overview-page"
                             aria-label="Analyze overview"
@@ -21755,6 +22591,156 @@ function formatIndexDataUpdateSchedule(settings) {
     display: grid;
     gap: 8px;
     grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.analyze-research-overview {
+    display: grid;
+    gap: 14px;
+    max-width: 900px;
+}
+
+.analyze-research-loading {
+    align-items: center;
+    color: #667480;
+    display: flex;
+    gap: 10px;
+}
+
+.analyze-research-summary-card :deep(.v-card-text) {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+}
+
+.analyze-research-card-title {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+}
+
+.analyze-research-step-value {
+    color: #145b4b;
+    font-size: 1.15rem;
+}
+
+.analyze-research-value-list {
+    display: grid !important;
+    gap: 8px !important;
+    justify-content: start;
+}
+
+.analyze-research-value-row {
+    align-items: center;
+    display: grid;
+    column-gap: 18px;
+    grid-template-columns: 84px 72px max-content max-content;
+}
+
+.analyze-research-rule-step {
+    color: #667480;
+    display: flex;
+    gap: 6px;
+}
+
+.analyze-research-rule-step-input {
+    max-width: 280px;
+}
+
+.analyze-research-buy-status {
+    border-radius: 999px;
+    display: inline-flex;
+    font-size: 0.72rem;
+    font-weight: 800;
+    justify-content: center;
+    padding: 3px 8px;
+}
+
+.analyze-research-buy-status--enabled {
+    background: rgba(var(--v-theme-success), 0.14);
+    color: rgb(var(--v-theme-success));
+}
+
+.analyze-research-buy-status--disabled {
+    background: rgba(102, 116, 128, 0.12);
+    color: #667480;
+}
+
+.analyze-research-range-values,
+.analyze-research-sell-values {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 8px 28px !important;
+}
+
+.analyze-research-no-max,
+.analyze-research-no-max-editor {
+    color: #667480;
+    font-weight: 800;
+}
+
+.analyze-research-settings-content,
+.analyze-research-buy-rule-list {
+    display: grid;
+    gap: 12px;
+}
+
+.analyze-research-general-editor {
+    align-items: start;
+    display: grid;
+    gap: 16px;
+    grid-template-columns: minmax(0, 1fr) 190px;
+}
+
+.analyze-research-money-editor {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(3, minmax(130px, 1fr));
+}
+
+.analyze-research-buy-rule-row {
+    align-items: start;
+    display: grid;
+    gap: 10px;
+    grid-template-columns: 84px 92px minmax(130px, 1fr) minmax(130px, 1fr) auto;
+}
+
+.analyze-research-streak-label {
+    padding-top: 12px;
+}
+
+.analyze-research-sell-editor {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(3, minmax(130px, 1fr));
+}
+
+@media (max-width: 760px) {
+    .analyze-research-buy-rule-row {
+        grid-template-columns: 1fr 1fr auto;
+    }
+
+    .analyze-research-buy-from {
+        grid-column: 1;
+        grid-row: 2;
+    }
+
+    .analyze-research-buy-to {
+        grid-column: 2;
+        grid-row: 2;
+    }
+
+    .analyze-research-buy-remove {
+        grid-column: 3;
+        grid-row: 1;
+    }
+
+    .analyze-research-value-row,
+    .analyze-research-general-editor,
+    .analyze-research-money-editor,
+    .analyze-research-sell-editor {
+        grid-template-columns: 1fr;
+    }
 }
 
 .analyze-trend-optimization-info {
