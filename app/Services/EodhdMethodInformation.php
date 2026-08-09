@@ -43,7 +43,7 @@ class EodhdMethodInformation
                 'access' => 'search/{query} + exchange-symbol-list/INDX',
                 'description' => 'Löst Suchbegriffe, ISIN, WKN, Valor und Index-Symbole gegen EODHD auf.',
                 'triggers' => [
-                    'HTTP GET /admin/stocks/search',
+                    'HTTP POST /admin/stocks/search',
                     'Ausgelöst beim Suchen nach einer neuen Aktie oder einem neuen Index.',
                 ],
                 'execution' => $this->execution(

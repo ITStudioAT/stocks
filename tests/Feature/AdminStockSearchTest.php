@@ -47,7 +47,7 @@ class AdminStockSearchTest extends TestCase
         $admin = $this->adminUser();
 
         $this->actingAs($admin)
-            ->getJson('/admin/stocks/search?query=Apple')
+            ->postJson('/admin/stocks/search', ['query' => 'Apple'])
             ->assertOk()
             ->assertJsonCount(10, 'results')
             ->assertJsonPath('results.0.symbol', 'AAPL1')
@@ -92,7 +92,7 @@ class AdminStockSearchTest extends TestCase
         $admin = $this->adminUser();
 
         $this->actingAs($admin)
-            ->getJson('/admin/stocks/search?query=DE000A0D8Q23')
+            ->postJson('/admin/stocks/search', ['query' => 'DE000A0D8Q23'])
             ->assertOk()
             ->assertJsonCount(1, 'results')
             ->assertJsonPath('results.0.symbol', 'EXXX')
@@ -130,7 +130,7 @@ class AdminStockSearchTest extends TestCase
         $admin = $this->adminUser();
 
         $this->actingAs($admin)
-            ->getJson('/admin/stocks/search?query=ATX.INDX')
+            ->postJson('/admin/stocks/search', ['query' => 'ATX.INDX'])
             ->assertOk()
             ->assertJsonCount(1, 'results')
             ->assertJsonPath('results.0.symbol', 'ATX')
@@ -147,14 +147,14 @@ class AdminStockSearchTest extends TestCase
         $admin = $this->adminUser();
 
         $this->actingAs($admin)
-            ->getJson('/admin/stocks/search')
+            ->postJson('/admin/stocks/search')
             ->assertUnprocessable()
             ->assertJsonValidationErrors('query');
     }
 
     public function test_guest_cannot_search_stocks(): void
     {
-        $this->getJson('/admin/stocks/search?query=Apple')->assertUnauthorized();
+        $this->postJson('/admin/stocks/search', ['query' => 'Apple'])->assertUnauthorized();
     }
 
     private function adminUser(): User

@@ -17,6 +17,7 @@ use App\Models\StockRealtimePrice;
 use App\Models\User;
 use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\EodhdBatchRealtimePriceService;
+use App\Services\EodhdErrorSanitizer;
 use App\Services\StockPriceCatalog;
 use Illuminate\Contracts\Queue\Factory as QueueFactory;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -1570,7 +1571,7 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")
+            ->postJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")
             ->assertOk()
             ->assertJsonPath('holding.id', $holding->id)
             ->assertJsonPath('intraday.title', 'Intraday 05.06.2026')
@@ -1644,7 +1645,7 @@ class AdminDepotHoldingTest extends TestCase
         }
 
         $this->actingAs($admin)
-            ->getJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")
+            ->postJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")
             ->assertOk()
             ->assertJsonPath('intraday.title', 'Intraday 05.06.2026')
             ->assertJsonCount(7, 'intraday_days')
@@ -1690,7 +1691,7 @@ class AdminDepotHoldingTest extends TestCase
         }
 
         $this->actingAs($admin)
-            ->getJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")
+            ->postJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")
             ->assertOk()
             ->assertJsonCount(7, 'intraday_days')
             ->assertJsonPath('intraday_days.0.trading_date', '2026-06-05')
@@ -1738,7 +1739,7 @@ class AdminDepotHoldingTest extends TestCase
         }
 
         $this->actingAs($admin)
-            ->getJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")
+            ->postJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")
             ->assertOk()
             ->assertJsonPath('intraday.trading_date', '2026-06-08')
             ->assertJsonPath('intraday_days.0.trading_date', '2026-06-08')
@@ -1788,7 +1789,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->createRealtimeQuote($holding, '2026-06-15 07:22:00', '490.80');
 
         $this->actingAs($admin)
-            ->getJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")
+            ->postJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")
             ->assertOk()
             ->assertJsonPath('intraday.title', 'Intraday 15.06.2026')
             ->assertJsonPath('intraday.trading_date', '2026-06-15')
@@ -1802,7 +1803,7 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('intraday_days.1.trading_date', '2026-06-12');
     }
 
-    public function test_admin_listing_fetches_and_stores_eodhd_intraday_candles_when_session_has_no_stored_intraday_rows(): void
+    public function test_chart_loading_post_fetches_missing_intraday_candles_while_listing_get_remains_read_only(): void
     {
         config(['services.eodhd.key' => 'test-token']);
         $admin = $this->adminUser();
@@ -1829,6 +1830,14 @@ class AdminDepotHoldingTest extends TestCase
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings?include_charts=1')
             ->assertOk()
+            ->assertJsonCount(0, 'holdings.0.intraday_prices');
+
+        $this->assertSame(0, StockHoldingIntradayCandle::query()->where('stock_holding_id', $holding->id)->count());
+        Http::assertNothingSent();
+
+        $this->actingAs($admin)
+            ->postJson('/admin/watchlist/holdings/charts?include_charts=1')
+            ->assertOk()
             ->assertJsonCount(301, 'holdings.0.intraday_prices')
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '470.15000000')
             ->assertJsonPath('holdings.0.intraday_prices.300.price', '770.15000000');
@@ -1844,7 +1853,7 @@ class AdminDepotHoldingTest extends TestCase
         Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/intraday/AMES.XETRA'));
     }
 
-    public function test_admin_listing_fetches_five_minute_eodhd_intraday_candles(): void
+    public function test_chart_loading_post_fetches_five_minute_eodhd_intraday_candles(): void
     {
         config(['services.eodhd.key' => 'test-token']);
         $admin = $this->adminUser();
@@ -1870,7 +1879,7 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings?include_charts=1')
+            ->postJson('/admin/watchlist/holdings/charts?include_charts=1')
             ->assertOk()
             ->assertJsonCount(103, 'holdings.0.intraday_prices')
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '42.60000000')
@@ -1910,7 +1919,7 @@ class AdminDepotHoldingTest extends TestCase
         }
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings?include_charts=1')
+            ->postJson('/admin/watchlist/holdings/charts?include_charts=1')
             ->assertOk()
             ->assertJsonCount(4, 'holdings.0.intraday_prices')
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '460.00000000')
@@ -1937,12 +1946,12 @@ class AdminDepotHoldingTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings?include_charts=1')
+            ->postJson('/admin/watchlist/holdings/charts?include_charts=1')
             ->assertOk()
             ->assertJsonCount(0, 'holdings.0.intraday_prices');
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings?include_charts=1')
+            ->postJson('/admin/watchlist/holdings/charts?include_charts=1')
             ->assertOk()
             ->assertJsonCount(0, 'holdings.0.intraday_prices');
 
@@ -1974,7 +1983,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->createRealtimeQuote($holding, '2026-06-05 15:30:00', '17.87');
 
         $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings?include_charts=1')
+            ->postJson('/admin/watchlist/holdings/charts?include_charts=1')
             ->assertOk()
             ->assertJsonCount(4, 'holdings.0.intraday_prices')
             ->assertJsonPath('holdings.0.intraday_prices.0.price', '17.12000000')
@@ -2519,6 +2528,7 @@ class AdminDepotHoldingTest extends TestCase
 
         (new RefreshDepotHoldingPrices('refresh-test'))->handle(
             app(EodhdBatchRealtimePriceService::class),
+            app(EodhdErrorSanitizer::class),
             $progress,
         );
 
@@ -2559,6 +2569,7 @@ class AdminDepotHoldingTest extends TestCase
 
         (new RefreshDepotHoldingPrices('refresh-index-test'))->handle(
             app(EodhdBatchRealtimePriceService::class),
+            app(EodhdErrorSanitizer::class),
             $progress,
         );
 
@@ -2597,6 +2608,7 @@ class AdminDepotHoldingTest extends TestCase
 
         (new RefreshDepotHoldingPrices('refresh-mail-test', $admin->id))->handle(
             app(EodhdBatchRealtimePriceService::class),
+            app(EodhdErrorSanitizer::class),
             $progress,
         );
 
@@ -2625,6 +2637,7 @@ class AdminDepotHoldingTest extends TestCase
 
         (new RefreshDepotHoldingPrices('refresh-mail-fail-test', $admin->id))->handle(
             app(EodhdBatchRealtimePriceService::class),
+            app(EodhdErrorSanitizer::class),
             $progress,
         );
 

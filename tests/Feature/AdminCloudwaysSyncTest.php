@@ -6,6 +6,8 @@ use App\Models\AppConfig;
 use App\Models\User;
 use App\Services\CloudwaysDatabaseSync;
 use Carbon\Carbon;
+use Illuminate\Database\Connection;
+use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -13,8 +15,11 @@ use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Mockery;
 use PDO;
+use Pdo\Mysql;
 use ReflectionMethod;
+use RuntimeException;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -24,13 +29,20 @@ class AdminCloudwaysSyncTest extends TestCase
 
     private ?string $cloudwaysDatabasePath = null;
 
+    private ?string $cloudwaysSslCaPath = null;
+
     protected function tearDown(): void
     {
         DB::purge('cloudways_testing');
+        DB::purge('cloudways_alias_testing');
         DB::purge('cloudways_target_testing');
 
         if ($this->cloudwaysDatabasePath && file_exists($this->cloudwaysDatabasePath)) {
             unlink($this->cloudwaysDatabasePath);
+        }
+
+        if ($this->cloudwaysSslCaPath && file_exists($this->cloudwaysSslCaPath)) {
+            unlink($this->cloudwaysSslCaPath);
         }
 
         parent::tearDown();
@@ -76,7 +88,7 @@ class AdminCloudwaysSyncTest extends TestCase
 
         $this->travelTo(Carbon::parse('2026-08-08 12:00:00', 'Europe/Vienna'));
 
-        $this->getJson('/admin/cloudways/check')
+        $this->postJson('/admin/cloudways/check')
             ->assertOk()
             ->assertJsonPath('comparison.checked_at', '2026-08-08T12:00:00+02:00');
 
@@ -142,7 +154,7 @@ class AdminCloudwaysSyncTest extends TestCase
         });
 
         $response = $this->actingAs($this->superAdminUser())
-            ->getJson('/admin/cloudways/check')
+            ->postJson('/admin/cloudways/check')
             ->assertOk()
             ->assertJsonPath('comparison.identical_tables', 1);
 
@@ -175,7 +187,7 @@ class AdminCloudwaysSyncTest extends TestCase
         ]);
 
         $response = $this->actingAs($this->superAdminUser())
-            ->getJson('/admin/cloudways/check')
+            ->postJson('/admin/cloudways/check')
             ->assertOk();
 
         $jsonTable = collect($response->json('comparison.tables'))->firstWhere('name', 'json_items');
@@ -188,7 +200,7 @@ class AdminCloudwaysSyncTest extends TestCase
             'payload' => '{"active":true,"empty":{},"items":[{"name":"second","value":2},{"name":"first","value":1}],"metadata":{"a":1,"b":2}}',
         ]);
 
-        $response = $this->getJson('/admin/cloudways/check')->assertOk();
+        $response = $this->postJson('/admin/cloudways/check')->assertOk();
         $jsonTable = collect($response->json('comparison.tables'))->firstWhere('name', 'json_items');
 
         $this->assertSame('different', $jsonTable['status']);
@@ -202,7 +214,7 @@ class AdminCloudwaysSyncTest extends TestCase
             ->assertForbidden();
 
         $this
-            ->getJson('/admin/cloudways/check')
+            ->postJson('/admin/cloudways/check')
             ->assertForbidden();
     }
 
@@ -224,7 +236,7 @@ class AdminCloudwaysSyncTest extends TestCase
         ]);
 
         $response = $this->actingAs($this->superAdminUser())
-            ->get('/admin/cloudways/check', [
+            ->post('/admin/cloudways/check', [], [
                 'Accept' => 'application/x-ndjson',
             ])
             ->assertOk();
@@ -246,7 +258,14 @@ class AdminCloudwaysSyncTest extends TestCase
     public function test_guest_cannot_compare_cloudways_and_local_table_contents(): void
     {
         $this->getJson('/admin/cloudways/status')->assertUnauthorized();
-        $this->getJson('/admin/cloudways/check')->assertUnauthorized();
+        $this->postJson('/admin/cloudways/check')->assertUnauthorized();
+    }
+
+    public function test_cloudways_check_rejects_get_requests(): void
+    {
+        $this->actingAs($this->superAdminUser())
+            ->getJson('/admin/cloudways/check')
+            ->assertMethodNotAllowed();
     }
 
     public function test_super_admin_can_sync_cloudways_tables_to_local_database(): void
@@ -407,6 +426,184 @@ class AdminCloudwaysSyncTest extends TestCase
 
         $this->assertDatabaseHas('cloud_items', $item);
         $this->assertSame([], $deleteQueries);
+    }
+
+    public function test_cloudways_sync_refuses_the_same_source_and_target_connection_before_deleting_rows(): void
+    {
+        $this->configureCloudwaysTestingConnection();
+        $this->createCloudItemsTable('cloudways_testing');
+        DB::connection('cloudways_testing')->table('cloud_items')->insert([
+            'id' => 1,
+            'name' => 'Preserved item',
+            'quantity' => 10,
+        ]);
+
+        try {
+            app(CloudwaysDatabaseSync::class)->syncAllTables(
+                checkedDifferentTables: ['cloud_items'],
+                sourceConnectionName: 'cloudways_testing',
+                targetConnectionName: 'cloudways_testing',
+            );
+
+            $this->fail('Expected synchronization against the same connection to be refused.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('same database', $exception->getMessage());
+        }
+
+        $this->assertSame(
+            1,
+            DB::connection('cloudways_testing')->table('cloud_items')->count(),
+        );
+    }
+
+    public function test_cloudways_sync_refuses_named_aliases_for_the_same_database_before_deleting_rows(): void
+    {
+        $this->configureCloudwaysTestingConnection();
+        $aliasConfiguration = config('database.connections.cloudways_testing');
+        $this->assertIsArray($aliasConfiguration);
+        $this->assertIsString($aliasConfiguration['database']);
+        $aliasConfiguration['database'] = dirname($aliasConfiguration['database'])
+            .DIRECTORY_SEPARATOR.'.'.DIRECTORY_SEPARATOR
+            .basename($aliasConfiguration['database']);
+        Config::set('database.connections.cloudways_alias_testing', $aliasConfiguration);
+        DB::purge('cloudways_alias_testing');
+
+        $this->createCloudItemsTable('cloudways_testing');
+        DB::connection('cloudways_testing')->table('cloud_items')->insert([
+            'id' => 1,
+            'name' => 'Preserved item',
+            'quantity' => 10,
+        ]);
+
+        try {
+            app(CloudwaysDatabaseSync::class)->syncAllTables(
+                checkedDifferentTables: ['cloud_items'],
+                sourceConnectionName: 'cloudways_testing',
+                targetConnectionName: 'cloudways_alias_testing',
+            );
+
+            $this->fail('Expected synchronization against a same-database alias to be refused.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('same database', $exception->getMessage());
+        }
+
+        $this->assertSame(
+            1,
+            DB::connection('cloudways_testing')->table('cloud_items')->count(),
+        );
+    }
+
+    public function test_cloudways_sync_refuses_mysql_dns_and_ip_aliases_for_the_same_live_database(): void
+    {
+        $this->configureLiveIdentityTestConnections('mysql');
+        $sourceConnection = $this->mockLiveIdentityConnection(
+            useReadPdo: true,
+            variables: [(object) [
+                'Variable_name' => 'server_uuid',
+                'Value' => '7c8309b5-6d82-11f0-a195-0242ac120002',
+            ]],
+        );
+        $targetConnection = $this->mockLiveIdentityConnection(
+            useReadPdo: false,
+            variables: [(object) [
+                'Variable_name' => 'server_uuid',
+                'Value' => '7c8309b5-6d82-11f0-a195-0242ac120002',
+            ]],
+        );
+        $databaseManager = DB::getFacadeRoot();
+        $this->assertInstanceOf(DatabaseManager::class, $databaseManager);
+        $mockDatabaseManager = Mockery::mock(DatabaseManager::class);
+        $mockDatabaseManager->shouldReceive('connection')
+            ->once()
+            ->with('cloudways_live_source')
+            ->andReturn($sourceConnection);
+        $mockDatabaseManager->shouldReceive('connection')
+            ->once()
+            ->with('cloudways_live_target')
+            ->andReturn($targetConnection);
+
+        DB::swap($mockDatabaseManager);
+
+        try {
+            app(CloudwaysDatabaseSync::class)->syncAllTables(
+                checkedDifferentTables: ['cloud_items'],
+                sourceConnectionName: 'cloudways_live_source',
+                targetConnectionName: 'cloudways_live_target',
+            );
+
+            $this->fail('Expected live aliases for the same MySQL database to be refused.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('same database', $exception->getMessage());
+        } finally {
+            DB::swap($databaseManager);
+        }
+    }
+
+    public function test_cloudways_sync_refuses_older_mariadb_aliases_using_the_live_fallback_identity(): void
+    {
+        $this->configureLiveIdentityTestConnections('mariadb');
+        $sourceConnection = $this->mockLiveIdentityConnection(useReadPdo: true);
+        $targetConnection = $this->mockLiveIdentityConnection(useReadPdo: false);
+        $databaseManager = DB::getFacadeRoot();
+        $this->assertInstanceOf(DatabaseManager::class, $databaseManager);
+        $mockDatabaseManager = Mockery::mock(DatabaseManager::class);
+        $mockDatabaseManager->shouldReceive('connection')
+            ->once()
+            ->with('cloudways_live_source')
+            ->andReturn($sourceConnection);
+        $mockDatabaseManager->shouldReceive('connection')
+            ->once()
+            ->with('cloudways_live_target')
+            ->andReturn($targetConnection);
+
+        DB::swap($mockDatabaseManager);
+
+        try {
+            app(CloudwaysDatabaseSync::class)->syncAllTables(
+                checkedDifferentTables: ['cloud_items'],
+                sourceConnectionName: 'cloudways_live_source',
+                targetConnectionName: 'cloudways_live_target',
+            );
+
+            $this->fail('Expected live aliases for the same MariaDB database to be refused.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('same database', $exception->getMessage());
+        } finally {
+            DB::swap($databaseManager);
+        }
+    }
+
+    public function test_cloudways_sync_fails_closed_when_a_mysql_live_identity_cannot_be_verified(): void
+    {
+        $this->configureLiveIdentityTestConnections('mysql');
+        $sourceConnection = Mockery::mock(Connection::class);
+        $sourceConnection->shouldReceive('selectOne')
+            ->once()
+            ->andThrow(new RuntimeException('Connection unavailable.'));
+        $databaseManager = DB::getFacadeRoot();
+        $this->assertInstanceOf(DatabaseManager::class, $databaseManager);
+        $mockDatabaseManager = Mockery::mock(DatabaseManager::class);
+        $mockDatabaseManager->shouldReceive('connection')
+            ->once()
+            ->with('cloudways_live_source')
+            ->andReturn($sourceConnection);
+
+        DB::swap($mockDatabaseManager);
+
+        try {
+            app(CloudwaysDatabaseSync::class)->syncAllTables(
+                checkedDifferentTables: ['cloud_items'],
+                sourceConnectionName: 'cloudways_live_source',
+                targetConnectionName: 'cloudways_live_target',
+            );
+
+            $this->fail('Expected synchronization to fail closed when live identity verification fails.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('could not verify', $exception->getMessage());
+            $this->assertStringContainsString('before deleting data', $exception->getMessage());
+        } finally {
+            DB::swap($databaseManager);
+        }
     }
 
     public function test_cloudways_sync_imports_only_different_tables(): void
@@ -747,23 +944,72 @@ class AdminCloudwaysSyncTest extends TestCase
         $this->postJson('/admin/cloudways/sync')->assertUnauthorized();
     }
 
-    public function test_cloudways_dynamic_connection_uses_a_short_connect_timeout(): void
+    public function test_cloudways_dynamic_connection_requires_and_uses_verified_tls(): void
     {
-        Config::set('services.cloudways.connection', null);
-        Config::set('services.cloudways.host', 'cloudways.example.test');
-        Config::set('services.cloudways.port', 3306);
-        Config::set('services.cloudways.database', 'stocks');
-        Config::set('services.cloudways.username', 'stocks');
-        Config::set('services.cloudways.password', 'secret');
-        Config::set('services.cloudways.connect_timeout', 3);
+        $this->cloudwaysSslCaPath = storage_path('framework/testing-cloudways-ca-'.Str::uuid().'.pem');
+        file_put_contents($this->cloudwaysSslCaPath, 'test certificate authority');
+
+        $this->configureDynamicCloudwaysCredentials();
+        Config::set('database.connections.mysql.url', 'mysql://local-user:local-password@local.example.test/local_database');
+        Config::set('services.cloudways.ssl_ca', $this->cloudwaysSslCaPath);
+        Config::set('services.cloudways.ssl_verify_server_cert', true);
 
         $sourceConnectionName = new ReflectionMethod(CloudwaysDatabaseSync::class, 'sourceConnectionName');
         $sourceConnectionName->setAccessible(true);
 
         $this->assertSame('cloudways', $sourceConnectionName->invoke(app(CloudwaysDatabaseSync::class)));
-        $this->assertSame(3, config('database.connections.cloudways.options')[PDO::ATTR_TIMEOUT]);
+        $this->assertNull(config('database.connections.cloudways.url'));
+        $options = config('database.connections.cloudways.options');
+        $this->assertSame(3, $options[PDO::ATTR_TIMEOUT]);
+        $this->assertSame(realpath($this->cloudwaysSslCaPath), $options[Mysql::ATTR_SSL_CA]);
+        $this->assertTrue($options[Mysql::ATTR_SSL_VERIFY_SERVER_CERT]);
 
         DB::purge('cloudways');
+    }
+
+    public function test_cloudways_dynamic_connection_fails_closed_without_a_tls_ca(): void
+    {
+        $this->configureDynamicCloudwaysCredentials();
+        Config::set('services.cloudways.ssl_ca', null);
+        Config::set('services.cloudways.ssl_verify_server_cert', true);
+
+        $sourceConnectionName = new ReflectionMethod(CloudwaysDatabaseSync::class, 'sourceConnectionName');
+        $sourceConnectionName->setAccessible(true);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('requires a TLS CA certificate');
+
+        $sourceConnectionName->invoke(app(CloudwaysDatabaseSync::class));
+    }
+
+    public function test_cloudways_dynamic_connection_fails_closed_when_server_verification_is_disabled(): void
+    {
+        $this->cloudwaysSslCaPath = storage_path('framework/testing-cloudways-ca-'.Str::uuid().'.pem');
+        file_put_contents($this->cloudwaysSslCaPath, 'test certificate authority');
+        $this->configureDynamicCloudwaysCredentials();
+        Config::set('services.cloudways.ssl_ca', $this->cloudwaysSslCaPath);
+        Config::set('services.cloudways.ssl_verify_server_cert', false);
+
+        $sourceConnectionName = new ReflectionMethod(CloudwaysDatabaseSync::class, 'sourceConnectionName');
+        $sourceConnectionName->setAccessible(true);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('requires server certificate verification');
+
+        $sourceConnectionName->invoke(app(CloudwaysDatabaseSync::class));
+    }
+
+    public function test_cloudways_explicit_connection_must_exist(): void
+    {
+        Config::set('services.cloudways.connection', 'missing_cloudways_connection');
+
+        $sourceConnectionName = new ReflectionMethod(CloudwaysDatabaseSync::class, 'sourceConnectionName');
+        $sourceConnectionName->setAccessible(true);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('configured Cloudways database connection does not exist');
+
+        $sourceConnectionName->invoke(app(CloudwaysDatabaseSync::class));
     }
 
     private function configureCloudwaysTestingConnection(): void
@@ -790,6 +1036,65 @@ class AdminCloudwaysSyncTest extends TestCase
         ]);
 
         DB::purge('cloudways_testing');
+    }
+
+    private function configureDynamicCloudwaysCredentials(): void
+    {
+        Config::set('services.cloudways.connection', null);
+        Config::set('services.cloudways.host', 'cloudways.example.test');
+        Config::set('services.cloudways.port', 3306);
+        Config::set('services.cloudways.database', 'stocks');
+        Config::set('services.cloudways.username', 'stocks');
+        Config::set('services.cloudways.password', 'secret');
+        Config::set('services.cloudways.connect_timeout', 3);
+    }
+
+    private function configureLiveIdentityTestConnections(string $driver): void
+    {
+        Config::set('database.connections.cloudways_live_source', [
+            'driver' => $driver,
+            'host' => 'database.internal.example',
+            'port' => 3306,
+            'database' => 'stocks',
+        ]);
+        Config::set('database.connections.cloudways_live_target', [
+            'driver' => $driver,
+            'host' => '203.0.113.42',
+            'port' => 3306,
+            'database' => 'stocks',
+        ]);
+    }
+
+    /**
+     * @param  array<int, object>  $variables
+     */
+    private function mockLiveIdentityConnection(bool $useReadPdo, array $variables = []): Connection
+    {
+        $connection = Mockery::mock(Connection::class);
+        $connection->shouldReceive('selectOne')
+            ->once()
+            ->with(
+                'select database() as database_name, @@hostname as server_hostname, @@port as server_port, @@server_id as server_id, @@datadir as server_data_directory',
+                [],
+                $useReadPdo,
+            )
+            ->andReturn((object) [
+                'database_name' => 'stocks',
+                'server_hostname' => 'database-01',
+                'server_port' => '3306',
+                'server_id' => '17',
+                'server_data_directory' => '/var/lib/mysql/',
+            ]);
+        $connection->shouldReceive('select')
+            ->once()
+            ->with(
+                "show variables where variable_name in ('server_uuid', 'server_uid')",
+                [],
+                $useReadPdo,
+            )
+            ->andReturn($variables);
+
+        return $connection;
     }
 
     private function createCloudItemsTable(?string $connection = null): void

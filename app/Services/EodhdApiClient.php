@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 use RuntimeException;
@@ -10,6 +11,7 @@ class EodhdApiClient
 {
     public function __construct(
         private EodhdApiUsage $apiUsage,
+        private EodhdErrorSanitizer $errorSanitizer,
     ) {}
 
     public function get(string $path, array $query = []): Response
@@ -22,14 +24,18 @@ class EodhdApiClient
 
         $this->apiUsage->recordCall();
 
-        return Http::baseUrl((string) config('services.eodhd.base_url', 'https://eodhd.com/api'))
-            ->acceptJson()
-            ->connectTimeout((int) config('services.eodhd.connect_timeout', 5))
-            ->timeout((int) config('services.eodhd.timeout', 20))
-            ->get($path, [
-                ...$query,
-                'api_token' => $apiToken,
-            ]);
+        try {
+            return Http::baseUrl((string) config('services.eodhd.base_url', 'https://eodhd.com/api'))
+                ->acceptJson()
+                ->connectTimeout((int) config('services.eodhd.connect_timeout', 5))
+                ->timeout((int) config('services.eodhd.timeout', 20))
+                ->get($path, [
+                    ...$query,
+                    'api_token' => $apiToken,
+                ]);
+        } catch (ConnectionException $exception) {
+            throw new ConnectionException($this->errorSanitizer->message($exception->getMessage()));
+        }
     }
 
     public function configured(): bool

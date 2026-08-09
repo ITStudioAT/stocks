@@ -2,7 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Models\AdminLoginCode;
 use App\Models\User;
+use App\Services\AdminSessionManager;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
 use Spatie\Permission\Models\Role;
@@ -35,6 +37,7 @@ class AdminUserTest extends TestCase
     public function test_admin_can_create_a_user(): void
     {
         $admin = $this->superAdminUser();
+        $this->pendingLoginCode('Demo@Example.com');
 
         $this->actingAs($admin)
             ->postJson('/admin/users', [
@@ -53,7 +56,9 @@ class AdminUserTest extends TestCase
 
         $this->assertNotNull($user->password);
         $this->assertFalse(Hash::check('secret-password', $user->password));
+        $this->assertNull($user->password_initialized_at);
         $this->assertTrue($user->hasRole('admin'));
+        $this->assertFalse(AdminLoginCode::query()->whereNull('consumed_at')->where('email', 'Demo@Example.com')->exists());
     }
 
     public function test_admin_can_update_a_user(): void
@@ -62,8 +67,11 @@ class AdminUserTest extends TestCase
         $user = User::factory()->create([
             'email' => 'old@example.com',
             'password' => Hash::make('old-password'),
+            'auth_revision' => 3,
         ]);
         $user->assignRole('admin');
+        $this->pendingLoginCode('old@example.com');
+        $this->pendingLoginCode('updated@example.com');
 
         $this->actingAs($admin)
             ->patchJson("/admin/users/{$user->id}", [
@@ -82,6 +90,82 @@ class AdminUserTest extends TestCase
         $this->assertTrue(Hash::check('old-password', $user->password));
         $this->assertTrue($user->hasRole('super_admin'));
         $this->assertFalse($user->hasRole('admin'));
+        $this->assertSame(4, $user->auth_revision);
+        $this->assertFalse(AdminLoginCode::query()
+            ->whereNull('consumed_at')
+            ->whereIn('email', ['old@example.com', 'updated@example.com'])
+            ->exists());
+
+        $this->actingAs($user)
+            ->withSession([AdminSessionManager::TargetRevisionSessionKey => 3])
+            ->getJson('/admin/me')
+            ->assertUnauthorized();
+    }
+
+    public function test_role_only_changes_revoke_existing_sessions_and_pending_login_codes(): void
+    {
+        $admin = $this->superAdminUser();
+        $user = User::factory()->create([
+            'email' => 'role-change@example.com',
+            'auth_revision' => 11,
+        ]);
+        $user->assignRole('admin');
+        $this->pendingLoginCode($user->email);
+
+        $this->actingAs($admin)
+            ->patchJson("/admin/users/{$user->id}", [
+                'last_name' => $user->last_name,
+                'first_name' => $user->first_name,
+                'email' => $user->email,
+                'roles' => ['super_admin'],
+            ])
+            ->assertOk();
+
+        $user->refresh();
+
+        $this->assertSame(12, $user->auth_revision);
+        $this->assertTrue($user->hasRole('super_admin'));
+        $this->assertFalse(AdminLoginCode::query()->whereNull('consumed_at')->where('email', $user->email)->exists());
+
+        $this->actingAs($user)
+            ->withSession([AdminSessionManager::TargetRevisionSessionKey => 11])
+            ->getJson('/admin/me')
+            ->assertUnauthorized();
+    }
+
+    public function test_email_only_changes_revoke_existing_sessions_and_codes_for_both_addresses(): void
+    {
+        $admin = $this->superAdminUser();
+        $user = User::factory()->create([
+            'email' => 'old-address@example.com',
+            'auth_revision' => 4,
+        ]);
+        $user->assignRole('admin');
+        $this->pendingLoginCode($user->email);
+        $this->pendingLoginCode('new-address@example.com');
+
+        $this->actingAs($admin)
+            ->patchJson("/admin/users/{$user->id}", [
+                'last_name' => $user->last_name,
+                'first_name' => $user->first_name,
+                'email' => 'new-address@example.com',
+                'roles' => ['admin'],
+            ])
+            ->assertOk();
+
+        $user->refresh();
+
+        $this->assertSame(5, $user->auth_revision);
+        $this->assertSame('new-address@example.com', $user->email);
+        $this->assertFalse(AdminLoginCode::query()
+            ->whereNull('consumed_at')
+            ->whereIn('email', ['old-address@example.com', 'new-address@example.com'])
+            ->exists());
+
+        $this->actingAs($user)
+            ->withSession([AdminSessionManager::TargetRevisionSessionKey => 4])
+            ->getJson('/admin/me')
+            ->assertUnauthorized();
     }
 
     public function test_admin_can_delete_another_user(): void
@@ -89,12 +173,14 @@ class AdminUserTest extends TestCase
         $admin = $this->superAdminUser();
         $user = User::factory()->create();
         $user->assignRole('admin');
+        $this->pendingLoginCode($user->email);
 
         $this->actingAs($admin)
             ->deleteJson("/admin/users/{$user->id}")
             ->assertOk();
 
         $this->assertModelMissing($user);
+        $this->assertFalse(AdminLoginCode::query()->whereNull('consumed_at')->where('email', $user->email)->exists());
     }
 
     public function test_admin_cannot_delete_their_own_user(): void
@@ -109,14 +195,10 @@ class AdminUserTest extends TestCase
         $this->assertModelExists($admin);
     }
 
-    public function test_kron_guenther_cannot_be_deleted(): void
+    public function test_protected_user_cannot_be_deleted(): void
     {
         $admin = $this->superAdminUser();
-        $user = User::factory()->create([
-            'email' => 'kron@naturwelt.at',
-            'last_name' => 'Kron',
-            'first_name' => 'Guenther',
-        ]);
+        $user = User::factory()->protectedAdministrator()->create();
         $user->assignRole('super_admin');
 
         $this->actingAs($admin)
@@ -127,21 +209,17 @@ class AdminUserTest extends TestCase
         $this->assertModelExists($user);
     }
 
-    public function test_kron_guenther_super_admin_role_cannot_be_removed(): void
+    public function test_protected_user_super_admin_role_cannot_be_removed(): void
     {
         $admin = $this->superAdminUser();
-        $user = User::factory()->create([
-            'email' => 'kron@naturwelt.at',
-            'last_name' => 'Kron',
-            'first_name' => 'Guenther',
-        ]);
+        $user = User::factory()->protectedAdministrator()->create();
         $user->syncRoles(['admin', 'super_admin']);
 
         $this->actingAs($admin)
             ->patchJson("/admin/users/{$user->id}", [
-                'last_name' => 'Kron',
-                'first_name' => 'Guenther',
-                'email' => 'kron@naturwelt.at',
+                'last_name' => $user->last_name,
+                'first_name' => $user->first_name,
+                'email' => $user->email,
                 'roles' => ['admin'],
             ])
             ->assertUnprocessable()
@@ -182,5 +260,15 @@ class AdminUserTest extends TestCase
         $user->assignRole('admin');
 
         return $user;
+    }
+
+    private function pendingLoginCode(string $email): AdminLoginCode
+    {
+        return AdminLoginCode::query()->create([
+            'email' => $email,
+            'code_hash' => Hash::make('123456'),
+            'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+        ]);
     }
 }

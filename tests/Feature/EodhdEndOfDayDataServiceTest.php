@@ -34,6 +34,7 @@ class EodhdEndOfDayDataServiceTest extends TestCase
                     'close' => 101.50,
                     'adjusted_close' => 101.40,
                     'volume' => 12345,
+                    'api_token' => 'provider-echoed-eod-secret',
                 ],
             ]),
         ]);
@@ -60,6 +61,13 @@ class EodhdEndOfDayDataServiceTest extends TestCase
             'freshness_status' => 'historical',
             'validation_status' => 'valid',
         ]);
+        $storedPayload = StockPrice::query()
+            ->where('source_key', 'eodhd_eod')
+            ->where('as_of', '2026-06-25 21:59:59')
+            ->sole()
+            ->raw_payload;
+        $this->assertSame('[redacted]', $storedPayload['api_token']);
+        $this->assertStringNotContainsString('provider-echoed-eod-secret', json_encode($storedPayload, JSON_THROW_ON_ERROR));
         $this->assertSame(3, StockPrice::query()->count());
         Http::assertSentCount(1);
         Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/eod/AMES.XETRA')

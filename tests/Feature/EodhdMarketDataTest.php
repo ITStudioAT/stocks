@@ -37,6 +37,7 @@ class EodhdMarketDataTest extends TestCase
                 'code' => 'AMES.XETRA',
                 'timestamp' => Carbon::parse('2026-06-05 10:00:00', 'UTC')->timestamp,
                 'close' => 472.4,
+                'api_token' => 'provider-echoed-realtime-secret',
             ]),
         ]);
 
@@ -55,6 +56,9 @@ class EodhdMarketDataTest extends TestCase
             'price_type' => 'last',
             'as_of' => '2026-06-05 10:00:00',
         ]);
+        $rawPayload = StockRealtimePrice::query()->sole()->raw_payload;
+        $this->assertSame('[redacted]', $rawPayload['api_token']);
+        $this->assertStringNotContainsString('provider-echoed-realtime-secret', json_encode($rawPayload, JSON_THROW_ON_ERROR));
         $this->assertNotNull($holding->refresh()->latest_realtime_price_id);
         Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/real-time/AMES.XETRA'));
     }
@@ -141,6 +145,7 @@ class EodhdMarketDataTest extends TestCase
                         'high' => 470.15,
                         'low' => 470.15,
                         'close' => 470.15,
+                        'api_token' => 'provider-echoed-intraday-secret',
                     ],
                     [
                         'timestamp' => Carbon::parse('2026-06-05 09:55:00', 'UTC')->timestamp,
@@ -149,6 +154,7 @@ class EodhdMarketDataTest extends TestCase
                         'high' => 472.8,
                         'low' => 472.8,
                         'close' => 472.8,
+                        'api_token' => 'provider-echoed-intraday-secret',
                     ],
                 ]);
             }
@@ -163,6 +169,12 @@ class EodhdMarketDataTest extends TestCase
         app(EodhdMarketData::class)->ensureIntradaySamples($holding->refresh());
 
         $this->assertSame(2, StockHoldingIntradayCandle::query()->where('stock_holding_id', $holding->id)->count());
+        $storedPayloads = StockHoldingIntradayCandle::query()
+            ->where('stock_holding_id', $holding->id)
+            ->get()
+            ->pluck('raw_payload');
+        $this->assertSame(['[redacted]', '[redacted]'], $storedPayloads->pluck('api_token')->all());
+        $this->assertStringNotContainsString('provider-echoed-intraday-secret', json_encode($storedPayloads, JSON_THROW_ON_ERROR));
         $this->assertDatabaseMissing('stock_holding_intraday_candles', [
             'stock_holding_id' => $holding->id,
             'as_of' => '2026-06-05 07:00:00',

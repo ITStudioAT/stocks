@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\StockHolding;
+use App\Models\StockHoldingDailyPrice;
 use App\Models\StockPrice;
 use App\Services\EodhdHistoricalDataService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -43,6 +44,7 @@ class EodhdHistoricalDataServiceTest extends TestCase
                     'low' => 99.75,
                     'close' => 101.50,
                     'volume' => 12345,
+                    'api_token' => 'provider-echoed-historical-secret',
                 ],
             ]),
         ]);
@@ -75,6 +77,18 @@ class EodhdHistoricalDataServiceTest extends TestCase
             'close' => '101.50000000',
             'currency' => 'EUR',
         ]);
+        $stockPayload = StockPrice::query()
+            ->where('source_key', 'eodhd_eod')
+            ->where('as_of', '2026-06-26 21:59:59')
+            ->sole()
+            ->raw_payload;
+        $dailyPayload = StockHoldingDailyPrice::query()->sole()->raw_payload;
+        $this->assertSame('[redacted]', $stockPayload['api_token']);
+        $this->assertSame('[redacted]', $dailyPayload['api_token']);
+        $this->assertStringNotContainsString(
+            'provider-echoed-historical-secret',
+            json_encode([$stockPayload, $dailyPayload], JSON_THROW_ON_ERROR),
+        );
         Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/eod/AMES.XETRA')
             && $request['from'] === '2026-06-26'
             && $request['to'] === '2026-06-26'

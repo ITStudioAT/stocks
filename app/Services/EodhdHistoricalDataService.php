@@ -15,6 +15,7 @@ class EodhdHistoricalDataService
 {
     public function __construct(
         private EodhdApiClient $apiClient,
+        private EodhdErrorSanitizer $errorSanitizer,
         private EodhdMarketData $marketData,
         private StockPriceCatalog $stockPriceCatalog,
     ) {}
@@ -58,7 +59,7 @@ class EodhdHistoricalDataService
                 $result = $this->syncHolding($holding, $targetDate);
             } catch (Throwable $exception) {
                 $failedCount++;
-                $errors[] = $exception->getMessage();
+                $errors[] = $this->errorSanitizer->message($exception->getMessage());
 
                 continue;
             }
@@ -166,14 +167,16 @@ class EodhdHistoricalDataService
             throw new RuntimeException("EODHD historical request failed with HTTP {$response->status()} for {$symbol}.");
         }
 
-        $payload = $response->json();
+        $payload = $this->errorSanitizer->payload($response->json());
 
         if (! is_array($payload)) {
             throw new RuntimeException("EODHD returned an invalid historical response for {$symbol}.");
         }
 
         if (($payload['status'] ?? null) === 'error') {
-            throw new RuntimeException((string) ($payload['message'] ?? "EODHD returned an error response for {$symbol}."));
+            throw new RuntimeException($this->errorSanitizer->message(
+                (string) ($payload['message'] ?? "EODHD returned an error response for {$symbol}."),
+            ));
         }
 
         $instrumentKey = $this->stockPriceCatalog->instrumentKeyForHolding($holding);

@@ -12,6 +12,7 @@ class EodhdExchangeDataImporter
 {
     public function __construct(
         private EodhdApiClient $eodhdApiClient,
+        private EodhdErrorSanitizer $errorSanitizer,
     ) {}
 
     public function createRun(): EodhdExchangeImportRun
@@ -89,7 +90,7 @@ class EodhdExchangeDataImporter
                         $details = $this->validDetailPayload($detailResponse, $detailCode);
                         $detailsByCode[$detailCode] = $details;
                     } catch (RuntimeException $exception) {
-                        $detailErrorsByCode[$detailCode] = $exception->getMessage();
+                        $detailErrorsByCode[$detailCode] = $this->errorSanitizer->message($exception->getMessage());
                     }
                 }
             }
@@ -144,7 +145,13 @@ class EodhdExchangeDataImporter
             throw new RuntimeException('EODHD returned an invalid exchange response.');
         }
 
-        return $exchanges;
+        if (($exchanges['status'] ?? null) === 'error') {
+            throw new RuntimeException($this->errorSanitizer->message(
+                (string) ($exchanges['message'] ?? 'EODHD returned an error response.'),
+            ));
+        }
+
+        return $this->sanitizedProviderPayload($exchanges);
     }
 
     /**
@@ -207,7 +214,9 @@ class EodhdExchangeDataImporter
             'current' => $run->current,
             'started_at' => $run->started_at?->toIso8601String(),
             'finished_at' => $run->finished_at?->toIso8601String(),
-            'error' => is_array($run->error_summary) ? ($run->error_summary['message'] ?? null) : null,
+            'error' => is_array($run->error_summary)
+                ? $this->errorSanitizer->payload($run->error_summary['message'] ?? null, 255)
+                : null,
             'success_count' => $run->success_count,
             'failed_count' => $run->failed_count,
         ];
@@ -246,6 +255,8 @@ class EodhdExchangeDataImporter
      */
     private function upsertExchange(array $exchange, ?array $details, ?string $detailCode): void
     {
+        $exchange = $this->sanitizedProviderPayload($exchange);
+        $details = is_array($details) ? $this->sanitizedProviderPayload($details) : null;
         $code = $this->stringValue($exchange['Code'] ?? $exchange['code'] ?? null);
 
         if ($code === null) {
@@ -296,11 +307,28 @@ class EodhdExchangeDataImporter
             throw new RuntimeException("EODHD returned an invalid exchange detail response for {$detailCode}.");
         }
 
+        if (($details['status'] ?? null) === 'error') {
+            throw new RuntimeException($this->errorSanitizer->message(
+                (string) ($details['message'] ?? "EODHD returned an error response for {$detailCode}."),
+            ));
+        }
+
+        $details = $this->sanitizedProviderPayload($details);
+
         if (isset($details['data']) && is_array($details['data'])) {
             return $details['data'];
         }
 
         return $details;
+    }
+
+    /**
+     * @param  array<array-key, mixed>  $payload
+     * @return array<array-key, mixed>
+     */
+    private function sanitizedProviderPayload(array $payload): array
+    {
+        return $this->errorSanitizer->payload($payload);
     }
 
     private function advanceSuccess(EodhdExchangeImportRun $run): void
@@ -314,7 +342,7 @@ class EodhdExchangeDataImporter
         $run->increment('processed_count');
         $run->increment('failed_count');
         $run->update([
-            'error_summary' => ['message' => Str::limit($message, 255, '')],
+            'error_summary' => ['message' => $this->errorSanitizer->message($message, 255)],
         ]);
     }
 
@@ -324,7 +352,7 @@ class EodhdExchangeDataImporter
             'status' => 'failed',
             'current' => null,
             'finished_at' => now(),
-            'error_summary' => ['message' => Str::limit($message, 255, '')],
+            'error_summary' => ['message' => $this->errorSanitizer->message($message, 255)],
         ]);
     }
 

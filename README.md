@@ -19,11 +19,13 @@ The admin login screen is available at:
 /admin/login
 ```
 
-Default seeded user:
+The protected administrator identity is configured with a real
+`SUPER_ADMIN_EMAIL`, plus `SUPER_ADMIN_FIRST_NAME` and `SUPER_ADMIN_LAST_NAME`.
+For example:
 
 ```text
-Name: Kron Günther
-Email: kron@naturwelt.at
+Name: Administrator Protected
+Email: admin@your-domain.at
 Roles: admin, super_admin
 ```
 

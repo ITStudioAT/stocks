@@ -13,12 +13,19 @@ class EncodingTest extends TestCase
 
     public function test_seeded_admin_name_preserves_utf8_characters(): void
     {
+        config()->set([
+            'stocks.protected_admin.email' => 'protected@example.com',
+            'stocks.protected_admin.first_name' => 'Günther',
+            'stocks.protected_admin.last_name' => 'Kron',
+        ]);
+
         $this->seed(DatabaseSeeder::class);
 
         $this->assertDatabaseHas('users', [
-            'email' => 'kron@naturwelt.at',
+            'email' => 'protected@example.com',
             'last_name' => 'Kron',
             'first_name' => 'Günther',
+            'is_protected' => true,
         ]);
     }
 

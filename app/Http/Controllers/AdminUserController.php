@@ -2,9 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\AdminLoginCode;
 use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
@@ -37,6 +42,9 @@ class AdminUserController extends Controller
 
     public function store(Request $request): JsonResponse
     {
+        $request->merge([
+            'email' => Str::lower(trim((string) $request->input('email'))),
+        ]);
         $validated = $request->validate([
             'last_name' => ['required', 'string', 'max:255'],
             'first_name' => ['required', 'string', 'max:255'],
@@ -45,15 +53,28 @@ class AdminUserController extends Controller
             'roles.*' => ['required', Rule::in($this->availableRoles())],
         ]);
 
-        $user = User::create([
-            'last_name' => $validated['last_name'],
-            'first_name' => $validated['first_name'],
-            'email' => $validated['email'],
-            'password' => Str::password(32),
-            'email_verified_at' => now(),
-        ]);
+        $user = DB::transaction(function () use ($validated): User {
+            $this->deletePendingLoginCodesForEmails([$validated['email']]);
 
-        $user->syncRoles($validated['roles']);
+            $user = User::create([
+                'last_name' => $validated['last_name'],
+                'first_name' => $validated['first_name'],
+                'email' => $validated['email'],
+                'password' => Str::password(32),
+                'email_verified_at' => now(),
+            ]);
+
+            $user->syncRoles($validated['roles']);
+
+            return $user;
+        });
+
+        Log::notice('security.admin_user.created', [
+            'actor_user_id' => $request->user()?->getKey(),
+            'target_user_id' => $user->getKey(),
+            'roles' => $validated['roles'],
+            'ip' => $request->ip(),
+        ]);
 
         return response()->json([
             'message' => 'User created.',
@@ -63,6 +84,9 @@ class AdminUserController extends Controller
 
     public function update(Request $request, User $user): JsonResponse
     {
+        $request->merge([
+            'email' => Str::lower(trim((string) $request->input('email'))),
+        ]);
         $validated = $request->validate([
             'last_name' => ['required', 'string', 'max:255'],
             'first_name' => ['required', 'string', 'max:255'],
@@ -71,36 +95,94 @@ class AdminUserController extends Controller
             'roles.*' => ['required', Rule::in($this->availableRoles())],
         ]);
 
-        if ($this->hasProtectedSuperAdminRole($user) && ! in_array('super_admin', $validated['roles'], true)) {
-            throw ValidationException::withMessages([
-                'roles' => 'Kron Günther must keep the super admin role.',
+        $user = DB::transaction(function () use ($request, $user, $validated): User {
+            $user = User::query()->lockForUpdate()->findOrFail($user->getKey());
+            $superAdminIds = $this->lockedSuperAdminIds();
+            $removesSuperAdmin = $superAdminIds->contains($user->getKey())
+                && ! in_array('super_admin', $validated['roles'], true);
+
+            if ($user->is_protected && $removesSuperAdmin) {
+                throw ValidationException::withMessages([
+                    'roles' => 'This protected account must keep the super admin role.',
+                ]);
+            }
+
+            if ($request->user()?->is($user) && $removesSuperAdmin) {
+                throw ValidationException::withMessages([
+                    'roles' => 'You cannot remove your own super admin role.',
+                ]);
+            }
+
+            if ($removesSuperAdmin && $superAdminIds->count() === 1) {
+                throw ValidationException::withMessages([
+                    'roles' => 'At least one super admin account is required.',
+                ]);
+            }
+
+            $oldEmail = $user->email;
+            $newEmail = $validated['email'];
+            $currentRoles = $user->getRoleNames()->sort()->values()->all();
+            $newRoles = collect($validated['roles'])->unique()->sort()->values()->all();
+            $emailChanged = $oldEmail !== $newEmail;
+            $rolesChanged = $currentRoles !== $newRoles;
+
+            $user->fill([
+                'last_name' => $validated['last_name'],
+                'first_name' => $validated['first_name'],
+                'email' => $newEmail,
             ]);
-        }
 
-        $user->fill([
-            'last_name' => $validated['last_name'],
-            'first_name' => $validated['first_name'],
-            'email' => $validated['email'],
+            if ($emailChanged || $rolesChanged) {
+                $user->auth_revision++;
+                $this->deletePendingLoginCodesForEmails([$oldEmail, $newEmail]);
+            }
+
+            $user->save();
+            $user->syncRoles($newRoles);
+
+            return $user->load('roles');
+        });
+
+        Log::notice('security.admin_user.updated', [
+            'actor_user_id' => $request->user()?->getKey(),
+            'target_user_id' => $user->getKey(),
+            'roles' => $validated['roles'],
+            'ip' => $request->ip(),
         ]);
-
-        $user->save();
-        $user->syncRoles($validated['roles']);
 
         return response()->json([
             'message' => 'User updated.',
-            'user' => $this->userPayload($user->load('roles')),
+            'user' => $this->userPayload($user, $request->user()),
         ]);
     }
 
     public function destroy(Request $request, User $user): JsonResponse
     {
-        if (! $this->canDeleteUser($user, $request->user())) {
-            throw ValidationException::withMessages([
-                'user' => 'This user account cannot be deleted.',
-            ]);
-        }
+        DB::transaction(function () use ($request, $user): void {
+            $user = User::query()->lockForUpdate()->findOrFail($user->getKey());
+            $superAdminIds = $this->lockedSuperAdminIds();
 
-        $user->delete();
+            if ($request->user()?->is($user) || $user->is_protected) {
+                throw ValidationException::withMessages([
+                    'user' => 'This user account cannot be deleted.',
+                ]);
+            }
+
+            if ($superAdminIds->contains($user->getKey()) && $superAdminIds->count() === 1) {
+                throw ValidationException::withMessages([
+                    'user' => 'At least one super admin account is required.',
+                ]);
+            }
+
+            $this->deletePendingLoginCodesForEmails([$user->email]);
+            $user->delete();
+        });
+
+        Log::notice('security.admin_user.deleted', [
+            'actor_user_id' => $request->user()?->getKey(),
+            'target_user_id' => $user->getKey(),
+            'ip' => $request->ip(),
+        ]);
 
         return response()->json([
             'message' => 'User deleted.',
@@ -134,7 +216,7 @@ class AdminUserController extends Controller
             'email' => $user->email,
             'roles' => $user->getRoleNames()->values()->all(),
             'can_delete' => $this->canDeleteUser($user, $currentUser),
-            'roles_locked' => $this->hasProtectedSuperAdminRole($user),
+            'roles_locked' => $user->is_protected,
             'created_at' => $user->created_at?->toIso8601String(),
         ];
     }
@@ -145,11 +227,45 @@ class AdminUserController extends Controller
             return false;
         }
 
-        return $user->email !== 'kron@naturwelt.at';
+        if ($user->is_protected) {
+            return false;
+        }
+
+        return ! $user->hasRole('super_admin') || User::role('super_admin')->count() > 1;
     }
 
-    private function hasProtectedSuperAdminRole(User $user): bool
+    /**
+     * @return Collection<int, int>
+     */
+    private function lockedSuperAdminIds(): Collection
     {
-        return $user->email === 'kron@naturwelt.at';
+        return User::role('super_admin')
+            ->orderBy('users.id')
+            ->lockForUpdate()
+            ->pluck('users.id');
+    }
+
+    /** @param array<int, string> $emails */
+    private function deletePendingLoginCodesForEmails(array $emails): void
+    {
+        $normalizedEmails = collect($emails)
+            ->map(fn (string $email): string => Str::lower(trim($email)))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($normalizedEmails === []) {
+            return;
+        }
+
+        AdminLoginCode::query()
+            ->whereNull('consumed_at')
+            ->where(function (Builder $query) use ($normalizedEmails): void {
+                foreach ($normalizedEmails as $email) {
+                    $query->orWhereRaw('LOWER(email) = ?', [$email]);
+                }
+            })
+            ->delete();
     }
 }

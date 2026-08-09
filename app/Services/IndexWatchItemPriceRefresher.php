@@ -17,6 +17,7 @@ class IndexWatchItemPriceRefresher
 
     public function __construct(
         private EodhdApiClient $apiClient,
+        private EodhdErrorSanitizer $errorSanitizer,
         private EodhdMarketData $marketData,
     ) {}
 
@@ -51,7 +52,7 @@ class IndexWatchItemPriceRefresher
             return false;
         }
 
-        $payload = $response->json();
+        $payload = $this->errorSanitizer->payload($response->json());
 
         if (! is_array($payload) || ($payload['status'] ?? null) === 'error') {
             return false;
@@ -214,7 +215,7 @@ class IndexWatchItemPriceRefresher
             return 0;
         }
 
-        $payload = $response->json();
+        $payload = $this->errorSanitizer->payload($response->json());
 
         if (! is_array($payload) || ($payload['status'] ?? null) === 'error') {
             return 0;

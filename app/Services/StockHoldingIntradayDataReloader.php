@@ -26,6 +26,7 @@ class StockHoldingIntradayDataReloader
 
     public function __construct(
         private EodhdApiClient $eodhdApiClient,
+        private EodhdErrorSanitizer $errorSanitizer,
         private EodhdMarketData $marketData,
     ) {}
 
@@ -111,7 +112,7 @@ class StockHoldingIntradayDataReloader
             $run->update([
                 'status' => 'failed',
                 'message' => 'Intraday reload failed.',
-                'error_summary' => ['message' => Str::limit($exception->getMessage(), 255, '')],
+                'error_summary' => ['message' => $this->errorSanitizer->message($exception->getMessage(), 255)],
                 'finished_at' => now(),
             ]);
 
@@ -469,7 +470,7 @@ class StockHoldingIntradayDataReloader
             $run->update([
                 'status' => 'failed',
                 'message' => 'Intraday reload failed.',
-                'error_summary' => ['message' => Str::limit($exception->getMessage(), 255, '')],
+                'error_summary' => ['message' => $this->errorSanitizer->message($exception->getMessage(), 255)],
                 'finished_at' => now(),
             ]);
 
@@ -509,7 +510,7 @@ class StockHoldingIntradayDataReloader
                     } catch (Throwable $exception) {
                         $run->increment('failed_count');
                         $run->update([
-                            'error_summary' => ['message' => Str::limit($exception->getMessage(), 255, '')],
+                            'error_summary' => ['message' => $this->errorSanitizer->message($exception->getMessage(), 255)],
                         ]);
                     } finally {
                         $run->increment('processed_count');
@@ -567,7 +568,7 @@ class StockHoldingIntradayDataReloader
                     } catch (Throwable $exception) {
                         $run->increment('failed_count');
                         $run->update([
-                            'error_summary' => ['message' => Str::limit($exception->getMessage(), 255, '')],
+                            'error_summary' => ['message' => $this->errorSanitizer->message($exception->getMessage(), 255)],
                         ]);
                     } finally {
                         $run->increment('processed_count');
@@ -623,7 +624,7 @@ class StockHoldingIntradayDataReloader
             } catch (Throwable $exception) {
                 $run->increment('failed_count');
                 $run->update([
-                    'error_summary' => ['message' => Str::limit($exception->getMessage(), 255, '')],
+                    'error_summary' => ['message' => $this->errorSanitizer->message($exception->getMessage(), 255)],
                 ]);
             } finally {
                 $run->increment('processed_count');
@@ -657,7 +658,7 @@ class StockHoldingIntradayDataReloader
             'status' => 'failed',
             'current' => null,
             'message' => 'Intraday reload failed.',
-            'error_summary' => ['message' => Str::limit($message, 255, '')],
+            'error_summary' => ['message' => $this->errorSanitizer->message($message, 255)],
             'finished_at' => now(),
         ]);
     }
@@ -730,7 +731,9 @@ class StockHoldingIntradayDataReloader
             'stored_count' => $run->stored_count,
             'success_count' => $run->success_count,
             'failed_count' => $run->failed_count,
-            'error' => is_array($run->error_summary) ? ($run->error_summary['message'] ?? null) : null,
+            'error' => is_array($run->error_summary)
+                ? $this->errorSanitizer->payload($run->error_summary['message'] ?? null, 255)
+                : null,
         ];
     }
 
@@ -1088,7 +1091,7 @@ class StockHoldingIntradayDataReloader
             throw new RuntimeException("EODHD intraday request failed with HTTP {$response->status()}.");
         }
 
-        $payload = $response->json();
+        $payload = $this->errorSanitizer->payload($response->json());
 
         if (! is_array($payload)) {
             throw new RuntimeException('EODHD returned an invalid intraday response.');
@@ -1097,7 +1100,7 @@ class StockHoldingIntradayDataReloader
         if (($payload['status'] ?? null) === 'error') {
             $message = is_string($payload['message'] ?? null) ? $payload['message'] : 'EODHD returned an error response.';
 
-            throw new RuntimeException($message);
+            throw new RuntimeException($this->errorSanitizer->message($message));
         }
 
         return collect($payload)

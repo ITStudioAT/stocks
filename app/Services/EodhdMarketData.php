@@ -42,6 +42,7 @@ class EodhdMarketData
         private WebQuoteValidator $validator,
         private MarketHours $marketHours,
         private EodhdApiClient $apiClient,
+        private EodhdErrorSanitizer $errorSanitizer,
         private IndexMarketHours $indexMarketHours,
     ) {}
 
@@ -413,7 +414,7 @@ class EodhdMarketData
             return [];
         }
 
-        $payload = $response->json();
+        $payload = $this->errorSanitizer->payload($response->json());
 
         if (! is_array($payload)) {
             $errors[] = "EODHD returned an invalid {$interval} intraday response.";
@@ -469,7 +470,7 @@ class EodhdMarketData
             asOf: $asOf,
             fetchedAt: now(),
             freshnessStatus: $freshnessStatus,
-            rawPayload: $payload,
+            rawPayload: $this->errorSanitizer->payload($payload),
         );
     }
 
@@ -791,7 +792,7 @@ class EodhdMarketData
         try {
             $response = $this->apiClient->get($path, $query);
         } catch (Throwable $exception) {
-            $errors[] = "EODHD request failed: {$exception->getMessage()}";
+            $errors[] = 'EODHD request failed: '.$this->errorSanitizer->message($exception->getMessage());
 
             return null;
         }
@@ -1379,7 +1380,7 @@ class EodhdMarketData
      */
     private function jsonPayload(array $payload): ?string
     {
-        $encodedPayload = json_encode($payload);
+        $encodedPayload = json_encode($this->errorSanitizer->payload($payload));
 
         return is_string($encodedPayload) ? $encodedPayload : null;
     }
@@ -1406,8 +1407,10 @@ class EodhdMarketData
     {
         $message = Arr::get($payload, 'message');
 
-        return is_string($message) && trim($message) !== ''
+        $message = is_string($message) && trim($message) !== ''
             ? $message
             : 'EODHD returned an error response.';
+
+        return $this->errorSanitizer->message($message);
     }
 }

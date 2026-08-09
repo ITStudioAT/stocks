@@ -22,6 +22,9 @@ describe('request', () => {
         const data = await request('/admin/example', {
             method: 'POST',
             body: JSON.stringify({ name: 'Stocks' }),
+            headers: {
+                'X-Request-Context': 'test',
+            },
         });
 
         expect(data).toEqual({ saved: true });
@@ -31,6 +34,7 @@ describe('request', () => {
                 Accept: 'application/json',
                 'Content-Type': 'application/json',
                 'X-CSRF-TOKEN': 'test-token',
+                'X-Request-Context': 'test',
             },
             method: 'POST',
             body: JSON.stringify({ name: 'Stocks' }),
@@ -65,6 +69,7 @@ describe('useAuthStore', () => {
         })));
 
         const auth = useAuthStore();
+        expect(auth.email).toBe('');
 
         await auth.sendCode('admin@example.com');
 
@@ -84,6 +89,66 @@ describe('useAuthStore', () => {
         await expect(auth.sendCode('admin@example.com')).rejects.toThrow('Invalid credentials.');
         expect(auth.error).toBe('Invalid credentials.');
         expect(auth.loading).toBe(false);
+    });
+
+    it('submits the current password and confirmed replacement password', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+            message: 'Password updated.',
+        }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const auth = useAuthStore();
+
+        await auth.updatePassword(
+            'Current-Password-123!',
+            'New-Password-456!',
+            'New-Password-456!',
+        );
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/profile/password', expect.objectContaining({
+            method: 'PATCH',
+            body: JSON.stringify({
+                current_password: 'Current-Password-123!',
+                password: 'New-Password-456!',
+                password_confirmation: 'New-Password-456!',
+            }),
+        }));
+    });
+
+    it('omits the prohibited current password during one-time initialization and refreshes user state', async () => {
+        const initializedUser = {
+            email: 'admin@example.com',
+            roles: ['admin'],
+            can_initialize_password: false,
+        };
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+            message: 'Password updated.',
+            user: initializedUser,
+        }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const auth = useAuthStore();
+        auth.user = {
+            email: 'admin@example.com',
+            roles: ['admin'],
+            can_initialize_password: true,
+        };
+
+        await auth.updatePassword(
+            'must-not-be-sent',
+            'Initialized-Password-456!',
+            'Initialized-Password-456!',
+        );
+
+        const [, requestOptions] = fetchMock.mock.calls[0];
+        const payload = JSON.parse(requestOptions.body);
+
+        expect(payload).toEqual({
+            password: 'Initialized-Password-456!',
+            password_confirmation: 'Initialized-Password-456!',
+        });
+        expect(payload).not.toHaveProperty('current_password');
+        expect(auth.user).toEqual(initializedUser);
     });
 
     it('does not load the current user outside authenticated admin pages', async () => {

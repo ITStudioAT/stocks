@@ -6,6 +6,7 @@ use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
 use App\Services\EodhdApiClient;
 use App\Services\EodhdApiUsage;
+use App\Services\EodhdErrorSanitizer;
 use App\Services\EodhdExchangeDataImporter;
 use App\Services\StockHoldingIntradayDataReloader;
 use Illuminate\Http\JsonResponse;
@@ -37,15 +38,18 @@ class AdminTestsController extends Controller
         ]);
     }
 
-    public function tickers(EodhdApiClient $eodhdApiClient, EodhdApiUsage $eodhdApiUsage): JsonResponse
-    {
+    public function tickers(
+        EodhdApiClient $eodhdApiClient,
+        EodhdApiUsage $eodhdApiUsage,
+        EodhdErrorSanitizer $errorSanitizer,
+    ): JsonResponse {
         try {
             $response = $eodhdApiClient->get('exchange-symbol-list/'.self::TickerExchangeCode, [
                 'fmt' => 'json',
             ]);
         } catch (RuntimeException $exception) {
             return response()->json([
-                'message' => $exception->getMessage(),
+                'message' => $errorSanitizer->message($exception->getMessage()),
                 'exchange_code' => self::TickerExchangeCode,
                 'tickers' => [],
                 'eodhd_api_usage' => $eodhdApiUsage->payload(),
@@ -72,22 +76,37 @@ class AdminTestsController extends Controller
             ], 422);
         }
 
+        if (($tickers['status'] ?? null) === 'error') {
+            return response()->json([
+                'message' => $errorSanitizer->message(
+                    (string) ($tickers['message'] ?? 'EODHD returned an error response.'),
+                ),
+                'exchange_code' => self::TickerExchangeCode,
+                'tickers' => [],
+                'eodhd_api_usage' => $eodhdApiUsage->payload(),
+            ], 422);
+        }
+
         return response()->json([
             'exchange_code' => self::TickerExchangeCode,
-            'tickers' => $tickers,
+            'tickers' => $errorSanitizer->payload($tickers),
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
     }
 
-    public function exchanges(EodhdApiClient $eodhdApiClient, EodhdApiUsage $eodhdApiUsage, EodhdExchangeDataImporter $importer): JsonResponse
-    {
+    public function exchanges(
+        EodhdApiClient $eodhdApiClient,
+        EodhdApiUsage $eodhdApiUsage,
+        EodhdErrorSanitizer $errorSanitizer,
+        EodhdExchangeDataImporter $importer,
+    ): JsonResponse {
         try {
             $response = $eodhdApiClient->get('exchanges-list/', [
                 'fmt' => 'json',
             ]);
         } catch (RuntimeException $exception) {
             return response()->json([
-                'message' => $exception->getMessage(),
+                'message' => $errorSanitizer->message($exception->getMessage()),
                 'exchanges' => [],
                 'eodhd_api_usage' => $eodhdApiUsage->payload(),
             ], 422);
@@ -111,10 +130,20 @@ class AdminTestsController extends Controller
             ], 422);
         }
 
+        if (($exchanges['status'] ?? null) === 'error') {
+            return response()->json([
+                'message' => $errorSanitizer->message(
+                    (string) ($exchanges['message'] ?? 'EODHD returned an error response.'),
+                ),
+                'exchanges' => [],
+                'eodhd_api_usage' => $eodhdApiUsage->payload(),
+            ], 422);
+        }
+
         $exchangeDetails = [];
         $exchangeDetailErrors = [];
         $exchanges = collect($exchanges)
-            ->map(function (mixed $exchange) use (&$exchangeDetails, &$exchangeDetailErrors, $eodhdApiClient, $importer): mixed {
+            ->map(function (mixed $exchange) use (&$exchangeDetails, &$exchangeDetailErrors, $eodhdApiClient, $errorSanitizer, $importer): mixed {
                 if (! is_array($exchange)) {
                     return $exchange;
                 }
@@ -147,6 +176,14 @@ class AdminTestsController extends Controller
                     return $exchange;
                 }
 
+                if (($details['status'] ?? null) === 'error') {
+                    $exchangeDetailErrors[$exchangeDetailCode] = $errorSanitizer->message(
+                        (string) ($details['message'] ?? 'EODHD returned an exchange detail error.'),
+                    );
+
+                    return $exchange;
+                }
+
                 if (isset($details['data']) && is_array($details['data'])) {
                     $details = $details['data'];
                 }
@@ -159,20 +196,24 @@ class AdminTestsController extends Controller
             ->all();
 
         return response()->json([
-            'exchanges' => $exchanges,
-            'exchange_details' => $exchangeDetails,
-            'exchange_detail_errors' => $exchangeDetailErrors,
+            'exchanges' => $errorSanitizer->payload($exchanges),
+            'exchange_details' => $errorSanitizer->payload($exchangeDetails),
+            'exchange_detail_errors' => $errorSanitizer->payload($exchangeDetailErrors),
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
     }
 
-    public function intraday(StockHolding $holding, StockHoldingIntradayDataReloader $reloader, EodhdApiUsage $eodhdApiUsage): JsonResponse
-    {
+    public function intraday(
+        StockHolding $holding,
+        StockHoldingIntradayDataReloader $reloader,
+        EodhdApiUsage $eodhdApiUsage,
+        EodhdErrorSanitizer $errorSanitizer,
+    ): JsonResponse {
         try {
             $refresh = $reloader->reloadToday($holding);
         } catch (RuntimeException $exception) {
             return response()->json([
-                'message' => $exception->getMessage(),
+                'message' => $errorSanitizer->message($exception->getMessage()),
                 'stock' => $this->stockPayload($holding),
                 'day' => $reloader->todayCandlePayload($holding),
                 'eodhd_api_usage' => $eodhdApiUsage->payload(),

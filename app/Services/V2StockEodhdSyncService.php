@@ -14,6 +14,7 @@ class V2StockEodhdSyncService
     public function __construct(
         private CompletedTradingDay $completedTradingDay,
         private EodhdEndOfDayDataService $endOfDayDataService,
+        private EodhdErrorSanitizer $errorSanitizer,
         private StockHoldingIntradayDataReloader $intradayDataReloader,
     ) {}
 
@@ -96,7 +97,7 @@ class V2StockEodhdSyncService
             return;
         }
 
-        $safeMessage = Str::limit($message, 1000, '');
+        $safeMessage = $this->errorSanitizer->message($message, 1000);
         $steps = collect($run->steps ?? [])
             ->map(function (array $step) use ($run, $safeMessage): array {
                 if ($step['key'] === $run->stage) {
@@ -140,7 +141,7 @@ class V2StockEodhdSyncService
             'date_from' => $run->date_from?->toDateString(),
             'date_to' => $run->date_to?->toDateString(),
             'current' => $intradayRun?->current ?? $run->current,
-            'steps' => $this->payloadSteps($run, $intradayRun),
+            'steps' => $this->errorSanitizer->payload($this->payloadSteps($run, $intradayRun), 1000),
             'progress' => [
                 'completed' => $completed,
                 'total' => $total,
@@ -162,7 +163,7 @@ class V2StockEodhdSyncService
                 'date_to' => $intradayRun?->date_to?->toDateString(),
             ],
             'message' => $run->message,
-            'error' => $run->error,
+            'error' => $run->error ? $this->errorSanitizer->message($run->error, 1000) : null,
             'started_at' => $run->started_at?->toIso8601String(),
             'finished_at' => $run->finished_at?->toIso8601String(),
         ];
@@ -278,6 +279,8 @@ class V2StockEodhdSyncService
             $messages[] = $intradayError;
         }
 
-        return $messages === [] ? null : Str::limit(implode(' ', $messages), 1000, '');
+        return $messages === []
+            ? null
+            : $this->errorSanitizer->message(implode(' ', $messages), 1000);
     }
 }

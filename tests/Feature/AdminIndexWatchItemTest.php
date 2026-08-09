@@ -189,6 +189,7 @@ class AdminIndexWatchItemTest extends TestCase
                     'previousClose' => 6386.8101,
                     'change_p' => 1.727466,
                     'currency' => 'EUR',
+                    'api_token' => 'provider-echoed-index-realtime-secret',
                 ]),
             ]);
             $index = IndexWatchItem::factory()->create([
@@ -214,6 +215,20 @@ class AdminIndexWatchItemTest extends TestCase
                 ->assertJsonPath('index.realtime_prices.0.as_of', '2026-07-03T17:30:00+02:00')
                 ->assertJsonPath('index.latest_price_as_of', '2026-07-03T17:30:00+02:00')
                 ->assertJsonPath('index.trading_times', 'Monday-Friday 09:00:00-17:30:00 Europe/Vienna');
+
+            $rawPayloads = [
+                $index->refresh()->raw_payload,
+                $index->prices()->whereDate('trading_date', '2026-07-03')->sole()->raw_payload,
+                IndexWatchItemRealtimePrice::query()->sole()->raw_payload,
+            ];
+            $this->assertSame(
+                ['[redacted]', '[redacted]', '[redacted]'],
+                collect($rawPayloads)->pluck('api_token')->all(),
+            );
+            $this->assertStringNotContainsString(
+                'provider-echoed-index-realtime-secret',
+                json_encode($rawPayloads, JSON_THROW_ON_ERROR),
+            );
 
             Http::assertSent(fn ($request): bool => str_contains($request->url(), '/api/real-time/ATX.INDX'));
         } finally {

@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Spatie\Permission\Models\Role;
@@ -40,6 +41,8 @@ class AdminRoleController extends Controller
             'guard_name' => 'web',
         ]);
 
+        $this->audit($request, 'created', $role);
+
         return response()->json([
             'message' => 'Role created.',
             'role' => $this->rolePayload($role),
@@ -56,13 +59,15 @@ class AdminRoleController extends Controller
             'name' => $validated['name'],
         ]);
 
+        $this->audit($request, 'updated', $role);
+
         return response()->json([
             'message' => 'Role updated.',
             'role' => $this->rolePayload($role),
         ]);
     }
 
-    public function destroy(Role $role): JsonResponse
+    public function destroy(Request $request, Role $role): JsonResponse
     {
         $this->ensureRoleCanBeModified($role, 'This system role cannot be deleted.');
 
@@ -73,6 +78,8 @@ class AdminRoleController extends Controller
         }
 
         $role->delete();
+
+        $this->audit($request, 'deleted', $role);
 
         return response()->json([
             'message' => 'Role deleted.',
@@ -130,5 +137,15 @@ class AdminRoleController extends Controller
     private function isSystemRole(Role $role): bool
     {
         return in_array($role->name, ['admin', 'super_admin'], true);
+    }
+
+    private function audit(Request $request, string $action, Role $role): void
+    {
+        Log::notice("security.admin_role.{$action}", [
+            'actor_user_id' => $request->user()?->getKey(),
+            'target_role_id' => $role->getKey(),
+            'role_name' => $role->name,
+            'ip' => $request->ip(),
+        ]);
     }
 }

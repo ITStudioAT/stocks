@@ -3,15 +3,16 @@ import { defineStore } from 'pinia';
 export const csrfToken = () => document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
 
 export async function request(path, options = {}) {
+    const { headers = {}, ...requestOptions } = options;
     const response = await fetch(path, {
         credentials: 'same-origin',
+        ...requestOptions,
         headers: {
             Accept: 'application/json',
             'Content-Type': 'application/json',
             'X-CSRF-TOKEN': csrfToken(),
-            ...(options.headers ?? {}),
+            ...headers,
         },
-        ...options,
     });
 
     const data = await response.json().catch(() => ({}));
@@ -31,7 +32,7 @@ export async function request(path, options = {}) {
 export const useAuthStore = defineStore('auth', {
     state: () => ({
         user: null,
-        email: 'kron@naturwelt.at',
+        email: '',
         loading: false,
         notice: '',
         error: '',
@@ -69,7 +70,7 @@ export const useAuthStore = defineStore('auth', {
                     body: JSON.stringify({ email: this.email, code }),
                 });
                 this.user = data.user;
-                window.location.assign('/admin');
+                window.location.assign(data.user?.can_initialize_password ? '/admin/profile' : '/admin');
             } catch (error) {
                 this.error = error.message;
                 throw error;
@@ -127,7 +128,7 @@ export const useAuthStore = defineStore('auth', {
                 this.loading = false;
             }
         },
-        async updatePassword(password) {
+        async updatePassword(currentPassword, password, passwordConfirmation) {
             this.loading = true;
             this.error = '';
             this.notice = '';
@@ -136,9 +137,12 @@ export const useAuthStore = defineStore('auth', {
                 const data = await request('/admin/profile/password', {
                     method: 'PATCH',
                     body: JSON.stringify({
+                        ...(this.user?.can_initialize_password ? {} : { current_password: currentPassword }),
                         password,
+                        password_confirmation: passwordConfirmation,
                     }),
                 });
+                this.user = data.user ?? this.user;
                 this.notice = data.message;
             } catch (error) {
                 this.error = error.message;

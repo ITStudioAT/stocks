@@ -18,10 +18,6 @@ return [
         'key' => env('POSTMARK_API_KEY', env('POSTMARK_TOKEN')),
     ],
 
-    'super_admin' => [
-        'password' => env('SA_PW'),
-    ],
-
     'cloudways' => [
         'connection' => env('CLOUDWAYS_CONNECTION'),
         'host' => env('CLOUDWAYS_HOST'),
@@ -30,6 +26,8 @@ return [
         'username' => env('CLOUDWAYS_USERNAME'),
         'password' => env('CLOUDWAYS_PASSWORD'),
         'connect_timeout' => env('CLOUDWAYS_CONNECT_TIMEOUT', 5),
+        'ssl_ca' => env('CLOUDWAYS_SSL_CA'),
+        'ssl_verify_server_cert' => env('CLOUDWAYS_SSL_VERIFY_SERVER_CERT', true),
         'sync_tables' => [
             'depot_transactions',
             'depots',

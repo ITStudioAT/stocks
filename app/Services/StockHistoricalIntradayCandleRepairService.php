@@ -17,6 +17,7 @@ class StockHistoricalIntradayCandleRepairService
 
     public function __construct(
         private EodhdApiClient $apiClient,
+        private EodhdErrorSanitizer $errorSanitizer,
         private EodhdMarketData $marketData,
         private CompletedTradingDay $completedTradingDay,
         private StockHistoricalDataRepairService $summaryService,
@@ -137,14 +138,16 @@ class StockHistoricalIntradayCandleRepairService
             'interval' => self::Interval,
             'fmt' => 'json',
         ]);
-        $payload = $response->json();
+        $payload = $this->errorSanitizer->payload($response->json());
 
         if (! is_array($payload)) {
             throw new RuntimeException("EODHD returned an invalid intraday response for {$symbol}.");
         }
 
         if (($payload['status'] ?? null) === 'error') {
-            throw new RuntimeException((string) ($payload['message'] ?? "EODHD returned an error response for {$symbol}."));
+            throw new RuntimeException($this->errorSanitizer->message(
+                (string) ($payload['message'] ?? "EODHD returned an error response for {$symbol}."),
+            ));
         }
 
         $now = now();

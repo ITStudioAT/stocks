@@ -4,6 +4,7 @@ namespace Tests\Unit;
 
 use App\Services\EodhdApiClient;
 use App\Services\EodhdApiUsage;
+use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -76,5 +77,22 @@ class EodhdApiUsageTest extends TestCase
         $this->assertSame(2, $payload['hour']['used']);
         $this->assertSame(99998, $payload['day']['remaining']);
         Http::assertSentCount(2);
+    }
+
+    public function test_the_api_client_redacts_tokens_from_connection_exceptions(): void
+    {
+        config(['services.eodhd.key' => 'connection-secret-token']);
+        Http::fake(Http::failedConnection(
+            'Connection failed for https://eodhd.test/eod?api_token=connection-secret-token&fmt=json',
+        ));
+
+        try {
+            app(EodhdApiClient::class)->get('eod/AAPL.US');
+            $this->fail('Expected the EODHD request to fail.');
+        } catch (ConnectionException $exception) {
+            $this->assertStringNotContainsString('connection-secret-token', $exception->getMessage());
+            $this->assertStringContainsString('api_token=[redacted]', $exception->getMessage());
+            $this->assertNull($exception->getPrevious());
+        }
     }
 }

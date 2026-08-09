@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\StockPriceRefreshRun;
 use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\EodhdBatchRealtimePriceService;
+use App\Services\EodhdErrorSanitizer;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
@@ -27,6 +28,7 @@ class RefreshDepotHoldingPrices implements ShouldQueue
 
     public function handle(
         EodhdBatchRealtimePriceService $realtimePriceService,
+        EodhdErrorSanitizer $errorSanitizer,
         DepotHoldingPriceRefreshProgress $progress,
     ): void {
         $progress->markRunning($this->refreshId);
@@ -38,7 +40,9 @@ class RefreshDepotHoldingPrices implements ShouldQueue
 
         $result = $realtimePriceService->syncAll();
         $status = $this->runStatus($result);
-        $errorMessage = $result['errors'] === [] ? null : implode(' ', $result['errors']);
+        $errorMessage = $result['errors'] === []
+            ? null
+            : $errorSanitizer->message(implode(' ', $result['errors']), 1000);
 
         $progress->finishWithSummary(
             $this->refreshId,
@@ -63,9 +67,14 @@ class RefreshDepotHoldingPrices implements ShouldQueue
 
     public function failed(?Throwable $exception): void
     {
+        $message = app(EodhdErrorSanitizer::class)->message(
+            $exception?->getMessage() ?? 'Unknown queue failure.',
+            1000,
+        );
+
         app(DepotHoldingPriceRefreshProgress::class)->fail(
             $this->refreshId,
-            $exception?->getMessage() ?? 'Unknown queue failure.',
+            $message,
         );
 
         StockPriceRefreshRun::query()
@@ -73,7 +82,7 @@ class RefreshDepotHoldingPrices implements ShouldQueue
             ->update([
                 'status' => 'failed',
                 'finished_at' => now(),
-                'error_summary' => ['message' => $exception?->getMessage() ?? 'Unknown queue failure.'],
+                'error_summary' => ['message' => $message],
             ]);
     }
 

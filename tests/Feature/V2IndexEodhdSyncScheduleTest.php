@@ -475,6 +475,23 @@ class V2IndexEodhdSyncScheduleTest extends TestCase
         $this->assertSame('scheduled', app(V2IndexRealtimeScheduler::class)->payload()['status']);
     }
 
+    public function test_realtime_scheduler_redacts_eodhd_tokens_from_stored_failures(): void
+    {
+        config(['services.eodhd.key' => 'scheduler-secret-token']);
+
+        app(V2IndexRealtimeScheduler::class)->markFailed(
+            'Provider failed at https://eodhd.com/api/real-time/AAPL.US?api_token=scheduler-secret-token&fmt=json',
+        );
+
+        $settings = AppConfig::query()
+            ->where('key', 'v2_index_realtime.schedule')
+            ->firstOrFail()
+            ->value;
+
+        $this->assertStringNotContainsString('scheduler-secret-token', $settings['last_error']);
+        $this->assertStringContainsString('api_token=[redacted]', $settings['last_error']);
+    }
+
     public function test_due_v2_index_schedule_queues_the_sync_using_the_stored_times(): void
     {
         Queue::fake();

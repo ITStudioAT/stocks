@@ -119,11 +119,63 @@ describe('useDepotStore', () => {
         const depots = useDepotStore();
         const data = await depots.loadTestIntraday(5);
 
-        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/stocks/5/intraday', expect.any(Object));
+        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/stocks/5/intraday', expect.objectContaining({
+            method: 'POST',
+        }));
         expect(data.day.rows[0].close).toBe('499.15000000');
         expect(depots.testIntraday.stock.symbol).toBe('AMES');
         expect(depots.testIntradayLoading).toBe(false);
         expect(depots.testIntradayError).toBe('');
+    });
+
+    it('uses POST requests for paid ticker and exchange tests', async () => {
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(jsonResponse({
+                exchange_code: 'XETRA',
+                tickers: [],
+            }))
+            .mockResolvedValueOnce(jsonResponse({
+                exchanges: [],
+                exchange_details: {},
+                exchange_detail_errors: {},
+            }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const depots = useDepotStore();
+
+        await depots.loadTestTickers();
+        await depots.loadTestExchanges();
+
+        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/tickers', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/exchanges', expect.objectContaining({
+            method: 'POST',
+        }));
+    });
+
+    it('uses POST requests when ensuring intraday candles', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+            holding: {
+                id: 7,
+                symbol: 'AMES',
+            },
+            intraday: null,
+            intraday_days: [],
+        }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const depots = useDepotStore();
+
+        await depots.loadHoldingIntradayCandles(7);
+        await depots.loadExpandedHoldingIntradayCandles(7);
+
+        expect(fetchMock).toHaveBeenNthCalledWith(1, '/admin/watchlist/holdings/7/intraday-candles', expect.objectContaining({
+            method: 'POST',
+        }));
+        expect(fetchMock).toHaveBeenNthCalledWith(2, '/admin/watchlist/holdings/7/intraday-candles', expect.objectContaining({
+            method: 'POST',
+        }));
     });
 
     it('requests every watchlist holding when requested', async () => {
@@ -146,6 +198,27 @@ describe('useDepotStore', () => {
         await depots.loadWatchlistHoldings(1, { allHoldings: true });
 
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings?page=1&all=1', expect.any(Object));
+    });
+
+    it('uses a POST request when chart loading may fetch provider data', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+            depot: null,
+            holdings: [],
+            meta: {},
+        }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const depots = useDepotStore();
+
+        await depots.loadWatchlistHoldings(1, {
+            includeCharts: true,
+            chartStockId: 7,
+        });
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/admin/watchlist/holdings/charts?page=1&include_charts=1&chart_stock_id=7',
+            expect.objectContaining({ method: 'POST' }),
+        );
     });
 
     it('merges end-of-day repair results without dropping historical data info', async () => {

@@ -2,6 +2,9 @@
 
 namespace Tests;
 
+use App\Models\User;
+use App\Services\AdminSessionManager;
+use Illuminate\Contracts\Auth\Authenticatable as UserContract;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use RuntimeException;
 
@@ -18,5 +21,20 @@ abstract class TestCase extends BaseTestCase
         parent::setUp();
 
         $this->withoutVite();
+    }
+
+    public function actingAs(UserContract $user, mixed $guard = null): static
+    {
+        parent::actingAs($user, $guard);
+
+        $guardName = is_string($guard) ? $guard : config('auth.defaults.guard');
+
+        if ($user instanceof User && $guardName === 'web') {
+            $this->withSession([
+                AdminSessionManager::TargetRevisionSessionKey => $user->auth_revision,
+            ]);
+        }
+
+        return $this;
     }
 }

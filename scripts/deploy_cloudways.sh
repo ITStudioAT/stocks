@@ -75,8 +75,6 @@ prepare_frontend_artifact() {
     fi
 
     local release_source_commit
-    local artifact_source_commit
-
     release_source_commit="$(tr -d '\r\n' < "$frontend_release_marker")"
 
     if [[ ! "$release_source_commit" =~ ^[0-9a-f]{40,64}$ ]]; then
@@ -87,8 +85,8 @@ prepare_frontend_artifact() {
 
     frontend_artifact_directory="$(mktemp -d "${project_directory}/public/.stocks-build.XXXXXX")"
 
-    if ! tar -xzf "$frontend_release_archive" -C "$frontend_artifact_directory"; then
-        echo "The frontend release archive could not be extracted." >&2
+    if ! php scripts/frontend-release.php extract-to "$frontend_artifact_directory"; then
+        echo "The validated frontend release archive could not be extracted." >&2
 
         return 1
     fi
@@ -99,16 +97,8 @@ prepare_frontend_artifact() {
         return 1
     fi
 
-    if [ ! -f "$frontend_artifact_directory/deployment-source.txt" ]; then
-        echo "The frontend artifact source marker is missing." >&2
-
-        return 1
-    fi
-
-    artifact_source_commit="$(tr -d '\r\n' < "$frontend_artifact_directory/deployment-source.txt")"
-
-    if [ "$artifact_source_commit" != "$release_source_commit" ]; then
-        echo "The frontend artifact was built for ${artifact_source_commit}, but the Cloudways release contains ${release_source_commit}." >&2
+    if [ -e "$frontend_artifact_directory/deployment-source.txt" ] || [ -L "$frontend_artifact_directory/deployment-source.txt" ]; then
+        echo "The frontend artifact contains a public source commit marker." >&2
 
         return 1
     fi
@@ -155,6 +145,13 @@ install_frontend_artifact() {
 
     frontend_artifact_directory=""
     frontend_artifact_installed=true
+
+    if ! php scripts/frontend-release.php validate-build; then
+        echo "The installed frontend artifact failed its post-install validation." >&2
+
+        return 1
+    fi
+
     echo "Frontend artifact installed."
 }
 
@@ -306,7 +303,7 @@ composer install \
 composer check-platform-reqs --no-dev --no-interaction
 
 install_frontend_artifact
-php artisan app:update --no-interaction --skip-composer --skip-npm --skip-build
+php artisan app:update --production --no-interaction --skip-composer --skip-npm --skip-build
 
 finalize_frontend_artifact
 php artisan up

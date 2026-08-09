@@ -16,6 +16,7 @@ class EodhdEndOfDayDataService
     public function __construct(
         private CompletedTradingDay $completedTradingDay,
         private EodhdApiClient $apiClient,
+        private EodhdErrorSanitizer $errorSanitizer,
         private EodhdMarketData $marketData,
         private StockPriceCatalog $stockPriceCatalog,
     ) {}
@@ -116,7 +117,7 @@ class EodhdEndOfDayDataService
                 $result = $this->processHolding($holding, $dateFrom, $dateTo, $reloadStored);
             } catch (Throwable $exception) {
                 $failedCount++;
-                $errors[] = $exception->getMessage();
+                $errors[] = $this->errorSanitizer->message($exception->getMessage());
 
                 continue;
             }
@@ -307,14 +308,16 @@ class EodhdEndOfDayDataService
             throw new RuntimeException("EODHD end-of-day request failed with HTTP {$response->status()} for {$symbol}.");
         }
 
-        $payload = $response->json();
+        $payload = $this->errorSanitizer->payload($response->json());
 
         if (! is_array($payload)) {
             throw new RuntimeException("EODHD returned an invalid end-of-day response for {$symbol}.");
         }
 
         if (($payload['status'] ?? null) === 'error') {
-            throw new RuntimeException((string) ($payload['message'] ?? "EODHD returned an error response for {$symbol}."));
+            throw new RuntimeException($this->errorSanitizer->message(
+                (string) ($payload['message'] ?? "EODHD returned an error response for {$symbol}."),
+            ));
         }
 
         $instrumentKey = $this->stockPriceCatalog->instrumentKeyForHolding($holding);

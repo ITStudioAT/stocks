@@ -2,10 +2,7 @@
 
 namespace Tests\Feature;
 
-use App\Models\Depot;
-use App\Models\DepotTransaction;
 use App\Models\IndexWatchItem;
-use App\Models\StockHolding;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -71,54 +68,26 @@ class HomepageTest extends TestCase
             ->assertJsonCount(0, 'indexes');
     }
 
-    public function test_depot_sum_sign_returns_zero_when_no_active_depot(): void
+    public function test_public_market_sign_returns_zero_when_no_index_changes_exist(): void
     {
         $this->getJson('/depot-sum-sign')
             ->assertOk()
             ->assertJsonPath('sign', 0);
     }
 
-    public function test_depot_sum_sign_returns_zero_when_depot_has_no_positions(): void
+    public function test_public_market_sign_returns_negative_one_when_index_sum_is_negative(): void
     {
-        Depot::factory()->create(['is_active' => true]);
-
-        $this->getJson('/depot-sum-sign')
-            ->assertOk()
-            ->assertJsonPath('sign', 0);
-    }
-
-    public function test_depot_sum_sign_returns_negative_one_when_sum_is_negative(): void
-    {
-        $depot = Depot::factory()->create(['is_active' => true]);
-        $holding = StockHolding::factory()->create(['latest_price' => '90.000000']);
-
-        DepotTransaction::factory()->create([
-            'depot_id' => $depot->id,
-            'stock_holding_id' => $holding->id,
-            'type' => 'buy',
-            'pieces' => '10.00000000',
-            'total_amount' => '1000.00',
-            'booked_at' => now(),
-        ]);
+        IndexWatchItem::factory()->create(['latest_price_change_pct' => '-1.250000']);
+        IndexWatchItem::factory()->create(['latest_price_change_pct' => '0.250000']);
 
         $this->getJson('/depot-sum-sign')
             ->assertOk()
             ->assertJsonPath('sign', -1);
     }
 
-    public function test_depot_sum_sign_returns_one_when_sum_is_positive(): void
+    public function test_public_market_sign_returns_one_when_index_sum_is_positive(): void
     {
-        $depot = Depot::factory()->create(['is_active' => true]);
-        $holding = StockHolding::factory()->create(['latest_price' => '110.000000']);
-
-        DepotTransaction::factory()->create([
-            'depot_id' => $depot->id,
-            'stock_holding_id' => $holding->id,
-            'type' => 'buy',
-            'pieces' => '10.00000000',
-            'total_amount' => '1000.00',
-            'booked_at' => now(),
-        ]);
+        IndexWatchItem::factory()->create(['latest_price_change_pct' => '0.010000']);
 
         $this->getJson('/depot-sum-sign')
             ->assertOk()

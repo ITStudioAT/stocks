@@ -12,11 +12,15 @@ use Illuminate\Notifications\Notifiable;
 use Spatie\Permission\Traits\HasRoles;
 
 #[Fillable(['last_name', 'first_name', 'email', 'password'])]
-#[Hidden(['password', 'remember_token'])]
+#[Hidden(['password', 'remember_token', 'auth_revision', 'password_initialized_at'])]
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
     use HasFactory, HasRoles, Notifiable;
+
+    protected $attributes = [
+        'auth_revision' => 1,
+    ];
 
     /**
      * Get the attributes that should be cast.
@@ -26,8 +30,11 @@ class User extends Authenticatable
     protected function casts(): array
     {
         return [
+            'auth_revision' => 'integer',
             'email_verified_at' => 'datetime',
+            'is_protected' => 'boolean',
             'password' => 'hashed',
+            'password_initialized_at' => 'datetime',
         ];
     }
 

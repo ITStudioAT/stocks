@@ -174,6 +174,39 @@ class AdminV2StockEodhdSyncTest extends TestCase
         $this->assertStringContainsString('Intraday failed for TEST.', $run->error);
     }
 
+    public function test_stock_sync_redacts_eodhd_tokens_from_storage_and_payloads(): void
+    {
+        config(['services.eodhd.key' => 'configured-stock-secret']);
+        $service = app(V2StockEodhdSyncService::class);
+        $run = $service->createRun();
+
+        $service->fail(
+            $run->id,
+            'Connection failed for https://eodhd.test/eod?api_token=configured-stock-secret&fmt=json',
+        );
+
+        $run->refresh();
+        $storedPayload = json_encode([$run->steps, $run->error], JSON_THROW_ON_ERROR);
+
+        $this->assertStringNotContainsString('configured-stock-secret', $storedPayload);
+        $this->assertStringContainsString('api_token=[redacted]', $storedPayload);
+
+        $run->update([
+            'steps' => [[
+                'key' => 'eod',
+                'label' => 'EOD-Daten',
+                'status' => 'failed',
+                'message' => 'Historical api_token=rotated-stock-secret',
+            ]],
+            'error' => 'Historical api_token=rotated-stock-secret',
+        ]);
+
+        $responsePayload = json_encode($service->payload($run->fresh()), JSON_THROW_ON_ERROR);
+
+        $this->assertStringNotContainsString('rotated-stock-secret', $responsePayload);
+        $this->assertStringContainsString('api_token=[redacted]', $responsePayload);
+    }
+
     public function test_guest_cannot_start_or_read_stock_eodhd_sync_runs(): void
     {
         $run = StockEodhdSyncRun::query()->create([

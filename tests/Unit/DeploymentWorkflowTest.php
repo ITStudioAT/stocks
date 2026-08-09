@@ -7,6 +7,7 @@ use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use Symfony\Component\Process\Process;
+use Symfony\Component\Yaml\Yaml;
 
 class DeploymentWorkflowTest extends TestCase
 {
@@ -79,6 +80,71 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertStringContainsString('<env name="APP_KEY" value="base64:', $phpUnitConfiguration);
     }
 
+    public function test_ci_audits_dependencies_and_pins_actions_to_release_commits(): void
+    {
+        $continuousIntegrationWorkflow = file_get_contents($this->projectPath('.github/workflows/ci.yml'));
+        $continuousIntegrationConfiguration = Yaml::parse($continuousIntegrationWorkflow);
+
+        $this->assertArrayHasKey('jobs', $continuousIntegrationConfiguration);
+        $this->assertSame(['contents' => 'read'], $continuousIntegrationConfiguration['permissions']);
+        $this->assertSame(3, substr_count($continuousIntegrationWorkflow, 'persist-credentials: false'));
+        $this->assertSame(3, substr_count(
+            $continuousIntegrationWorkflow,
+            'uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0',
+        ));
+        $this->assertSame(2, substr_count(
+            $continuousIntegrationWorkflow,
+            'uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0',
+        ));
+        $this->assertSame(2, substr_count(
+            $continuousIntegrationWorkflow,
+            'uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2',
+        ));
+        $this->assertSame(7, preg_match_all('/^\s+uses:\s+[^@\s]+@[0-9a-f]{40}\s+#\s+\S+$/m', $continuousIntegrationWorkflow));
+        $this->assertStringContainsString('run: composer audit --locked', $continuousIntegrationWorkflow);
+        $this->assertStringContainsString('run: npm audit', $continuousIntegrationWorkflow);
+        $this->assertStringContainsString('run: npm ci --ignore-scripts --no-fund', $continuousIntegrationWorkflow);
+        $this->assertStringContainsString('run: php scripts/verify-release-commit.php', $continuousIntegrationWorkflow);
+        $this->assertStringContainsString(
+            'run: php scripts/frontend-release.php verify-build "$(git rev-parse HEAD^)"',
+            $continuousIntegrationWorkflow,
+        );
+        $this->assertStringNotContainsString('--no-audit', $continuousIntegrationWorkflow);
+    }
+
+    public function test_dependabot_monitors_all_dependency_ecosystems(): void
+    {
+        $dependabot = Yaml::parseFile($this->projectPath('.github/dependabot.yml'));
+        $updates = $dependabot['updates'];
+
+        $this->assertSame(2, $dependabot['version']);
+        $this->assertSame(['composer', 'npm', 'github-actions'], array_column($updates, 'package-ecosystem'));
+
+        foreach ($updates as $update) {
+            $this->assertSame('/', $update['directory']);
+            $this->assertSame('weekly', $update['schedule']['interval']);
+        }
+    }
+
+    public function test_tinker_is_only_a_development_dependency(): void
+    {
+        $composer = json_decode(
+            file_get_contents($this->projectPath('composer.json')),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        $composerLock = json_decode(
+            file_get_contents($this->projectPath('composer.lock')),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+
+        $this->assertArrayNotHasKey('laravel/tinker', $composer['require']);
+        $this->assertSame('^3.0', $composer['require-dev']['laravel/tinker']);
+        $this->assertNotContains('laravel/tinker', array_column($composerLock['packages'], 'name'));
+        $this->assertContains('laravel/tinker', array_column($composerLock['packages-dev'], 'name'));
+    }
+
     public function test_composer_exposes_the_local_queue_worker_command(): void
     {
         $composer = json_decode(
@@ -137,11 +203,18 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertStringContainsString('flock -n 9', $deployment);
         $this->assertStringContainsString('php scripts/frontend-release.php verify', $deployment);
         $this->assertStringContainsString('frontend-build.sha256', $deployment);
+        $this->assertStringContainsString('contains a public source commit marker', $deployment);
+        $this->assertStringNotContainsString('artifact_source_commit', $deployment);
         $this->assertStringContainsString(
             'php scripts/source-manifest.php prune-unlisted "$frontend_release_manifest_path"',
             $deployment,
         );
-        $this->assertStringContainsString('tar -xzf "$frontend_release_archive"', $deployment);
+        $this->assertStringContainsString(
+            'php scripts/frontend-release.php extract-to "$frontend_artifact_directory"',
+            $deployment,
+        );
+        $this->assertStringContainsString('php scripts/frontend-release.php validate-build', $deployment);
+        $this->assertStringNotContainsString('tar -xzf "$frontend_release_archive"', $deployment);
         $this->assertStringContainsString('Resuming the interrupted Cloudways deployment.', $deployment);
         $this->assertStringContainsString('frontend_artifact_installed=true', $deployment);
         $this->assertStringContainsString('cloudways-deploy-maintenance', $deployment);
@@ -150,7 +223,7 @@ class DeploymentWorkflowTest extends TestCase
             strrpos($deployment, 'finalize_frontend_artifact'),
         );
         $this->assertStringContainsString(
-            'php artisan app:update --no-interaction --skip-composer --skip-npm --skip-build',
+            'php artisan app:update --production --no-interaction --skip-composer --skip-npm --skip-build',
             $deployment,
         );
         $this->assertStringContainsString(
@@ -205,6 +278,7 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertFileExists("{$deploymentDirectory}/storage/framework/git-fetched");
         $this->assertFileExists("{$deploymentDirectory}/storage/framework/git-merged");
         $this->assertDirectoryExists("{$deploymentDirectory}/public/build");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/public/build/deployment-source.txt");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
         $this->assertStringContainsString(
@@ -461,6 +535,101 @@ class DeploymentWorkflowTest extends TestCase
         $verify = $this->runPhpScriptIn($deploymentDirectory, 'scripts/frontend-release.php', 'verify');
 
         $this->assertTrue($verify->isSuccessful(), $verify->getErrorOutput());
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/public/build/deployment-source.txt");
+    }
+
+    public function test_release_commit_verifier_accepts_exactly_the_four_deployment_files(): void
+    {
+        $deploymentDirectory = $this->createReleaseCommitFixture();
+
+        $verify = $this->runPhpScriptIn(
+            $deploymentDirectory,
+            'scripts/verify-release-commit.php',
+        );
+
+        $this->assertTrue($verify->isSuccessful(), $verify->getErrorOutput());
+        $this->assertStringContainsString(
+            'Deployment release commit verified for source',
+            $verify->getOutput(),
+        );
+    }
+
+    public function test_release_commit_verifier_rejects_an_extra_source_file(): void
+    {
+        $deploymentDirectory = $this->createReleaseCommitFixture(includeUnexpectedSource: true);
+
+        $verify = $this->runPhpScriptIn(
+            $deploymentDirectory,
+            'scripts/verify-release-commit.php',
+        );
+
+        $this->assertFalse($verify->isSuccessful());
+        $this->assertStringContainsString(
+            'unexpected: app/Unexpected.php',
+            $verify->getErrorOutput(),
+        );
+    }
+
+    public function test_frontend_release_creation_and_installation_keep_the_source_commit_private(): void
+    {
+        $deploymentDirectory = $this->createDeploymentFixture();
+        $sourceCommit = str_repeat('b', 40);
+        file_put_contents(
+            "{$deploymentDirectory}/public/build/deployment-source.txt",
+            str_repeat('a', 40)."\n",
+        );
+
+        $gitInit = new Process(['git', 'init'], $deploymentDirectory);
+        $gitInit->run();
+        $this->assertTrue($gitInit->isSuccessful(), $gitInit->getErrorOutput());
+
+        $gitAdd = new Process([
+            'git',
+            'add',
+            '--',
+            'artisan',
+            'composer.json',
+            'composer.lock',
+            'scripts/deploy_cloudways.sh',
+            'scripts/frontend-release.php',
+            'scripts/source-manifest.php',
+        ], $deploymentDirectory);
+        $gitAdd->run();
+        $this->assertTrue($gitAdd->isSuccessful(), $gitAdd->getErrorOutput());
+
+        $create = $this->runPhpScriptIn(
+            $deploymentDirectory,
+            'scripts/frontend-release.php',
+            'create',
+            $sourceCommit,
+        );
+
+        $this->assertTrue($create->isSuccessful(), $create->getErrorOutput());
+        $this->assertSame($sourceCommit, trim((string) file_get_contents(
+            "{$deploymentDirectory}/deployment/source-commit",
+        )));
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/public/build/deployment-source.txt");
+
+        $archiveContents = new Process([
+            'tar',
+            '-tzf',
+            "{$deploymentDirectory}/deployment/frontend-build.tar.gz",
+        ], $deploymentDirectory);
+        $archiveContents->run();
+
+        $this->assertTrue($archiveContents->isSuccessful(), $archiveContents->getErrorOutput());
+        $this->assertStringContainsString('manifest.json', $archiveContents->getOutput());
+        $this->assertStringNotContainsString('deployment-source.txt', $archiveContents->getOutput());
+
+        $install = $this->runPhpScriptIn(
+            $deploymentDirectory,
+            'scripts/frontend-release.php',
+            'install',
+        );
+
+        $this->assertTrue($install->isSuccessful(), $install->getErrorOutput());
+        $this->assertFileExists("{$deploymentDirectory}/public/build/manifest.json");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/public/build/deployment-source.txt");
     }
 
     public function test_no_git_source_verification_rejects_unlisted_changed_and_missing_files(): void
@@ -596,24 +765,9 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertFileExists("{$deploymentDirectory}/scripts/source-manifest.php");
     }
 
-    public function test_no_git_release_verification_rejects_marker_and_expected_commit_mismatches(): void
+    public function test_no_git_release_verification_rejects_an_expected_commit_mismatch(): void
     {
         $deploymentDirectory = $this->createDeploymentFixture();
-        file_put_contents("{$deploymentDirectory}/deployment/source-commit", str_repeat('b', 40)."\n");
-
-        $archiveMismatch = $this->runPhpScriptIn(
-            $deploymentDirectory,
-            'scripts/frontend-release.php',
-            'verify',
-        );
-
-        $this->assertFalse($archiveMismatch->isSuccessful());
-        $this->assertStringContainsString(
-            'The frontend archive source marker does not match its release.',
-            $archiveMismatch->getErrorOutput(),
-        );
-
-        file_put_contents("{$deploymentDirectory}/deployment/source-commit", str_repeat('a', 40)."\n");
         $explicitCommitMismatch = $this->runPhpScriptIn(
             $deploymentDirectory,
             'scripts/frontend-release.php',
@@ -623,6 +777,181 @@ class DeploymentWorkflowTest extends TestCase
 
         $this->assertFalse($explicitCommitMismatch->isSuccessful());
         $this->assertStringContainsString('not '.str_repeat('b', 40), $explicitCommitMismatch->getErrorOutput());
+    }
+
+    public function test_no_git_release_verification_rejects_a_public_commit_marker_in_the_archive(): void
+    {
+        $deploymentDirectory = $this->createDeploymentFixture();
+        file_put_contents(
+            "{$deploymentDirectory}/public/build/deployment-source.txt",
+            str_repeat('a', 40)."\n",
+        );
+        $this->writeDeploymentFixtureArchive($deploymentDirectory);
+
+        $verify = $this->runPhpScriptIn($deploymentDirectory, 'scripts/frontend-release.php', 'verify');
+
+        $this->assertFalse($verify->isSuccessful());
+        $this->assertStringContainsString(
+            'The frontend release archive contains a public source commit marker.',
+            $verify->getErrorOutput(),
+        );
+    }
+
+    public function test_release_verification_rejects_links_special_entries_and_path_traversal_before_extraction(): void
+    {
+        $cases = [
+            ['name' => './assets/link.js', 'type' => '2', 'link_name' => 'manifest.json'],
+            ['name' => './assets/hard-link.js', 'type' => '1', 'link_name' => 'manifest.json'],
+            ['name' => './assets/device.js', 'type' => '3'],
+            ['name' => '../outside.js', 'type' => '0', 'contents' => 'outside'],
+        ];
+
+        foreach ($cases as $maliciousEntry) {
+            $deploymentDirectory = $this->createDeploymentFixture();
+            $this->writeRawFrontendArchive($deploymentDirectory, [
+                ['name' => './manifest.json', 'contents' => '{}'],
+                $maliciousEntry,
+            ]);
+
+            $verify = $this->runPhpScriptIn($deploymentDirectory, 'scripts/frontend-release.php', 'verify');
+
+            $this->assertFalse($verify->isSuccessful());
+            $this->assertMatchesRegularExpression(
+                '/link or special entry|path traversal|unsafe path/',
+                $verify->getErrorOutput(),
+            );
+            $this->assertFileDoesNotExist(dirname($deploymentDirectory).'/outside.js');
+        }
+    }
+
+    public function test_release_verification_rejects_unlisted_and_server_executable_assets(): void
+    {
+        $unlistedDirectory = $this->createDeploymentFixture();
+        $this->writeRawFrontendArchive($unlistedDirectory, [
+            ['name' => './manifest.json', 'contents' => '{}'],
+            ['name' => './assets/unlisted.js', 'contents' => 'alert(1)'],
+        ]);
+
+        $unlisted = $this->runPhpScriptIn($unlistedDirectory, 'scripts/frontend-release.php', 'verify');
+
+        $this->assertFalse($unlisted->isSuccessful());
+        $this->assertStringContainsString('unexpected: assets/unlisted.js', $unlisted->getErrorOutput());
+
+        $executableDirectory = $this->createDeploymentFixture();
+        $this->writeRawFrontendArchive($executableDirectory, [
+            [
+                'name' => './manifest.json',
+                'contents' => json_encode(['entry' => ['file' => 'assets/shell.php']], JSON_THROW_ON_ERROR),
+            ],
+            ['name' => './assets/shell.php', 'contents' => '<?php echo "unsafe";'],
+        ]);
+
+        $executable = $this->runPhpScriptIn($executableDirectory, 'scripts/frontend-release.php', 'verify');
+
+        $this->assertFalse($executable->isSuccessful());
+        $this->assertStringContainsString('disallowed asset extension', $executable->getErrorOutput());
+    }
+
+    public function test_release_verification_rejects_executable_and_special_permission_bits(): void
+    {
+        $cases = [
+            [
+                ['name' => './manifest.json', 'contents' => '{}', 'mode' => 0755],
+                'file has executable or special permission bits',
+            ],
+            [
+                ['name' => './', 'type' => '5', 'mode' => 04755],
+                'directory has special permission bits',
+            ],
+        ];
+
+        foreach ($cases as [$entry, $expectedError]) {
+            $deploymentDirectory = $this->createDeploymentFixture();
+            $entries = ($entry['type'] ?? null) === '5'
+                ? [$entry, ['name' => './manifest.json', 'contents' => '{}']]
+                : [$entry];
+            $this->writeRawFrontendArchive($deploymentDirectory, $entries);
+
+            $verify = $this->runPhpScriptIn($deploymentDirectory, 'scripts/frontend-release.php', 'verify');
+
+            $this->assertFalse($verify->isSuccessful());
+            $this->assertStringContainsString($expectedError, $verify->getErrorOutput());
+        }
+    }
+
+    public function test_release_verification_bounds_file_size_entry_count_total_size_and_trailing_decompression(): void
+    {
+        $oversizedDirectory = $this->createDeploymentFixture();
+        $this->writeRawFrontendArchive($oversizedDirectory, [
+            ['name' => './manifest.json', 'contents' => '{}', 'declared_size' => 16_000_001],
+        ]);
+        $oversized = $this->runPhpScriptIn($oversizedDirectory, 'scripts/frontend-release.php', 'verify');
+        $this->assertFalse($oversized->isSuccessful());
+        $this->assertStringContainsString('file exceeds the size limit', $oversized->getErrorOutput());
+
+        $manyEntriesDirectory = $this->createDeploymentFixture();
+        $manyEntries = [];
+
+        for ($index = 0; $index <= 1_000; $index++) {
+            $manyEntries[] = ['name' => "./assets/file-{$index}.js", 'contents' => ''];
+        }
+
+        $this->writeRawFrontendArchive($manyEntriesDirectory, $manyEntries);
+        $many = $this->runPhpScriptIn($manyEntriesDirectory, 'scripts/frontend-release.php', 'verify');
+        $this->assertFalse($many->isSuccessful());
+        $this->assertStringContainsString('contains too many entries', $many->getErrorOutput());
+
+        $aggregateDirectory = $this->createDeploymentFixture();
+        $aggregateManifest = json_encode([
+            'first' => ['file' => 'assets/first.js'],
+            'second' => ['file' => 'assets/second.js'],
+        ], JSON_THROW_ON_ERROR);
+        $this->writeRawFrontendArchive($aggregateDirectory, [
+            ['name' => './manifest.json', 'contents' => $aggregateManifest],
+            ['name' => './assets/first.js', 'contents' => str_repeat('a', 12_000_000)],
+            ['name' => './assets/second.js', 'contents' => '', 'declared_size' => 12_000_001],
+        ]);
+        $aggregate = $this->runPhpScriptIn($aggregateDirectory, 'scripts/frontend-release.php', 'verify');
+        $this->assertFalse($aggregate->isSuccessful());
+        $this->assertStringContainsString('total uncompressed size limit', $aggregate->getErrorOutput());
+
+        $paddingDirectory = $this->createDeploymentFixture();
+        $this->writeRawFrontendArchive(
+            $paddingDirectory,
+            [['name' => './manifest.json', 'contents' => '{}']],
+            trailingZeros: 1_048_577,
+        );
+        $padding = $this->runPhpScriptIn($paddingDirectory, 'scripts/frontend-release.php', 'verify');
+        $this->assertFalse($padding->isSuccessful());
+        $this->assertStringContainsString('excessive trailing padding', $padding->getErrorOutput());
+    }
+
+    public function test_release_rebuild_verification_compares_exact_files_and_bytes(): void
+    {
+        $deploymentDirectory = $this->createDeploymentFixture();
+
+        $matching = $this->runPhpScriptIn(
+            $deploymentDirectory,
+            'scripts/frontend-release.php',
+            'verify-build',
+            str_repeat('a', 40),
+        );
+
+        $this->assertTrue($matching->isSuccessful(), $matching->getErrorOutput());
+
+        file_put_contents("{$deploymentDirectory}/public/build/manifest.json", "{ }\n");
+        $changed = $this->runPhpScriptIn(
+            $deploymentDirectory,
+            'scripts/frontend-release.php',
+            'verify-build',
+            str_repeat('a', 40),
+        );
+
+        $this->assertFalse($changed->isSuccessful());
+        $this->assertStringContainsString(
+            'does not match the clean frontend rebuild',
+            $changed->getErrorOutput(),
+        );
     }
 
     public function test_no_git_release_verification_rejects_a_modified_frontend_archive(): void
@@ -672,21 +1001,6 @@ class DeploymentWorkflowTest extends TestCase
             'The frontend release source commit is invalid.',
             $invalidOuterMarker->getErrorOutput(),
         );
-
-        file_put_contents("{$deploymentDirectory}/deployment/source-commit", str_repeat('a', 40)."\n");
-        unlink("{$deploymentDirectory}/public/build/deployment-source.txt");
-        $this->writeDeploymentFixtureArchive($deploymentDirectory);
-        $missingInnerMarker = $this->runPhpScriptIn(
-            $deploymentDirectory,
-            'scripts/frontend-release.php',
-            'verify',
-        );
-
-        $this->assertFalse($missingInnerMarker->isSuccessful());
-        $this->assertStringContainsString(
-            'The frontend archive source marker does not match its release.',
-            $missingInnerMarker->getErrorOutput(),
-        );
     }
 
     private function runPhpScript(string ...$arguments): Process
@@ -718,7 +1032,6 @@ class DeploymentWorkflowTest extends TestCase
         file_put_contents("{$directory}/composer.json", "{}\n");
         file_put_contents("{$directory}/composer.lock", "{}\n");
         file_put_contents("{$directory}/public/build/manifest.json", "{}\n");
-        file_put_contents("{$directory}/public/build/deployment-source.txt", str_repeat('a', 40)."\n");
         file_put_contents("{$directory}/deployment/source-commit", str_repeat('a', 40)."\n");
 
         $manifestPaths = [
@@ -739,6 +1052,60 @@ class DeploymentWorkflowTest extends TestCase
         return str_replace('\\', '/', $directory);
     }
 
+    private function createReleaseCommitFixture(bool $includeUnexpectedSource = false): string
+    {
+        $directory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'stocks-deployment-test-'.bin2hex(random_bytes(8));
+        $this->temporaryDeploymentDirectories[] = $directory;
+
+        foreach (['app', 'deployment', 'scripts'] as $relativeDirectory) {
+            mkdir($directory.DIRECTORY_SEPARATOR.$relativeDirectory, 0777, true);
+        }
+
+        copy($this->projectPath('scripts/verify-release-commit.php'), "{$directory}/scripts/verify-release-commit.php");
+        file_put_contents("{$directory}/app/Application.php", "<?php\n");
+        file_put_contents("{$directory}/deployment/frontend-build.sha256", "old-hash\n");
+        file_put_contents("{$directory}/deployment/frontend-build.tar.gz", 'old-archive');
+        file_put_contents("{$directory}/deployment/source-commit", str_repeat('a', 40)."\n");
+        file_put_contents("{$directory}/deployment/source-manifest.sha256", "old-manifest\n");
+
+        $this->runFixtureGit($directory, 'init');
+        $this->runFixtureGit($directory, 'add', '--', '.');
+        $this->runFixtureGit($directory, 'commit', '-m', 'Create source release');
+        $parent = trim($this->runFixtureGit($directory, 'rev-parse', 'HEAD')->getOutput());
+
+        file_put_contents("{$directory}/deployment/frontend-build.sha256", "new-hash\n");
+        file_put_contents("{$directory}/deployment/frontend-build.tar.gz", 'new-archive');
+        file_put_contents("{$directory}/deployment/source-commit", "{$parent}\n");
+        file_put_contents("{$directory}/deployment/source-manifest.sha256", "new-manifest\n");
+
+        if ($includeUnexpectedSource) {
+            file_put_contents("{$directory}/app/Unexpected.php", "<?php\n");
+        }
+
+        $this->runFixtureGit($directory, 'add', '--', '.');
+        $this->runFixtureGit($directory, 'commit', '-m', 'Build deployment release');
+
+        return str_replace('\\', '/', $directory);
+    }
+
+    private function runFixtureGit(string $directory, string ...$arguments): Process
+    {
+        $process = new Process([
+            'git',
+            '-c',
+            'commit.gpgsign=false',
+            '-c',
+            'user.name=Deployment Test',
+            '-c',
+            'user.email=deployment-test@example.com',
+            ...$arguments,
+        ], $directory);
+        $process->run();
+        $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+
+        return $process;
+    }
+
     private function createCloudwaysShellFixture(): string
     {
         $directory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'stocks-deployment-test-'.bin2hex(random_bytes(8));
@@ -754,7 +1121,6 @@ class DeploymentWorkflowTest extends TestCase
         file_put_contents("{$directory}/deployment/source-manifest.sha256", "fixture\n");
         file_put_contents("{$directory}/deployment/frontend-build.sha256", "fixture\n");
         file_put_contents("{$directory}/artifact/manifest.json", "{}\n");
-        file_put_contents("{$directory}/artifact/deployment-source.txt", str_repeat('a', 40)."\n");
 
         $archive = new Process([
             'tar',
@@ -777,6 +1143,14 @@ if [ "${1:-}" = "scripts/source-manifest.php" ] && [ "${2:-}" = "prune-unlisted"
     fi
 
     rm -f app/Legacy.php
+    exit 0
+fi
+
+if [ "${1:-}" = "scripts/frontend-release.php" ]; then
+    if [ "${2:-}" = "extract-to" ]; then
+        tar -xzf deployment/frontend-build.tar.gz -C "$3"
+    fi
+
     exit 0
 fi
 
@@ -934,6 +1308,65 @@ BASH);
         );
     }
 
+    /**
+     * @param array<int, array{
+     *     name: string,
+     *     contents?: string,
+     *     declared_size?: int,
+     *     link_name?: string,
+     *     mode?: int,
+     *     type?: string,
+     * }> $entries
+     */
+    private function writeRawFrontendArchive(
+        string $directory,
+        array $entries,
+        int $trailingZeros = 0,
+    ): void {
+        $tar = '';
+
+        foreach ($entries as $entry) {
+            $contents = $entry['contents'] ?? '';
+            $declaredSize = $entry['declared_size'] ?? strlen($contents);
+            $type = $entry['type'] ?? '0';
+            $mode = $entry['mode'] ?? ($type === '5' ? 0755 : 0644);
+            $header = str_pad($entry['name'], 100, "\0")
+                .sprintf("%07o\0", $mode)
+                .sprintf("%07o\0", 0)
+                .sprintf("%07o\0", 0)
+                .sprintf("%011o\0", $declaredSize)
+                .sprintf("%011o\0", 0)
+                .str_repeat(' ', 8)
+                .$type
+                .str_pad($entry['link_name'] ?? '', 100, "\0")
+                ."ustar\0"
+                .'00'
+                .str_repeat("\0", 32)
+                .str_repeat("\0", 32)
+                .sprintf("%07o\0", 0)
+                .sprintf("%07o\0", 0)
+                .str_repeat("\0", 155)
+                .str_repeat("\0", 12);
+            $this->assertSame(512, strlen($header));
+            $checksum = array_sum(array_map('ord', str_split($header)));
+            $header = substr_replace($header, sprintf("%06o\0 ", $checksum), 148, 8);
+            $tar .= $header.$contents;
+            $tar .= str_repeat("\0", (512 - (strlen($contents) % 512)) % 512);
+        }
+
+        $tar .= str_repeat("\0", 1_024 + $trailingZeros);
+        $archive = gzencode($tar, 9, ZLIB_ENCODING_GZIP);
+        $this->assertIsString($archive);
+        $archivePath = "{$directory}/deployment/frontend-build.tar.gz";
+        file_put_contents($archivePath, $archive);
+        $archiveHash = hash_file('sha256', $archivePath);
+        $this->assertIsString($archiveHash);
+        file_put_contents(
+            "{$directory}/deployment/frontend-build.sha256",
+            "{$archiveHash}  frontend-build.tar.gz\n",
+        );
+    }
+
     private function normalizedFileHash(string $path): string
     {
         $contents = file_get_contents($path);
@@ -983,9 +1416,15 @@ BASH);
         );
 
         foreach ($iterator as $item) {
-            $item->isDir() && ! $item->isLink()
-                ? rmdir($item->getPathname())
-                : unlink($item->getPathname());
+            if ($item->isDir() && ! $item->isLink()) {
+                chmod($item->getPathname(), 0777);
+                rmdir($item->getPathname());
+
+                continue;
+            }
+
+            chmod($item->getPathname(), 0666);
+            unlink($item->getPathname());
         }
 
         rmdir($directory);

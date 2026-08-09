@@ -206,7 +206,13 @@ export const useDepotStore = defineStore('depots', {
             this.holdingsError = '';
 
             try {
-                const data = await request(`/admin/watchlist/holdings?${query.toString()}`);
+                const endpoint = options.includeCharts === true
+                    ? '/admin/watchlist/holdings/charts'
+                    : '/admin/watchlist/holdings';
+                const requestOptions = options.includeCharts === true
+                    ? { method: 'POST' }
+                    : {};
+                const data = await request(`${endpoint}?${query.toString()}`, requestOptions);
                 this.activeDepot = data.depot ?? this.activeDepot;
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
@@ -288,7 +294,9 @@ export const useDepotStore = defineStore('depots', {
             this.testTickersError = '';
 
             try {
-                const data = await request('/admin/tests/tickers');
+                const data = await request('/admin/tests/tickers', {
+                    method: 'POST',
+                });
                 this.testTickerExchangeCode = data.exchange_code ?? 'XETRA';
                 this.testTickers = data.tickers ?? [];
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
@@ -306,7 +314,9 @@ export const useDepotStore = defineStore('depots', {
             this.testIntradayError = '';
 
             try {
-                const data = await request(`/admin/tests/stocks/${stockId}/intraday`);
+                const data = await request(`/admin/tests/stocks/${stockId}/intraday`, {
+                    method: 'POST',
+                });
                 this.testIntraday = data;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
@@ -323,7 +333,9 @@ export const useDepotStore = defineStore('depots', {
             this.testExchangesError = '';
 
             try {
-                const data = await request('/admin/tests/exchanges');
+                const data = await request('/admin/tests/exchanges', {
+                    method: 'POST',
+                });
                 this.testExchanges = data.exchanges ?? [];
                 this.testExchangeDetails = data.exchange_details ?? {};
                 this.testExchangeDetailErrors = data.exchange_detail_errors ?? {};
@@ -959,7 +971,9 @@ export const useDepotStore = defineStore('depots', {
             this.analyzeIntradayCandlesError = '';
 
             try {
-                const data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`);
+                const data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`, {
+                    method: 'POST',
+                });
 
                 if (this.analyzeIntradayCandlesRequestedId === id) {
                     this.analyzeIntradayCandles = data;
@@ -990,7 +1004,9 @@ export const useDepotStore = defineStore('depots', {
             };
 
             try {
-                const data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`);
+                const data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`, {
+                    method: 'POST',
+                });
 
                 this.holdingIntradayCandles = {
                     ...this.holdingIntradayCandles,
@@ -1335,7 +1351,10 @@ export const useDepotStore = defineStore('depots', {
             this.stockSearchError = '';
 
             try {
-                const data = await request(`/admin/stocks/search?query=${encodeURIComponent(query)}`);
+                const data = await request('/admin/stocks/search', {
+                    method: 'POST',
+                    body: JSON.stringify({ query }),
+                });
                 this.stockSearchResults = data.results;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
             } catch (error) {

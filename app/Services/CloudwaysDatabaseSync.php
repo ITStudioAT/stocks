@@ -5,11 +5,14 @@ namespace App\Services;
 use App\Models\AppConfig;
 use Illuminate\Database\Connection;
 use Illuminate\Support\Collection;
+use Illuminate\Support\ConfigurationUrlParser;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use PDO;
+use Pdo\Mysql;
 use RuntimeException;
 use stdClass;
+use Throwable;
 
 class CloudwaysDatabaseSync
 {
@@ -132,6 +135,8 @@ class CloudwaysDatabaseSync
     ): array {
         $sourceConnectionName ??= $this->sourceConnectionName();
         $targetConnectionName ??= (string) config('database.default');
+
+        $this->assertDistinctDatabaseConnections($sourceConnectionName, $targetConnectionName);
 
         $synchronizableTables = array_values(array_intersect(
             $this->synchronizableTableNames(),
@@ -260,7 +265,13 @@ class CloudwaysDatabaseSync
     {
         $configuredConnection = config('services.cloudways.connection');
 
-        if (is_string($configuredConnection) && $configuredConnection !== '') {
+        if (is_string($configuredConnection) && trim($configuredConnection) !== '') {
+            $configuredConnection = trim($configuredConnection);
+
+            if (! is_array(config("database.connections.{$configuredConnection}"))) {
+                throw new RuntimeException('The configured Cloudways database connection does not exist.');
+            }
+
             return $configuredConnection;
         }
 
@@ -273,10 +284,36 @@ class CloudwaysDatabaseSync
             throw new RuntimeException('Cloudways database credentials are not configured.');
         }
 
+        $sslCa = config('services.cloudways.ssl_ca');
+        $verifyServerCertificate = config('services.cloudways.ssl_verify_server_cert');
+
+        if (! is_string($sslCa) || trim($sslCa) === '') {
+            throw new RuntimeException(
+                'The dynamic Cloudways database connection requires a TLS CA certificate. Configure CLOUDWAYS_SSL_CA or CLOUDWAYS_CONNECTION.',
+            );
+        }
+
+        $resolvedSslCa = realpath(trim($sslCa));
+
+        if ($resolvedSslCa === false || ! is_file($resolvedSslCa) || ! is_readable($resolvedSslCa)) {
+            throw new RuntimeException('The configured Cloudways TLS CA certificate is not a readable file.');
+        }
+
+        if ($verifyServerCertificate !== true) {
+            throw new RuntimeException(
+                'The dynamic Cloudways database connection requires server certificate verification.',
+            );
+        }
+
+        if (! extension_loaded('pdo_mysql')) {
+            throw new RuntimeException('The dynamic Cloudways database connection requires the PDO MySQL extension.');
+        }
+
         config([
             'database.connections.'.self::SourceConnectionName => array_merge(
                 config('database.connections.mysql'),
                 [
+                    'url' => null,
                     'host' => $host,
                     'port' => config('services.cloudways.port'),
                     'database' => $database,
@@ -284,7 +321,11 @@ class CloudwaysDatabaseSync
                     'password' => $password,
                     'options' => array_replace(
                         config('database.connections.mysql.options', []),
-                        [PDO::ATTR_TIMEOUT => (int) config('services.cloudways.connect_timeout', 5)],
+                        [
+                            PDO::ATTR_TIMEOUT => (int) config('services.cloudways.connect_timeout', 5),
+                            Mysql::ATTR_SSL_CA => $resolvedSslCa,
+                            Mysql::ATTR_SSL_VERIFY_SERVER_CERT => true,
+                        ],
                     ),
                 ],
             ),
@@ -293,6 +334,252 @@ class CloudwaysDatabaseSync
         DB::purge(self::SourceConnectionName);
 
         return self::SourceConnectionName;
+    }
+
+    private function assertDistinctDatabaseConnections(
+        string $sourceConnectionName,
+        string $targetConnectionName,
+    ): void {
+        $sameConnectionName = $sourceConnectionName === $targetConnectionName;
+        $sourceIdentity = $this->normalizedDatabaseIdentity($sourceConnectionName, 'read');
+        $targetIdentity = $this->normalizedDatabaseIdentity($targetConnectionName, 'write');
+        $sameDatabaseIdentity = $sourceIdentity !== null
+            && $targetIdentity !== null
+            && $sourceIdentity === $targetIdentity;
+
+        if ($sameConnectionName || $sameDatabaseIdentity) {
+            $this->refuseSameDatabaseSynchronization();
+        }
+
+        if (! $this->supportsLiveDatabaseIdentity($sourceIdentity)
+            || ! $this->supportsLiveDatabaseIdentity($targetIdentity)) {
+            return;
+        }
+
+        $sourceLiveIdentity = $this->liveDatabaseIdentity($sourceConnectionName, 'read');
+        $targetLiveIdentity = $this->liveDatabaseIdentity($targetConnectionName, 'write');
+
+        if ($sourceLiveIdentity === $targetLiveIdentity) {
+            $this->refuseSameDatabaseSynchronization();
+        }
+    }
+
+    /**
+     * @param  array{driver: string, database: string, endpoint: string}|null  $identity
+     */
+    private function supportsLiveDatabaseIdentity(?array $identity): bool
+    {
+        return $identity !== null
+            && in_array($identity['driver'], ['mariadb', 'mysql'], true);
+    }
+
+    /**
+     * @return array{database: string, server: string}
+     */
+    private function liveDatabaseIdentity(string $connectionName, string $connectionRole): array
+    {
+        $connection = DB::connection($connectionName);
+        $useReadPdo = $connectionRole === 'read';
+
+        try {
+            $server = $connection->selectOne(
+                'select database() as database_name, @@hostname as server_hostname, @@port as server_port, @@server_id as server_id, @@datadir as server_data_directory',
+                [],
+                $useReadPdo,
+            );
+            $database = $this->databaseIdentityValue($server, 'database_name');
+            $serverHostname = strtolower($this->databaseIdentityValue($server, 'server_hostname'));
+            $serverPort = $this->databaseIdentityValue($server, 'server_port');
+            $serverId = $this->databaseIdentityValue($server, 'server_id');
+            $serverDataDirectory = strtolower(str_replace(
+                '\\',
+                '/',
+                rtrim($this->databaseIdentityValue($server, 'server_data_directory'), '/\\'),
+            ));
+
+            if ($database === ''
+                || $serverHostname === ''
+                || $serverPort === ''
+                || $serverId === ''
+                || $serverDataDirectory === '') {
+                throw new RuntimeException('The database server returned an incomplete live identity.');
+            }
+
+            $serverIdentity = $this->uniqueLiveServerIdentity(
+                $connection,
+                $useReadPdo,
+            ) ?? implode('|', [
+                'fallback',
+                $serverHostname,
+                $serverPort,
+                $serverId,
+                $serverDataDirectory,
+            ]);
+
+            return [
+                'database' => $database,
+                'server' => $serverIdentity,
+            ];
+        } catch (Throwable $exception) {
+            throw new RuntimeException(
+                'Cloudways synchronization could not verify that the source and target are distinct live databases; synchronization was refused before deleting data.',
+                previous: $exception,
+            );
+        }
+    }
+
+    private function uniqueLiveServerIdentity(Connection $connection, bool $useReadPdo): ?string
+    {
+        $variables = $connection->select(
+            "show variables where variable_name in ('server_uuid', 'server_uid')",
+            [],
+            $useReadPdo,
+        );
+        $identifiers = [];
+
+        foreach ($variables as $variable) {
+            $name = strtolower($this->databaseIdentityValue($variable, 'variable_name'));
+            $value = strtolower($this->databaseIdentityValue($variable, 'value'));
+
+            if (in_array($name, ['server_uuid', 'server_uid'], true) && $value !== '') {
+                $identifiers[$name] = $value;
+            }
+        }
+
+        foreach (['server_uuid', 'server_uid'] as $name) {
+            if (isset($identifiers[$name])) {
+                return $name.':'.$identifiers[$name];
+            }
+        }
+
+        return null;
+    }
+
+    private function databaseIdentityValue(array|object|null $row, string $key): string
+    {
+        if ($row === null) {
+            return '';
+        }
+
+        $values = array_change_key_case((array) $row, CASE_LOWER);
+        $value = $values[strtolower($key)] ?? null;
+
+        return is_scalar($value) ? trim((string) $value) : '';
+    }
+
+    private function refuseSameDatabaseSynchronization(): never
+    {
+        throw new RuntimeException(
+            'Cloudways source and target resolve to the same database; synchronization was refused before deleting data.',
+        );
+    }
+
+    /**
+     * @return array{driver: string, database: string, endpoint: string}|null
+     */
+    private function normalizedDatabaseIdentity(string $connectionName, string $connectionRole): ?array
+    {
+        $configuration = config("database.connections.{$connectionName}");
+
+        if (! is_array($configuration)) {
+            return null;
+        }
+
+        $configuration = (new ConfigurationUrlParser)->parseConfiguration($configuration);
+        $roleConfiguration = $configuration[$connectionRole] ?? null;
+
+        if (is_array($roleConfiguration)) {
+            $configuration = array_replace($configuration, $roleConfiguration);
+        }
+
+        $driver = strtolower(trim((string) ($configuration['driver'] ?? '')));
+        $database = trim((string) ($configuration['database'] ?? ''));
+
+        if ($driver === '' || $database === '') {
+            return null;
+        }
+
+        if ($driver === 'sqlite') {
+            return [
+                'driver' => $driver,
+                'database' => $this->normalizedDatabasePath($database),
+                'endpoint' => 'sqlite',
+            ];
+        }
+
+        $socket = trim((string) ($configuration['unix_socket'] ?? ''));
+
+        if ($socket !== '') {
+            return [
+                'driver' => $driver,
+                'database' => $database,
+                'endpoint' => 'socket:'.$this->normalizedDatabasePath($socket),
+            ];
+        }
+
+        $hosts = collect((array) ($configuration['host'] ?? []))
+            ->filter(fn (mixed $host): bool => is_string($host) && trim($host) !== '')
+            ->map(fn (string $host): string => $this->normalizedDatabaseHost($host))
+            ->unique()
+            ->sort()
+            ->values()
+            ->all();
+
+        if ($hosts === []) {
+            return null;
+        }
+
+        $port = (int) ($configuration['port'] ?? $this->defaultDatabasePort($driver));
+
+        return [
+            'driver' => $driver,
+            'database' => $database,
+            'endpoint' => 'tcp:'.implode(',', $hosts).":{$port}",
+        ];
+    }
+
+    private function normalizedDatabasePath(string $path): string
+    {
+        if ($path === ':memory:') {
+            return $path;
+        }
+
+        $resolvedPath = realpath($path);
+
+        if ($resolvedPath === false && ! $this->pathIsAbsolute($path)) {
+            $path = base_path($path);
+            $resolvedPath = realpath($path);
+        }
+
+        $normalizedPath = str_replace('\\', '/', $resolvedPath ?: $path);
+
+        return PHP_OS_FAMILY === 'Windows' ? strtolower($normalizedPath) : $normalizedPath;
+    }
+
+    private function pathIsAbsolute(string $path): bool
+    {
+        return str_starts_with($path, '/')
+            || str_starts_with($path, '\\')
+            || preg_match('/^[A-Za-z]:[\\\\\/]/', $path) === 1;
+    }
+
+    private function normalizedDatabaseHost(string $host): string
+    {
+        $host = strtolower(rtrim(trim($host, " \t\n\r\0\x0B[]"), '.'));
+
+        return in_array($host, ['localhost', '127.0.0.1', '::1'], true)
+            ? 'loopback'
+            : $host;
+    }
+
+    private function defaultDatabasePort(string $driver): int
+    {
+        return match ($driver) {
+            'mariadb', 'mysql' => 3306,
+            'pgsql' => 5432,
+            'sqlsrv' => 1433,
+            default => 0,
+        };
     }
 
     private function persistExecution(string $configKey, string $executedAt): void

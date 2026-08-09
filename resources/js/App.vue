@@ -267,7 +267,9 @@ const expandedDataIntradayDays = ref({});
 const expandedAnalyzeIntradayDays = ref({});
 const profileLastName = ref('');
 const profileFirstName = ref('');
+const currentPassword = ref('');
 const newPassword = ref('');
+const newPasswordConfirmation = ref('');
 const profileMessage = ref('');
 const profileError = ref('');
 const isNameDialogOpen = ref(false);
@@ -444,6 +446,7 @@ let selectedDataDateRangeRequestId = 0;
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
 const canManageDashboardAdmin = computed(() => user.value?.roles?.some((role) => ['admin', 'super_admin'].includes(role)) ?? false);
+const canInitializePassword = computed(() => user.value?.can_initialize_password === true);
 const profileDisplayName = computed(() => user.value?.name || 'Loading...');
 const appVersionLabel = computed(() => dashboardVersions.value?.current_version ?? appVersion.value ?? '');
 const dashboardCurrentVersion = computed(() => dashboardVersions.value?.current_version ?? appVersion.value ?? 'x.x.x');
@@ -4138,10 +4141,11 @@ function emptyCloudwaysSyncResult() {
 
 async function streamCloudwaysDatabaseCheck() {
     const response = await fetch('/admin/cloudways/check', {
-        method: 'GET',
+        method: 'POST',
         credentials: 'same-origin',
         headers: {
             Accept: 'application/x-ndjson',
+            'X-CSRF-TOKEN': csrfToken(),
         },
     });
 
@@ -5559,7 +5563,9 @@ async function saveProfileName() {
 }
 
 function openPasswordDialog() {
+    currentPassword.value = '';
     newPassword.value = '';
+    newPasswordConfirmation.value = '';
     profileError.value = '';
     profileMessage.value = '';
     isPasswordDialogOpen.value = true;
@@ -5567,7 +5573,9 @@ function openPasswordDialog() {
 
 function abortPasswordEdit() {
     isPasswordDialogOpen.value = false;
+    currentPassword.value = '';
     newPassword.value = '';
+    newPasswordConfirmation.value = '';
 }
 
 async function savePassword() {
@@ -5575,7 +5583,11 @@ async function savePassword() {
     profileMessage.value = '';
 
     try {
-        await auth.updatePassword(newPassword.value);
+        await auth.updatePassword(
+            currentPassword.value,
+            newPassword.value,
+            newPasswordConfirmation.value,
+        );
         profileMessage.value = auth.notice;
         abortPasswordEdit();
     } catch (err) {
@@ -13016,9 +13028,12 @@ function formatIndexDataUpdateSchedule(settings) {
                         <v-icon :icon="isDashboardMenuCompact ? 'mdi-chevron-right' : 'mdi-chevron-left'" />
                     </v-btn>
                     <v-spacer />
-                    <v-btn href="/admin/logout" prepend-icon="mdi-logout" size="small" variant="text">
-                        Logout
-                    </v-btn>
+                    <form action="/admin/logout" method="POST">
+                        <input type="hidden" name="_token" :value="csrfToken()">
+                        <v-btn prepend-icon="mdi-logout" size="small" type="submit" variant="text">
+                            Logout
+                        </v-btn>
+                    </form>
                 </div>
             </v-app-bar>
 
@@ -21704,12 +21719,16 @@ function formatIndexDataUpdateSchedule(settings) {
                                 <v-card border flat>
                                     <v-card-title>Password</v-card-title>
                                     <v-card-text>
-                                        <div class="text-h6">Protected</div>
-                                        <div class="text-body-2 text-medium-emphasis">Change the password used for admin login.</div>
+                                        <div class="text-h6">{{ canInitializePassword ? 'Setup required' : 'Protected' }}</div>
+                                        <div class="text-body-2 text-medium-emphasis">
+                                            {{ canInitializePassword
+                                                ? 'Set a password while this emailed-code session is still recent.'
+                                                : 'Change the password used for admin login.' }}
+                                        </div>
                                     </v-card-text>
                                     <v-card-actions>
                                         <v-btn color="primary" prepend-icon="mdi-lock-reset" variant="tonal" @click="openPasswordDialog">
-                                            Edit password
+                                            {{ canInitializePassword ? 'Set password' : 'Edit password' }}
                                         </v-btn>
                                     </v-card-actions>
                                 </v-card>
@@ -21739,13 +21758,38 @@ function formatIndexDataUpdateSchedule(settings) {
 
                         <v-dialog v-model="isPasswordDialogOpen" persistent max-width="520">
                             <v-card>
-                                <v-card-title>Edit password</v-card-title>
+                                <v-card-title>{{ canInitializePassword ? 'Set password' : 'Edit password' }}</v-card-title>
                                 <v-card-text>
+                                    <v-alert v-if="canInitializePassword" class="mb-4" type="warning" variant="tonal">
+                                        This one-time setup is available only briefly after signing in with an emailed code.
+                                    </v-alert>
                                     <form id="profile-password-form" @submit.prevent="savePassword">
+                                        <v-text-field
+                                            v-if="!canInitializePassword"
+                                            v-model="currentPassword"
+                                            autocomplete="current-password"
+                                            label="Current password"
+                                            maxlength="1024"
+                                            required
+                                            type="password"
+                                        />
                                         <v-text-field
                                             v-model="newPassword"
                                             autocomplete="new-password"
-                                            label="Password"
+                                            hint="Use at least 12 characters with upper and lower case letters, a number, and a symbol."
+                                            label="New password"
+                                            maxlength="1024"
+                                            minlength="12"
+                                            persistent-hint
+                                            required
+                                            type="password"
+                                        />
+                                        <v-text-field
+                                            v-model="newPasswordConfirmation"
+                                            autocomplete="new-password"
+                                            label="Confirm new password"
+                                            maxlength="1024"
+                                            minlength="12"
                                             required
                                             type="password"
                                         />

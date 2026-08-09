@@ -1,8 +1,12 @@
 <?php
 
+use App\Console\Commands\RedactEodhdErrors;
+use App\Models\AdminLoginCode;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
+
+Artisan::addCommands([RedactEodhdErrors::class]);
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -31,3 +35,7 @@ Schedule::command('indices:eodhd-sync:dispatch-due')
 Schedule::command('indices:v2-realtime:dispatch-due')
     ->everyMinute()
     ->withoutOverlapping(10);
+
+Schedule::command('model:prune', ['--model' => [AdminLoginCode::class]])
+    ->dailyAt('03:15')
+    ->withoutOverlapping();

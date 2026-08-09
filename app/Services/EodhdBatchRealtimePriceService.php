@@ -23,6 +23,7 @@ class EodhdBatchRealtimePriceService
 
     public function __construct(
         private EodhdApiClient $apiClient,
+        private EodhdErrorSanitizer $errorSanitizer,
         private StockRealtimePriceCatalog $realtimePriceCatalog,
         private WebQuoteValidator $validator,
     ) {}
@@ -60,7 +61,7 @@ class EodhdBatchRealtimePriceService
                     ];
                 } catch (Throwable $exception) {
                     $failedCount += $holdings->count();
-                    $errors[] = $exception->getMessage();
+                    $errors[] = $this->errorSanitizer->message($exception->getMessage());
                 }
             });
 
@@ -165,14 +166,16 @@ class EodhdBatchRealtimePriceService
      */
     private function payloadsBySymbol(Response $response, string $primarySymbol): Collection
     {
-        $payload = $response->json();
+        $payload = $this->errorSanitizer->payload($response->json());
 
         if (! is_array($payload)) {
             throw new RuntimeException('EODHD returned an invalid realtime response.');
         }
 
         if (($payload['status'] ?? null) === 'error') {
-            throw new RuntimeException((string) ($payload['message'] ?? 'EODHD returned an error response.'));
+            throw new RuntimeException($this->errorSanitizer->message(
+                (string) ($payload['message'] ?? 'EODHD returned an error response.'),
+            ));
         }
 
         $payloads = $this->payloadList($payload);

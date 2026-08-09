@@ -64,6 +64,7 @@ class AdminDepotHoldingController extends Controller
     public function index(Request $request): JsonResponse
     {
         $activeDepot = $this->activeDepot();
+        $mayFetchMissingIntradaySamples = $request->routeIs('admin.watchlist.holdings.charts');
         $includeCharts = $request->boolean('include_charts');
         $includeAllChartHoldings = $includeCharts && $request->boolean('all_chart_holdings');
         $includeAllHoldings = $request->boolean('all') || $includeAllChartHoldings;
@@ -123,6 +124,7 @@ class AdminDepotHoldingController extends Controller
                     $includeAllChartHoldings || ($includeCharts && $holding->id === $chartStockId),
                     ! $includeAllChartHoldings && $includeIntradayCharts,
                     $chartRange,
+                    $mayFetchMissingIntradaySamples,
                 ));
 
             return response()->json([
@@ -153,6 +155,7 @@ class AdminDepotHoldingController extends Controller
                 $includeCharts && ($chartStockId <= 0 || $holding->id === $chartStockId),
                 $includeIntradayCharts,
                 $chartRange,
+                $mayFetchMissingIntradaySamples,
             ));
 
         return response()->json([
@@ -599,6 +602,7 @@ class AdminDepotHoldingController extends Controller
         bool $includeCharts = false,
         bool $includeIntradayCharts = true,
         ?string $chartRange = null,
+        bool $mayFetchMissingIntradaySamples = false,
     ): array {
         $dashboardPriceSourceDate = $this->dashboardPriceSourceDate($holding);
         $relevantTradingDate = $dashboardPriceSourceDate['date'];
@@ -663,7 +667,12 @@ class AdminDepotHoldingController extends Controller
             'recent_prices' => $recentStoredPricePayload['prices'],
             'recent_prices_are_fallback' => $recentStoredPricePayload['are_fallback'],
             'intraday_prices' => $includeCharts
-                ? $this->intradayPricePayloadForChartRange($holding, $chartRange, $includeIntradayCharts)
+                ? $this->intradayPricePayloadForChartRange(
+                    $holding,
+                    $chartRange,
+                    $includeIntradayCharts,
+                    $mayFetchMissingIntradaySamples,
+                )
                 : [],
             'intraday_candles' => $includeCharts && $includeIntradayCharts ? $this->intradayCandlePayload($holding) : [],
             'daily_prices' => $includeCharts ? $this->dailyPricePayload($holding) : [],
@@ -998,6 +1007,7 @@ class AdminDepotHoldingController extends Controller
         StockHolding $holding,
         ?string $chartRange,
         bool $includeIntradayCharts,
+        bool $mayFetchMissingIntradaySamples,
     ): array {
         if ($chartRange === '1w') {
             return $this->weeklyIntradaySamplePayload($holding);
@@ -1007,7 +1017,7 @@ class AdminDepotHoldingController extends Controller
             return [];
         }
 
-        return $this->intradayPricePayload($holding);
+        return $this->intradayPricePayload($holding, $mayFetchMissingIntradaySamples);
     }
 
     /**
@@ -1280,15 +1290,17 @@ class AdminDepotHoldingController extends Controller
     /**
      * @return array<int, array{id: int, price: string, currency: ?string, as_of: ?string, source_name: ?string, price_type: ?string}>
      */
-    private function intradayPricePayload(StockHolding $holding): array
-    {
+    private function intradayPricePayload(
+        StockHolding $holding,
+        bool $mayFetchMissingIntradaySamples = false,
+    ): array {
         $sessionDate = $this->eodhdMarketData->intradaySessionDate($holding);
 
         if ($sessionDate !== null) {
             $realtimePrices = $this->realtimeIntradayPricePayload($holding, $sessionDate);
             $storedCandleCount = $this->storedIntradayPriceCount($holding, $sessionDate);
 
-            if ($storedCandleCount === 0) {
+            if ($storedCandleCount === 0 && $mayFetchMissingIntradaySamples) {
                 $this->eodhdMarketData->ensureIntradaySamples($holding);
                 $storedCandleCount = $this->storedIntradayPriceCount($holding, $sessionDate);
             }

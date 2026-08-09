@@ -35,6 +35,7 @@ class EodhdExchangeDataImporterTest extends TestCase
                     'Country' => 'Argentina',
                     'Currency' => 'ARS',
                     'OperatingMIC' => 'XBUE',
+                    'api_token' => 'test-token',
                 ],
                 [
                     'Code' => 'NASDAQ',
@@ -107,6 +108,7 @@ class EodhdExchangeDataImporterTest extends TestCase
         $this->assertSame('10:00:00', $buenosAires->trading_hours['PreMarketOpen']);
         $this->assertSame('New Year\'s Day', $buenosAires->holidays['2026-01-01']['Holiday']);
         $this->assertSame('13:00:00', $buenosAires->holidays['2026-12-24']['EarlyClose']);
+        $this->assertSame('[redacted]', $buenosAires->raw_exchange['api_token']);
         $this->assertSame('XNAS', $nasdaq->detail_code);
         $this->assertSame('09:30:00', $nasdaq->trading_hours['Open']);
         $this->assertSame('Independence Day', $nasdaq->holidays['2026-07-04']['Holiday']);
@@ -154,5 +156,32 @@ class EodhdExchangeDataImporterTest extends TestCase
             'code' => 'XETRA',
             'name' => 'Updated XETRA',
         ]);
+    }
+
+    public function test_importer_redacts_tokens_from_provider_detail_errors(): void
+    {
+        config(['services.eodhd.key' => 'configured-detail-secret']);
+        Http::fake([
+            'eodhd.com/api/exchanges-list/*' => Http::response([[
+                'Code' => 'NASDAQ',
+                'Name' => 'NASDAQ',
+                'OperatingMIC' => 'XNAS',
+            ]]),
+            'eodhd.com/api/v2/exchange-details/XNAS*' => Http::response([
+                'status' => 'error',
+                'message' => 'Failed URL: api_token=configured-detail-secret&fmt=json',
+            ]),
+        ]);
+        $importer = app(EodhdExchangeDataImporter::class);
+        $run = $importer->createRun();
+
+        $importer->import($run->id);
+
+        $error = $run->refresh()->error_summary['message'];
+
+        $this->assertSame('failed', $run->status);
+        $this->assertStringNotContainsString('configured-detail-secret', $error);
+        $this->assertStringContainsString('api_token=[redacted]', $error);
+        $this->assertNull(EodhdExchange::query()->where('code', 'NASDAQ')->firstOrFail()->raw_details);
     }
 }

@@ -55,6 +55,7 @@ class V2IndexEodhdSyncService
 
     public function __construct(
         private EodhdApiClient $apiClient,
+        private EodhdErrorSanitizer $errorSanitizer,
         private EodhdMarketData $marketData,
         private CompletedTradingDay $completedTradingDay,
     ) {}
@@ -1569,7 +1570,7 @@ class V2IndexEodhdSyncService
             );
         }
 
-        $payload = $response->json();
+        $payload = $this->sanitizePayload($response->json());
 
         if (! is_array($payload)) {
             throw new RuntimeException("EODHD returned an invalid {$dataType} response.");
@@ -1578,7 +1579,7 @@ class V2IndexEodhdSyncService
         if (($payload['status'] ?? null) === 'error') {
             $message = is_string($payload['message'] ?? null) ? $payload['message'] : "EODHD returned an {$dataType} error.";
 
-            throw new RuntimeException($message);
+            throw new RuntimeException($this->errorSanitizer->message($message));
         }
 
         return $payload;
@@ -1838,34 +1839,12 @@ class V2IndexEodhdSyncService
 
     private function safeErrorMessage(string $message, int $limit): string
     {
-        $apiToken = config('services.eodhd.key');
-
-        if (is_string($apiToken) && $apiToken !== '') {
-            $message = str_replace($apiToken, '[redacted]', $message);
-        }
-
-        $message = preg_replace(
-            '/(api(?:_|%5[fF])token=)[^&\s]+/i',
-            '$1[redacted]',
-            $message,
-        ) ?? $message;
-
-        return Str::limit($message, $limit, '');
+        return $this->errorSanitizer->message($message, $limit);
     }
 
     private function sanitizePayload(mixed $value): mixed
     {
-        if (is_string($value)) {
-            return $this->safeErrorMessage($value, 10_000);
-        }
-
-        if (! is_array($value)) {
-            return $value;
-        }
-
-        return collect($value)
-            ->map(fn (mixed $item): mixed => $this->sanitizePayload($item))
-            ->all();
+        return $this->errorSanitizer->payload($value, 10_000);
     }
 
     /**

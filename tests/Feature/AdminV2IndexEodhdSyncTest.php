@@ -114,10 +114,19 @@ class AdminV2IndexEodhdSyncTest extends TestCase
             Http::fake([
                 'eodhd.com/api/eod/ATX.INDX*' => Http::response([
                     ['date' => '2026-08-03', 'open' => 5000, 'close' => 5050, 'adjusted_close' => 5050],
-                    ['date' => '2026-08-04', 'open' => 5050, 'close' => 5120, 'adjusted_close' => 5120],
+                    [
+                        'date' => '2026-08-04',
+                        'open' => 5050,
+                        'close' => 5120,
+                        'adjusted_close' => 5120,
+                        'api_token' => 'provider-echoed-v2-index-secret',
+                    ],
                 ]),
                 'eodhd.com/api/intraday/ATX.INDX*' => Http::response([
-                    $this->intradayRecord('2026-08-04 08:05:00', 5110),
+                    [
+                        ...$this->intradayRecord('2026-08-04 08:05:00', 5110),
+                        'api_token' => 'provider-echoed-v2-index-secret',
+                    ],
                 ]),
             ]);
 
@@ -157,6 +166,13 @@ class AdminV2IndexEodhdSyncTest extends TestCase
                 'as_of' => '2026-08-04 08:05:00',
                 'close' => '5110.00000000',
             ]);
+            $syncedCandle = $index->intradayCandles()->where('as_of', '2026-08-04 08:05:00')->sole();
+            $this->assertSame('[redacted]', $syncedPrice->raw_payload['api_token']);
+            $this->assertSame('[redacted]', $syncedCandle->raw_payload['api_token']);
+            $this->assertStringNotContainsString(
+                'provider-echoed-v2-index-secret',
+                json_encode([$syncedPrice->raw_payload, $syncedCandle->raw_payload], JSON_THROW_ON_ERROR),
+            );
 
             $intradayRequests = Http::recorded(
                 fn (Request $request): bool => str_contains($request->url(), '/intraday/ATX.INDX'),

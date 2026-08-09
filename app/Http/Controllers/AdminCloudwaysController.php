@@ -6,6 +6,7 @@ use App\Http\Requests\AdminCloudwaysSyncRequest;
 use App\Services\CloudwaysDatabaseSync;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 use Throwable;
 
@@ -20,6 +21,8 @@ class AdminCloudwaysController extends Controller
 
     public function show(Request $request, CloudwaysDatabaseSync $cloudwaysDatabaseSync): JsonResponse|StreamedResponse
     {
+        $this->audit($request, 'check_requested');
+
         if ($this->wantsStreamedResponse($request)) {
             return $this->streamCheck($cloudwaysDatabaseSync);
         }
@@ -37,6 +40,10 @@ class AdminCloudwaysController extends Controller
         CloudwaysDatabaseSync $cloudwaysDatabaseSync,
     ): JsonResponse|StreamedResponse {
         $checkedDifferentTables = $request->validated('tables');
+
+        $this->audit($request, 'sync_requested', [
+            'tables' => $checkedDifferentTables,
+        ]);
 
         if ($this->wantsStreamedResponse($request)) {
             return $this->streamSync($cloudwaysDatabaseSync, $checkedDifferentTables);
@@ -82,7 +89,7 @@ class AdminCloudwaysController extends Controller
 
                 $this->streamCloudwaysEvent([
                     'type' => 'error',
-                    'message' => $exception->getMessage(),
+                    'message' => 'Cloudways comparison failed. Review the server logs for details.',
                 ]);
             }
         }, 200, $this->streamHeaders());
@@ -121,7 +128,7 @@ class AdminCloudwaysController extends Controller
 
                 $this->streamCloudwaysEvent([
                     'type' => 'error',
-                    'message' => $exception->getMessage(),
+                    'message' => 'Cloudways synchronization failed. Review the server logs for details.',
                 ]);
             }
         }, 200, $this->streamHeaders());
@@ -153,5 +160,17 @@ class AdminCloudwaysController extends Controller
         flush();
 
         return true;
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     */
+    private function audit(Request $request, string $event, array $context = []): void
+    {
+        Log::notice("security.cloudways.{$event}", [
+            'actor_user_id' => $request->user()?->getKey(),
+            'ip' => $request->ip(),
+            ...$context,
+        ]);
     }
 }

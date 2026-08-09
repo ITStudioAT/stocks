@@ -401,8 +401,13 @@ function indexMonthPrices(direction = 'up') {
     });
 }
 
-const dashboardWatchlistHoldingsPath = '/admin/watchlist/holdings?page=1&include_charts=1&all_chart_holdings=1&all=1&chart_range=1y';
+const dashboardWatchlistHoldingsPath = '/admin/watchlist/holdings/charts?page=1&include_charts=1&all_chart_holdings=1&all=1&chart_range=1y';
 const stocksWatchlistHoldingsPath = '/admin/watchlist/holdings?page=1&all=1';
+
+function isWatchlistHoldingsRequest(path) {
+    return path.startsWith('/admin/watchlist/holdings?page=1')
+        || path.startsWith('/admin/watchlist/holdings/charts?page=1');
+}
 
 function trendDailyPrices(direction = 'up') {
     const baseDate = new Date(Date.UTC(2026, 4, 1));
@@ -434,6 +439,41 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Password');
         expect(wrapper.text()).toContain('Code');
         expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('renders the one-time OTP password setup without a current-password field', async () => {
+        window.history.pushState({}, '', '/admin/profile');
+        vi.stubGlobal('fetch', vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        name: 'Bootstrap Administrator',
+                        first_name: 'Bootstrap',
+                        last_name: 'Administrator',
+                        email: 'bootstrap@example.com',
+                        roles: ['admin', 'super_admin'],
+                        can_initialize_password: true,
+                    },
+                }));
+            }
+
+            return Promise.resolve(jsonResponse({}));
+        }));
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        expect(wrapper.text()).toContain('Setup required');
+        expect(wrapper.text()).toContain('Set a password while this emailed-code session is still recent.');
+
+        const setPasswordButton = wrapper.findAll('button')
+            .find((button) => button.text().includes('Set password'));
+        await setPasswordButton.trigger('click');
+        await flushPromises();
+
+        expect(document.body.textContent).toContain('This one-time setup is available only briefly');
+        expect(document.body.querySelector('input[autocomplete="current-password"]')).toBeNull();
+        expect(document.body.querySelectorAll('input[autocomplete="new-password"]')).toHaveLength(2);
     });
 
     it('starts the dashboard menu compact on handset width', async () => {
@@ -484,7 +524,7 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ days: [] }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [
@@ -640,7 +680,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [
@@ -803,7 +843,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot: {
                         id: 1,
@@ -1126,7 +1166,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -1979,7 +2019,7 @@ describe('App', () => {
         expect(window.location.pathname).toBe('/admin/menu/analyze/trend');
         expect(window.location.search).toBe('?stock=1');
         expect(fetchMock.mock.calls.some(([path]) => (
-            path === '/admin/watchlist/holdings?page=1&include_charts=1&all_chart_holdings=1&all=1&chart_range=1y'
+            path === '/admin/watchlist/holdings/charts?page=1&include_charts=1&all_chart_holdings=1&all=1&chart_range=1y'
         ))).toBe(true);
         const analyzeTrend = wrapper.find('[aria-label="Analyze trend"]');
         const trendStockMenu = wrapper.find('[aria-label="Analyze trend stocks"]');
@@ -2878,7 +2918,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -3266,7 +3306,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -3364,7 +3404,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -3552,7 +3592,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -3650,7 +3690,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -3782,7 +3822,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -3920,7 +3960,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -4021,7 +4061,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -4091,7 +4131,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [
@@ -4179,7 +4219,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
@@ -4355,7 +4395,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot: {
                         id: 1,
@@ -5290,7 +5330,11 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/stocks/search?query=DAX') {
+            if (
+                path === '/admin/stocks/search'
+                && options?.method === 'POST'
+                && JSON.parse(options.body).query === 'DAX'
+            ) {
                 return Promise.resolve(jsonResponse({
                     results: [
                         {
@@ -5307,7 +5351,11 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/stocks/search?query=Microsoft') {
+            if (
+                path === '/admin/stocks/search'
+                && options?.method === 'POST'
+                && JSON.parse(options.body).query === 'Microsoft'
+            ) {
                 return Promise.resolve(jsonResponse({
                     results: [
                         {
@@ -5448,11 +5496,11 @@ describe('App', () => {
         expect(wrapper.vm.activeItemRefreshIntervalMilliseconds).toBe(60_000);
         expect(wrapper.vm.activeItemRefreshTimer).not.toBeNull();
         const stockRefreshRequestCount = fetchMock.mock.calls
-            .filter(([path]) => path.startsWith('/admin/watchlist/holdings?page=1')).length;
+            .filter(([path]) => isWatchlistHoldingsRequest(path)).length;
         await wrapper.vm.refreshActiveItemPage();
         await flushPromises();
         expect(fetchMock.mock.calls
-            .filter(([path]) => path.startsWith('/admin/watchlist/holdings?page=1'))).toHaveLength(stockRefreshRequestCount + 1);
+            .filter(([path]) => isWatchlistHoldingsRequest(path))).toHaveLength(stockRefreshRequestCount + 1);
 
         expect(wrapper.text()).not.toContain('305.55');
         expect(fetchMock).not.toHaveBeenCalledWith('/admin/watchlist/holdings/1/intraday-candles', expect.anything());
@@ -5696,7 +5744,7 @@ describe('App', () => {
         expect(appleStockRow.classes()).toContain('stock-holding-row--selected');
         expect(stocksDeleteButton.attributes('disabled')).toBeUndefined();
         expect(fetchMock).toHaveBeenCalledWith(
-            '/admin/watchlist/holdings?page=1&include_charts=1&all=1&chart_stock_id=1&chart_range=today',
+            '/admin/watchlist/holdings/charts?page=1&include_charts=1&all=1&chart_stock_id=1&chart_range=today',
             expect.any(Object),
         );
 
@@ -5759,7 +5807,7 @@ describe('App', () => {
         await flushPromises();
 
         expect(fetchMock).toHaveBeenCalledWith(
-            '/admin/watchlist/holdings?page=1&include_charts=1&all=1&chart_stock_id=1&chart_range=1w',
+            '/admin/watchlist/holdings/charts?page=1&include_charts=1&all=1&chart_stock_id=1&chart_range=1w',
             expect.any(Object),
         );
         expect(wrapper.get('.stock-price-range-tabs .v-tab--selected').text()).toBe('1 week');
@@ -6633,7 +6681,7 @@ describe('App', () => {
             if (path === '/admin/depots/active') {
                 return Promise.resolve(jsonResponse({ depot, price_refresh_settings: priceRefreshSettings() }));
             }
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot, holdings: [holdingWithPieces, holdingWithoutPieces],
                     meta: pagination, price_refresh_settings: priceRefreshSettings(),
@@ -6687,7 +6735,7 @@ describe('App', () => {
                         index_price_refresh_settings: indexPriceRefreshSettings(),
                     }));
                 }
-                if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+                if (isWatchlistHoldingsRequest(path)) {
                     return Promise.resolve(jsonResponse({
                         depot,
                         holdings: [],
@@ -6757,7 +6805,7 @@ describe('App', () => {
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
@@ -6812,7 +6860,7 @@ describe('App', () => {
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -6895,7 +6943,7 @@ describe('App', () => {
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -6942,7 +6990,7 @@ describe('App', () => {
                     index_price_refresh_settings: indexPriceRefreshSettings(),
                 }));
             }
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -6978,6 +7026,7 @@ describe('App', () => {
 
     it('shows Cloudways after Health in Data for super_admin and syncs after confirmation', async () => {
         window.history.pushState({}, '', '/admin/menu/users');
+        document.head.innerHTML = '<meta name="csrf-token" content="cloudways-test-token">';
         localStorage.removeItem('data_intraday_refresh_info_dismissed');
         let mockedIndexPriceRefreshSettings = indexPriceRefreshSettings();
         let mockedIndexDataUpdateSettings = indexDataUpdateSettings();
@@ -7008,7 +7057,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [
@@ -7745,7 +7794,7 @@ describe('App', () => {
                 ]));
             }
 
-            if (path === '/admin/cloudways/check' && options?.method === 'GET') {
+            if (path === '/admin/cloudways/check' && options?.method === 'POST') {
                 const tables = [
                     {
                         name: 'users',
@@ -7856,6 +7905,10 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
+        const logoutForm = wrapper.get('form[action="/admin/logout"]');
+        expect(logoutForm.attributes('method')).toBe('POST');
+        expect(logoutForm.get('input[name="_token"]').element.value).toBe('cloudways-test-token');
+        expect(logoutForm.get('button[type="submit"]').attributes('href')).toBeUndefined();
         expect(wrapper.text()).toContain('Admin');
         expect(wrapper.text()).toContain('Users');
         expect(wrapper.text()).toContain('Roles');
@@ -7908,7 +7961,12 @@ describe('App', () => {
         await cloudwaysCheckButton.trigger('click');
         await flushPromises();
 
-        expect(fetchMock).toHaveBeenCalledWith('/admin/cloudways/check', expect.anything());
+        expect(fetchMock).toHaveBeenCalledWith('/admin/cloudways/check', expect.objectContaining({
+            method: 'POST',
+            headers: expect.objectContaining({
+                'X-CSRF-TOKEN': 'cloudways-test-token',
+            }),
+        }));
         expect(wrapper.get('[aria-label="Cloudways check"]').text()).toContain('Cloudways check');
         expect(wrapper.get('[aria-label="Cloudways check"]').text()).toContain('business and market-data tables');
         expect(wrapper.get('[aria-label="Cloudways comparison result"]').text()).toContain('1 identical');
@@ -8793,7 +8851,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
@@ -8899,7 +8957,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [
@@ -9120,7 +9178,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -9353,7 +9411,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [holding],
@@ -9676,7 +9734,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -10064,7 +10122,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -10191,7 +10249,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
                     holdings: [],
@@ -10289,7 +10347,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 holdingsLoaded += 1;
 
                 return Promise.resolve(jsonResponse({
@@ -10403,7 +10461,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
@@ -10586,7 +10644,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
@@ -10687,7 +10745,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],
@@ -10782,7 +10840,7 @@ describe('App', () => {
                 }));
             }
 
-            if (path.startsWith('/admin/watchlist/holdings?page=1')) {
+            if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [],

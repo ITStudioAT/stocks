@@ -19,7 +19,11 @@ class UpdateApplicationCommandTest extends TestCase
     {
         parent::setUp();
 
-        config()->set('services.super_admin.password', null);
+        config()->set([
+            'stocks.protected_admin.email' => 'protected@example.com',
+            'stocks.protected_admin.first_name' => 'Protected',
+            'stocks.protected_admin.last_name' => 'Administrator',
+        ]);
     }
 
     public function test_update_command_can_be_previewed(): void
@@ -29,7 +33,7 @@ class UpdateApplicationCommandTest extends TestCase
             ->expectsOutputToContain('Would run: php artisan optimize:clear')
             ->expectsOutputToContain('Would run: php artisan migrate --force --no-interaction')
             ->expectsOutputToContain('Would run: node scripts/dev-stop-stale-vite.mjs --strict')
-            ->expectsOutputToContain('Would run: npm ci --ignore-scripts --no-audit --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm')
+            ->expectsOutputToContain('Would run: npm ci --ignore-scripts --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm')
             ->expectsOutputToContain('Would run: npm run build')
             ->expectsOutputToContain('Would run: php artisan optimize')
             ->expectsOutputToContain('Would run: php artisan queue:restart')
@@ -54,6 +58,8 @@ class UpdateApplicationCommandTest extends TestCase
     {
         $this->artisan('app:update --dry-run --production')
             ->expectsOutputToContain('Would run: composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader')
+            ->expectsOutputToContain('Would run: php artisan security:preflight --no-interaction')
+            ->expectsOutputToContain('Would run: php artisan security:redact-eodhd-errors --no-interaction')
             ->assertSuccessful();
     }
 
@@ -112,7 +118,7 @@ class UpdateApplicationCommandTest extends TestCase
         Process::assertRan('php artisan optimize:clear');
         Process::assertDidntRun('php artisan migrate --force --no-interaction');
         Process::assertDidntRun('node scripts/dev-stop-stale-vite.mjs --strict');
-        Process::assertDidntRun('npm ci --ignore-scripts --no-audit --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm');
+        Process::assertDidntRun('npm ci --ignore-scripts --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm');
         Process::assertDidntRun('npm run build');
         Process::assertDidntRun('php artisan optimize');
         Process::assertDidntRun('php artisan queue:restart');
@@ -148,35 +154,42 @@ class UpdateApplicationCommandTest extends TestCase
             ]);
         }
 
-        $protectedUser = User::query()->find(1);
+        $protectedUser = User::query()->where('email', 'protected@example.com')->first();
 
         $this->assertNotNull($protectedUser);
-        $this->assertSame('Kron', $protectedUser->last_name);
-        $this->assertSame('Günther', $protectedUser->first_name);
-        $this->assertSame('kron@naturwelt.at', $protectedUser->email);
+        $this->assertSame('Administrator', $protectedUser->last_name);
+        $this->assertSame('Protected', $protectedUser->first_name);
+        $this->assertSame('protected@example.com', $protectedUser->email);
         $this->assertNotNull($protectedUser->email_verified_at);
+        $this->assertTrue($protectedUser->is_protected);
+        $this->assertNull($protectedUser->password_initialized_at);
         $this->assertSame(['admin', 'super_admin'], $protectedUser->getRoleNames()->sort()->values()->all());
     }
 
-    public function test_update_command_repairs_protected_admin_user_and_moves_duplicate_email(): void
+    public function test_update_command_does_not_elevate_unrelated_id_one_and_safely_elevates_the_configured_identity(): void
     {
         $this->markCurrentMigrationsAsRanExcept([]);
         $this->createProtectedAdminTables();
 
-        User::factory()->create([
+        $unrelatedUser = User::factory()->create([
             'id' => 1,
-            'last_name' => 'Wrong',
-            'first_name' => 'User',
-            'email' => 'wrong@example.com',
+            'email' => 'unrelated@example.com',
         ]);
-
-        $duplicateProtectedUser = User::factory()->create([
-            'id' => 2,
-            'email' => 'kron@naturwelt.at',
+        $configuredUser = User::factory()->create([
+            'last_name' => 'Existing',
+            'first_name' => 'Administrator',
+            'email' => 'protected@example.com',
+            'password' => Hash::make('Known-Ordinary-Password-123!'),
+            'auth_revision' => 7,
         ]);
-
-        Role::findOrCreate('guest', 'web');
-        User::query()->find(1)->assignRole('guest');
+        DB::table('admin_login_codes')->insert([
+            'email' => 'protected@example.com',
+            'code_hash' => Hash::make('123456'),
+            'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
 
         $this->fakeSuccessfulUpdateProcess();
 
@@ -185,28 +198,117 @@ class UpdateApplicationCommandTest extends TestCase
             ->expectsOutputToContain('Application update complete.')
             ->assertSuccessful();
 
-        $protectedUser = User::query()->find(1);
-        $retiredDuplicateUser = $duplicateProtectedUser->fresh();
+        $unrelatedUser->refresh();
+        $configuredUser->refresh();
 
-        $this->assertSame('Kron', $protectedUser->last_name);
-        $this->assertSame('Günther', $protectedUser->first_name);
-        $this->assertSame('kron@naturwelt.at', $protectedUser->email);
-        $this->assertSame(['admin', 'super_admin'], $protectedUser->getRoleNames()->sort()->values()->all());
-        $this->assertStringStartsWith('kron.retired.2.', $retiredDuplicateUser->email);
-        $this->assertStringEndsWith('@naturwelt.at', $retiredDuplicateUser->email);
+        $this->assertFalse($unrelatedUser->is_protected);
+        $this->assertSame([], $unrelatedUser->getRoleNames()->all());
+        $this->assertTrue($configuredUser->is_protected);
+        $this->assertFalse(Hash::check('Known-Ordinary-Password-123!', $configuredUser->password));
+        $this->assertNull($configuredUser->password_initialized_at);
+        $this->assertSame(8, $configuredUser->auth_revision);
+        $this->assertSame(0, DB::table('admin_login_codes')->where('email', 'protected@example.com')->count());
+        $this->assertSame(['admin', 'super_admin'], $configuredUser->getRoleNames()->sort()->values()->all());
     }
 
-    public function test_update_command_uses_the_super_admin_password_from_configuration(): void
+    public function test_update_command_preserves_an_existing_protected_admin_identity_and_password(): void
     {
-        config()->set('services.super_admin.password', 'correct-super-admin-password');
+        $this->markCurrentMigrationsAsRanExcept([]);
+        $this->createProtectedAdminTables();
+
+        $existingProtectedUser = User::factory()->create([
+            'id' => 47,
+            'last_name' => 'Existing',
+            'first_name' => 'Administrator',
+            'email' => 'existing@example.com',
+            'is_protected' => true,
+        ]);
+        $existingPassword = $existingProtectedUser->password;
+
+        $this->fakeSuccessfulUpdateProcess();
+
+        $this->artisan('app:update --skip-npm --skip-build')
+            ->expectsOutputToContain('Verified roles and protected admin user.')
+            ->expectsOutputToContain('Application update complete.')
+            ->assertSuccessful();
+
+        $protectedUser = User::query()->findOrFail(47);
+
+        $this->assertSame('Existing', $protectedUser->last_name);
+        $this->assertSame('Administrator', $protectedUser->first_name);
+        $this->assertSame('existing@example.com', $protectedUser->email);
+        $this->assertSame($existingPassword, $protectedUser->password);
+        $this->assertTrue($protectedUser->is_protected);
+        $this->assertSame(['admin', 'super_admin'], $protectedUser->getRoleNames()->sort()->values()->all());
+    }
+
+    public function test_update_command_preserves_a_matching_existing_super_admin_password_during_upgrade(): void
+    {
+        $this->markCurrentMigrationsAsRanExcept([]);
+        $this->createProtectedAdminTables();
+
+        Role::findOrCreate('super_admin', 'web');
+        $existingSuperAdmin = User::factory()->create([
+            'email' => 'protected@example.com',
+            'password' => Hash::make('Existing-Super-Admin-Password-123!'),
+            'auth_revision' => 5,
+        ]);
+        $existingSuperAdmin->assignRole('super_admin');
+        DB::table('admin_login_codes')->insert([
+            'email' => $existingSuperAdmin->email,
+            'code_hash' => Hash::make('123456'),
+            'attempts' => 0,
+            'expires_at' => now()->addMinutes(10),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->fakeSuccessfulUpdateProcess();
+
+        $this->artisan('app:update --skip-npm --skip-build')
+            ->expectsOutputToContain('Verified roles and protected admin user.')
+            ->assertSuccessful();
+
+        $existingSuperAdmin->refresh();
+
+        $this->assertTrue(Hash::check('Existing-Super-Admin-Password-123!', $existingSuperAdmin->password));
+        $this->assertNotNull($existingSuperAdmin->password_initialized_at);
+        $this->assertTrue($existingSuperAdmin->is_protected);
+        $this->assertSame(6, $existingSuperAdmin->auth_revision);
+        $this->assertFalse(DB::table('admin_login_codes')->where('email', $existingSuperAdmin->email)->exists());
+        $this->assertSame(['admin', 'super_admin'], $existingSuperAdmin->getRoleNames()->sort()->values()->all());
+    }
+
+    public function test_update_command_ignores_the_legacy_sa_pw_when_bootstrapping_the_protected_admin(): void
+    {
+        config()->set('services.super_admin.password', 'legacy-master-password');
 
         $this->markCurrentMigrationsAsRanExcept([]);
         $this->createProtectedAdminTables();
 
+        $this->fakeSuccessfulUpdateProcess();
+
+        $this->artisan('app:update --skip-npm --skip-build')
+            ->expectsOutputToContain('Verified roles and protected admin user.')
+            ->expectsOutputToContain('Application update complete.')
+            ->assertSuccessful();
+
+        $protectedAdmin = User::query()->where('email', 'protected@example.com')->firstOrFail();
+
+        $this->assertNotSame('', $protectedAdmin->password);
+        $this->assertFalse(Hash::check('legacy-master-password', $protectedAdmin->password));
+    }
+
+    public function test_update_command_does_not_overwrite_an_existing_protected_admin_password(): void
+    {
+        $this->markCurrentMigrationsAsRanExcept([]);
+        $this->createProtectedAdminTables();
+
         User::factory()->create([
-            'id' => 1,
-            'email' => 'wrong@example.com',
+            'id' => 47,
+            'email' => 'existing@example.com',
             'password' => Hash::make('old-password'),
+            'is_protected' => true,
         ]);
 
         $this->fakeSuccessfulUpdateProcess();
@@ -216,7 +318,77 @@ class UpdateApplicationCommandTest extends TestCase
             ->expectsOutputToContain('Application update complete.')
             ->assertSuccessful();
 
-        $this->assertTrue(Hash::check('correct-super-admin-password', User::query()->find(1)->password));
+        $protectedAdmin = User::query()->findOrFail(47);
+
+        $this->assertTrue(Hash::check('old-password', $protectedAdmin->password));
+    }
+
+    public function test_update_command_repairs_a_blank_password_with_an_unpredictable_value(): void
+    {
+        config()->set('services.super_admin.password', 'legacy-master-password');
+
+        $this->markCurrentMigrationsAsRanExcept([]);
+        $this->createProtectedAdminTables();
+        DB::table('users')->insert([
+            'id' => 1,
+            'last_name' => 'Existing',
+            'first_name' => 'Admin',
+            'email' => 'existing@example.com',
+            'password' => '',
+            'auth_revision' => 1,
+            'is_protected' => true,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        $this->fakeSuccessfulUpdateProcess();
+
+        $this->artisan('app:update --skip-npm --skip-build')
+            ->expectsOutputToContain('Verified roles and protected admin user.')
+            ->expectsOutputToContain('Application update complete.')
+            ->assertSuccessful();
+
+        $protectedAdmin = User::query()->findOrFail(1);
+
+        $this->assertNotSame('', $protectedAdmin->password);
+        $this->assertFalse(Hash::check('legacy-master-password', $protectedAdmin->password));
+        $this->assertNull($protectedAdmin->password_initialized_at);
+        $this->assertSame(2, $protectedAdmin->auth_revision);
+    }
+
+    public function test_update_command_fails_closed_when_multiple_protected_accounts_exist(): void
+    {
+        $this->markCurrentMigrationsAsRanExcept([]);
+        $this->createProtectedAdminTables();
+
+        User::factory()->count(2)->create([
+            'is_protected' => true,
+        ]);
+
+        $this->fakeSuccessfulUpdateProcess();
+
+        $this->artisan('app:update --skip-npm --skip-build')
+            ->expectsOutputToContain('Multiple protected administrator accounts exist. Refusing to choose one.')
+            ->doesntExpectOutputToContain('Application update complete.')
+            ->assertFailed();
+    }
+
+    public function test_update_command_fails_closed_when_configured_email_matches_multiple_normalized_users(): void
+    {
+        $this->markCurrentMigrationsAsRanExcept([]);
+        $this->createProtectedAdminTables();
+
+        User::factory()->create(['email' => 'protected@example.com']);
+        User::factory()->create(['email' => 'Protected@Example.com']);
+
+        $this->fakeSuccessfulUpdateProcess();
+
+        $this->artisan('app:update --skip-npm --skip-build')
+            ->expectsOutputToContain('Multiple users match SUPER_ADMIN_EMAIL after normalization. Refusing to elevate any account.')
+            ->doesntExpectOutputToContain('Application update complete.')
+            ->assertFailed();
+
+        $this->assertSame(0, User::query()->where('is_protected', true)->count());
     }
 
     public function test_update_command_stops_before_migrations_when_pending_migrations_create_the_same_table(): void
@@ -502,6 +674,9 @@ PHP);
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
+            $table->unsignedBigInteger('auth_revision')->default(1);
+            $table->timestamp('password_initialized_at')->nullable();
+            $table->boolean('is_protected')->default(false);
             $table->rememberToken();
             $table->timestamps();
         });
@@ -513,6 +688,16 @@ PHP);
             $table->timestamps();
 
             $table->unique(['name', 'guard_name']);
+        });
+
+        Schema::create('admin_login_codes', function (Blueprint $table): void {
+            $table->id();
+            $table->string('email')->index();
+            $table->string('code_hash');
+            $table->unsignedTinyInteger('attempts')->default(0);
+            $table->timestamp('expires_at');
+            $table->timestamp('consumed_at')->nullable();
+            $table->timestamps();
         });
 
         Schema::create('roles', function (Blueprint $table): void {

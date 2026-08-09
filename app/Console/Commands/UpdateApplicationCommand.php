@@ -2,7 +2,7 @@
 
 namespace App\Console\Commands;
 
-use App\Models\User;
+use App\Services\ProtectedAdminProvisioner;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
@@ -10,9 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Schema;
-use Illuminate\Support\Str;
-use Spatie\Permission\Models\Role;
-use Spatie\Permission\PermissionRegistrar;
+use RuntimeException;
 use Throwable;
 
 #[Signature('app:update
@@ -27,18 +25,6 @@ use Throwable;
 class UpdateApplicationCommand extends Command
 {
     private const MIGRATION_STEP = 'Running database migrations';
-
-    private const PROTECTED_ADMIN_USER_ID = 1;
-
-    private const PROTECTED_ADMIN_EMAIL = 'kron@naturwelt.at';
-
-    private const PROTECTED_ADMIN_FIRST_NAME = 'Günther';
-
-    private const PROTECTED_ADMIN_LAST_NAME = 'Kron';
-
-    private const PROTECTED_ADMIN_ROLES = ['super_admin', 'admin'];
-
-    private const REQUIRED_ROLES = ['super_admin', 'admin', 'user'];
 
     /**
      * @var array<string, string>
@@ -130,13 +116,21 @@ class UpdateApplicationCommand extends Command
 
         $commands['Clearing optimized Laravel files'] = 'php artisan optimize:clear';
 
+        if ($this->option('production')) {
+            $commands['Validating production security configuration'] = 'php artisan security:preflight --no-interaction';
+        }
+
         if (! $this->option('skip-migrate')) {
             $commands[self::MIGRATION_STEP] = 'php artisan migrate --force --no-interaction';
         }
 
+        if ($this->option('production')) {
+            $commands['Redacting stored EODHD error secrets'] = 'php artisan security:redact-eodhd-errors --no-interaction';
+        }
+
         if (! $this->option('skip-npm')) {
             $commands['Stopping frontend dev server'] = 'node scripts/dev-stop-stale-vite.mjs --strict';
-            $commands['Installing npm packages'] = 'npm ci --ignore-scripts --no-audit --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm';
+            $commands['Installing npm packages'] = 'npm ci --ignore-scripts --no-fund --prefer-offline --cache=storage/app/npm-cache --logs-dir=storage/logs/npm';
         }
 
         if (! $this->option('skip-build')) {
@@ -204,49 +198,15 @@ class UpdateApplicationCommand extends Command
     private function ensureProtectedAdminUser(): bool
     {
         try {
-            app(PermissionRegistrar::class)->forgetCachedPermissions();
+            if (! Schema::hasColumn('users', 'is_protected')) {
+                throw new RuntimeException('The protected-user migration has not been applied.');
+            }
 
-            DB::transaction(function (): void {
-                foreach (self::REQUIRED_ROLES as $role) {
-                    Role::findOrCreate($role, 'web');
-                }
+            if (! Schema::hasColumn('users', 'password_initialized_at')) {
+                throw new RuntimeException('The password-initialization migration has not been applied.');
+            }
 
-                $duplicateProtectedUser = User::query()
-                    ->where('email', self::PROTECTED_ADMIN_EMAIL)
-                    ->whereKeyNot(self::PROTECTED_ADMIN_USER_ID)
-                    ->first();
-
-                if ($duplicateProtectedUser) {
-                    $duplicateProtectedUser->forceFill([
-                        'email' => $this->retiredProtectedAdminEmail($duplicateProtectedUser),
-                    ])->save();
-                }
-
-                $user = User::query()->find(self::PROTECTED_ADMIN_USER_ID) ?? new User;
-                $user->id = self::PROTECTED_ADMIN_USER_ID;
-
-                $attributes = [
-                    'last_name' => self::PROTECTED_ADMIN_LAST_NAME,
-                    'first_name' => self::PROTECTED_ADMIN_FIRST_NAME,
-                    'email' => self::PROTECTED_ADMIN_EMAIL,
-                    'email_verified_at' => now(),
-                ];
-
-                $protectedAdminPassword = $this->protectedAdminPassword();
-
-                if ($protectedAdminPassword) {
-                    $attributes['password'] = $protectedAdminPassword;
-                }
-
-                if (! $protectedAdminPassword && (! $user->exists || blank($user->password))) {
-                    $attributes['password'] = Str::password(32);
-                }
-
-                $user->forceFill($attributes)->save();
-                $user->syncRoles(self::PROTECTED_ADMIN_ROLES);
-            });
-
-            app(PermissionRegistrar::class)->forgetCachedPermissions();
+            app(ProtectedAdminProvisioner::class)->provision();
             $this->components->info('Verified roles and protected admin user.');
 
             return true;
@@ -255,31 +215,6 @@ class UpdateApplicationCommand extends Command
 
             return false;
         }
-    }
-
-    private function protectedAdminPassword(): ?string
-    {
-        $password = config('services.super_admin.password');
-
-        if (! is_string($password) || blank($password)) {
-            return null;
-        }
-
-        return $password;
-    }
-
-    private function retiredProtectedAdminEmail(User $user): string
-    {
-        $baseEmail = "kron.retired.{$user->id}.".now()->format('YmdHis');
-        $email = "{$baseEmail}@naturwelt.at";
-        $attempt = 1;
-
-        while (User::query()->where('email', $email)->whereKeyNot($user->getKey())->exists()) {
-            $email = "{$baseEmail}.{$attempt}@naturwelt.at";
-            $attempt++;
-        }
-
-        return $email;
     }
 
     private function retireAlreadyAppliedDuplicateCreateMigrations(): bool

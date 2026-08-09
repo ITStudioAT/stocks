@@ -22,6 +22,7 @@ class V2IndexRealtimeScheduler
     private const UpdatingTimeoutMinutes = 11;
 
     public function __construct(
+        private EodhdErrorSanitizer $errorSanitizer,
         private IndexWatchItemPriceRefresher $priceRefresher,
         private IndexMarketHours $indexMarketHours,
     ) {}
@@ -215,7 +216,7 @@ class V2IndexRealtimeScheduler
         $this->storeSettings([
             ...$settings,
             'last_finished_at' => now(self::Timezone)->toIso8601String(),
-            'last_error' => $message,
+            'last_error' => $this->errorSanitizer->message($message, 1000),
         ]);
     }
 
@@ -260,7 +261,9 @@ class V2IndexRealtimeScheduler
             'last_dispatched_at' => is_string($settings['last_dispatched_at']) ? $settings['last_dispatched_at'] : null,
             'last_refreshed_at' => is_string($settings['last_refreshed_at']) ? $settings['last_refreshed_at'] : null,
             'last_finished_at' => is_string($settings['last_finished_at']) ? $settings['last_finished_at'] : null,
-            'last_error' => is_string($settings['last_error']) ? $settings['last_error'] : null,
+            'last_error' => is_string($settings['last_error'])
+                ? $this->errorSanitizer->message($settings['last_error'], 1000)
+                : null,
             'next_refresh_at' => is_string($settings['next_refresh_at']) ? $settings['next_refresh_at'] : null,
         ];
     }

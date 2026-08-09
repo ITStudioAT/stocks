@@ -17,13 +17,18 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: '8.4'
           coverage: none
+
+      - name: Audit Composer dependencies
+        run: composer audit --locked
 
       - name: Install Composer dependencies
         run: composer install --prefer-dist --no-interaction --no-progress
@@ -43,16 +48,21 @@ jobs:
 
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
 
       - name: Install frontend dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-fund
+
+      - name: Audit frontend dependencies
+        run: npm audit
 
       - name: Run frontend tests
         run: npm run test:frontend
@@ -67,15 +77,34 @@ jobs:
 
     steps:
       - name: Check out source and release commits
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 2
+          persist-credentials: false
 
       - name: Set up PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
         with:
           php-version: '8.4'
           coverage: none
 
+      - name: Verify deployment release commit scope
+        run: php scripts/verify-release-commit.php
+
       - name: Verify source and frontend artifact
         run: php scripts/frontend-release.php verify "$(git rev-parse HEAD^)"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install frontend dependencies for an independent rebuild
+        run: npm ci --ignore-scripts --no-fund
+
+      - name: Rebuild frontend from the release source
+        run: npm run build
+
+      - name: Compare the committed artifact with the clean rebuild
+        run: php scripts/frontend-release.php verify-build "$(git rev-parse HEAD^)"

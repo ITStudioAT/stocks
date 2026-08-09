@@ -6,11 +6,12 @@ use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\StockPriceRefreshRun;
 use Illuminate\Contracts\Queue\Factory as QueueFactory;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Str;
 use Throwable;
 
 class DepotHoldingPriceRefreshProgress
 {
+    public function __construct(private EodhdErrorSanitizer $errorSanitizer) {}
+
     /**
      * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}
      */
@@ -39,7 +40,15 @@ class DepotHoldingPriceRefreshProgress
     {
         $payload = Cache::get($this->key($refreshId));
 
-        return is_array($payload) ? $payload : null;
+        if (! is_array($payload)) {
+            return null;
+        }
+
+        $payload['error'] = is_string($payload['error'] ?? null)
+            ? $this->errorSanitizer->message($payload['error'], 255)
+            : null;
+
+        return $payload;
     }
 
     /**
@@ -144,7 +153,7 @@ class DepotHoldingPriceRefreshProgress
             'message' => $message,
             'current' => null,
             'finished_at' => now()->toIso8601String(),
-            'error' => $error === null ? null : Str::limit($error, 255, ''),
+            'error' => $error,
         ]);
     }
 
@@ -158,7 +167,7 @@ class DepotHoldingPriceRefreshProgress
             'status' => 'failed',
             'message' => 'Price refresh failed.',
             'finished_at' => now()->toIso8601String(),
-            'error' => Str::limit($error, 255, ''),
+            'error' => $error,
         ]);
     }
 
@@ -183,6 +192,10 @@ class DepotHoldingPriceRefreshProgress
      */
     private function put(string $refreshId, array $payload): array
     {
+        $payload['error'] = is_string($payload['error'] ?? null)
+            ? $this->errorSanitizer->message($payload['error'], 255)
+            : null;
+
         Cache::put($this->key($refreshId), $payload, now()->addHours(2));
 
         return $payload;
@@ -203,7 +216,9 @@ class DepotHoldingPriceRefreshProgress
             'current' => null,
             'started_at' => $run->started_at?->toIso8601String() ?? now()->toIso8601String(),
             'finished_at' => $run->finished_at?->toIso8601String(),
-            'error' => is_array($run->error_summary) ? ($run->error_summary['message'] ?? null) : null,
+            'error' => is_array($run->error_summary) && is_string($run->error_summary['message'] ?? null)
+                ? $this->errorSanitizer->message($run->error_summary['message'], 255)
+                : null,
         ];
     }
 

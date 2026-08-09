@@ -1,0 +1,38 @@
+<?php
+
+namespace App\Http\Requests;
+
+use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Support\Str;
+
+class AdminPasswordLoginRequest extends FormRequest
+{
+    public function authorize(): bool
+    {
+        return true;
+    }
+
+    /**
+     * @return array<string, array<int, string>>
+     */
+    public function rules(): array
+    {
+        return [
+            'email' => ['required', 'email', 'max:254'],
+            'password' => ['required', 'string', 'max:1024'],
+        ];
+    }
+
+    protected function prepareForValidation(): void
+    {
+        $email = $this->input('email');
+
+        if (! is_string($email)) {
+            return;
+        }
+
+        $this->merge([
+            'email' => Str::lower(trim($email)),
+        ]);
+    }
+}

@@ -104,7 +104,7 @@ class AdminTestsOptionsTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson("/admin/tests/stocks/{$holding->id}/intraday")
+            ->postJson("/admin/tests/stocks/{$holding->id}/intraday")
             ->assertOk()
             ->assertJsonPath('stock.symbol', 'AMES')
             ->assertJsonPath('day.trading_date', '2026-06-25')
@@ -154,7 +154,7 @@ class AdminTestsOptionsTest extends TestCase
         ]);
 
         $this->actingAs($admin)
-            ->getJson("/admin/tests/stocks/{$holding->id}/intraday")
+            ->postJson("/admin/tests/stocks/{$holding->id}/intraday")
             ->assertStatus(422)
             ->assertJsonPath('message', 'EODHD intraday request failed with HTTP 500.')
             ->assertJsonPath('stock.symbol', 'AMES')
@@ -165,7 +165,7 @@ class AdminTestsOptionsTest extends TestCase
     {
         $holding = StockHolding::factory()->create();
 
-        $this->getJson("/admin/tests/stocks/{$holding->id}/intraday")->assertUnauthorized();
+        $this->postJson("/admin/tests/stocks/{$holding->id}/intraday")->assertUnauthorized();
     }
 
     public function test_admin_can_load_xetra_tickers_from_eodhd(): void
@@ -186,7 +186,7 @@ class AdminTestsOptionsTest extends TestCase
         $admin = $this->adminUser();
 
         $this->actingAs($admin)
-            ->getJson('/admin/tests/tickers')
+            ->postJson('/admin/tests/tickers')
             ->assertOk()
             ->assertJsonPath('exchange_code', 'XETRA')
             ->assertJsonPath('tickers.0.Code', 'AMES')
@@ -247,7 +247,7 @@ class AdminTestsOptionsTest extends TestCase
         $admin = $this->adminUser();
 
         $this->actingAs($admin)
-            ->getJson('/admin/tests/exchanges')
+            ->postJson('/admin/tests/exchanges')
             ->assertOk()
             ->assertJsonPath('exchanges.0.Code', 'BA')
             ->assertJsonPath('exchanges.0.Name', 'Buenos Aires Exchange')
@@ -279,12 +279,12 @@ class AdminTestsOptionsTest extends TestCase
 
     public function test_guest_cannot_load_test_tickers(): void
     {
-        $this->getJson('/admin/tests/tickers')->assertUnauthorized();
+        $this->postJson('/admin/tests/tickers')->assertUnauthorized();
     }
 
     public function test_guest_cannot_load_test_exchanges(): void
     {
-        $this->getJson('/admin/tests/exchanges')->assertUnauthorized();
+        $this->postJson('/admin/tests/exchanges')->assertUnauthorized();
     }
 
     private function adminUser(): User
