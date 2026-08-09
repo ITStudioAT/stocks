@@ -1678,10 +1678,11 @@ describe('App', () => {
         expect(simulateResearchButton.exists()).toBe(true);
         expect(simulateResearchButton.text()).toContain('Simulate');
         expect(simulateResearchButton.attributes('disabled')).toBeUndefined();
-        expect(fetchMock.mock.calls.some(([path]) => (
-            path.includes('/admin/watchlist/holdings?page=1')
+        expect(fetchMock.mock.calls.some(([path, options]) => (
+            path.includes('/admin/watchlist/holdings/charts?page=1')
             && path.includes('include_charts=1')
             && path.includes('all_chart_holdings=1')
+            && options?.method === 'POST'
         ))).toBe(true);
         const stopResearchSimulationButton = analyzeResearch.find('[aria-label="Stop research simulation"]');
         expect(stopResearchSimulationButton.exists()).toBe(true);

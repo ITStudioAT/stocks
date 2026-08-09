@@ -7,6 +7,7 @@ use App\Models\DepotTransaction;
 use App\Models\StockHolding;
 use App\Models\StockPrice;
 use App\Models\User;
+use App\Services\AdminSessionManager;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
@@ -269,6 +270,27 @@ class AdminDepotTest extends TestCase
         $this->actingAs($admin)
             ->get('/admin/menu/analyze/tests')
             ->assertOk();
+    }
+
+    public function test_research_simulation_menu_requires_a_current_admin_session(): void
+    {
+        $this->get('/admin/menu/analyze/research/simulation')
+            ->assertRedirect('/admin/login');
+
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->get('/admin/menu/analyze/research/simulation')
+            ->assertOk();
+
+        $this->be($admin)
+            ->withSession([
+                AdminSessionManager::TargetRevisionSessionKey => $admin->auth_revision + 1,
+            ])
+            ->get('/admin/menu/analyze/research/simulation')
+            ->assertRedirect('/admin/login');
+
+        $this->assertGuest();
     }
 
     private function adminUser(): User
