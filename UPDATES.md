@@ -1,9 +1,14 @@
-## 0.8.8 x
+## 0.8.8
+
+### System
+
+- Major Security Update with Sol Ultra
 
 ### Analyze
 
 - Research-Menu-Item Added
 - Simulation added
+- Trend removed, Trend v2 is the actual version
 
 ## 0.8.7
 
