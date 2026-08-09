@@ -8,7 +8,7 @@
 
 - Research/Settings: Count of rows !!!
 
-## 0.8.10 !!!
+## 0.8.10-0.8.11
 
 ### ANALYSIS
 

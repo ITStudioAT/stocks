@@ -27,6 +27,12 @@ class AdminUiPreferencesController extends Controller
             'analyze_trend_streak_buy_thresholds' => ['sometimes', 'array', 'min:1', 'max:20'],
             'analyze_trend_streak_buy_thresholds.*' => ['nullable', 'numeric', 'min:-100', 'max:0'],
             'analyze_trend_streak_sell_threshold' => ['sometimes', 'numeric', 'min:0', 'max:100'],
+            'analyze_trend_signal_columns' => ['sometimes', 'array', 'max:4'],
+            'analyze_trend_signal_columns.*' => [
+                'string',
+                Rule::in(UiPreferences::AnalyzeTrendSignalColumns),
+                'distinct',
+            ],
         ]);
 
         if (
@@ -36,6 +42,7 @@ class AdminUiPreferencesController extends Controller
             && ! array_key_exists('analyze_trend_virtual_buy_amount', $validated)
             && ! array_key_exists('analyze_trend_streak_buy_thresholds', $validated)
             && ! array_key_exists('analyze_trend_streak_sell_threshold', $validated)
+            && ! array_key_exists('analyze_trend_signal_columns', $validated)
         ) {
             throw ValidationException::withMessages([
                 'ui_preferences' => 'Provide a UI preference to update.',
@@ -69,6 +76,16 @@ class AdminUiPreferencesController extends Controller
                     $request->user(),
                     $validated['analyze_trend_max_invest_amount'] ?? null,
                     $validated['analyze_trend_virtual_buy_amount'] ?? null,
+                ),
+            ]);
+        }
+
+        if (array_key_exists('analyze_trend_signal_columns', $validated)) {
+            return response()->json([
+                'message' => 'UI preferences updated.',
+                'ui_preferences' => $uiPreferences->updateAnalyzeTrendSignalColumns(
+                    $request->user(),
+                    $validated['analyze_trend_signal_columns'],
                 ),
             ]);
         }

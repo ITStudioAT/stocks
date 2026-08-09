@@ -262,11 +262,24 @@ export function calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio(
             let soldOnCurrentRow = false;
 
             if (position !== null) {
+                const dayChangePercent = priceChangePercent(
+                    price.price,
+                    prices[priceIndex - 1].price,
+                );
+
+                if (dayChangePercent !== null && dayChangePercent < 0) {
+                    position.emergencyStreakCount += 1;
+                    position.emergencyStreakChangePercent += dayChangePercent;
+                } else {
+                    position.emergencyStreakCount = 0;
+                    position.emergencyStreakChangePercent = 0;
+                }
+
                 const openChangeAmount = investmentAmount * ((price.price / position.buyPrice) - 1);
 
                 if (
-                    negativeStreak.count > 0
-                    && negativeStreak.changePercent
+                    position.emergencyStreakCount > 0
+                    && position.emergencyStreakChangePercent
                         <= normalizedEmergencySellThreshold + percentageComparisonTolerance
                 ) {
                     realizedChangeAmount += openChangeAmount;
@@ -293,6 +306,8 @@ export function calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio(
             ) {
                 position = {
                     buyPrice: price.price,
+                    emergencyStreakChangePercent: 0,
+                    emergencyStreakCount: 0,
                 };
                 hasTrade = true;
                 isWaitingForReentry = false;

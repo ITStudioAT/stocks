@@ -61,6 +61,12 @@ export const useDepotStore = defineStore('depots', {
             analyze_trend_virtual_buy_amount: 7000,
             analyze_trend_streak_buy_thresholds: [-4, -3, -2, -1, 0],
             analyze_trend_streak_sell_threshold: 3,
+            analyze_trend_signal_columns: [
+                'vbuy_vsell',
+                'vbuy_vsell_max_invest',
+                'vbuy_once',
+                'vbuy_once_emergency',
+            ],
         },
         stockSearchResults: [],
         pagination: {

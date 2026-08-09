@@ -46,6 +46,13 @@ const maxAnalyzeTrendVirtualBuyAmount = 1000000;
 const defaultAnalyzeTrendStreakBuyThresholds = [-4, -3, -2, -1, 0];
 const maxAnalyzeTrendStreakBuyThresholdCount = 20;
 const defaultAnalyzeTrendStreakSellThreshold = 3;
+const analyzeTrendSignalColumnItems = [
+    { key: 'vbuy_vsell', label: 'VBUY/VSELL' },
+    { key: 'vbuy_vsell_max_invest', label: 'VBUY/VSELL MAX INVEST' },
+    { key: 'vbuy_once', label: 'VBUY ONCE' },
+    { key: 'vbuy_once_emergency', label: 'VBUY ONCE WITH EMERGENCY' },
+];
+const defaultAnalyzeTrendSignalColumns = analyzeTrendSignalColumnItems.map(({ key }) => key);
 const defaultAnalyzeResearchBuyThresholds = [-4, -3, -2, -1, 0];
 const maxAnalyzeResearchBuyRuleCount = 20;
 const defaultAnalyzeResearchSellThreshold = 3;
@@ -236,6 +243,8 @@ const analyzeTrendStreakBuyThresholdEditValues = ref(defaultAnalyzeTrendStreakBu
 })));
 const analyzeTrendStreakSellThreshold = ref(defaultAnalyzeTrendStreakSellThreshold);
 const analyzeTrendStreakSellThresholdEditValue = ref(String(defaultAnalyzeTrendStreakSellThreshold));
+const analyzeTrendSignalColumns = ref([...defaultAnalyzeTrendSignalColumns]);
+const isAnalyzeTrendSignalColumnsSaving = ref(false);
 const isAnalyzeTrendStreakRulesDialogOpen = ref(false);
 const isAnalyzeTrendStreakRulesSaving = ref(false);
 const analyzeResearchSettings = ref(defaultAnalyzeResearchSettings());
@@ -485,16 +494,6 @@ const watchListTableColumnCount = computed(() => {
 
     return columnCount;
 });
-const analyzeTrendV2Markers = computed(() => new Map(holdings.value.map((holding) => [
-    holding.id,
-    latestAnalyzeTrendV2Marker(holding),
-])));
-const dashboardTrendSignalCards = computed(() => holdings.value
-    .map((holding) => ({
-        holding,
-        recommendation: analyzeTrendV2Markers.value.get(holding.id) ?? null,
-    }))
-    .filter(({ recommendation }) => ['buy', 'sell'].includes(recommendation?.key)));
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
 const selectedTestStock = computed(() => testOptions.value.stocks
     .find((stock) => stock.id === selectedTestStockId.value) ?? null);
@@ -1144,6 +1143,17 @@ const selectedAnalyzeTrendV2BuyOnceEmergencyTotal = computed(() => {
     return selectedAnalyzeTrendV2BuyOnceEmergencyRowsByDate.value
         .get(latestSelectedDate)?.totalChangeAmount ?? 0;
 });
+const analyzeTrendV2Markers = computed(() => new Map(holdings.value.map((holding, holdingIndex) => [
+    holding.id,
+    latestAnalyzeTrendV2Markers(holding, holdingIndex),
+])));
+const dashboardTrendSignalCards = computed(() => holdings.value.flatMap((holding) => (
+    analyzeTrendV2Signals(holding).map((recommendation) => ({
+        holding,
+        key: `${holding.id}-${recommendation.sourceKey}-${recommendation.key}`,
+        recommendation,
+    }))
+)));
 const analyzeTrendV2SafeInvestmentAmount = computed(() => (
     calculateAnalyzeTrendV2SafeInvestmentAmount(
         holdings.value,
@@ -1568,7 +1578,7 @@ function analyzeTrendDailyPrices(holding) {
         .sort((firstPrice, secondPrice) => firstPrice.trading_date.localeCompare(secondPrice.trading_date));
 }
 
-function latestAnalyzeTrendV2Marker(holding) {
+function latestAnalyzeTrendV2Markers(holding, holdingIndex) {
     const latestRow = buildAnalyzeTrendV2Rows(
         holding,
         analyzeTrendRowLimit.value,
@@ -1576,42 +1586,64 @@ function latestAnalyzeTrendV2Marker(holding) {
         analyzeTrendStreakBuyThresholds.value,
         analyzeTrendStreakSellThreshold.value,
     )[0] ?? null;
+    const constrainedRow = analyzeTrendV2ConstrainedPortfolioTotal.value.holdingRows
+        .find((holdingRows) => holdingRows.holdingIndex === holdingIndex)?.rows[0] ?? null;
+    const buyOnceRow = analyzeTrendV2BuyOncePortfolio.value.holdingRows
+        .find((holdingRows) => holdingRows.holdingIndex === holdingIndex)?.rows[0] ?? null;
+    const buyOnceEmergencyRow = analyzeTrendV2BuyOnceEmergencyPortfolio.value.holdingRows
+        .find((holdingRows) => holdingRows.holdingIndex === holdingIndex)?.rows[0] ?? null;
+    const signalsBySource = new Map([
+        ['vbuy_vsell', trendSignalsFromActions(
+            latestRow?.virtualTradeActions,
+            'vbuy_vsell',
+            'VBUY/VSELL',
+        )],
+        ['vbuy_vsell_max_invest', trendSignalsFromActions(
+            constrainedRow?.virtualTradeActions,
+            'vbuy_vsell_max_invest',
+            'VBUY/VSELL MAX INVEST',
+        )],
+        ['vbuy_once', buyOnceRow?.isBuy
+            ? [trendSignal('buy', 'VBUY', 'vbuy_once', 'VBUY ONCE')]
+            : []],
+        ['vbuy_once_emergency', trendSignalsFromActions(
+            buyOnceEmergencyRow?.emergencyTradeActions,
+            'vbuy_once_emergency',
+            'VBUY ONCE WITH EMERGENCY',
+        )],
+    ]);
 
-    if (!latestRow) {
-        return null;
-    }
+    return analyzeTrendSignalColumns.value.flatMap((sourceKey) => signalsBySource.get(sourceKey) ?? []);
+}
 
-    const marker = latestRow.virtualTradeActions.find((action) => ['buy', 'sell'].includes(action.type));
+function trendSignalsFromActions(actions, sourceKey, sourceLabel) {
+    return (Array.isArray(actions) ? actions : [])
+        .filter((action) => ['buy', 'sell'].includes(action.type))
+        .map((action) => trendSignal(action.type, action.label, sourceKey, sourceLabel));
+}
 
-    if (!marker) {
-        return null;
-    }
-
+function trendSignal(type, reason, sourceKey, sourceLabel) {
     return {
-        key: marker.type,
-        label: marker.type.toUpperCase(),
-        reason: marker.label,
+        key: type,
+        label: type.toUpperCase(),
+        reason,
+        sourceKey,
+        sourceLabel,
     };
 }
 
-function dashboardTrendRecommendation(holding) {
-    return analyzeTrendV2Markers.value.get(holding.id) ?? null;
+function analyzeTrendV2Signals(holding) {
+    return analyzeTrendV2Markers.value.get(holding.id) ?? [];
 }
 
-function dashboardTrendRecommendationLabel(holding) {
-    return dashboardTrendRecommendation(holding)?.label?.toUpperCase() ?? '';
+function trendSignalTitle(signal) {
+    return `${signal.sourceLabel}: ${signal.reason}`;
 }
 
-function dashboardTrendRecommendationTitle(holding) {
-    return dashboardTrendRecommendation(holding)?.reason ?? '';
-}
-
-function dashboardTrendRecommendationClass(holding) {
-    const recommendation = dashboardTrendRecommendation(holding);
-
+function trendSignalClass(signal) {
     return {
-        'dashboard-trend-badge--buy': recommendation?.key === 'buy',
-        'dashboard-trend-badge--sell': recommendation?.key === 'sell',
+        'dashboard-trend-badge--buy': signal?.key === 'buy',
+        'dashboard-trend-badge--sell': signal?.key === 'sell',
     };
 }
 function isRealtimePriceRow(priceRow) {
@@ -2151,6 +2183,9 @@ watch(
         );
         analyzeTrendStreakSellThreshold.value = normalizeAnalyzeTrendStreakSellThreshold(
             preferences?.analyze_trend_streak_sell_threshold,
+        );
+        analyzeTrendSignalColumns.value = normalizeAnalyzeTrendSignalColumns(
+            preferences?.analyze_trend_signal_columns,
         );
     },
     { immediate: true },
@@ -3600,6 +3635,35 @@ function isValidAnalyzeTrendStreakSellThreshold(value) {
     const threshold = Number(value);
 
     return value !== '' && Number.isFinite(threshold) && threshold >= 0 && threshold <= 100;
+}
+
+function normalizeAnalyzeTrendSignalColumns(value) {
+    if (!Array.isArray(value)) {
+        return [...defaultAnalyzeTrendSignalColumns];
+    }
+
+    return defaultAnalyzeTrendSignalColumns.filter((columnKey) => value.includes(columnKey));
+}
+
+async function toggleAnalyzeTrendSignalColumn(columnKey, isSelected) {
+    const previousSignalColumns = [...analyzeTrendSignalColumns.value];
+    const selectedSignalColumns = isSelected
+        ? [...previousSignalColumns, columnKey]
+        : previousSignalColumns.filter((selectedColumnKey) => selectedColumnKey !== columnKey);
+
+    analyzeTrendSignalColumns.value = normalizeAnalyzeTrendSignalColumns(selectedSignalColumns);
+
+    try {
+        isAnalyzeTrendSignalColumnsSaving.value = true;
+        await depotsStore.updateUiPreferences({
+            analyze_trend_signal_columns: analyzeTrendSignalColumns.value,
+        });
+    } catch (error) {
+        analyzeTrendSignalColumns.value = previousSignalColumns;
+        transactionsError.value = error.message;
+    } finally {
+        isAnalyzeTrendSignalColumnsSaving.value = false;
+    }
 }
 
 function editAnalyzeTrendRowLimit() {
@@ -11907,7 +11971,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                 <div class="dashboard-stock-signal-grid">
                                     <v-card
                                         v-for="card in dashboardTrendSignalCards"
-                                        :key="card.holding.id"
+                                        :key="card.key"
                                         class="dashboard-stock-signal-card"
                                         :class="{
                                             'dashboard-stock-signal-card--buy': card.recommendation.key === 'buy',
@@ -11929,10 +11993,13 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 </div>
                                                 <strong
                                                     class="dashboard-stock-signal-card-action"
-                                                    :title="card.recommendation.reason"
+                                                    :title="trendSignalTitle(card.recommendation)"
                                                 >
                                                     {{ card.recommendation.label }}
                                                 </strong>
+                                            </div>
+                                            <div class="dashboard-stock-signal-card-source">
+                                                {{ card.recommendation.sourceLabel }}
                                             </div>
                                         </v-card-text>
                                     </v-card>
@@ -12833,16 +12900,15 @@ function formatIndexDataUpdateSchedule(settings) {
                                             </span>
                                         </span>
                                     </div>
-                                    <div
-                                        v-if="dashboardTrendRecommendation(holding)"
-                                        class="mobile-stock-signal-row"
-                                    >
+                                    <div v-if="analyzeTrendV2Signals(holding).length" class="mobile-stock-signal-row">
                                         <span
+                                            v-for="signal in analyzeTrendV2Signals(holding)"
+                                            :key="`${signal.sourceKey}-${signal.key}`"
                                             class="dashboard-trend-badge"
-                                            :class="dashboardTrendRecommendationClass(holding)"
-                                            :title="dashboardTrendRecommendationTitle(holding)"
+                                            :class="trendSignalClass(signal)"
+                                            :title="trendSignalTitle(signal)"
                                         >
-                                            {{ dashboardTrendRecommendationLabel(holding) }}
+                                            {{ signal.label }} · {{ signal.sourceLabel }}
                                         </span>
                                     </div>
                                     <div v-if="activeSection === 'stocks'" class="mobile-stock-actions">
@@ -12970,13 +13036,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                             </div>
                                         </td>
                                         <td class="watch-list-content-cell">
-                                            <span
-                                                v-if="dashboardTrendRecommendation(holding)"
-                                                class="stock-trend-signal text-error font-weight-bold"
-                                                :title="dashboardTrendRecommendationTitle(holding)"
-                                            >
-                                                {{ dashboardTrendRecommendationLabel(holding) }}
-                                            </span>
+                                            <div v-if="analyzeTrendV2Signals(holding).length" class="stock-trend-signal-list">
+                                                <span
+                                                    v-for="signal in analyzeTrendV2Signals(holding)"
+                                                    :key="`${signal.sourceKey}-${signal.key}`"
+                                                    class="stock-trend-signal text-error font-weight-bold"
+                                                    :title="trendSignalTitle(signal)"
+                                                >
+                                                    {{ signal.label }}
+                                                    <small>{{ signal.sourceLabel }}</small>
+                                                </span>
+                                            </div>
                                         </td>
                                         <td v-if="isHandsetLandscape" class="watch-list-content-cell">
                                             <span class="handset-landscape-price">
@@ -15692,9 +15762,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         :class="{
                                             'analyze-holding-card--active': selectedAnalyzeHoldingId === holding.id,
                                             'analyze-holding-card--held': hasPositionPieces(holding),
-                                            'analyze-holding-card--signal': ['buy', 'sell'].includes(
-                                                analyzeTrendV2Markers.get(holding.id)?.key,
-                                            ),
+                                            'analyze-holding-card--signal': analyzeTrendV2Signals(holding).length > 0,
                                         }"
                                         :aria-pressed="selectedAnalyzeHoldingId === holding.id"
                                         :title="stockDisplayLabel(holding, 'stock')"
@@ -15792,6 +15860,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 analyzeTrendV2BuyOnceEmergencyPortfolio.changeAmount,
                                             ) }}
                                         </strong>
+                                        <span class="analyze-trend-summary-note">
+                                            SELL: -4% REBUY: +3%
+                                        </span>
                                     </div>
                                     <div class="analyze-trend-summary-item analyze-trend-summary-item--safe-invest">
                                         <span class="analyze-trend-summary-label">Safe invest per VBUY</span>
@@ -15882,7 +15953,21 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     </span>
                                                 </th>
                                                 <th>
-                                                    VBUY/VSELL
+                                                    <label class="analyze-trend-column-toggle">
+                                                        <input
+                                                            type="checkbox"
+                                                            :aria-label="analyzeTrendSignalColumnItems[0].label"
+                                                            :checked="analyzeTrendSignalColumns.includes(
+                                                                analyzeTrendSignalColumnItems[0].key,
+                                                            )"
+                                                            :disabled="isAnalyzeTrendSignalColumnsSaving"
+                                                            @change="toggleAnalyzeTrendSignalColumn(
+                                                                analyzeTrendSignalColumnItems[0].key,
+                                                                $event.target.checked,
+                                                            )"
+                                                        >
+                                                        <span>{{ analyzeTrendSignalColumnItems[0].label }}</span>
+                                                    </label>
                                                     <span
                                                         v-if="selectedAnalyzeTrendV2Total !== null"
                                                         class="analyze-trend-dep-change"
@@ -15892,8 +15977,21 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     </span>
                                                 </th>
                                                 <th>
-                                                    VBUY/VSELL
-                                                    <span class="analyze-trend-dep-change">MAX INVEST</span>
+                                                    <label class="analyze-trend-column-toggle">
+                                                        <input
+                                                            type="checkbox"
+                                                            :aria-label="analyzeTrendSignalColumnItems[1].label"
+                                                            :checked="analyzeTrendSignalColumns.includes(
+                                                                analyzeTrendSignalColumnItems[1].key,
+                                                            )"
+                                                            :disabled="isAnalyzeTrendSignalColumnsSaving"
+                                                            @change="toggleAnalyzeTrendSignalColumn(
+                                                                analyzeTrendSignalColumnItems[1].key,
+                                                                $event.target.checked,
+                                                            )"
+                                                        >
+                                                        <span>{{ analyzeTrendSignalColumnItems[1].label }}</span>
+                                                    </label>
                                                     <span
                                                         class="analyze-trend-dep-change"
                                                         :class="priceChangePercentClass(
@@ -15906,7 +16004,21 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     </span>
                                                 </th>
                                                 <th>
-                                                    VBUY ONCE
+                                                    <label class="analyze-trend-column-toggle">
+                                                        <input
+                                                            type="checkbox"
+                                                            :aria-label="analyzeTrendSignalColumnItems[2].label"
+                                                            :checked="analyzeTrendSignalColumns.includes(
+                                                                analyzeTrendSignalColumnItems[2].key,
+                                                            )"
+                                                            :disabled="isAnalyzeTrendSignalColumnsSaving"
+                                                            @change="toggleAnalyzeTrendSignalColumn(
+                                                                analyzeTrendSignalColumnItems[2].key,
+                                                                $event.target.checked,
+                                                            )"
+                                                        >
+                                                        <span>{{ analyzeTrendSignalColumnItems[2].label }}</span>
+                                                    </label>
                                                     <span
                                                         class="analyze-trend-dep-change"
                                                         :class="priceChangePercentClass(
@@ -15919,7 +16031,21 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     </span>
                                                 </th>
                                                 <th>
-                                                    VBUY ONCE WITH EMERGENCY
+                                                    <label class="analyze-trend-column-toggle">
+                                                        <input
+                                                            type="checkbox"
+                                                            :aria-label="analyzeTrendSignalColumnItems[3].label"
+                                                            :checked="analyzeTrendSignalColumns.includes(
+                                                                analyzeTrendSignalColumnItems[3].key,
+                                                            )"
+                                                            :disabled="isAnalyzeTrendSignalColumnsSaving"
+                                                            @change="toggleAnalyzeTrendSignalColumn(
+                                                                analyzeTrendSignalColumnItems[3].key,
+                                                                $event.target.checked,
+                                                            )"
+                                                        >
+                                                        <span>{{ analyzeTrendSignalColumnItems[3].label }}</span>
+                                                    </label>
                                                     <span
                                                         class="analyze-trend-dep-change"
                                                         :class="priceChangePercentClass(
@@ -19356,6 +19482,20 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <span>{{ formatLatestPrice(holding) }}</span>
                                         <span>{{ formatStockHoldingValue(holding) }}</span>
                                     </div>
+                                    <div
+                                        v-if="analyzeTrendV2Signals(holding).length"
+                                        class="mobile-stock-signal-row"
+                                    >
+                                        <span
+                                            v-for="signal in analyzeTrendV2Signals(holding)"
+                                            :key="`${signal.sourceKey}-${signal.key}`"
+                                            class="dashboard-trend-badge"
+                                            :class="trendSignalClass(signal)"
+                                            :title="trendSignalTitle(signal)"
+                                        >
+                                            {{ signal.label }} · {{ signal.sourceLabel }}
+                                        </span>
+                                    </div>
                                     <div class="mobile-depot-stock-row text-caption">
                                         <span>Prev Day {{ formatPreviousDayPrice(holding) }}</span>
                                         <span :class="previousDayChangePercentClass(holding)">
@@ -19445,13 +19585,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <div class="depot-stock-isin">{{ holding.isin || '-' }}</div>
                                         </td>
                                         <td>
-                                            <span
-                                                v-if="dashboardTrendRecommendation(holding)"
-                                                class="stock-trend-signal text-error font-weight-bold"
-                                                :title="dashboardTrendRecommendationTitle(holding)"
-                                            >
-                                                {{ dashboardTrendRecommendationLabel(holding) }}
-                                            </span>
+                                            <div v-if="analyzeTrendV2Signals(holding).length" class="stock-trend-signal-list">
+                                                <span
+                                                    v-for="signal in analyzeTrendV2Signals(holding)"
+                                                    :key="`${signal.sourceKey}-${signal.key}`"
+                                                    class="stock-trend-signal text-error font-weight-bold"
+                                                    :title="trendSignalTitle(signal)"
+                                                >
+                                                    {{ signal.label }}
+                                                    <small>{{ signal.sourceLabel }}</small>
+                                                </span>
+                                            </div>
                                         </td>
                                         <td class="text-right">{{ formatPositionPieces(holding) }}</td>
                                         <td class="text-right">{{ formatStockHoldingValue(holding) }}</td>
@@ -20572,6 +20716,13 @@ function formatIndexDataUpdateSchedule(settings) {
     font-weight: 900;
 }
 
+.dashboard-stock-signal-card-source {
+    color: rgba(var(--v-theme-on-surface), 0.68);
+    font-size: 0.68rem;
+    font-weight: 700;
+    margin-top: 8px;
+}
+
 .dashboard-version-card {
     background: rgb(var(--v-theme-surface));
     border-color: rgba(var(--v-border-color), var(--v-border-opacity));
@@ -20973,6 +21124,26 @@ function formatIndexDataUpdateSchedule(settings) {
 .mobile-stock-signal-row {
     align-items: center;
     display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.stock-trend-signal-list {
+    display: grid;
+    gap: 4px;
+}
+
+.stock-trend-signal {
+    display: inline-flex;
+    flex-direction: column;
+    line-height: 1.1;
+}
+
+.stock-trend-signal small {
+    color: rgba(var(--v-theme-on-surface), 0.64);
+    font-size: 0.6rem;
+    font-weight: 700;
+    white-space: nowrap;
 }
 
 .dashboard-compact-menu {
@@ -21734,6 +21905,20 @@ function formatIndexDataUpdateSchedule(settings) {
     flex-wrap: wrap;
     gap: 10px 16px;
     justify-self: start;
+}
+
+.analyze-trend-column-toggle {
+    align-items: flex-start;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 3px;
+}
+
+.analyze-trend-column-toggle input {
+    accent-color: rgb(var(--v-theme-primary));
+    margin: 0;
 }
 
 .analyze-trend-invest-info {

@@ -214,11 +214,13 @@ describe('analyze Trend V2 calculation service', () => {
                     { trading_date: '2026-06-03', price: 98.01 },
                     { trading_date: '2026-06-04', price: 97.0299 },
                     { trading_date: '2026-06-05', price: 96.059601 },
-                    { trading_date: '2026-06-06', price: 97 },
-                    { trading_date: '2026-06-07', price: 96.03 },
-                    { trading_date: '2026-06-08', price: 95.0697 },
-                    { trading_date: '2026-06-09', price: 94.119003 },
-                    { trading_date: '2026-06-10', price: 96.00138306 },
+                    { trading_date: '2026-06-06', price: 95.09900499 },
+                    { trading_date: '2026-06-07', price: 94.1480149401 },
+                    { trading_date: '2026-06-08', price: 93.206534790699 },
+                    { trading_date: '2026-06-09', price: 94.138600138606 },
+                    { trading_date: '2026-06-10', price: 93.19721413722 },
+                    { trading_date: '2026-06-11', price: 92.265241995848 },
+                    { trading_date: '2026-06-12', price: 91.342589575889 },
                 ],
             },
         ], {
@@ -227,26 +229,54 @@ describe('analyze Trend V2 calculation service', () => {
         });
         const rows = result.holdingRows[0].rows;
         const firstBuyRow = rows.find((row) => row.date === '2026-06-04');
-        const emergencySellRow = rows.find((row) => row.date === '2026-06-05');
-        const waitingRow = rows.find((row) => row.date === '2026-06-06');
-        const secondBuyRow = rows.find((row) => row.date === '2026-06-09');
+        const firstPostBuyRow = rows.find((row) => row.date === '2026-06-05');
+        const emergencySellRow = rows.find((row) => row.date === '2026-06-08');
+        const waitingRow = rows.find((row) => row.date === '2026-06-09');
+        const secondBuyRow = rows.find((row) => row.date === '2026-06-12');
 
         expect(firstBuyRow.emergencyTradeActions).toEqual([
             { amount: 1000, label: 'VBUY', type: 'buy' },
         ]);
+        expect(firstPostBuyRow.emergencyTradeActions).toEqual([]);
         expect(emergencySellRow.emergencyTradeActions).toEqual([
             { amount: 1000, label: 'VSELL EMERGENCY', type: 'sell' },
         ]);
-        expect(emergencySellRow.totalChangeAmount).toBeCloseTo(-10, 2);
-        expect(emergencySellRow.displayChangeAmount).toBeCloseTo(-10, 2);
-        expect(waitingRow.totalChangeAmount).toBeCloseTo(-10, 2);
+        expect(emergencySellRow.totalChangeAmount).toBeCloseTo(-39.4, 2);
+        expect(emergencySellRow.displayChangeAmount).toBeCloseTo(-39.4, 2);
+        expect(waitingRow.totalChangeAmount).toBeCloseTo(-39.4, 2);
         expect(waitingRow.displayChangeAmount).toBeNull();
         expect(secondBuyRow.emergencyTradeActions).toEqual([
             { amount: 1000, label: 'VBUY', type: 'buy' },
         ]);
         expect(rows.filter((row) => row.emergencyTradeActions.some((action) => action.type === 'buy')))
             .toHaveLength(2);
-        expect(result.changeAmount).toBeCloseTo(10, 2);
+        expect(result.changeAmount).toBeCloseTo(-39.4, 2);
+    });
+
+    it('starts the emergency sell streak after the VBUY signal day', () => {
+        const result = calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio([
+            {
+                daily_prices: [
+                    { trading_date: '2025-11-03', price: 94.706 },
+                    { trading_date: '2025-11-04', price: 92.751 },
+                    { trading_date: '2025-11-05', price: 92.572 },
+                    { trading_date: '2025-11-06', price: 89.724 },
+                    { trading_date: '2025-11-07', price: 88.99 },
+                ],
+            },
+        ], {
+            buyThresholds,
+            maxInvestment: 4444.44,
+        });
+        const rows = result.holdingRows[0].rows;
+        const buyRow = rows.find((row) => row.date === '2025-11-06');
+        const nextRow = rows.find((row) => row.date === '2025-11-07');
+
+        expect(buyRow.emergencyTradeActions).toEqual([
+            { amount: 4444.44, label: 'VBUY', type: 'buy' },
+        ]);
+        expect(nextRow.emergencyTradeActions).toEqual([]);
+        expect(nextRow.displayChangeAmount).toBeCloseTo(-36.36, 2);
     });
 
     it('rebuys after an emergency sell when the positive streak reaches three percent', () => {
@@ -258,10 +288,12 @@ describe('analyze Trend V2 calculation service', () => {
                     { trading_date: '2026-06-03', price: 98.01 },
                     { trading_date: '2026-06-04', price: 97.0299 },
                     { trading_date: '2026-06-05', price: 96.059601 },
-                    { trading_date: '2026-06-06', price: 97.02019701 },
-                    { trading_date: '2026-06-07', price: 97.9903989801 },
-                    { trading_date: '2026-06-08', price: 98.970302969901 },
-                    { trading_date: '2026-06-09', price: 99.960006 },
+                    { trading_date: '2026-06-06', price: 95.09900499 },
+                    { trading_date: '2026-06-07', price: 94.1480149401 },
+                    { trading_date: '2026-06-08', price: 93.206534790699 },
+                    { trading_date: '2026-06-09', price: 94.13860013860599 },
+                    { trading_date: '2026-06-10', price: 95.07998613999205 },
+                    { trading_date: '2026-06-11', price: 96.03078600139197 },
                 ],
             },
         ], {
@@ -269,14 +301,14 @@ describe('analyze Trend V2 calculation service', () => {
             maxInvestment: 1000,
         });
         const rows = result.holdingRows[0].rows;
-        const positiveStreakRebuyRow = rows.find((row) => row.date === '2026-06-08');
+        const positiveStreakRebuyRow = rows.find((row) => row.date === '2026-06-11');
 
         expect(positiveStreakRebuyRow.emergencyTradeActions).toEqual([
             { amount: 1000, label: 'VBUY +3% STREAK', type: 'buy' },
         ]);
         expect(rows.filter((row) => row.emergencyTradeActions.some((action) => action.type === 'buy')))
             .toHaveLength(2);
-        expect(result.changeAmount).toBeCloseTo(0, 2);
+        expect(result.changeAmount).toBeCloseTo(-39.4, 2);
     });
 
     it('recalculates the portfolio total when the row limit changes', () => {
