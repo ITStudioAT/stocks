@@ -4,6 +4,16 @@
 
 - Show this under Stocks and under Depot and on the Dashboard
 
+### ANALYSIS
+
+- Research/Settings: Count of rows !!!
+
+## 0.8.10 !!!
+
+### ANALYSIS
+
+- New Analysis types
+
 ## 0.8.9
 
 ### BUY/SELL-Signals
@@ -13,7 +23,6 @@
 ### Analyse
 
 - Signal, if a holded stock, should be sold
-- Research/Settings: Count of rows !!!
 
 ## 0.8.8
 

@@ -8,6 +8,8 @@ import { useRoleStore } from './stores/roles';
 import { useUserStore } from './stores/users';
 import { formatAdaptiveNumber, formatPriceValue } from './utils/numberFormatters';
 import {
+    calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio,
+    calculateAnalyzeTrendV2BuyOncePortfolio,
     calculateAnalyzeTrendV2Rows,
     calculateAnalyzeTrendV2ConstrainedPortfolioTotal,
     calculateAnalyzeTrendV2PortfolioMaximumInvestment,
@@ -483,14 +485,14 @@ const watchListTableColumnCount = computed(() => {
 
     return columnCount;
 });
-const dashboardTrendRecommendations = computed(() => new Map(holdings.value.map((holding) => [
+const analyzeTrendV2Markers = computed(() => new Map(holdings.value.map((holding) => [
     holding.id,
     latestAnalyzeTrendV2Marker(holding),
 ])));
 const dashboardTrendSignalCards = computed(() => holdings.value
     .map((holding) => ({
         holding,
-        recommendation: dashboardTrendRecommendations.value.get(holding.id) ?? null,
+        recommendation: analyzeTrendV2Markers.value.get(holding.id) ?? null,
     }))
     .filter(({ recommendation }) => ['buy', 'sell'].includes(recommendation?.key)));
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
@@ -1095,6 +1097,53 @@ const analyzeTrendV2ConstrainedHoldingStats = computed(() => {
 const selectedAnalyzeTrendV2ConstrainedTotal = computed(() => (
     analyzeTrendV2ConstrainedHoldingStats.value.get(selectedAnalyzeHoldingId.value)?.changeAmount ?? 0
 ));
+const analyzeTrendV2BuyOncePortfolio = computed(() => calculateAnalyzeTrendV2BuyOncePortfolio(
+    holdings.value,
+    {
+        buyThresholds: analyzeTrendStreakBuyThresholds.value,
+        maxInvestment: analyzeTrendMaxInvestAmount.value,
+        rowLimit: analyzeTrendRowLimit.value,
+    },
+));
+const selectedAnalyzeTrendV2BuyOnceRowsByDate = computed(() => {
+    const selectedHoldingIndex = holdings.value.findIndex((holding) => (
+        holding.id === selectedAnalyzeHoldingId.value
+    ));
+    const selectedHoldingRows = analyzeTrendV2BuyOncePortfolio.value.holdingRows
+        .find(({ holdingIndex }) => holdingIndex === selectedHoldingIndex)?.rows ?? [];
+
+    return new Map(selectedHoldingRows.map((row) => [row.date, row]));
+});
+const selectedAnalyzeTrendV2BuyOnceTotal = computed(() => {
+    const latestSelectedDate = selectedAnalyzeTrendV2Rows.value[0]?.date;
+
+    return selectedAnalyzeTrendV2BuyOnceRowsByDate.value.get(latestSelectedDate)?.changeAmount ?? 0;
+});
+const analyzeTrendV2BuyOnceEmergencyPortfolio = computed(() => (
+    calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio(
+        holdings.value,
+        {
+            buyThresholds: analyzeTrendStreakBuyThresholds.value,
+            maxInvestment: analyzeTrendMaxInvestAmount.value,
+            rowLimit: analyzeTrendRowLimit.value,
+        },
+    )
+));
+const selectedAnalyzeTrendV2BuyOnceEmergencyRowsByDate = computed(() => {
+    const selectedHoldingIndex = holdings.value.findIndex((holding) => (
+        holding.id === selectedAnalyzeHoldingId.value
+    ));
+    const selectedHoldingRows = analyzeTrendV2BuyOnceEmergencyPortfolio.value.holdingRows
+        .find(({ holdingIndex }) => holdingIndex === selectedHoldingIndex)?.rows ?? [];
+
+    return new Map(selectedHoldingRows.map((row) => [row.date, row]));
+});
+const selectedAnalyzeTrendV2BuyOnceEmergencyTotal = computed(() => {
+    const latestSelectedDate = selectedAnalyzeTrendV2Rows.value[0]?.date;
+
+    return selectedAnalyzeTrendV2BuyOnceEmergencyRowsByDate.value
+        .get(latestSelectedDate)?.totalChangeAmount ?? 0;
+});
 const analyzeTrendV2SafeInvestmentAmount = computed(() => (
     calculateAnalyzeTrendV2SafeInvestmentAmount(
         holdings.value,
@@ -1546,7 +1595,7 @@ function latestAnalyzeTrendV2Marker(holding) {
 }
 
 function dashboardTrendRecommendation(holding) {
-    return dashboardTrendRecommendations.value.get(holding.id) ?? null;
+    return analyzeTrendV2Markers.value.get(holding.id) ?? null;
 }
 
 function dashboardTrendRecommendationLabel(holding) {
@@ -15643,6 +15692,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                         :class="{
                                             'analyze-holding-card--active': selectedAnalyzeHoldingId === holding.id,
                                             'analyze-holding-card--held': hasPositionPieces(holding),
+                                            'analyze-holding-card--signal': ['buy', 'sell'].includes(
+                                                analyzeTrendV2Markers.get(holding.id)?.key,
+                                            ),
                                         }"
                                         :aria-pressed="selectedAnalyzeHoldingId === holding.id"
                                         :title="stockDisplayLabel(holding, 'stock')"
@@ -15716,6 +15768,30 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <span class="analyze-trend-summary-note">
                                             Max: {{ formatWholeEuroAmount(analyzeTrendMaxInvestAmount) }}
                                         </span>
+                                    </div>
+                                    <div class="analyze-trend-summary-item analyze-trend-summary-item--buy-once">
+                                        <span class="analyze-trend-summary-label">VBUY ONCE total within max invest</span>
+                                        <strong
+                                            :class="priceChangePercentClass(
+                                                analyzeTrendV2BuyOncePortfolio.changeAmount,
+                                            )"
+                                        >
+                                            {{ formatAnalyzeTrendSignedWin(
+                                                analyzeTrendV2BuyOncePortfolio.changeAmount,
+                                            ) }}
+                                        </strong>
+                                    </div>
+                                    <div class="analyze-trend-summary-item analyze-trend-summary-item--emergency">
+                                        <span class="analyze-trend-summary-label">VBUY ONCE total EMERGENCY</span>
+                                        <strong
+                                            :class="priceChangePercentClass(
+                                                analyzeTrendV2BuyOnceEmergencyPortfolio.changeAmount,
+                                            )"
+                                        >
+                                            {{ formatAnalyzeTrendSignedWin(
+                                                analyzeTrendV2BuyOnceEmergencyPortfolio.changeAmount,
+                                            ) }}
+                                        </strong>
                                     </div>
                                     <div class="analyze-trend-summary-item analyze-trend-summary-item--safe-invest">
                                         <span class="analyze-trend-summary-label">Safe invest per VBUY</span>
@@ -15826,6 +15902,32 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     >
                                                         {{ formatAnalyzeTrendSignedWin(
                                                             selectedAnalyzeTrendV2ConstrainedTotal,
+                                                        ) }}
+                                                    </span>
+                                                </th>
+                                                <th>
+                                                    VBUY ONCE
+                                                    <span
+                                                        class="analyze-trend-dep-change"
+                                                        :class="priceChangePercentClass(
+                                                            selectedAnalyzeTrendV2BuyOnceTotal,
+                                                        )"
+                                                    >
+                                                        TODAY {{ formatAnalyzeTrendSignedWin(
+                                                            selectedAnalyzeTrendV2BuyOnceTotal,
+                                                        ) }}
+                                                    </span>
+                                                </th>
+                                                <th>
+                                                    VBUY ONCE WITH EMERGENCY
+                                                    <span
+                                                        class="analyze-trend-dep-change"
+                                                        :class="priceChangePercentClass(
+                                                            selectedAnalyzeTrendV2BuyOnceEmergencyTotal,
+                                                        )"
+                                                    >
+                                                        TODAY {{ formatAnalyzeTrendSignedWin(
+                                                            selectedAnalyzeTrendV2BuyOnceEmergencyTotal,
                                                         ) }}
                                                     </span>
                                                 </th>
@@ -15962,6 +16064,78 @@ function formatIndexDataUpdateSchedule(settings) {
                                                                 ) }}
                                                             </span>
                                                         </template>
+                                                </td>
+                                                <td
+                                                    v-for="buyOnceTrendRow in [
+                                                        selectedAnalyzeTrendV2BuyOnceRowsByDate.get(trendRow.date),
+                                                    ]"
+                                                    :key="`buy-once-${trendRow.date}`"
+                                                >
+                                                    <template v-if="buyOnceTrendRow">
+                                                        <span
+                                                            v-if="buyOnceTrendRow.isBuy"
+                                                            class="analyze-trend-rec analyze-trend-rec--buy"
+                                                        >
+                                                            VBUY
+                                                        </span>
+                                                        <span
+                                                            class="analyze-trend-dep-change"
+                                                            :class="buyOnceTrendRow.isBuy
+                                                                ? ''
+                                                                : priceChangePercentClass(buyOnceTrendRow.changeAmount)"
+                                                        >
+                                                            {{ buyOnceTrendRow.isBuy
+                                                                ? formatAnalyzeTrendWin(buyOnceTrendRow.investmentAmount)
+                                                                : formatAnalyzeTrendSignedWin(buyOnceTrendRow.changeAmount) }}
+                                                        </span>
+                                                    </template>
+                                                </td>
+                                                <td
+                                                    v-for="emergencyTrendRow in [
+                                                        selectedAnalyzeTrendV2BuyOnceEmergencyRowsByDate.get(
+                                                            trendRow.date,
+                                                        ),
+                                                    ]"
+                                                    :key="`buy-once-emergency-${trendRow.date}`"
+                                                >
+                                                    <template v-if="emergencyTrendRow">
+                                                        <div
+                                                            v-for="emergencyTradeAction in
+                                                                emergencyTrendRow.emergencyTradeActions"
+                                                            :key="emergencyTradeAction.label"
+                                                        >
+                                                            <span
+                                                                class="analyze-trend-rec"
+                                                                :class="{
+                                                                    'analyze-trend-rec--buy':
+                                                                        emergencyTradeAction.type === 'buy',
+                                                                    'analyze-trend-rec--sell':
+                                                                        emergencyTradeAction.type === 'sell',
+                                                                }"
+                                                            >
+                                                                {{ emergencyTradeAction.label }}
+                                                            </span>
+                                                        </div>
+                                                        <span
+                                                            v-if="emergencyTrendRow.investmentAmount !== null"
+                                                            class="analyze-trend-dep-change"
+                                                        >
+                                                            {{ formatAnalyzeTrendWin(
+                                                                emergencyTrendRow.investmentAmount,
+                                                            ) }}
+                                                        </span>
+                                                        <span
+                                                            v-else-if="emergencyTrendRow.displayChangeAmount !== null"
+                                                            class="analyze-trend-dep-change"
+                                                            :class="priceChangePercentClass(
+                                                                emergencyTrendRow.displayChangeAmount,
+                                                            )"
+                                                        >
+                                                            {{ formatAnalyzeTrendSignedWin(
+                                                                emergencyTrendRow.displayChangeAmount,
+                                                            ) }}
+                                                        </span>
+                                                    </template>
                                                 </td>
                                             </tr>
                                         </tbody>
@@ -21520,6 +21694,16 @@ function formatIndexDataUpdateSchedule(settings) {
     border-color: #dfa85b;
 }
 
+.analyze-trend-summary-item--buy-once {
+    background: #eee4ff;
+    border-color: #ab85df;
+}
+
+.analyze-trend-summary-item--emergency {
+    background: #ffe1eb;
+    border-color: #df83a5;
+}
+
 .analyze-trend-summary-item--safe-invest {
     background: #dcecff;
     border-color: #82afe0;
@@ -23095,6 +23279,12 @@ function formatIndexDataUpdateSchedule(settings) {
 .analyze-holding-card--held.analyze-holding-card--active {
     background: rgba(var(--v-theme-success), 0.18);
     border-color: rgba(var(--v-theme-success), 0.72);
+}
+
+.analyze-holding-card--signal,
+.analyze-holding-card--signal.analyze-holding-card--active {
+    background: rgba(var(--v-theme-error), 0.2);
+    border-color: rgba(var(--v-theme-error), 0.72);
 }
 
 .analyze-holding-card-header {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+    calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio,
+    calculateAnalyzeTrendV2BuyOncePortfolio,
     calculateAnalyzeTrendV2Rows,
     calculateAnalyzeTrendV2ConstrainedPortfolioTotal,
     calculateAnalyzeTrendV2PortfolioMaximumInvestment,
@@ -132,6 +134,149 @@ describe('analyze Trend V2 calculation service', () => {
             buyThresholds,
             sellThreshold: 3,
         })).toBeCloseTo(147, 2);
+    });
+
+    it('invests once per stock and holds each virtual position through the latest price', () => {
+        const result = calculateAnalyzeTrendV2BuyOncePortfolio([
+            {
+                daily_prices: [
+                    { trading_date: '2026-06-01', price: 100 },
+                    { trading_date: '2026-06-02', price: 99 },
+                    { trading_date: '2026-06-03', price: 98.01 },
+                    { trading_date: '2026-06-04', price: 97.0299 },
+                    { trading_date: '2026-06-05', price: 106.73289 },
+                ],
+            },
+            {
+                daily_prices: [
+                    { trading_date: '2026-06-01', price: 50 },
+                    { trading_date: '2026-06-02', price: 49.5 },
+                    { trading_date: '2026-06-03', price: 49.005 },
+                    { trading_date: '2026-06-04', price: 48.51495 },
+                    { trading_date: '2026-06-05', price: 46.0892025 },
+                ],
+            },
+        ], {
+            buyThresholds,
+            maxInvestment: 1000,
+            rowLimit: 4,
+        });
+
+        expect(result.investmentAmount).toBe(500);
+        expect(result.investedAmount).toBe(1000);
+        expect(result.currentValue).toBeCloseTo(1025, 2);
+        expect(result.changeAmount).toBeCloseTo(25, 2);
+        expect(result.holdingRows[0].rows.find((row) => row.date === '2026-06-02').currentValue)
+            .toBeNull();
+        expect(result.holdingRows[0].rows.find((row) => row.date === '2026-06-04')).toEqual({
+            changeAmount: 0,
+            date: '2026-06-04',
+            currentValue: 500,
+            investmentAmount: 500,
+            isBuy: true,
+        });
+        expect(result.holdingRows[0].rows[0].currentValue).toBeCloseTo(550, 2);
+        expect(result.holdingRows[0].rows[0].changeAmount).toBeCloseTo(50, 2);
+        expect(result.holdingRows[1].rows[0].currentValue).toBeCloseTo(475, 2);
+        expect(result.holdingRows[1].rows[0].changeAmount).toBeCloseTo(-25, 2);
+        expect(result.holdingRows[1].rows.filter((row) => row.isBuy)).toHaveLength(1);
+    });
+
+    it('divides maximum investment by every stock even when one has no prices', () => {
+        const result = calculateAnalyzeTrendV2BuyOncePortfolio([
+            {
+                daily_prices: [
+                    { trading_date: '2026-05-29', price: 100 },
+                    { trading_date: '2026-05-30', price: 99 },
+                    { trading_date: '2026-05-31', price: 98.01 },
+                    { trading_date: '2026-06-01', price: 97.0299 },
+                ],
+            },
+            { daily_prices: [] },
+        ], {
+            buyThresholds,
+            maxInvestment: 1000,
+        });
+
+        expect(result.investmentAmount).toBe(500);
+        expect(result.investedAmount).toBe(500);
+        expect(result.currentValue).toBe(500);
+        expect(result.changeAmount).toBe(0);
+        expect(result.holdingRows[1].rows).toEqual([]);
+    });
+
+    it('emergency-sells at a minus four percent streak and rebuys on the next VBUY signal', () => {
+        const result = calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio([
+            {
+                daily_prices: [
+                    { trading_date: '2026-06-01', price: 100 },
+                    { trading_date: '2026-06-02', price: 99 },
+                    { trading_date: '2026-06-03', price: 98.01 },
+                    { trading_date: '2026-06-04', price: 97.0299 },
+                    { trading_date: '2026-06-05', price: 96.059601 },
+                    { trading_date: '2026-06-06', price: 97 },
+                    { trading_date: '2026-06-07', price: 96.03 },
+                    { trading_date: '2026-06-08', price: 95.0697 },
+                    { trading_date: '2026-06-09', price: 94.119003 },
+                    { trading_date: '2026-06-10', price: 96.00138306 },
+                ],
+            },
+        ], {
+            buyThresholds,
+            maxInvestment: 1000,
+        });
+        const rows = result.holdingRows[0].rows;
+        const firstBuyRow = rows.find((row) => row.date === '2026-06-04');
+        const emergencySellRow = rows.find((row) => row.date === '2026-06-05');
+        const waitingRow = rows.find((row) => row.date === '2026-06-06');
+        const secondBuyRow = rows.find((row) => row.date === '2026-06-09');
+
+        expect(firstBuyRow.emergencyTradeActions).toEqual([
+            { amount: 1000, label: 'VBUY', type: 'buy' },
+        ]);
+        expect(emergencySellRow.emergencyTradeActions).toEqual([
+            { amount: 1000, label: 'VSELL EMERGENCY', type: 'sell' },
+        ]);
+        expect(emergencySellRow.totalChangeAmount).toBeCloseTo(-10, 2);
+        expect(emergencySellRow.displayChangeAmount).toBeCloseTo(-10, 2);
+        expect(waitingRow.totalChangeAmount).toBeCloseTo(-10, 2);
+        expect(waitingRow.displayChangeAmount).toBeNull();
+        expect(secondBuyRow.emergencyTradeActions).toEqual([
+            { amount: 1000, label: 'VBUY', type: 'buy' },
+        ]);
+        expect(rows.filter((row) => row.emergencyTradeActions.some((action) => action.type === 'buy')))
+            .toHaveLength(2);
+        expect(result.changeAmount).toBeCloseTo(10, 2);
+    });
+
+    it('rebuys after an emergency sell when the positive streak reaches three percent', () => {
+        const result = calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio([
+            {
+                daily_prices: [
+                    { trading_date: '2026-06-01', price: 100 },
+                    { trading_date: '2026-06-02', price: 99 },
+                    { trading_date: '2026-06-03', price: 98.01 },
+                    { trading_date: '2026-06-04', price: 97.0299 },
+                    { trading_date: '2026-06-05', price: 96.059601 },
+                    { trading_date: '2026-06-06', price: 97.02019701 },
+                    { trading_date: '2026-06-07', price: 97.9903989801 },
+                    { trading_date: '2026-06-08', price: 98.970302969901 },
+                    { trading_date: '2026-06-09', price: 99.960006 },
+                ],
+            },
+        ], {
+            buyThresholds,
+            maxInvestment: 1000,
+        });
+        const rows = result.holdingRows[0].rows;
+        const positiveStreakRebuyRow = rows.find((row) => row.date === '2026-06-08');
+
+        expect(positiveStreakRebuyRow.emergencyTradeActions).toEqual([
+            { amount: 1000, label: 'VBUY +3% STREAK', type: 'buy' },
+        ]);
+        expect(rows.filter((row) => row.emergencyTradeActions.some((action) => action.type === 'buy')))
+            .toHaveLength(2);
+        expect(result.changeAmount).toBeCloseTo(0, 2);
     });
 
     it('recalculates the portfolio total when the row limit changes', () => {

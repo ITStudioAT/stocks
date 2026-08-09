@@ -134,6 +134,205 @@ export function calculateAnalyzeTrendV2PortfolioTotal(holdings, options = {}) {
     }, 0);
 }
 
+export function calculateAnalyzeTrendV2BuyOncePortfolio(
+    holdings,
+    {
+        buyThresholds = [],
+        maxInvestment = 0,
+        rowLimit = 200,
+    } = {},
+) {
+    const normalizedHoldings = Array.isArray(holdings) ? holdings : [];
+    const normalizedMaxInvestment = normalizePositiveNumber(maxInvestment);
+    const investmentAmount = normalizedHoldings.length > 0
+        ? normalizedMaxInvestment / normalizedHoldings.length
+        : 0;
+    let currentValue = 0;
+    let investedAmount = 0;
+
+    const holdingRows = normalizedHoldings.map((holding, holdingIndex) => {
+        const prices = normalizeDailyPrices(holding?.daily_prices)
+            .slice(-(normalizeRowLimit(rowLimit) + 1));
+        let buyPrice = null;
+
+        if (investmentAmount <= 0) {
+            return {
+                holdingIndex,
+                rows: [],
+            };
+        }
+
+        const rows = prices.slice(1).map((price, rowIndex) => {
+            const priceIndex = rowIndex + 1;
+            const negativeStreak = calculateNegativeStreak(prices, priceIndex);
+            const previousNegativeStreak = calculateNegativeStreak(prices, priceIndex - 1);
+            const isBuy = buyPrice === null
+                && price.price > 0
+                && isBuySignal(negativeStreak, previousNegativeStreak, buyThresholds);
+
+            if (isBuy) {
+                buyPrice = price.price;
+                investedAmount += investmentAmount;
+            }
+
+            const rowCurrentValue = buyPrice === null
+                ? null
+                : investmentAmount * (price.price / buyPrice);
+
+            return {
+                changeAmount: rowCurrentValue === null ? null : rowCurrentValue - investmentAmount,
+                date: price.trading_date,
+                currentValue: rowCurrentValue,
+                investmentAmount: isBuy ? investmentAmount : null,
+                isBuy,
+            };
+        });
+
+        currentValue += rows.at(-1)?.currentValue ?? 0;
+
+        return {
+            holdingIndex,
+            rows: rows.reverse(),
+        };
+    });
+
+    return {
+        changeAmount: currentValue - investedAmount,
+        currentValue,
+        holdingRows,
+        investedAmount,
+        investmentAmount,
+    };
+}
+
+export function calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio(
+    holdings,
+    {
+        buyThresholds = [],
+        emergencySellThreshold = -4,
+        maxInvestment = 0,
+        positiveRebuyThreshold = 3,
+        rowLimit = 200,
+    } = {},
+) {
+    const normalizedHoldings = Array.isArray(holdings) ? holdings : [];
+    const normalizedMaxInvestment = normalizePositiveNumber(maxInvestment);
+    const normalizedEmergencySellThreshold = Number.isFinite(Number(emergencySellThreshold))
+        ? Number(emergencySellThreshold)
+        : -4;
+    const normalizedPositiveRebuyThreshold = normalizePositiveNumber(positiveRebuyThreshold) || 3;
+    const percentageComparisonTolerance = 0.000000001;
+    const investmentAmount = normalizedHoldings.length > 0
+        ? normalizedMaxInvestment / normalizedHoldings.length
+        : 0;
+    let changeAmount = 0;
+
+    const holdingRows = normalizedHoldings.map((holding, holdingIndex) => {
+        const prices = normalizeDailyPrices(holding?.daily_prices)
+            .slice(-(normalizeRowLimit(rowLimit) + 1));
+        const rows = [];
+        let hasTrade = false;
+        let isWaitingForReentry = false;
+        let position = null;
+        let realizedChangeAmount = 0;
+
+        prices.forEach((price, priceIndex) => {
+            if (priceIndex === 0) {
+                return;
+            }
+
+            const negativeStreak = calculateNegativeStreak(prices, priceIndex);
+            const previousNegativeStreak = calculateNegativeStreak(prices, priceIndex - 1);
+            const positiveStreak = calculatePositiveStreak(prices, priceIndex);
+            const hasBuySignal = isBuySignal(
+                negativeStreak,
+                previousNegativeStreak,
+                buyThresholds,
+            );
+            const hasPositiveReentrySignal = positiveStreak.count > 0
+                && positiveStreak.changePercent
+                    >= normalizedPositiveRebuyThreshold - percentageComparisonTolerance;
+            const row = {
+                date: price.trading_date,
+                displayChangeAmount: null,
+                emergencyTradeActions: [],
+                investmentAmount: null,
+                totalChangeAmount: null,
+            };
+            let soldOnCurrentRow = false;
+
+            if (position !== null) {
+                const openChangeAmount = investmentAmount * ((price.price / position.buyPrice) - 1);
+
+                if (
+                    negativeStreak.count > 0
+                    && negativeStreak.changePercent
+                        <= normalizedEmergencySellThreshold + percentageComparisonTolerance
+                ) {
+                    realizedChangeAmount += openChangeAmount;
+                    row.emergencyTradeActions.push({
+                        amount: investmentAmount,
+                        label: 'VSELL EMERGENCY',
+                        type: 'sell',
+                    });
+                    position = null;
+                    isWaitingForReentry = true;
+                    soldOnCurrentRow = true;
+                }
+            }
+
+            const isInitialBuy = !hasTrade && hasBuySignal;
+            const isEmergencyRebuy = isWaitingForReentry
+                && (hasBuySignal || hasPositiveReentrySignal);
+
+            if (
+                position === null
+                && !soldOnCurrentRow
+                && investmentAmount > 0
+                && (isInitialBuy || isEmergencyRebuy)
+            ) {
+                position = {
+                    buyPrice: price.price,
+                };
+                hasTrade = true;
+                isWaitingForReentry = false;
+                row.emergencyTradeActions.push({
+                    amount: investmentAmount,
+                    label: isEmergencyRebuy && !hasBuySignal
+                        ? 'VBUY +3% STREAK'
+                        : 'VBUY',
+                    type: 'buy',
+                });
+                row.investmentAmount = investmentAmount;
+            }
+
+            const openChangeAmount = position === null
+                ? 0
+                : investmentAmount * ((price.price / position.buyPrice) - 1);
+            row.totalChangeAmount = hasTrade
+                ? realizedChangeAmount + openChangeAmount
+                : null;
+            row.displayChangeAmount = position !== null || soldOnCurrentRow
+                ? row.totalChangeAmount
+                : null;
+            rows.push(row);
+        });
+
+        changeAmount += rows.at(-1)?.totalChangeAmount ?? 0;
+
+        return {
+            holdingIndex,
+            rows: rows.reverse(),
+        };
+    });
+
+    return {
+        changeAmount,
+        holdingRows,
+        investmentAmount,
+    };
+}
+
 export function calculateAnalyzeTrendV2PortfolioMaximumInvestment(holdings, options = {}) {
     if (!Array.isArray(holdings)) {
         return {
@@ -428,6 +627,27 @@ function calculateNegativeStreak(prices, priceIndex) {
         const dayChangePercent = priceChangePercent(prices[index].price, prices[index - 1].price);
 
         if (dayChangePercent === null || dayChangePercent >= 0) {
+            break;
+        }
+
+        count += 1;
+        changePercent += dayChangePercent;
+    }
+
+    return {
+        count,
+        changePercent,
+    };
+}
+
+function calculatePositiveStreak(prices, priceIndex) {
+    let count = 0;
+    let changePercent = 0;
+
+    for (let index = priceIndex; index > 0; index -= 1) {
+        const dayChangePercent = priceChangePercent(prices[index].price, prices[index - 1].price);
+
+        if (dayChangePercent === null || dayChangePercent <= 0) {
             break;
         }
 
