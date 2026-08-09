@@ -2039,10 +2039,8 @@ describe('App', () => {
 
         const trendV2OverlapStreakLatestRow = analyzeTrendV2.findAll('.analyze-trend-table tbody tr')[0];
         const trendV2CalculatedSell = trendV2OverlapStreakLatestRow.find('.analyze-trend-calculated-sell');
-        expect(trendV2CalculatedSell.exists()).toBe(true);
-        expect(trendV2CalculatedSell.text()).toBe('SELL');
-        expect(trendV2CalculatedSell.attributes('title'))
-            .toBe('Calculated SELL signal for the current holding');
+        expect(trendV2CalculatedSell.exists()).toBe(false);
+        expect(trendV2OverlapStreakLatestRow.findAll('td')[3].text()).not.toContain('VSELL');
         expect(trendV2OverlapStreakLatestRow.findAll('td')[4].text()).toContain('VSELL');
 
         const trendV2TrendSignalCard = trendV2StockMenu.findAll('.analyze-holding-card')

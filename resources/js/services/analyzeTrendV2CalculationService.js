@@ -276,12 +276,15 @@ export function calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio(
                 }
 
                 const openChangeAmount = investmentAmount * ((price.price / position.buyPrice) - 1);
-
-                if (
-                    position.emergencyStreakCount > 0
+                const openChangePercent = priceChangePercent(price.price, position.buyPrice);
+                const hasEmergencyStreakLoss = position.emergencyStreakCount > 0
                     && position.emergencyStreakChangePercent
-                        <= normalizedEmergencySellThreshold + percentageComparisonTolerance
-                ) {
+                        <= normalizedEmergencySellThreshold + percentageComparisonTolerance;
+                const hasEmergencyHoldingLoss = openChangePercent !== null
+                    && openChangePercent
+                        <= normalizedEmergencySellThreshold + percentageComparisonTolerance;
+
+                if (hasEmergencyStreakLoss || hasEmergencyHoldingLoss) {
                     realizedChangeAmount += openChangeAmount;
                     row.emergencyTradeActions.push({
                         amount: investmentAmount,

@@ -279,6 +279,36 @@ describe('analyze Trend V2 calculation service', () => {
         expect(nextRow.displayChangeAmount).toBeCloseTo(-36.36, 2);
     });
 
+    it('emergency-sells when the holding loses four percent without a four percent loss streak', () => {
+        const result = calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio([
+            {
+                daily_prices: [
+                    { trading_date: '2026-06-01', price: 100 },
+                    { trading_date: '2026-06-02', price: 99 },
+                    { trading_date: '2026-06-03', price: 98.01 },
+                    { trading_date: '2026-06-04', price: 97.0299 },
+                    { trading_date: '2026-06-05', price: 95.089302 },
+                    { trading_date: '2026-06-06', price: 96.059601 },
+                    { trading_date: '2026-06-07', price: 94.119003 },
+                    { trading_date: '2026-06-08', price: 93.148704 },
+                ],
+            },
+        ], {
+            buyThresholds,
+            maxInvestment: 1000,
+        });
+        const rows = result.holdingRows[0].rows;
+        const threePercentHoldingLossRow = rows.find((row) => row.date === '2026-06-07');
+        const fourPercentHoldingLossRow = rows.find((row) => row.date === '2026-06-08');
+
+        expect(threePercentHoldingLossRow.emergencyTradeActions).toEqual([]);
+        expect(fourPercentHoldingLossRow.emergencyTradeActions).toEqual([
+            { amount: 1000, label: 'VSELL EMERGENCY', type: 'sell' },
+        ]);
+        expect(fourPercentHoldingLossRow.totalChangeAmount).toBeCloseTo(-40, 2);
+        expect(result.changeAmount).toBeCloseTo(-40, 2);
+    });
+
     it('rebuys after an emergency sell when the positive streak reaches three percent', () => {
         const result = calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio([
             {

@@ -17,7 +17,6 @@ import {
     calculateAnalyzeTrendV2SafeInvestmentAmount,
     calculateAnalyzeTrendV2SafeInvestmentTotal,
     calculateAnalyzeTrendV2Total,
-    shouldShowAnalyzeTrendSellRecommendation,
 } from './services/analyzeTrendV2CalculationService';
 import {
     calculateAnalyzeResearchCombinationCount,
@@ -16088,14 +16087,6 @@ function formatIndexDataUpdateSchedule(settings) {
                                                             class="analyze-trend-dep-change"
                                                         >
                                                             {{ formatAnalyzeTrendWin(depotAction.amount, depotAction.currency) }}
-                                                        </span>
-                                                    </div>
-                                                    <div v-if="shouldShowAnalyzeTrendSellRecommendation(selectedAnalyzeHolding, trendRow)">
-                                                        <span
-                                                            class="analyze-trend-rec analyze-trend-rec--sell analyze-trend-calculated-sell"
-                                                            title="Calculated SELL signal for the current holding"
-                                                        >
-                                                            SELL
                                                         </span>
                                                     </div>
                                                     <span
