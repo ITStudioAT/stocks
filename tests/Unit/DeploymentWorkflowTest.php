@@ -112,6 +112,18 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertStringNotContainsString('--no-audit', $continuousIntegrationWorkflow);
     }
 
+    public function test_tailwind_release_build_only_scans_versioned_application_sources(): void
+    {
+        $styleSheet = file_get_contents($this->projectPath('resources/css/app.css'));
+
+        $this->assertStringContainsString("@import 'tailwindcss' source(none);", $styleSheet);
+        $this->assertStringContainsString("@source '../**/*.blade.php';", $styleSheet);
+        $this->assertStringContainsString("@source '../**/*.js';", $styleSheet);
+        $this->assertStringContainsString("@source '../**/*.vue';", $styleSheet);
+        $this->assertStringNotContainsString('storage/framework/views', $styleSheet);
+        $this->assertStringNotContainsString('vendor/', $styleSheet);
+    }
+
     public function test_dependabot_monitors_all_dependency_ecosystems(): void
     {
         $dependabot = Yaml::parseFile($this->projectPath('.github/dependabot.yml'));
