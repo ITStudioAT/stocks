@@ -188,7 +188,9 @@ export function calculateAnalyzeTrendV2ConstrainedPortfolioTotal(
         ...options
     } = {},
 ) {
-    const normalizedMaxInvestment = normalizePositiveNumber(maxInvestment);
+    const normalizedMaxInvestment = maxInvestment === null
+        ? Number.POSITIVE_INFINITY
+        : normalizePositiveNumber(maxInvestment);
 
     if (!Array.isArray(holdings)) {
         return {

@@ -179,6 +179,28 @@ describe('analyze Trend V2 calculation service', () => {
         expect(rejectedRows.every((row) => row.virtualTradeActions.length === 0)).toBe(true);
     });
 
+    it('reports maximum invested capital without enforcing an investment limit', () => {
+        const holdings = [
+            { daily_prices: virtualTradePrices() },
+            { daily_prices: virtualTradePrices().slice(0, 5) },
+        ];
+
+        const result = calculateAnalyzeTrendV2ConstrainedPortfolioTotal(holdings, {
+            maxInvestment: null,
+            virtualBuyAmount: 7000,
+            buyThresholds,
+            sellThreshold: 3,
+        });
+
+        expect(result.changeAmount).toBeCloseTo(calculateAnalyzeTrendV2PortfolioTotal(holdings, {
+            virtualBuyAmount: 7000,
+            buyThresholds,
+            sellThreshold: 3,
+        }), 2);
+        expect(result.maximumInvestedAmount).toBe(14000);
+        expect(result.skippedBuyCount).toBe(0);
+    });
+
     it('calculates a safe uniform VBUY amount for the maximum investment', () => {
         const holdings = [
             { daily_prices: virtualTradePrices() },

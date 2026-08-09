@@ -36,11 +36,8 @@ class UpdateAnalyzeResearchSettingsRequest extends FormRequest
             'invest.from' => ['required', 'numeric', 'min:0', 'max:1000000'],
             'invest.to' => ['required', 'numeric', 'min:0', 'max:1000000'],
             'invest.step' => ['required', 'numeric', 'gt:0', 'max:1000000'],
-            'max_invest' => ['required', 'array:enabled,from,to,step'],
-            'max_invest.enabled' => ['required', 'boolean'],
-            'max_invest.from' => ['required', 'numeric', 'min:0', 'max:1000000'],
-            'max_invest.to' => ['required', 'numeric', 'min:0', 'max:1000000'],
-            'max_invest.step' => ['required', 'numeric', 'gt:0', 'max:1000000'],
+            'max_invest' => ['required', 'array:value'],
+            'max_invest.value' => ['required', 'numeric', 'min:0', 'max:1000000'],
         ];
     }
 
@@ -77,16 +74,14 @@ class UpdateAnalyzeResearchSettingsRequest extends FormRequest
                     );
                 }
 
-                foreach (['invest' => 'Invest', 'max_invest' => 'Max invest'] as $key => $label) {
-                    $from = $this->input("{$key}.from");
-                    $to = $this->input("{$key}.to");
+                $investFrom = $this->input('invest.from');
+                $investTo = $this->input('invest.to');
 
-                    if (is_numeric($from) && is_numeric($to) && (float) $from > (float) $to) {
-                        $validator->errors()->add(
-                            "{$key}.from",
-                            "The {$label} from value must not be greater than the to value.",
-                        );
-                    }
+                if (is_numeric($investFrom) && is_numeric($investTo) && (float) $investFrom > (float) $investTo) {
+                    $validator->errors()->add(
+                        'invest.from',
+                        'The Invest from value must not be greater than the to value.',
+                    );
                 }
             },
         ];

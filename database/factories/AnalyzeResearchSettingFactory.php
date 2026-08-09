@@ -32,7 +32,7 @@ class AnalyzeResearchSettingFactory extends Factory
                 'buy_step' => 0.1,
                 'sell' => ['from' => 3.0, 'to' => 3.0, 'step' => 0.1],
                 'invest' => ['from' => 7000.0, 'to' => 7000.0, 'step' => 100.0],
-                'max_invest' => ['enabled' => false, 'from' => 80000.0, 'to' => 80000.0, 'step' => 1000.0],
+                'max_invest' => ['value' => 80000.0],
             ],
         ];
     }

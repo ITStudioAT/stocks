@@ -16,6 +16,13 @@ import {
     calculateAnalyzeTrendV2SafeInvestmentTotal,
     calculateAnalyzeTrendV2Total,
 } from './services/analyzeTrendV2CalculationService';
+import {
+    calculateAnalyzeResearchCombinationCount,
+    calculateAnalyzeResearchInvestmentByHolding,
+    formatAnalyzeResearchCombinationCount,
+    generateAnalyzeResearchVariants,
+    rememberAnalyzeResearchBestResults,
+} from './services/analyzeResearchCombinationService';
 
 const logoMarkUrl = '/images/gkstocks-logo-mark.png';
 const displayTimeZone = 'Europe/Vienna';
@@ -44,7 +51,7 @@ const defaultAnalyzeResearchSellStep = 0.1;
 const defaultAnalyzeResearchRowLimit = 200;
 const maxAnalyzeResearchRowLimit = 2000;
 const defaultAnalyzeResearchInvest = { from: 7000, to: 7000, step: 100 };
-const defaultAnalyzeResearchMaxInvest = { enabled: false, from: 80000, to: 80000, step: 1000 };
+const defaultAnalyzeResearchMaxInvest = { value: 80000 };
 const maxAnalyzeResearchInvestment = 1000000;
 const cashLedgerPageSize = 20;
 const indexRealtimeOverdueCheckIntervalMilliseconds = 1000;
@@ -240,6 +247,15 @@ const analyzeResearchSettingsMessage = ref('');
 const analyzeResearchSettingsError = ref('');
 const isAnalyzeResearchSettingsDialogOpen = ref(false);
 const analyzeResearchEditSection = ref('');
+const isAnalyzeResearchSimulationRunning = ref(false);
+const isAnalyzeResearchSimulationPaused = ref(false);
+const analyzeResearchSimulationDescription = ref('');
+const analyzeResearchSimulationResult = ref(null);
+const analyzeResearchSimulationBestResults = ref([]);
+const analyzeResearchSimulationMessage = ref('');
+const analyzeResearchSimulationCompletedCount = ref(0n);
+const analyzeResearchSimulationTotalCount = ref(0n);
+let analyzeResearchSimulationRunId = 0;
 const selectedTestStockId = ref(null);
 const selectedDataIntradayStockId = ref(null);
 const selectedDataIndexId = ref(null);
@@ -1156,9 +1172,7 @@ const isAnalyzeResearchFormValid = computed(() => {
         investFrom,
         investTo,
         investStep,
-        maxInvestFrom,
-        maxInvestTo,
-        maxInvestStep,
+        maxInvestValue,
     } = analyzeResearchForm.value;
 
     if (!Array.isArray(buyRules) || buyRules.length < 1 || buyRules.length > maxAnalyzeResearchBuyRuleCount) {
@@ -1182,10 +1196,7 @@ const isAnalyzeResearchFormValid = computed(() => {
         && isAnalyzeResearchDecimalInRange(investTo, 0, maxAnalyzeResearchInvestment)
         && Number(investFrom) <= Number(investTo)
         && isAnalyzeResearchDecimalInRange(investStep, Number.EPSILON, maxAnalyzeResearchInvestment)
-        && isAnalyzeResearchDecimalInRange(maxInvestFrom, 0, maxAnalyzeResearchInvestment)
-        && isAnalyzeResearchDecimalInRange(maxInvestTo, 0, maxAnalyzeResearchInvestment)
-        && Number(maxInvestFrom) <= Number(maxInvestTo)
-        && isAnalyzeResearchDecimalInRange(maxInvestStep, Number.EPSILON, maxAnalyzeResearchInvestment);
+        && isAnalyzeResearchDecimalInRange(maxInvestValue, 0, maxAnalyzeResearchInvestment);
 });
 const analyzeResearchEditTitle = computed(() => ({
     rows: 'Edit rows',
@@ -1194,6 +1205,12 @@ const analyzeResearchEditTitle = computed(() => ({
     buyRules: 'Edit Virtual Buy rules',
     sellRules: 'Edit Virtual Sell rules',
 }[analyzeResearchEditSection.value] ?? 'Edit research settings'));
+const analyzeResearchCombinationCount = computed(() => calculateAnalyzeResearchCombinationCount(
+    analyzeResearchSettings.value,
+));
+const analyzeResearchCombinationCountLabel = computed(() => formatAnalyzeResearchCombinationCount(
+    analyzeResearchCombinationCount.value,
+));
 const showAnalyzeSparklineDots = computed(() => isAnalyzeTodayRange(selectedAnalyzeHistoryRange.value));
 const analyzeIntradayDetail = computed(() => analyzeIntradayCandles.value?.intraday ?? null);
 const analyzeIntradayDetailDays = computed(() => {
@@ -3336,6 +3353,18 @@ watch(
 );
 
 watch(
+    [activeAnalyzeSubsection, activeAnalyzeResearchSubsection],
+    ([subsection, researchSubsection]) => {
+        if (
+            isAnalyzeResearchSimulationRunning.value
+            && (subsection !== 'research' || researchSubsection !== 'simulation')
+        ) {
+            stopAnalyzeResearchSimulation();
+        }
+    },
+);
+
+watch(
     [activeSection, activeDataSubsection, selectedDataHistoricStockId],
     ([section, dataSubsection, selectedStockId]) => {
         if (section !== 'data') {
@@ -3465,6 +3494,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+    analyzeResearchSimulationRunId += 1;
     stopPriceRefreshPolling();
     stopIntradayBackfillPolling();
     stopPriceRefreshSettingsPolling();
@@ -3849,11 +3879,18 @@ function syncUpdateStatusPolling() {
 }
 
 function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.current_page, options = {}) {
-    const shouldIncludeAnalyzeCharts = activeSection.value === 'analyze' && selectedAnalyzeHoldingId.value !== null;
+    const shouldIncludeResearchSimulationCharts = activeSection.value === 'analyze'
+        && activeAnalyzeSubsection.value === 'research'
+        && activeAnalyzeResearchSubsection.value === 'simulation';
+    const shouldIncludeAnalyzeCharts = activeSection.value === 'analyze'
+        && (selectedAnalyzeHoldingId.value !== null || shouldIncludeResearchSimulationCharts);
     const shouldIncludeStockChart = activeSection.value === 'stocks' && selectedStockWatchItem.value !== null;
     const shouldIncludeCharts = shouldIncludeAnalyzeCharts || shouldIncludeStockChart;
     const shouldIncludeAllChartHoldings = shouldIncludeAnalyzeCharts
-        && isAnalyzeTrendSubsection(activeAnalyzeSubsection.value);
+        && (
+            isAnalyzeTrendSubsection(activeAnalyzeSubsection.value)
+            || shouldIncludeResearchSimulationCharts
+        );
     const shouldIncludeAllHoldings = activeSection.value === 'analyze'
         || activeSection.value === 'stocks'
         || (activeSection.value === 'data' && activeDataSubsection.value === 'stocks');
@@ -4871,12 +4908,10 @@ function normalizeAnalyzeResearchSettings(settings) {
             step: normalizeAnalyzeResearchDecimal(settings?.invest?.step, defaults.invest.step),
         },
         max_invest: {
-            enabled: typeof settings?.max_invest?.enabled === 'boolean'
-                ? settings.max_invest.enabled
-                : defaults.max_invest.enabled,
-            from: normalizeAnalyzeResearchDecimal(settings?.max_invest?.from, defaults.max_invest.from),
-            to: normalizeAnalyzeResearchDecimal(settings?.max_invest?.to, defaults.max_invest.to),
-            step: normalizeAnalyzeResearchDecimal(settings?.max_invest?.step, defaults.max_invest.step),
+            value: normalizeAnalyzeResearchDecimal(
+                settings?.max_invest?.value ?? settings?.max_invest?.from,
+                defaults.max_invest.value,
+            ),
         },
     };
 }
@@ -4898,10 +4933,7 @@ function analyzeResearchFormFromSettings(settings) {
         investFrom: String(normalizedSettings.invest.from),
         investTo: String(normalizedSettings.invest.to),
         investStep: String(normalizedSettings.invest.step),
-        maxInvestEnabled: normalizedSettings.max_invest.enabled,
-        maxInvestFrom: String(normalizedSettings.max_invest.from),
-        maxInvestTo: String(normalizedSettings.max_invest.to),
-        maxInvestStep: String(normalizedSettings.max_invest.step),
+        maxInvestValue: String(normalizedSettings.max_invest.value),
     };
 }
 
@@ -4926,6 +4958,16 @@ function formatAnalyzeResearchDecimal(value) {
         minimumFractionDigits: 2,
         maximumFractionDigits: 6,
     });
+}
+
+function formatAnalyzeResearchBuyRulesSummary(buyRules) {
+    return buyRules.map((buyRule, index) => {
+        const value = buyRule.enabled
+            ? `${formatAnalyzeResearchDecimal(buyRule.from)}%–${formatAnalyzeResearchDecimal(buyRule.to)}%`
+            : 'off';
+
+        return `S${index + 1} ${value}`;
+    }).join(', ');
 }
 
 function editAnalyzeResearchSettings(section) {
@@ -5006,10 +5048,7 @@ async function saveAnalyzeResearchSettings() {
             step: Number(analyzeResearchForm.value.investStep),
         },
         max_invest: {
-            enabled: analyzeResearchForm.value.maxInvestEnabled,
-            from: Number(analyzeResearchForm.value.maxInvestFrom),
-            to: Number(analyzeResearchForm.value.maxInvestTo),
-            step: Number(analyzeResearchForm.value.maxInvestStep),
+            value: Number(analyzeResearchForm.value.maxInvestValue),
         },
     };
 
@@ -5031,6 +5070,167 @@ async function saveAnalyzeResearchSettings() {
         analyzeResearchSettingsError.value = error.message;
     } finally {
         analyzeResearchSettingsSaving.value = false;
+    }
+}
+
+async function startAnalyzeResearchSimulation() {
+    if (isAnalyzeResearchSimulationRunning.value) {
+        return;
+    }
+
+    const simulationHoldings = holdings.value.filter((holding) => (
+        Array.isArray(holding?.daily_prices) && holding.daily_prices.length >= 2
+    ));
+
+    if (simulationHoldings.length === 0) {
+        analyzeResearchSimulationMessage.value = 'No historical price data is available for the simulation.';
+
+        return;
+    }
+
+    const settings = JSON.parse(JSON.stringify(analyzeResearchSettings.value));
+    const totalCount = calculateAnalyzeResearchCombinationCount(settings);
+
+    if (totalCount === 0n) {
+        analyzeResearchSimulationMessage.value = 'The current research settings contain no valid combinations.';
+
+        return;
+    }
+
+    const runId = ++analyzeResearchSimulationRunId;
+    const totalCountLabel = formatAnalyzeResearchCombinationCount(totalCount);
+    let batchStartedAt = performance.now();
+    let hasYielded = false;
+
+    isAnalyzeResearchSimulationRunning.value = true;
+    isAnalyzeResearchSimulationPaused.value = false;
+    analyzeResearchSimulationDescription.value = '';
+    analyzeResearchSimulationResult.value = null;
+    analyzeResearchSimulationBestResults.value = [];
+    analyzeResearchSimulationMessage.value = '';
+    analyzeResearchSimulationCompletedCount.value = 0n;
+    analyzeResearchSimulationTotalCount.value = totalCount;
+
+    try {
+        for (const variant of generateAnalyzeResearchVariants(settings)) {
+            if (isAnalyzeResearchSimulationPaused.value) {
+                await waitWhileAnalyzeResearchSimulationPaused(runId);
+            }
+
+            if (runId !== analyzeResearchSimulationRunId) {
+                return;
+            }
+
+            const variantNumber = analyzeResearchSimulationCompletedCount.value + 1n;
+            const variantNumberLabel = formatAnalyzeResearchCombinationCount(variantNumber);
+            const calculationOptions = {
+                rowLimit: variant.rowLimit,
+                virtualBuyAmount: variant.virtualBuyAmount,
+                buyThresholds: variant.buyThresholds,
+                sellThreshold: variant.sellThreshold,
+            };
+            const calculationResult = calculateAnalyzeTrendV2ConstrainedPortfolioTotal(simulationHoldings, {
+                ...calculationOptions,
+                maxInvestment: variant.maxInvestment,
+            });
+            const investedStocks = calculateAnalyzeResearchInvestmentByHolding(calculationResult.holdingRows)
+                .map(({ holdingIndex, investedAmount }) => {
+                    const holding = simulationHoldings[holdingIndex];
+
+                    return {
+                        holdingId: holding?.id ?? holdingIndex,
+                        label: stockDisplayLabel(holding, `Stock ${holdingIndex + 1}`),
+                        investedAmount,
+                    };
+                });
+
+            analyzeResearchSimulationDescription.value = `Variant ${variantNumberLabel} / ${totalCountLabel}`;
+            const simulationResult = {
+                variantNumber: variantNumberLabel,
+                totalCount: totalCountLabel,
+                changeAmount: calculationResult.changeAmount,
+                maximumInvestedAmount: calculationResult.maximumInvestedAmount,
+                investedStocks,
+                settings: analyzeResearchSimulationVariantDescription(variant),
+            };
+            analyzeResearchSimulationResult.value = simulationResult;
+            analyzeResearchSimulationBestResults.value = rememberAnalyzeResearchBestResults(
+                analyzeResearchSimulationBestResults.value,
+                simulationResult,
+            );
+            analyzeResearchSimulationCompletedCount.value = variantNumber;
+
+            if (!hasYielded || performance.now() - batchStartedAt >= 12) {
+                hasYielded = true;
+                await yieldAnalyzeResearchSimulation();
+                batchStartedAt = performance.now();
+            }
+        }
+
+        if (runId === analyzeResearchSimulationRunId) {
+            analyzeResearchSimulationMessage.value = `Completed ${totalCountLabel} variants.`;
+        }
+    } catch (error) {
+        if (runId === analyzeResearchSimulationRunId) {
+            analyzeResearchSimulationMessage.value = error.message;
+        }
+    } finally {
+        if (runId === analyzeResearchSimulationRunId) {
+            isAnalyzeResearchSimulationRunning.value = false;
+            isAnalyzeResearchSimulationPaused.value = false;
+            analyzeResearchSimulationDescription.value = '';
+        }
+    }
+}
+
+function toggleAnalyzeResearchSimulationPause() {
+    if (!isAnalyzeResearchSimulationRunning.value) {
+        return;
+    }
+
+    isAnalyzeResearchSimulationPaused.value = !isAnalyzeResearchSimulationPaused.value;
+}
+
+function stopAnalyzeResearchSimulation() {
+    if (!isAnalyzeResearchSimulationRunning.value) {
+        return;
+    }
+
+    analyzeResearchSimulationRunId += 1;
+    isAnalyzeResearchSimulationRunning.value = false;
+    isAnalyzeResearchSimulationPaused.value = false;
+    analyzeResearchSimulationDescription.value = '';
+    analyzeResearchSimulationMessage.value = `Stopped after ${formatAnalyzeResearchCombinationCount(
+        analyzeResearchSimulationCompletedCount.value,
+    )} / ${formatAnalyzeResearchCombinationCount(analyzeResearchSimulationTotalCount.value)} variants.`;
+}
+
+function analyzeResearchSimulationVariantDescription(variant) {
+    const buyRules = variant.buyThresholds.map((threshold, index) => (
+        threshold === null
+            ? `S${index + 1} off`
+            : `S${index + 1} ${formatAnalyzeResearchDecimal(threshold)}%`
+    )).join(', ');
+    const maxInvest = `Max ${formatAnalyzeResearchDecimal(variant.maxInvestment)} EUR`;
+
+    return `BUY ${buyRules} · SELL ${formatAnalyzeResearchDecimal(variant.sellThreshold)}%`
+        + ` · Invest ${formatAnalyzeResearchDecimal(variant.virtualBuyAmount)} EUR · ${maxInvest}`;
+}
+
+function analyzeResearchSimulationMaximumInvestedLabel(maximumInvestedAmount) {
+    return `Max invested: ${formatAnalyzeResearchDecimal(maximumInvestedAmount)} EUR`;
+}
+
+function yieldAnalyzeResearchSimulation() {
+    return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+async function waitWhileAnalyzeResearchSimulationPaused(runId) {
+    while (
+        isAnalyzeResearchSimulationPaused.value
+        && runId === analyzeResearchSimulationRunId
+    ) {
+        await new Promise((resolve) => window.setTimeout(resolve, 50));
     }
 }
 
@@ -15357,16 +15557,12 @@ function formatIndexDataUpdateSchedule(settings) {
                                             Edit
                                         </v-btn>
                                     </v-card-title>
-                                    <v-card-text
-                                        v-if="analyzeResearchSettings.max_invest.enabled"
-                                        class="analyze-research-range-values"
-                                    >
-                                        <span>From <strong>{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.max_invest.from) }} EUR</strong></span>
-                                        <span>To <strong>{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.max_invest.to) }} EUR</strong></span>
-                                        <span>Step <strong>{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.max_invest.step) }} EUR</strong></span>
-                                    </v-card-text>
-                                    <v-card-text v-else>
-                                        <strong class="analyze-research-no-max">No max</strong>
+                                    <v-card-text class="analyze-research-range-values">
+                                        <span>
+                                            <strong>{{ formatAnalyzeResearchDecimal(
+                                                analyzeResearchSettings.max_invest.value,
+                                            ) }} EUR</strong>
+                                        </span>
                                     </v-card-text>
                                 </v-card>
 
@@ -15406,8 +15602,12 @@ function formatIndexDataUpdateSchedule(settings) {
                                             >
                                                 {{ buyRule.enabled ? 'BUY' : 'No BUY' }}
                                             </span>
-                                            <span>From <strong>{{ formatAnalyzeResearchDecimal(buyRule.from) }}%</strong></span>
-                                            <span>To <strong>{{ formatAnalyzeResearchDecimal(buyRule.to) }}%</strong></span>
+                                            <span v-if="buyRule.enabled">
+                                                From <strong>{{ formatAnalyzeResearchDecimal(buyRule.from) }}%</strong>
+                                            </span>
+                                            <span v-if="buyRule.enabled">
+                                                To <strong>{{ formatAnalyzeResearchDecimal(buyRule.to) }}%</strong>
+                                            </span>
                                         </div>
                                     </v-card-text>
                                 </v-card>
@@ -15524,60 +15724,25 @@ function formatIndexDataUpdateSchedule(settings) {
 
                                         <template v-if="analyzeResearchEditSection === 'maxInvest'">
                                             <div>
-                                                <h3 class="text-subtitle-1 font-weight-bold">Max invest range</h3>
+                                                <h3 class="text-subtitle-1 font-weight-bold">Max invest</h3>
                                                 <p class="text-body-2 text-medium-emphasis">
-                                                    Disable this option to research without a maximum investment.
+                                                    Set the investment ceiling used by every simulation variant.
                                                 </p>
                                             </div>
-                                            <v-checkbox
-                                                v-model="analyzeResearchForm.maxInvestEnabled"
-                                                aria-label="Use research max invest"
-                                                label="Use max invest"
-                                                density="compact"
-                                                hide-details
-                                            />
-                                            <div
-                                                v-if="analyzeResearchForm.maxInvestEnabled"
-                                                class="analyze-research-money-editor"
-                                            >
-                                            <v-text-field
-                                                v-model="analyzeResearchForm.maxInvestFrom"
-                                                aria-label="Research max invest from"
-                                                label="From"
-                                                type="number"
-                                                min="0"
-                                                :max="maxAnalyzeResearchInvestment"
-                                                :step="analyzeResearchForm.maxInvestStep || 'any'"
-                                                suffix="EUR"
-                                                inputmode="decimal"
-                                                density="compact"
-                                            />
-                                            <v-text-field
-                                                v-model="analyzeResearchForm.maxInvestTo"
-                                                aria-label="Research max invest to"
-                                                label="To"
-                                                type="number"
-                                                min="0"
-                                                :max="maxAnalyzeResearchInvestment"
-                                                :step="analyzeResearchForm.maxInvestStep || 'any'"
-                                                suffix="EUR"
-                                                inputmode="decimal"
-                                                density="compact"
-                                            />
-                                            <v-text-field
-                                                v-model="analyzeResearchForm.maxInvestStep"
-                                                aria-label="Research max invest step"
-                                                label="Step"
-                                                type="number"
-                                                min="0.000001"
-                                                :max="maxAnalyzeResearchInvestment"
-                                                step="0.01"
-                                                suffix="EUR"
-                                                inputmode="decimal"
-                                                density="compact"
-                                            />
+                                            <div class="analyze-research-max-invest-editor">
+                                                <v-text-field
+                                                    v-model="analyzeResearchForm.maxInvestValue"
+                                                    aria-label="Research max invest value"
+                                                    label="Maximum investment"
+                                                    type="number"
+                                                    min="0"
+                                                    :max="maxAnalyzeResearchInvestment"
+                                                    step="0.01"
+                                                    suffix="EUR"
+                                                    inputmode="decimal"
+                                                    density="compact"
+                                                />
                                             </div>
-                                            <div v-else class="analyze-research-no-max-editor">No max</div>
                                         </template>
 
                                         <template v-if="analyzeResearchEditSection === 'buyRules'">
@@ -15619,6 +15784,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     hide-details
                                                 />
                                                 <v-text-field
+                                                    v-if="buyRule.enabled"
                                                     v-model="buyRule.from"
                                                     class="analyze-research-buy-from"
                                                     :aria-label="`Research BUY streak ${index + 1} from`"
@@ -15630,9 +15796,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     suffix="%"
                                                     inputmode="decimal"
                                                     density="compact"
-                                                    :disabled="!buyRule.enabled"
                                                 />
                                                 <v-text-field
+                                                    v-if="buyRule.enabled"
                                                     v-model="buyRule.to"
                                                     class="analyze-research-buy-to"
                                                     :aria-label="`Research BUY streak ${index + 1} to`"
@@ -15644,7 +15810,6 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     suffix="%"
                                                     inputmode="decimal"
                                                     density="compact"
-                                                    :disabled="!buyRule.enabled"
                                                 />
                                                 <v-btn
                                                     :aria-label="`Remove research BUY streak ${index + 1}`"
@@ -15745,7 +15910,245 @@ function formatIndexDataUpdateSchedule(settings) {
                                 v-if="activeAnalyzeResearchSubsection === 'simulation'"
                                 class="analyze-research-simulation"
                                 aria-label="Research simulation"
-                            />
+                            >
+                                <div
+                                    class="analyze-research-simulation-settings"
+                                    aria-label="Research settings summary"
+                                    tabindex="0"
+                                >
+                                    <div class="analyze-research-simulation-settings-summary">
+                                        <div>
+                                            <strong>Settings</strong>
+                                            · {{ analyzeResearchSettings.rows }} rows
+                                            · Invest {{ formatAnalyzeResearchDecimal(analyzeResearchSettings.invest.from) }}–{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.invest.to) }} EUR
+                                            · Max invest {{ formatAnalyzeResearchDecimal(
+                                                analyzeResearchSettings.max_invest.value,
+                                            ) }} EUR
+                                            · BUY step {{ formatAnalyzeResearchDecimal(analyzeResearchSettings.buy_step) }}%
+                                            · BUY {{ formatAnalyzeResearchBuyRulesSummary(analyzeResearchSettings.buy_rules) }}
+                                            · SELL +{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.sell.from) }}%–+{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.sell.to) }}%
+                                        </div>
+                                    </div>
+                                    <div
+                                        class="analyze-research-simulation-settings-popover"
+                                        role="tooltip"
+                                    >
+                                        <strong class="analyze-research-simulation-settings-title">Research settings</strong>
+                                        <dl class="analyze-research-compact-settings">
+                                            <div class="analyze-research-compact-setting">
+                                                <dt>Rows</dt>
+                                                <dd>{{ analyzeResearchSettings.rows }}</dd>
+                                            </div>
+                                            <div class="analyze-research-compact-setting">
+                                                <dt>Invest range</dt>
+                                                <dd>
+                                                    {{ formatAnalyzeResearchDecimal(analyzeResearchSettings.invest.from) }}–{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.invest.to) }} EUR,
+                                                    step {{ formatAnalyzeResearchDecimal(analyzeResearchSettings.invest.step) }} EUR
+                                                </dd>
+                                            </div>
+                                            <div class="analyze-research-compact-setting">
+                                                <dt>Max invest</dt>
+                                                <dd>
+                                                    {{ formatAnalyzeResearchDecimal(
+                                                        analyzeResearchSettings.max_invest.value,
+                                                    ) }} EUR
+                                                </dd>
+                                            </div>
+                                            <div class="analyze-research-compact-setting">
+                                                <dt>Virtual Buy rules</dt>
+                                                <dd class="analyze-research-compact-values">
+                                                    <span>Step {{ formatAnalyzeResearchDecimal(analyzeResearchSettings.buy_step) }}%</span>
+                                                    <span
+                                                        v-for="(buyRule, index) in analyzeResearchSettings.buy_rules"
+                                                        :key="index"
+                                                    >
+                                                        Streak {{ index + 1 }}:
+                                                        {{ buyRule.enabled ? 'BUY' : 'No BUY' }}
+                                                        <template v-if="buyRule.enabled">
+                                                            {{ formatAnalyzeResearchDecimal(buyRule.from) }}%–{{ formatAnalyzeResearchDecimal(buyRule.to) }}%
+                                                        </template>
+                                                    </span>
+                                                </dd>
+                                            </div>
+                                            <div class="analyze-research-compact-setting">
+                                                <dt>Virtual Sell rules</dt>
+                                                <dd>
+                                                    +{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.sell.from) }}%–+{{ formatAnalyzeResearchDecimal(analyzeResearchSettings.sell.to) }}%,
+                                                    step {{ formatAnalyzeResearchDecimal(analyzeResearchSettings.sell.step) }}%
+                                                </dd>
+                                            </div>
+                                        </dl>
+                                    </div>
+                                </div>
+                                <div
+                                    class="analyze-research-simulation-combinations"
+                                    aria-label="Research simulation combination count"
+                                >
+                                    <span>Possible combinations</span>
+                                    <strong>{{ analyzeResearchCombinationCountLabel }}</strong>
+                                </div>
+                                <div class="analyze-research-simulation-actions">
+                                    <v-btn
+                                        aria-label="Simulate research"
+                                        color="primary"
+                                        prepend-icon="mdi-play-outline"
+                                        type="button"
+                                        variant="flat"
+                                        :disabled="isAnalyzeResearchSimulationRunning"
+                                        @click="startAnalyzeResearchSimulation"
+                                    >
+                                        Simulate
+                                    </v-btn>
+                                    <v-btn
+                                        aria-label="Pause or continue research simulation"
+                                        color="warning"
+                                        :prepend-icon="isAnalyzeResearchSimulationPaused
+                                            ? 'mdi-play-outline'
+                                            : 'mdi-pause-circle-outline'"
+                                        type="button"
+                                        variant="outlined"
+                                        :disabled="!isAnalyzeResearchSimulationRunning"
+                                        @click="toggleAnalyzeResearchSimulationPause"
+                                    >
+                                        {{ isAnalyzeResearchSimulationPaused
+                                            ? 'Continue Simulate'
+                                            : 'Pause Simulate' }}
+                                    </v-btn>
+                                    <v-btn
+                                        aria-label="Stop research simulation"
+                                        color="error"
+                                        prepend-icon="mdi-stop-circle-outline"
+                                        type="button"
+                                        variant="outlined"
+                                        :disabled="!isAnalyzeResearchSimulationRunning"
+                                        @click="stopAnalyzeResearchSimulation"
+                                    >
+                                        Stop Simulate
+                                    </v-btn>
+                                </div>
+                                <div
+                                    class="analyze-research-simulation-status"
+                                    aria-live="polite"
+                                >
+                                    <span
+                                        class="analyze-research-simulation-status-indicator"
+                                        :class="{
+                                            'analyze-research-simulation-status-indicator--running':
+                                                isAnalyzeResearchSimulationRunning
+                                                && !isAnalyzeResearchSimulationPaused,
+                                            'analyze-research-simulation-status-indicator--paused':
+                                                isAnalyzeResearchSimulationPaused,
+                                        }"
+                                    />
+                                    <strong>{{ isAnalyzeResearchSimulationPaused ? 'Paused:' : 'Running:' }}</strong>
+                                    <span>
+                                        {{ isAnalyzeResearchSimulationRunning
+                                            ? (analyzeResearchSimulationDescription || 'Research simulation')
+                                            : 'Nothing' }}
+                                    </span>
+                                </div>
+                                <v-card
+                                    aria-label="Research simulation results"
+                                    class="analyze-research-simulation-results"
+                                    variant="outlined"
+                                >
+                                    <v-card-title>Simulation results</v-card-title>
+                                    <v-card-text
+                                        v-if="analyzeResearchSimulationResult"
+                                        class="analyze-research-simulation-result"
+                                        aria-live="polite"
+                                    >
+                                        <div class="analyze-research-simulation-result-line">
+                                            <strong>
+                                                Variant {{ analyzeResearchSimulationResult.variantNumber }} /
+                                                {{ analyzeResearchSimulationResult.totalCount }}
+                                            </strong>
+                                            <strong :class="priceChangePercentClass(analyzeResearchSimulationResult.changeAmount)">
+                                                {{ formatAnalyzeTrendWin(analyzeResearchSimulationResult.changeAmount) }}
+                                            </strong>
+                                            <strong class="analyze-research-simulation-maximum-invested">
+                                                {{ analyzeResearchSimulationMaximumInvestedLabel(
+                                                    analyzeResearchSimulationResult.maximumInvestedAmount,
+                                                ) }}
+                                            </strong>
+                                        </div>
+                                        <div
+                                            class="analyze-research-simulation-invested-stocks"
+                                            aria-label="Invested stocks for current simulation result"
+                                        >
+                                            <strong>Invested stocks:</strong>
+                                            <span v-if="analyzeResearchSimulationResult.investedStocks.length === 0">
+                                                None
+                                            </span>
+                                            <span
+                                                v-for="stock in analyzeResearchSimulationResult.investedStocks"
+                                                :key="stock.holdingId"
+                                                class="analyze-research-simulation-invested-stock"
+                                            >
+                                                {{ stock.label }}
+                                                <strong>{{ formatAnalyzeResearchDecimal(stock.investedAmount) }} EUR</strong>
+                                            </span>
+                                        </div>
+                                        <div class="text-medium-emphasis">
+                                            {{ analyzeResearchSimulationResult.settings }}
+                                        </div>
+                                    </v-card-text>
+                                    <v-card-text v-else class="text-medium-emphasis">
+                                        No simulation results yet.
+                                    </v-card-text>
+                                    <template v-if="analyzeResearchSimulationBestResults.length > 0">
+                                        <v-divider />
+                                        <v-card-title>Best 10</v-card-title>
+                                        <v-card-text class="analyze-research-simulation-best-results">
+                                            <ol aria-label="Best research simulation results">
+                                                <li
+                                                    v-for="(result, resultIndex) in analyzeResearchSimulationBestResults"
+                                                    :key="result.variantNumber"
+                                                >
+                                                    <strong class="analyze-research-simulation-best-rank">
+                                                        #{{ resultIndex + 1 }}
+                                                    </strong>
+                                                    <strong>Variant {{ result.variantNumber }}</strong>
+                                                    <strong :class="priceChangePercentClass(result.changeAmount)">
+                                                        {{ formatAnalyzeTrendWin(result.changeAmount) }}
+                                                    </strong>
+                                                    <strong class="analyze-research-simulation-maximum-invested">
+                                                        {{ analyzeResearchSimulationMaximumInvestedLabel(
+                                                            result.maximumInvestedAmount,
+                                                        ) }}
+                                                    </strong>
+                                                    <div
+                                                        class="analyze-research-simulation-invested-stocks"
+                                                        :aria-label="`Invested stocks for variant ${result.variantNumber}`"
+                                                    >
+                                                        <strong>Invested stocks:</strong>
+                                                        <span v-if="result.investedStocks.length === 0">None</span>
+                                                        <span
+                                                            v-for="stock in result.investedStocks"
+                                                            :key="stock.holdingId"
+                                                            class="analyze-research-simulation-invested-stock"
+                                                        >
+                                                            {{ stock.label }}
+                                                            <strong>
+                                                                {{ formatAnalyzeResearchDecimal(stock.investedAmount) }} EUR
+                                                            </strong>
+                                                        </span>
+                                                    </div>
+                                                    <span class="text-medium-emphasis" :title="result.settings">
+                                                        {{ result.settings }}
+                                                    </span>
+                                                </li>
+                                            </ol>
+                                        </v-card-text>
+                                    </template>
+                                    <template v-if="analyzeResearchSimulationMessage">
+                                        <v-divider />
+                                        <v-card-text class="analyze-research-simulation-message">
+                                            {{ analyzeResearchSimulationMessage }}
+                                        </v-card-text>
+                                    </template>
+                                </v-card>
+                            </section>
                         </section>
 
                         <section
@@ -22673,16 +23076,242 @@ function formatIndexDataUpdateSchedule(settings) {
     gap: 8px 28px !important;
 }
 
-.analyze-research-no-max,
-.analyze-research-no-max-editor {
-    color: #667480;
-    font-weight: 800;
-}
-
 .analyze-research-settings-content,
 .analyze-research-buy-rule-list {
     display: grid;
     gap: 12px;
+}
+
+.analyze-research-settings-content {
+    max-height: min(72vh, 760px);
+    overflow-y: auto;
+}
+
+.analyze-research-compact-settings {
+    display: grid;
+    gap: 0;
+}
+
+.analyze-research-compact-setting {
+    align-items: start;
+    display: grid;
+    gap: 16px;
+    grid-template-columns: minmax(130px, 0.7fr) minmax(0, 1.3fr);
+    padding: 10px 0;
+}
+
+.analyze-research-compact-setting + .analyze-research-compact-setting {
+    border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.analyze-research-compact-setting dt {
+    font-weight: 700;
+}
+
+.analyze-research-compact-setting dd {
+    margin: 0;
+}
+
+.analyze-research-compact-values {
+    display: grid;
+    gap: 2px;
+}
+
+.analyze-research-simulation {
+    display: grid;
+    gap: 16px;
+}
+
+.analyze-research-simulation-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.analyze-research-simulation-combinations {
+    align-items: baseline;
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.analyze-research-simulation-combinations strong {
+    color: rgb(var(--v-theme-primary));
+    font-size: 1.25rem;
+}
+
+.analyze-research-simulation-status {
+    align-items: center;
+    display: flex;
+    font-size: 0.82rem;
+    gap: 8px;
+}
+
+.analyze-research-simulation-status-indicator {
+    background: rgba(var(--v-theme-on-surface), 0.28);
+    border-radius: 50%;
+    height: 8px;
+    width: 8px;
+}
+
+.analyze-research-simulation-status-indicator--running {
+    background: rgb(var(--v-theme-success));
+}
+
+.analyze-research-simulation-status-indicator--paused {
+    background: rgb(var(--v-theme-warning));
+}
+
+.analyze-research-simulation-results :deep(.v-card-title) {
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.analyze-research-simulation-result {
+    display: grid;
+    gap: 6px;
+}
+
+.analyze-research-simulation-result-line {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    justify-content: space-between;
+}
+
+.analyze-research-simulation-invested-stocks {
+    align-items: baseline;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 0.76rem;
+    gap: 5px 8px;
+}
+
+.analyze-research-simulation-invested-stock {
+    background: rgba(var(--v-theme-primary), 0.08);
+    border-radius: 999px;
+    padding: 2px 7px;
+    white-space: nowrap;
+}
+
+.analyze-research-simulation-best-results {
+    padding-top: 0;
+}
+
+.analyze-research-simulation-best-results ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.analyze-research-simulation-best-results li {
+    align-items: baseline;
+    border-top: 1px solid rgba(var(--v-border-color), calc(var(--v-border-opacity) * 0.55));
+    display: grid;
+    font-size: 0.78rem;
+    gap: 4px 12px;
+    grid-template-columns: 28px minmax(90px, auto) minmax(95px, auto) minmax(110px, auto) minmax(0, 1fr);
+    padding: 6px 0;
+}
+
+.analyze-research-simulation-best-results li:first-child {
+    border-top: 0;
+}
+
+.analyze-research-simulation-best-results li > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.analyze-research-simulation-best-results li > .analyze-research-simulation-invested-stocks {
+    grid-column: 1 / -1;
+}
+
+.analyze-research-simulation-best-rank {
+    color: rgb(var(--v-theme-primary));
+}
+
+@media (max-width: 720px) {
+    .analyze-research-simulation-best-results li {
+        grid-template-columns: 28px minmax(90px, 1fr) auto;
+    }
+
+    .analyze-research-simulation-best-results li .analyze-research-simulation-maximum-invested {
+        grid-column: 2 / -1;
+    }
+
+    .analyze-research-simulation-best-results li > span {
+        grid-column: 1 / -1;
+    }
+}
+
+.analyze-research-simulation-message {
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.analyze-research-simulation-settings {
+    background: rgba(var(--v-theme-surface-variant), 0.35);
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 6px;
+    color: rgba(var(--v-theme-on-surface), 0.72);
+    cursor: default;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    padding: 5px 8px;
+    position: relative;
+    width: 100%;
+}
+
+.analyze-research-simulation-settings:focus-visible {
+    outline: 2px solid rgb(var(--v-theme-primary));
+    outline-offset: 2px;
+}
+
+.analyze-research-simulation-settings-summary {
+    white-space: nowrap;
+}
+
+.analyze-research-simulation-settings-summary > div {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.analyze-research-simulation-settings-popover {
+    background: rgb(var(--v-theme-surface));
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+    color: rgb(var(--v-theme-on-surface));
+    font-size: 0.8rem;
+    line-height: 1.4;
+    opacity: 0;
+    padding: 12px 14px;
+    pointer-events: none;
+    position: absolute;
+    right: 0;
+    top: calc(100% + 6px);
+    transform: translateY(-4px);
+    transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+    visibility: hidden;
+    width: min(560px, calc(100vw - 48px));
+    z-index: 20;
+}
+
+.analyze-research-simulation-settings:hover .analyze-research-simulation-settings-popover,
+.analyze-research-simulation-settings:focus-within .analyze-research-simulation-settings-popover {
+    opacity: 1;
+    transform: translateY(0);
+    visibility: visible;
+}
+
+.analyze-research-simulation-settings-title {
+    display: block;
+    font-size: 0.9rem;
+    margin-bottom: 4px;
 }
 
 .analyze-research-general-editor {
@@ -22696,6 +23325,10 @@ function formatIndexDataUpdateSchedule(settings) {
     display: grid;
     gap: 10px;
     grid-template-columns: repeat(3, minmax(130px, 1fr));
+}
+
+.analyze-research-max-invest-editor {
+    max-width: 320px;
 }
 
 .analyze-research-buy-rule-row {
@@ -22716,6 +23349,11 @@ function formatIndexDataUpdateSchedule(settings) {
 }
 
 @media (max-width: 760px) {
+    .analyze-research-compact-setting {
+        gap: 4px;
+        grid-template-columns: 1fr;
+    }
+
     .analyze-research-buy-rule-row {
         grid-template-columns: 1fr 1fr auto;
     }

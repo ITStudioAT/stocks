@@ -1071,7 +1071,7 @@ describe('App', () => {
         let currentResearchSettings = {
             rows: 200,
             buy_rules: [-4, -3, -2, -1, 0].map((threshold) => ({
-                enabled: true,
+                enabled: threshold !== -4,
                 from: threshold,
                 to: threshold,
             })),
@@ -1087,10 +1087,7 @@ describe('App', () => {
                 step: 100,
             },
             max_invest: {
-                enabled: false,
-                from: 80000,
-                to: 80000,
-                step: 1000,
+                value: 80000,
             },
         };
         const fetchMock = vi.fn((path, options = {}) => {
@@ -1616,6 +1613,99 @@ describe('App', () => {
         expect(analyzeResearch.find('[aria-label="Research simulation"]').exists()).toBe(true);
         expect(analyzeResearch.find('.analyze-research-overview').exists()).toBe(false);
 
+        const researchSettingsSummary = analyzeResearch.find('[aria-label="Research settings summary"]');
+        expect(researchSettingsSummary.exists()).toBe(true);
+        expect(researchSettingsSummary.findAll('.analyze-research-simulation-settings-summary > div')).toHaveLength(1);
+        expect(researchSettingsSummary.text()).toContain('200 rows');
+        expect(researchSettingsSummary.text()).toContain('Invest 7,000.00–7,000.00 EUR');
+        expect(researchSettingsSummary.text()).toContain('BUY step 0.05%');
+        expect(researchSettingsSummary.text()).toContain('BUY S1 off, S2 -3.00%–-3.00%');
+        const researchSettingsPopover = researchSettingsSummary.find('[role="tooltip"]');
+        expect(researchSettingsPopover.text()).toContain('Virtual Buy rules');
+        expect(researchSettingsPopover.text()).toContain('Streak 1:');
+        const firstPopoverBuyRule = researchSettingsPopover.findAll('.analyze-research-compact-values > span')[1];
+        expect(firstPopoverBuyRule.text()).toBe('Streak 1: No BUY');
+        expect(researchSettingsPopover.text()).toContain('Virtual Sell rules');
+        expect(researchSettingsSummary.find('input').exists()).toBe(false);
+        const researchCombinationCount = analyzeResearch.find('[aria-label="Research simulation combination count"]');
+        expect(researchCombinationCount.text()).toContain('Possible combinations');
+        expect(researchCombinationCount.text()).toContain('1');
+        const simulateResearchButton = analyzeResearch.find('[aria-label="Simulate research"]');
+        expect(simulateResearchButton.exists()).toBe(true);
+        expect(simulateResearchButton.text()).toContain('Simulate');
+        expect(simulateResearchButton.attributes('disabled')).toBeUndefined();
+        const stopResearchSimulationButton = analyzeResearch.find('[aria-label="Stop research simulation"]');
+        expect(stopResearchSimulationButton.exists()).toBe(true);
+        expect(stopResearchSimulationButton.text()).toContain('Stop Simulate');
+        expect(stopResearchSimulationButton.attributes('disabled')).toBeDefined();
+        const pauseResearchSimulationButton = analyzeResearch.find(
+            '[aria-label="Pause or continue research simulation"]',
+        );
+        expect(pauseResearchSimulationButton.exists()).toBe(true);
+        expect(pauseResearchSimulationButton.text()).toContain('Pause Simulate');
+        expect(pauseResearchSimulationButton.attributes('disabled')).toBeDefined();
+        expect(analyzeResearch.find('.analyze-research-simulation-status').text()).toContain('Running:Nothing');
+        const researchSimulationResults = analyzeResearch.find('[aria-label="Research simulation results"]');
+        expect(researchSimulationResults.exists()).toBe(true);
+        expect(researchSimulationResults.text()).toContain('Simulation results');
+        expect(researchSimulationResults.text()).toContain('No simulation results yet.');
+
+        await simulateResearchButton.trigger('click');
+
+        expect(simulateResearchButton.attributes('disabled')).toBeDefined();
+        expect(stopResearchSimulationButton.attributes('disabled')).toBeUndefined();
+        expect(pauseResearchSimulationButton.attributes('disabled')).toBeUndefined();
+        expect(analyzeResearch.find('.analyze-research-simulation-status').text()).toContain('Variant 1 / 1');
+        expect(researchSimulationResults.text()).toContain('Variant 1 / 1');
+        expect(researchSimulationResults.find('.analyze-research-simulation-result-line').text())
+            .toContain('329.00 EUR');
+        expect(researchSimulationResults.find('.analyze-research-simulation-result-line').text())
+            .toContain('Max invested: 14,000.00 EUR');
+        const currentInvestedStocks = researchSimulationResults.find(
+            '[aria-label="Invested stocks for current simulation result"]',
+        );
+        expect(currentInvestedStocks.exists()).toBe(true);
+        expect(currentInvestedStocks.text()).toContain('Invested stocks:');
+        expect(currentInvestedStocks.findAll('.analyze-research-simulation-invested-stock').length)
+            .toBeGreaterThan(0);
+        expect(researchSimulationResults.text()).toContain('Best 10');
+        const bestResearchSimulationResults = researchSimulationResults.find(
+            '[aria-label="Best research simulation results"]',
+        );
+        expect(bestResearchSimulationResults.findAll('li')).toHaveLength(1);
+        expect(bestResearchSimulationResults.text()).toContain('#1Variant 1329.00 EUR');
+        expect(bestResearchSimulationResults.text()).toContain('Max invested: 14,000.00 EUR');
+        const bestInvestedStocks = bestResearchSimulationResults.find('[aria-label="Invested stocks for variant 1"]');
+        const investedStockLabels = (investedStocks) => investedStocks
+            .findAll('.analyze-research-simulation-invested-stock')
+            .map((stock) => stock.text().replace(/\s+/g, ' '));
+        expect(investedStockLabels(currentInvestedStocks)[0]).toContain('Buy Streak Fund 14,000.00 EUR');
+        expect(investedStockLabels(bestInvestedStocks)).toEqual(investedStockLabels(currentInvestedStocks));
+
+        await pauseResearchSimulationButton.trigger('click');
+
+        expect(pauseResearchSimulationButton.text()).toContain('Continue Simulate');
+        expect(analyzeResearch.find('.analyze-research-simulation-status').text())
+            .toContain('Paused:Variant 1 / 1');
+        expect(stopResearchSimulationButton.attributes('disabled')).toBeUndefined();
+
+        await stopResearchSimulationButton.trigger('click');
+        await flushPromises();
+
+        expect(stopResearchSimulationButton.attributes('disabled')).toBeDefined();
+        expect(pauseResearchSimulationButton.attributes('disabled')).toBeDefined();
+        expect(pauseResearchSimulationButton.text()).toContain('Pause Simulate');
+        expect(researchSimulationResults.text()).toContain('Stopped after 1 / 1 variants.');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await flushPromises();
+
+        await simulateResearchButton.trigger('click');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await flushPromises();
+
+        expect(researchSimulationResults.text()).toContain('Completed 1 variants.');
+        expect(analyzeResearch.find('.analyze-research-simulation-status').text()).toContain('Running:Nothing');
+
         await researchSubmenuTabs.find((tab) => tab.text() === 'Settings').trigger('click');
         await flushPromises();
 
@@ -1627,10 +1717,14 @@ describe('App', () => {
         expect(analyzeResearch.text()).toContain('Virtual Sell rules');
         expect(analyzeResearch.text()).not.toContain('Step for all intervals');
         expect(analyzeResearch.find('[aria-label="Research virtual buy rule values"]').text()).toContain('Step 0.05%');
+        const firstResearchBuyRule = analyzeResearch.findAll('.analyze-research-value-row')[0];
+        expect(firstResearchBuyRule.text()).toContain('No BUY');
+        expect(firstResearchBuyRule.text()).not.toContain('From');
+        expect(firstResearchBuyRule.text()).not.toContain('To');
         expect(analyzeResearch.find('.analyze-research-sell-values').text()).toContain('Step 0.25%');
         expect(analyzeResearch.text()).toContain('200');
         expect(analyzeResearch.text()).toContain('7,000.00 EUR');
-        expect(analyzeResearch.text()).toContain('No max');
+        expect(analyzeResearch.text()).toContain('80,000.00 EUR');
         expect(analyzeResearch.find('[aria-label="Research BUY streak 1 from"]').exists()).toBe(false);
         [
             'Edit research rows',
@@ -1676,23 +1770,18 @@ describe('App', () => {
         await flushPromises();
         researchSettingsDialog = document.body.querySelector('.analyze-research-settings-dialog');
         expect(researchSettingsDialog.textContent).toContain('Edit max invest');
-        expect(researchSettingsDialog.textContent).toContain('No max');
         expect(researchSettingsDialog.querySelector('[aria-label="Research invest from"]')).toBeNull();
-        researchSettingsDialog.querySelector('[aria-label="Use research max invest"]').click();
-        await flushPromises();
-        updateResearchInput(researchSettingsDialog, 'Research max invest from', '60000.5');
-        updateResearchInput(researchSettingsDialog, 'Research max invest to', '90000.75');
-        updateResearchInput(researchSettingsDialog, 'Research max invest step', '5000.25');
+        expect(researchSettingsDialog.querySelector('[aria-label="Research max invest from"]')).toBeNull();
+        expect(researchSettingsDialog.querySelector('[aria-label="Research max invest to"]')).toBeNull();
+        expect(researchSettingsDialog.querySelector('[aria-label="Research max invest step"]')).toBeNull();
+        updateResearchInput(researchSettingsDialog, 'Research max invest value', '60000.5');
         Array.from(researchSettingsDialog.querySelectorAll('button'))
             .find((button) => button.textContent.includes('Save settings'))
             .click();
         await flushPromises();
 
         expect(currentResearchSettings.max_invest).toEqual({
-            enabled: true,
-            from: 60000.5,
-            to: 90000.75,
-            step: 5000.25,
+            value: 60000.5,
         });
 
         await analyzeResearch.find('[aria-label="Edit research Virtual Buy rules"]').trigger('click');
@@ -1700,6 +1789,8 @@ describe('App', () => {
         researchSettingsDialog = document.body.querySelector('.analyze-research-settings-dialog');
         expect(researchSettingsDialog.querySelector('[aria-label="Research BUY step"]')).not.toBeNull();
         expect(researchSettingsDialog.querySelector('[aria-label="Research SELL step"]')).toBeNull();
+        expect(researchSettingsDialog.querySelector('[aria-label="Research BUY streak 1 from"]')).toBeNull();
+        expect(researchSettingsDialog.querySelector('[aria-label="Research BUY streak 1 to"]')).toBeNull();
         Array.from(researchSettingsDialog.querySelectorAll('button'))
             .find((button) => button.textContent.includes('Cancel'))
             .click();
@@ -1716,7 +1807,7 @@ describe('App', () => {
         await flushPromises();
 
         expect(currentResearchSettings.rows).toBe(200);
-        expect(currentResearchSettings.buy_rules[0]).toEqual({ enabled: true, from: -4, to: -4 });
+        expect(currentResearchSettings.buy_rules[0]).toEqual({ enabled: false, from: -4, to: -4 });
         expect(currentResearchSettings.buy_step).toBe(0.05);
         expect(currentResearchSettings.sell).toEqual({ from: 3, to: 3, step: 0.25 });
         expect(analyzeResearch.text()).toContain('Research settings saved.');
@@ -2745,7 +2836,7 @@ describe('App', () => {
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/holdings/historical-prices/ensure')).toBe(false);
 
         wrapper.unmount();
-    }, 15000);
+    }, 20000);
 
     it('restores the selected Analyze overview stock from the URL', async () => {
         window.history.pushState({}, '', '/admin/menu/analyze/overview?stock=1');

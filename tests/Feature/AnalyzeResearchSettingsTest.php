@@ -33,10 +33,7 @@ class AnalyzeResearchSettingsTest extends TestCase
                     'sell' => ['from' => 3, 'to' => 3, 'step' => 0.1],
                     'invest' => ['from' => 7000, 'to' => 7000, 'step' => 100],
                     'max_invest' => [
-                        'enabled' => false,
-                        'from' => 80000,
-                        'to' => 80000,
-                        'step' => 1000,
+                        'value' => 80000,
                     ],
                 ],
             ]);
@@ -61,10 +58,7 @@ class AnalyzeResearchSettingsTest extends TestCase
             'sell' => ['from' => 2.15, 'to' => 6.75, 'step' => 0.25],
             'invest' => ['from' => 4500.25, 'to' => 8200.75, 'step' => 250.5],
             'max_invest' => [
-                'enabled' => true,
-                'from' => 60000.5,
-                'to' => 90000.75,
-                'step' => 5000.25,
+                'value' => 60000.5,
             ],
         ];
 
@@ -131,6 +125,33 @@ class AnalyzeResearchSettingsTest extends TestCase
         $this->assertSame(0.35, $setting->settings['sell']['step']);
     }
 
+    public function test_legacy_max_invest_range_is_normalized_to_one_value(): void
+    {
+        $admin = $this->adminUser();
+
+        $setting = AnalyzeResearchSetting::factory()->for($admin)->create([
+            'settings' => [
+                'rows' => 200,
+                'buy_rules' => [['enabled' => true, 'from' => -4.0, 'to' => -2.0]],
+                'buy_step' => 0.1,
+                'sell' => ['from' => 2.0, 'to' => 5.0, 'step' => 0.1],
+                'invest' => ['from' => 7000.0, 'to' => 7000.0, 'step' => 100.0],
+                'max_invest' => ['enabled' => true, 'from' => 60000.5, 'to' => 90000.75, 'step' => 5000.25],
+            ],
+        ]);
+
+        $this->actingAs($admin)
+            ->getJson('/admin/analyze/research-settings')
+            ->assertOk()
+            ->assertJsonPath('research_settings.max_invest', [
+                'value' => 60000.5,
+            ]);
+
+        $setting->refresh();
+
+        $this->assertSame(['value' => 60000.5], $setting->settings['max_invest']);
+    }
+
     public function test_admin_must_provide_valid_research_intervals(): void
     {
         $admin = $this->adminUser();
@@ -144,7 +165,7 @@ class AnalyzeResearchSettingsTest extends TestCase
                 'buy_step' => 0,
                 'sell' => ['from' => 8.5, 'to' => 3.5, 'step' => 0],
                 'invest' => ['from' => 9000.0, 'to' => 5000.0, 'step' => 0],
-                'max_invest' => ['enabled' => true, 'from' => 90000.0, 'to' => 50000.0, 'step' => 0],
+                'max_invest' => ['value' => -1],
             ])
             ->assertUnprocessable()
             ->assertJsonValidationErrors([
@@ -155,8 +176,7 @@ class AnalyzeResearchSettingsTest extends TestCase
                 'rows',
                 'invest.from',
                 'invest.step',
-                'max_invest.from',
-                'max_invest.step',
+                'max_invest.value',
             ]);
 
         $this->actingAs($admin)
@@ -166,7 +186,7 @@ class AnalyzeResearchSettingsTest extends TestCase
                 'buy_step' => 0.1,
                 'sell' => ['from' => 3.0, 'to' => 4.0, 'step' => 0.1],
                 'invest' => ['from' => 7000.0, 'to' => 7000.0, 'step' => 100.0],
-                'max_invest' => ['enabled' => false, 'from' => 80000.0, 'to' => 80000.0, 'step' => 1000.0],
+                'max_invest' => ['value' => 80000.0],
             ])
             ->assertUnprocessable()
             ->assertJsonValidationErrors('buy_rules.0');

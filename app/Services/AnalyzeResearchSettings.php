@@ -19,7 +19,7 @@ class AnalyzeResearchSettings
      *     buy_step: float,
      *     sell: array{from: float, to: float, step: float},
      *     invest: array{from: float, to: float, step: float},
-     *     max_invest: array{enabled: bool, from: float, to: float, step: float},
+     *     max_invest: array{value: float},
      * }
      */
     public function payload(User $user): array
@@ -45,7 +45,7 @@ class AnalyzeResearchSettings
      *     buy_step: float,
      *     sell: array{from: float, to: float, step: float},
      *     invest: array{from: float, to: float, step: float},
-     *     max_invest: array{enabled: bool, from: float, to: float, step: float},
+     *     max_invest: array{value: float},
      * }
      */
     public function update(User $user, array $settings): array
@@ -67,7 +67,7 @@ class AnalyzeResearchSettings
      *     buy_step: float,
      *     sell: array{from: float, to: float, step: float},
      *     invest: array{from: float, to: float, step: float},
-     *     max_invest: array{enabled: bool, from: float, to: float, step: float},
+     *     max_invest: array{value: float},
      * }
      */
     public function defaultSettings(): array
@@ -94,10 +94,7 @@ class AnalyzeResearchSettings
                 'step' => 100.0,
             ],
             'max_invest' => [
-                'enabled' => false,
-                'from' => 80000.0,
-                'to' => 80000.0,
-                'step' => 1000.0,
+                'value' => 80000.0,
             ],
         ];
     }
@@ -110,7 +107,7 @@ class AnalyzeResearchSettings
      *     buy_step: float,
      *     sell: array{from: float, to: float, step: float},
      *     invest: array{from: float, to: float, step: float},
-     *     max_invest: array{enabled: bool, from: float, to: float, step: float},
+     *     max_invest: array{value: float},
      * }
      */
     private function normalize(?array $settings): array
@@ -202,22 +199,21 @@ class AnalyzeResearchSettings
     }
 
     /**
-     * @return array{enabled: bool, from: float, to: float, step: float}
+     * @return array{value: float}
      */
     private function normalizeMaxInvest(mixed $maxInvest): array
     {
         if (! is_array($maxInvest)) {
-            return ['enabled' => false, 'from' => 80000.0, 'to' => 80000.0, 'step' => 1000.0];
+            return ['value' => 80000.0];
         }
 
-        $from = $this->normalizeDecimal($maxInvest['from'] ?? null, 80000.0, 0.0, 1000000.0);
-        $to = $this->normalizeDecimal($maxInvest['to'] ?? null, 80000.0, 0.0, 1000000.0);
-
         return [
-            'enabled' => filter_var($maxInvest['enabled'] ?? false, FILTER_VALIDATE_BOOL),
-            'from' => min($from, $to),
-            'to' => max($from, $to),
-            'step' => $this->normalizeDecimal($maxInvest['step'] ?? null, 1000.0, 0.000001, 1000000.0),
+            'value' => $this->normalizeDecimal(
+                $maxInvest['value'] ?? $maxInvest['from'] ?? null,
+                80000.0,
+                0.0,
+                1000000.0,
+            ),
         ];
     }
 

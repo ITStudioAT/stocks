@@ -3,6 +3,7 @@
 ### Analyze
 
 - Research-Menu-Item Added
+- Simulation added
 
 ## 0.8.7
 
