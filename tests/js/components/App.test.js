@@ -1901,6 +1901,8 @@ describe('App', () => {
             .find((button) => button.text().includes('Apple'));
         const trendV2MicrosoftHoldingCard = analyzeTrendV2.findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Microsoft'));
+        expect(trendV2AppleHoldingCard.classes()).toContain('analyze-trend-holding-card--selected');
+        expect(trendV2MicrosoftHoldingCard.classes()).not.toContain('analyze-trend-holding-card--selected');
         expect(trendV2AppleHoldingCard.classes()).toContain('analyze-holding-card--held');
         expect(trendV2MicrosoftHoldingCard.classes()).not.toContain('analyze-holding-card--held');
         expect(trendV2MicrosoftHoldingCard.classes()).not.toContain('analyze-holding-card--signal');
@@ -7669,6 +7671,22 @@ describe('App', () => {
         expect(cloudwaysSyncDialog.textContent).toContain('Tables selected: 1.');
         const confirmSyncButton = Array.from(cloudwaysSyncDialog.querySelectorAll('button'))
             .find((button) => button.textContent.trim() === 'Sync differences');
+        const applicationRefreshPaths = [
+            '/admin/me',
+            '/admin/depots/active',
+            '/admin/depots?page=1',
+            '/admin/watchlist/holdings?page=1',
+            '/admin/index-watch-items',
+            '/admin/users?page=1',
+            '/admin/roles?page=1',
+            '/admin/cloudways/status',
+        ];
+        const applicationRefreshCallsBeforeSync = Object.fromEntries(
+            applicationRefreshPaths.map((path) => [
+                path,
+                fetchMock.mock.calls.filter(([requestedPath]) => requestedPath === path).length,
+            ]),
+        );
         confirmSyncButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
         await flushPromises();
 
@@ -7685,6 +7703,11 @@ describe('App', () => {
         expect(wrapper.get('[aria-label="Cloudways sync result"]').text()).not.toContain('Not imported');
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/cloudways/check')).toHaveLength(1);
         expect(wrapper.find('[aria-label="Cloudways comparison result"]').exists()).toBe(false);
+        applicationRefreshPaths.forEach((path) => {
+            expect(fetchMock.mock.calls.filter(([requestedPath]) => requestedPath === path)).toHaveLength(
+                applicationRefreshCallsBeforeSync[path] + 1,
+            );
+        });
 
         fetchMock.mockImplementationOnce(() => Promise.resolve(ndjsonResponse([{
             type: 'error',
@@ -8091,6 +8114,21 @@ describe('App', () => {
         expect(dataOverview.text()).toContain('Mo-Fr 09:15-17:30 · 15 min');
         const eodhdSyncButton = dataOverview.find('[aria-label="Sync EODHD realtime data"]');
         expect(eodhdSyncButton.exists()).toBe(true);
+        const visibleDataRefreshPaths = [
+            '/admin/depots/active',
+            '/admin/watchlist/holdings/historical-prices/coverage',
+            '/admin/watchlist/holdings/7/intraday-candles/coverage',
+            '/admin/watchlist/holdings/7/realtime-prices/latest',
+            '/admin/data/realtime/latest?stock=7',
+            '/admin/watchlist/holdings/7/intraday-candles/latest-days',
+            '/admin/watchlist/holdings/7/end-of-day-prices/latest-days',
+        ];
+        const visibleDataRefreshCallsBeforeSync = Object.fromEntries(
+            visibleDataRefreshPaths.map((path) => [
+                path,
+                fetchMock.mock.calls.filter(([requestedPath]) => requestedPath === path).length,
+            ]),
+        );
         await eodhdSyncButton.trigger('click');
 
         const liveDataManualSyncStatusDot = dataOverview.find('[aria-label="Live data update status: updating"]');
@@ -8123,6 +8161,11 @@ describe('App', () => {
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/historical-prices/coverage', expect.any(Object));
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/holdings/historical-prices/ensure')).toBe(false);
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/7/intraday-candles/coverage', expect.any(Object));
+        visibleDataRefreshPaths.forEach((path) => {
+            expect(fetchMock.mock.calls.filter(([requestedPath]) => requestedPath === path)).toHaveLength(
+                visibleDataRefreshCallsBeforeSync[path] + 1,
+            );
+        });
         const historicalDataCard = dataOverview.find('.test-selected-stock-card--historical');
         expect(historicalDataCard.exists()).toBe(true);
         expect(historicalDataCard.text()).toContain('Historical Data');

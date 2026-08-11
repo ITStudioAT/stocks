@@ -299,6 +299,8 @@ class V2IndexEodhdSyncService
                 );
                 $plans[$index->id] = ['index' => $index, 'rows' => $missingRows];
             } catch (Throwable $exception) {
+                $this->throwIfAuthenticationFailed($exception);
+
                 $indexSummary['eod'] = ['available' => 0, 'missing' => 0, 'synced' => 0, 'status' => 'failed'];
                 $errors[] = $this->errorPayload($index, 'eod', $exception);
                 $this->failIndexProgress($run, $index, ['eod_check', 'eod_sync'], $exception->getMessage());
@@ -575,6 +577,8 @@ class V2IndexEodhdSyncService
             try {
                 $result = $this->fetchIntradayBlock($index, $range);
             } catch (Throwable $exception) {
+                $this->throwIfAuthenticationFailed($exception);
+
                 $status = $this->exceptionStatus($exception);
                 $attempts = $this->shouldRetryIntradayException($exception)
                     ? count(self::IntradayRetryDelays) + 1
@@ -1563,6 +1567,13 @@ class V2IndexEodhdSyncService
      */
     private function responsePayload(Response $response, string $dataType): array
     {
+        if ($response->status() === 401) {
+            throw new RuntimeException(
+                'EODHD rejected the configured API token (HTTP 401). Update EODHD_API before retrying.',
+                401,
+            );
+        }
+
         if ($response->failed()) {
             throw new RuntimeException(
                 "EODHD {$dataType} request failed with HTTP {$response->status()}.",
@@ -1583,6 +1594,15 @@ class V2IndexEodhdSyncService
         }
 
         return $payload;
+    }
+
+    private function throwIfAuthenticationFailed(Throwable $exception): void
+    {
+        if ((int) $exception->getCode() !== 401) {
+            return;
+        }
+
+        throw $exception;
     }
 
     private function startStep(IndexEodhdSyncRun $run, string $stepKey, string $message): void

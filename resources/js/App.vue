@@ -2750,6 +2750,199 @@ async function loadInfoData() {
     }
 }
 
+async function refreshApplicationDataAfterCloudwaysSync() {
+    await auth.loadUser().catch(() => {});
+
+    const refreshRequests = [
+        depotsStore.loadActiveDepot(),
+        depotsStore.loadDepots(depotPagination.value.current_page),
+        loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page, { silent: true }),
+        depotsStore.loadIndexWatchItems(),
+        loadCloudwaysExecutionStatus(),
+    ];
+
+    if (canManageUsers.value) {
+        refreshRequests.push(
+            usersStore.loadUsers(userPagination.value.current_page),
+            rolesStore.loadRoles(rolePagination.value.current_page),
+        );
+    }
+
+    if (dashboardVersions.value !== null) {
+        refreshRequests.push(loadDashboardVersions());
+    }
+
+    if (dashboardDailyPerformance.value !== null) {
+        refreshRequests.push(depotsStore.loadDashboardDailyPerformance());
+    }
+
+    if (transactions.value.length > 0 || depotHoldings.value.length > 0) {
+        refreshRequests.push(depotsStore.loadTransactions());
+    }
+
+    if (depotStockPeriod.value !== null) {
+        refreshRequests.push(depotsStore.loadDepotStockPeriod(activeDepotStocksSubsection.value));
+    }
+
+    if (infoTables.value.length > 0 || infoMethods.value.length > 0) {
+        refreshRequests.push(loadInfoData());
+    }
+
+    if (stockHistoricalPriceCoverage.value !== null) {
+        refreshRequests.push(loadDataHistoricalPriceCoverage());
+    }
+
+    await Promise.allSettled(refreshRequests);
+}
+
+async function refreshVisibleApplicationData() {
+    const refreshRequests = [depotsStore.loadActiveDepot()];
+
+    if (activeSection.value === 'dashboard') {
+        refreshRequests.push(
+            loadDashboardVersions(),
+            depotsStore.loadDashboardDailyPerformance(),
+            loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page, { silent: true }),
+        );
+    }
+
+    if (activeSection.value === 'indices') {
+        refreshRequests.push(
+            depotsStore.loadIndexWatchItems(),
+            depotsStore.loadIndexEodhdSyncSettings(),
+        );
+    }
+
+    if (activeSection.value === 'stocks' || activeSection.value === 'analyze') {
+        refreshRequests.push(
+            loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page, { silent: true }),
+        );
+    }
+
+    if (activeSection.value === 'data') {
+        refreshRequests.push(refreshVisibleDataSection());
+    }
+
+    if (activeSection.value === 'infos') {
+        refreshRequests.push(loadInfoData());
+    }
+
+    if (activeSection.value === 'depot') {
+        if (depotSubsectionRequiresTransactions(activeDepotSubsection.value)) {
+            refreshRequests.push(depotsStore.loadTransactions());
+        }
+
+        if (activeDepotSubsection.value === 'overview') {
+            refreshRequests.push(
+                loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page, { silent: true }),
+            );
+        }
+
+        if (isDepotStockPeriodPage()) {
+            refreshRequests.push(depotsStore.loadDepotStockPeriod(activeDepotStocksSubsection.value));
+        }
+    }
+
+    if (activeSection.value === 'depots') {
+        refreshRequests.push(depotsStore.loadDepots(depotPagination.value.current_page));
+    }
+
+    if (activeSection.value === 'users') {
+        refreshRequests.push(usersStore.loadUsers(userPagination.value.current_page));
+    }
+
+    if (activeSection.value === 'roles') {
+        refreshRequests.push(rolesStore.loadRoles(rolePagination.value.current_page));
+    }
+
+    if (activeSection.value === 'profile') {
+        refreshRequests.push(auth.loadUser());
+    }
+
+    await Promise.allSettled(refreshRequests);
+}
+
+async function refreshVisibleDataSection() {
+    if (activeDataSubsection.value === 'indices') {
+        await Promise.allSettled([
+            depotsStore.loadIndexWatchItems(),
+            loadSelectedDataDateRange(),
+        ]);
+
+        return;
+    }
+
+    if (activeDataSubsection.value === 'stocks') {
+        await Promise.allSettled([
+            depotsStore.loadWatchlistHoldings(1, { allHoldings: true, silent: true }),
+            loadSelectedDataDateRange(),
+        ]);
+
+        return;
+    }
+
+    if (activeDataSubsection.value === 'health') {
+        await loadStockTradingTimeHealthCheck().catch(() => {});
+
+        return;
+    }
+
+    if (activeDataSubsection.value === 'cloudways') {
+        await loadCloudwaysExecutionStatus().catch(() => {});
+
+        return;
+    }
+
+    if (activeDataSubsection.value === 'exchanges') {
+        await depotsStore.loadDataExchanges().catch(() => {});
+
+        return;
+    }
+
+    if (activeDataSubsection.value === 'intraday') {
+        await depotsStore.loadDataIntraday(selectedDataIntradayStockId.value).catch(() => {});
+
+        return;
+    }
+
+    if (activeDataSubsection.value === 'repair') {
+        await depotsStore.loadDataRepair().catch(() => {});
+
+        return;
+    }
+
+    await loadDataHistoricalPriceCoverage().catch(() => {});
+
+    const selectedStockId = selectedDataHistoricStockId.value;
+    const refreshRequests = [loadSelectedDataDateRange()];
+
+    if (activeDataSubsection.value === 'overview') {
+        refreshRequests.push(
+            loadSelectedDataLiveLatestEntries(selectedStockId),
+            loadDataRealtimeLatestPrices(selectedStockId),
+            loadSelectedDataHistoricalLatestEntries(selectedStockId),
+            loadSelectedDataEndOfDayLatestEntries(selectedStockId),
+        );
+    }
+
+    if (activeDataSubsection.value === 'live-data') {
+        refreshRequests.push(
+            loadSelectedDataLiveLatestEntries(selectedStockId),
+            loadDataRealtimeLatestPrices(selectedStockId),
+        );
+    }
+
+    if (activeDataSubsection.value === 'historical-data') {
+        refreshRequests.push(loadSelectedDataHistoricalLatestEntries(selectedStockId));
+    }
+
+    if (activeDataSubsection.value === 'eod-data') {
+        refreshRequests.push(loadSelectedDataEndOfDayLatestEntries(selectedStockId));
+    }
+
+    await Promise.allSettled(refreshRequests);
+}
+
 function infoEodhdModeLabel(mode) {
     return {
         direct: 'Direct',
@@ -2974,6 +3167,7 @@ async function syncCloudwaysDatabase() {
         await streamCloudwaysDatabaseSync(checkedDifferentTables);
         cloudwaysCheckResult.value = null;
         cloudwaysCheckMessage.value = '';
+        await refreshApplicationDataAfterCloudwaysSync();
     } catch (error) {
         cloudwaysSyncError.value = error.message;
     } finally {
@@ -4875,7 +5069,7 @@ async function pollStockEodhdSync(refreshId) {
 
         if (!['queued', 'running'].includes(data.refresh?.status)) {
             stopStockEodhdSyncPolling();
-            await loadWatchlistHoldingsForActiveSection(1);
+            await refreshVisibleApplicationData();
         }
     } catch (error) {
         stockEodhdSyncError.value = error.message;
@@ -5019,10 +5213,7 @@ async function pollIndexEodhdSync(refreshId) {
 
         if (!['queued', 'running'].includes(data.refresh?.status)) {
             stopIndexEodhdSyncPolling();
-            await Promise.all([
-                depotsStore.loadIndexWatchItems(),
-                depotsStore.loadIndexEodhdSyncSettings(),
-            ]);
+            await refreshVisibleApplicationData();
         }
     } catch (error) {
         indexEodhdSyncError.value = error.message;
@@ -5447,7 +5638,7 @@ async function syncLiveDataRealtime() {
     try {
         const data = await depotsStore.syncDataRealtime();
         liveDataRealtimeSyncMessage.value = data.message ?? 'EODHD realtime sync finished.';
-        await loadDataHistoricalPriceCoverage();
+        await refreshVisibleApplicationData();
     } catch (err) {
         dataHistoricalPriceError.value = err.message;
     } finally {
@@ -5463,7 +5654,7 @@ async function syncHistoricalData() {
     try {
         const data = await depotsStore.syncDataHistorical();
         historicalDataSyncMessage.value = data.message ?? 'EODHD historical sync finished.';
-        await loadDataHistoricalPriceCoverage();
+        await refreshVisibleApplicationData();
     } catch (err) {
         dataHistoricalPriceError.value = err.message;
     } finally {
@@ -5479,7 +5670,7 @@ async function syncEndOfDayData() {
     try {
         const data = await depotsStore.syncDataEndOfDay();
         endOfDayDataSyncMessage.value = data.message ?? 'EODHD end-of-day sync finished.';
-        await loadDataHistoricalPriceCoverage();
+        await refreshVisibleApplicationData();
     } catch (err) {
         dataHistoricalPriceError.value = err.message;
     } finally {
@@ -5495,7 +5686,7 @@ async function syncIndexData() {
     try {
         const data = await depotsStore.syncDataIndices();
         indexDataSyncMessage.value = data.message ?? 'EODHD index live sync finished.';
-        await loadDataHistoricalPriceCoverage();
+        await refreshVisibleApplicationData();
     } catch (err) {
         dataHistoricalPriceError.value = err.message;
     } finally {
@@ -5511,7 +5702,7 @@ async function syncIndexHistoricalData() {
     try {
         const data = await depotsStore.syncDataIndexHistorical();
         indexHistoricalDataSyncMessage.value = data.message ?? 'EODHD historical indices sync finished.';
-        await loadDataHistoricalPriceCoverage();
+        await refreshVisibleApplicationData();
     } catch (err) {
         dataHistoricalPriceError.value = err.message;
     } finally {
@@ -5741,7 +5932,9 @@ async function pollPriceRefreshSettings() {
             }
 
             depotsStore.clearPriceRefresh();
-            await reloadDataOverviewPageData(wasTrackingPriceRefresh || didRefreshTimestampChange);
+            if (wasTrackingPriceRefresh || didRefreshTimestampChange) {
+                await refreshVisibleApplicationData();
+            }
 
             return;
         }
@@ -5786,6 +5979,7 @@ async function pollIntradayBackfillStatus(refreshId) {
 
         if (!refresh || isFinishedPriceRefresh(refresh)) {
             stopIntradayBackfillPolling();
+            await refreshVisibleApplicationData();
         }
     } catch (err) {
         stopIntradayBackfillPolling();
@@ -6058,7 +6252,7 @@ async function repairEndOfDayData() {
             (stock) => depotsStore.repairEndOfDayStock(stock.id),
         );
 
-        await depotsStore.loadDataRepair();
+        await refreshVisibleApplicationData();
     } catch (error) {
         dataRepairError.value = error.message;
     } finally {
@@ -6092,7 +6286,7 @@ async function repairHistoricalData() {
             (stock) => depotsStore.repairHistoricalDataStock(stock.id),
         );
 
-        await depotsStore.loadDataRepair();
+        await refreshVisibleApplicationData();
     } catch (error) {
         dataRepairError.value = error.message;
     } finally {
@@ -6225,6 +6419,7 @@ async function reloadDataExchanges() {
         }
 
         stopDataExchangeReloadPolling();
+        await refreshVisibleApplicationData();
     } catch {
     }
 }
@@ -6261,6 +6456,7 @@ async function reloadDataIntraday() {
         }
 
         stopDataIntradayReloadPolling();
+        await refreshVisibleApplicationData();
     } catch {
     }
 }
@@ -6287,6 +6483,7 @@ async function pollDataExchangeReload(refreshId) {
 
         if (isFinishedPriceRefresh(data.refresh)) {
             stopDataExchangeReloadPolling();
+            await refreshVisibleApplicationData();
         }
     } catch {
         stopDataExchangeReloadPolling();
@@ -6320,6 +6517,7 @@ async function pollDataIntradayReload(refreshId) {
 
         if (isFinishedPriceRefresh(data.refresh)) {
             stopDataIntradayReloadPolling();
+            await refreshVisibleApplicationData();
         }
     } catch {
         stopDataIntradayReloadPolling();
@@ -6352,9 +6550,8 @@ async function finishPriceRefresh(refresh) {
     stopPriceRefreshPolling();
     depotsStore.clearPriceRefresh();
     await Promise.all([
-        loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page),
         depotsStore.loadQueueStatus(),
-        reloadDataOverviewPageData(),
+        refreshVisibleApplicationData(),
     ]);
 
     if (refresh.status === 'failed') {
@@ -15759,7 +15956,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         type="button"
                                         class="index-watch-card analyze-holding-card analyze-holding-card--compact"
                                         :class="{
-                                            'analyze-holding-card--active': selectedAnalyzeHoldingId === holding.id,
+                                            'analyze-trend-holding-card--selected': selectedAnalyzeHoldingId === holding.id,
                                             'analyze-holding-card--held': hasPositionPieces(holding),
                                             'analyze-holding-card--signal': analyzeTrendV2Signals(holding).length > 0,
                                         }"
@@ -23461,6 +23658,12 @@ function formatIndexDataUpdateSchedule(settings) {
 .analyze-holding-card--signal.analyze-holding-card--active {
     background: rgba(var(--v-theme-error), 0.2);
     border-color: rgba(var(--v-theme-error), 0.72);
+}
+
+.analyze-trend-holding-item .analyze-trend-holding-card--selected {
+    background: rgba(var(--v-theme-warning), 0.28);
+    border: 2px solid rgb(var(--v-theme-warning));
+    box-shadow: 0 0 0 1px rgba(var(--v-theme-warning), 0.28);
 }
 
 .analyze-holding-card-header {

@@ -15,12 +15,62 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use RuntimeException;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
 class AdminV2IndexEodhdSyncTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_invalid_api_token_stops_the_sync_after_the_first_request(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-08-10 10:00:00', 'Europe/Vienna'));
+        config(['services.eodhd.key' => 'invalid-test-token']);
+
+        try {
+            IndexWatchItem::factory()->create([
+                'symbol' => 'ATX',
+                'exchange' => 'INDX',
+                'instrument_type' => 'INDEX',
+            ]);
+            IndexWatchItem::factory()->create([
+                'symbol' => 'GDAXI',
+                'exchange' => 'INDX',
+                'instrument_type' => 'INDEX',
+            ]);
+            Http::preventStrayRequests();
+            Http::fake([
+                'eodhd.com/api/eod/*' => Http::response([], 401),
+            ]);
+
+            $syncService = app(V2IndexEodhdSyncService::class);
+            $run = $syncService->createRun();
+
+            try {
+                $syncService->run($run->id);
+                $this->fail('The invalid EODHD API token did not stop the sync.');
+            } catch (RuntimeException $exception) {
+                $this->assertSame(401, $exception->getCode());
+                $this->assertSame(
+                    'EODHD rejected the configured API token (HTTP 401). Update EODHD_API before retrying.',
+                    $exception->getMessage(),
+                );
+            }
+
+            $run->refresh();
+
+            $this->assertSame('failed', $run->status);
+            $this->assertSame(
+                'EODHD rejected the configured API token (HTTP 401). Update EODHD_API before retrying.',
+                $run->error,
+            );
+            $this->assertCount(1, Http::recorded());
+            $this->assertStringNotContainsString('invalid-test-token', (string) $run->error);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
 
     public function test_admin_can_queue_an_index_eodhd_sync_and_read_its_steps(): void
     {
