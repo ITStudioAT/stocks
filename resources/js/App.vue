@@ -7083,6 +7083,17 @@ function formatDepotPreviousDayBalance() {
     return `${formatAccountBalance(depotValuationNumber('previous_day_balance'))} EUR`;
 }
 
+function hasDepotPreviousDayExternalCashFlow() {
+    return depotValuationNumber('previous_day_external_cash_flow_amount') !== 0;
+}
+
+function formatDepotPreviousDayExternalCashFlowAmount() {
+    const amount = depotValuationNumber('previous_day_external_cash_flow_amount');
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${formatAccountBalance(amount)} EUR`;
+}
+
 function formatDepotPreviousDayChangeAmount() {
     const amount = depotValuationNumber('previous_day_change_amount');
     const sign = amount > 0 ? '+' : '';
@@ -19523,8 +19534,12 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <td class="text-medium-emphasis text-caption">Account Yesterday</td>
                                             <td class="text-right">{{ formatDepotPreviousDayBalance() }}</td>
                                         </tr>
+                                        <tr v-if="hasDepotPreviousDayExternalCashFlow()" class="depot-account-external-cash-flow-row">
+                                            <td class="text-medium-emphasis text-caption">External cash flow today</td>
+                                            <td class="text-right">{{ formatDepotPreviousDayExternalCashFlowAmount() }}</td>
+                                        </tr>
                                         <tr class="depot-account-yesterday-change-row">
-                                            <td class="text-medium-emphasis text-caption">+/-</td>
+                                            <td class="text-medium-emphasis text-caption">Performance +/-</td>
                                             <td class="text-right">
                                                 <span :class="depotPreviousDayChangeClass()">
                                                     {{ formatDepotPreviousDayChangePercent() }} ·

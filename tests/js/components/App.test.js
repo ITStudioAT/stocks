@@ -9288,8 +9288,9 @@ describe('App', () => {
                 cash_balance: '650.00',
                 account_balance: '1033.00',
                 previous_day_balance: '1020.00',
-                previous_day_change_amount: '13.00',
-                previous_day_change_percent: '1.27',
+                previous_day_external_cash_flow_amount: '10.00',
+                previous_day_change_amount: '3.00',
+                previous_day_change_percent: '0.29',
                 year_start_balance: '1000.00',
                 current_balance: '1033.00',
                 balance_change_amount: '33.00',
@@ -9317,8 +9318,9 @@ describe('App', () => {
                 cash_balance: '650.00',
                 account_balance: '1010.00',
                 previous_day_balance: '1020.00',
-                previous_day_change_amount: '-10.00',
-                previous_day_change_percent: '-0.98',
+                previous_day_external_cash_flow_amount: '10.00',
+                previous_day_change_amount: '-20.00',
+                previous_day_change_percent: '-1.94',
                 year_start_balance: '1000.00',
                 current_balance: '1010.00',
                 balance_change_amount: '10.00',
@@ -9429,8 +9431,9 @@ describe('App', () => {
                         cash_balance: '650.00',
                         account_balance: '1010.50',
                         previous_day_balance: '1020.00',
-                        previous_day_change_amount: '-9.50',
-                        previous_day_change_percent: '-0.93',
+                        previous_day_external_cash_flow_amount: '10.00',
+                        previous_day_change_amount: '-19.50',
+                        previous_day_change_percent: '-1.89',
                         year_start_balance: '1000.00',
                         current_balance: '1010.50',
                         balance_change_amount: '10.50',
@@ -9519,7 +9522,10 @@ describe('App', () => {
         expect(wrapper.text()).toContain('1,033.00 EUR');
         expect(wrapper.find('.depot-account-yesterday-row').text()).toContain('Account Yesterday');
         expect(wrapper.find('.depot-account-yesterday-row').text()).toContain('1,020.00 EUR');
-        expect(wrapper.find('.depot-account-yesterday-change-row').text()).toContain('+1.27% · +13.00 EUR');
+        expect(wrapper.find('.depot-account-external-cash-flow-row').text()).toContain('External cash flow today');
+        expect(wrapper.find('.depot-account-external-cash-flow-row').text()).toContain('+10.00 EUR');
+        expect(wrapper.find('.depot-account-yesterday-change-row').text()).toContain('Performance +/-');
+        expect(wrapper.find('.depot-account-yesterday-change-row').text()).toContain('+0.29% · +3.00 EUR');
         expect(wrapper.find('.depot-account-yesterday-change-row .text-success').exists()).toBe(true);
         expect(wrapper.text()).not.toContain('Status');
         expect(wrapper.text()).not.toContain('Active');

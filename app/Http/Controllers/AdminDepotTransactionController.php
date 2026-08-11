@@ -469,11 +469,25 @@ class AdminDepotTransactionController extends Controller
      */
     private function depotValuationPayloads(Depot $depot, array $depotHoldings): array
     {
-        $previousDayBalance = $this->previousDayAccountBalance($depot);
+        $previousDayCutoff = now()->subDay()->endOfDay();
+        $previousDayBalance = $this->previousDayAccountBalance($depot, $previousDayCutoff);
+        $previousDayExternalCashFlowAmount = $this->externalCashFlowAfter($depot, $previousDayCutoff);
 
         return [
-            'latest' => $this->depotValuationPayload($depot, $depotHoldings, 'latest', $previousDayBalance),
-            'flatex' => $this->depotValuationPayload($depot, $depotHoldings, 'flatex', $previousDayBalance),
+            'latest' => $this->depotValuationPayload(
+                $depot,
+                $depotHoldings,
+                'latest',
+                $previousDayBalance,
+                $previousDayExternalCashFlowAmount,
+            ),
+            'flatex' => $this->depotValuationPayload(
+                $depot,
+                $depotHoldings,
+                'flatex',
+                $previousDayBalance,
+                $previousDayExternalCashFlowAmount,
+            ),
         ];
     }
 
@@ -481,18 +495,24 @@ class AdminDepotTransactionController extends Controller
      * @param  array<int, array{id: int, symbol: ?string, name: ?string, isin: ?string, currency: ?string, latest_price: ?string, previous_day_price: ?string, previous_day_price_date: ?string, previous_day_change_percent: ?string, flatex_price: ?string, year_start_price: ?string, latest_price_fetched_at: ?string, latest_price_status: string, position_pieces: string}>  $depotHoldings
      * @return array<string, string>
      */
-    private function depotValuationPayload(Depot $depot, array $depotHoldings, string $source, float $previousDayBalance): array
-    {
+    private function depotValuationPayload(
+        Depot $depot,
+        array $depotHoldings,
+        string $source,
+        float $previousDayBalance,
+        float $previousDayExternalCashFlowAmount,
+    ): array {
         $stockBalance = $this->holdingStockBalance(
             $depotHoldings,
             $source === 'flatex' ? 'flatex_price' : 'latest_price',
         );
         $cashBalance = (float) $depot->account_balance;
         $currentBalance = $cashBalance + $stockBalance;
-        $previousDayChangeAmount = $currentBalance - $previousDayBalance;
-        $previousDayChangePercent = $previousDayBalance === 0.0
+        $previousDayPerformanceBaseline = $previousDayBalance + $previousDayExternalCashFlowAmount;
+        $previousDayChangeAmount = $currentBalance - $previousDayPerformanceBaseline;
+        $previousDayChangePercent = $previousDayPerformanceBaseline === 0.0
             ? 0.0
-            : ($previousDayChangeAmount / $previousDayBalance) * 100;
+            : ($previousDayChangeAmount / $previousDayPerformanceBaseline) * 100;
         $cashFlowSummary = $this->cashFlowSummary($depot, $cashBalance, now()->endOfDay());
         $balanceChangeWithBrokerBonusAmount = $currentBalance
             + $cashFlowSummary['total_withdrawals']
@@ -526,6 +546,7 @@ class AdminDepotTransactionController extends Controller
             'cash_balance' => $this->decimal($cashBalance, 2),
             'account_balance' => $this->decimal($cashBalance + $stockBalance, 2),
             'previous_day_balance' => $this->decimal($previousDayBalance, 2),
+            'previous_day_external_cash_flow_amount' => $this->decimal($previousDayExternalCashFlowAmount, 2),
             'previous_day_change_amount' => $this->decimal($previousDayChangeAmount, 2),
             'previous_day_change_percent' => $this->decimal($previousDayChangePercent, 2),
             'year_start_balance' => $this->decimal($yearStartBalance, 2),
@@ -552,9 +573,8 @@ class AdminDepotTransactionController extends Controller
         ];
     }
 
-    private function previousDayAccountBalance(Depot $depot): float
+    private function previousDayAccountBalance(Depot $depot, Carbon $previousDayCutoff): float
     {
-        $previousDayCutoff = now()->subDay()->endOfDay();
         $openPiecesByHoldingId = $this->openPiecesByHoldingIdAt($depot, $previousDayCutoff);
         $stockBalance = StockHolding::query()
             ->whereKey($openPiecesByHoldingId->keys()->all())

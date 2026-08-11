@@ -304,6 +304,37 @@ class DepotTransactionTest extends TestCase
         $this->assertSame('1123.45', $depot->refresh()->account_balance);
     }
 
+    public function test_previous_day_performance_excludes_todays_deposit(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-08-11 12:00:00', 'Europe/Vienna'));
+
+        try {
+            $admin = $this->adminUser();
+            $depot = Depot::factory()->create([
+                'account_balance' => '13000.00',
+                'is_active' => true,
+            ]);
+
+            $this->createCashTransaction(
+                depot: $depot,
+                type: 'deposit',
+                amount: '3000.00',
+                bookedAt: '2026-08-11 00:00:00',
+            );
+
+            $this->actingAs($admin)
+                ->getJson('/admin/depot-transactions')
+                ->assertOk()
+                ->assertJsonPath('depot_valuations.latest.current_balance', '13000.00')
+                ->assertJsonPath('depot_valuations.latest.previous_day_balance', '10000.00')
+                ->assertJsonPath('depot_valuations.latest.previous_day_external_cash_flow_amount', '3000.00')
+                ->assertJsonPath('depot_valuations.latest.previous_day_change_amount', '0.00')
+                ->assertJsonPath('depot_valuations.latest.previous_day_change_percent', '0.00');
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
     public function test_admin_can_book_stock_buy_and_sell_transactions(): void
     {
         $admin = $this->adminUser();
