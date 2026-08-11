@@ -63,11 +63,15 @@ class AdminDepotTransactionController extends Controller
         }
 
         $depotHoldings = $this->depotHoldingPayloads($depot);
+        $previousDayCutoff = now()->subDay()->endOfDay();
+        $previousDayBalance = $this->previousDayAccountBalance($depot, $previousDayCutoff);
+        $previousDayExternalCashFlowAmount = $this->externalCashFlowAfter($depot, $previousDayCutoff);
         $depotValuation = $this->depotValuationPayload(
             $depot,
             $depotHoldings,
             'latest',
-            $this->previousDayAccountBalance($depot),
+            $previousDayBalance,
+            $previousDayExternalCashFlowAmount,
         );
 
         return response()->json([

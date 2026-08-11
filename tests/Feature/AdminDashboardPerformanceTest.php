@@ -130,6 +130,44 @@ class AdminDashboardPerformanceTest extends TestCase
             ]);
     }
 
+    public function test_dashboard_performance_excludes_a_same_day_deposit(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-08-11 12:00:00', 'Europe/Vienna'));
+
+        try {
+            $depot = Depot::factory()->create([
+                'account_balance' => '13000.00',
+                'is_active' => true,
+            ]);
+
+            DepotTransaction::factory()->create([
+                'depot_id' => $depot->id,
+                'stock_holding_id' => null,
+                'type' => 'deposit',
+                'pieces' => null,
+                'total_amount' => '3000.00',
+                'unit_price' => null,
+                'cash_delta' => '3000.00',
+                'balance_after' => '13000.00',
+                'booked_at' => '2026-08-11 00:00:00',
+                'is_external_cashflow' => true,
+                'affects_performance' => false,
+            ]);
+
+            $this->actingAs($this->adminUser())
+                ->getJson('/admin/dashboard/performance')
+                ->assertOk()
+                ->assertJsonPath('sums.0.change_amount', '0.00')
+                ->assertJsonPath('sums.0.change_percent', '0.00')
+                ->assertJsonPath('sums.2.change_amount', '0.00')
+                ->assertJsonPath('sums.2.change_percent', '0.00')
+                ->assertJsonPath('sums.4.change_amount', '0.00')
+                ->assertJsonPath('sums.4.change_percent', '0.00');
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
     public function test_last_month_percentage_excludes_later_external_cash_flows(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-08-07 12:00:00', 'Europe/Vienna'));
