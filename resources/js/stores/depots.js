@@ -203,6 +203,10 @@ export const useDepotStore = defineStore('depots', {
                 query.set('chart_range', options.chartRange);
             }
 
+            if (Number.isInteger(options.historyRowLimit) && options.historyRowLimit > 0) {
+                query.set('history_row_limit', String(Math.min(options.historyRowLimit, 1000)));
+            }
+
             if (!isSilent) {
                 this.holdingsLoading = true;
             }
@@ -961,6 +965,38 @@ export const useDepotStore = defineStore('depots', {
                     method: 'POST',
                 });
                 this.stockHistoricalPriceCoverage = data.coverage;
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async loadHistoricalPriceRowCoverage(rowCount) {
+            this.holdingsError = '';
+
+            try {
+                const query = new URLSearchParams({
+                    row_count: String(rowCount),
+                });
+                const data = await request(`/admin/watchlist/holdings/historical-price-rows?${query.toString()}`);
+                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
+
+                return data;
+            } catch (error) {
+                this.holdingsError = error.message;
+                throw error;
+            }
+        },
+        async ensureHistoricalPriceRows(rowCount) {
+            this.holdingsError = '';
+
+            try {
+                const data = await request('/admin/watchlist/holdings/historical-price-rows', {
+                    method: 'POST',
+                    body: JSON.stringify({ row_count: rowCount }),
+                });
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
 
                 return data;

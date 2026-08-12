@@ -34,6 +34,59 @@ class AdminDepotHoldingTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_chart_payload_can_load_the_latest_requested_analysis_rows_beyond_one_year(): void
+    {
+        $this->travelTo(Carbon::parse('2026-06-27 12:00:00', 'Europe/Vienna'));
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create([
+            'name' => 'Apple',
+            'latest_price' => null,
+            'latest_price_fetched_at' => null,
+            'latest_price_as_of' => null,
+        ]);
+        $secondHolding = StockHolding::factory()->create([
+            'name' => 'Microsoft',
+            'latest_price' => null,
+            'latest_price_fetched_at' => null,
+            'latest_price_as_of' => null,
+        ]);
+
+        foreach (range(1, 5) as $day) {
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => "2024-01-0{$day}",
+                'close' => number_format(100 + $day, 8, '.', ''),
+                'adjusted_close' => number_format(100 + $day, 8, '.', ''),
+            ]);
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $secondHolding->id,
+                'trading_date' => "2024-02-0{$day}",
+                'close' => number_format(200 + $day, 8, '.', ''),
+                'adjusted_close' => number_format(200 + $day, 8, '.', ''),
+            ]);
+        }
+
+        $this->actingAs($admin)
+            ->postJson('/admin/watchlist/holdings/charts?include_charts=1&all_chart_holdings=1&all=1&history_row_limit=2')
+            ->assertOk()
+            ->assertJsonCount(3, 'holdings.0.daily_prices')
+            ->assertJsonPath('holdings.0.daily_prices.0.trading_date', '2024-01-03')
+            ->assertJsonPath('holdings.0.daily_prices.2.trading_date', '2024-01-05')
+            ->assertJsonCount(3, 'holdings.1.daily_prices')
+            ->assertJsonPath('holdings.1.daily_prices.0.trading_date', '2024-02-03')
+            ->assertJsonPath('holdings.1.daily_prices.2.trading_date', '2024-02-05');
+    }
+
+    public function test_chart_analysis_row_limit_cannot_exceed_one_thousand(): void
+    {
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->postJson('/admin/watchlist/holdings/charts?include_charts=1&history_row_limit=1001')
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('history_row_limit');
+    }
+
     public function test_admin_can_list_watchlist_holdings_with_pagination(): void
     {
         $admin = $this->adminUser();

@@ -21,7 +21,7 @@ class AdminUiPreferencesController extends Controller
     {
         $validated = $request->validate([
             'depot_price_source' => ['sometimes', 'string', Rule::in(UiPreferences::DepotPriceSources)],
-            'analyze_trend_row_limit' => ['sometimes', 'integer', 'min:1', 'max:2000'],
+            'analyze_trend_row_limit' => ['sometimes', 'integer', 'min:1', 'max:'.UiPreferences::MaxAnalyzeTrendRowLimit],
             'analyze_trend_max_invest_amount' => ['sometimes', 'integer', 'min:0', 'max:1000000'],
             'analyze_trend_virtual_buy_amount' => ['sometimes', 'integer', 'min:0', 'max:1000000'],
             'analyze_trend_streak_buy_thresholds' => ['sometimes', 'array', 'min:1', 'max:20'],

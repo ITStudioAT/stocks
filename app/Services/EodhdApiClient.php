@@ -9,6 +9,8 @@ use RuntimeException;
 
 class EodhdApiClient
 {
+    public const AuthenticationErrorMessage = 'EODHD rejected the configured API token (HTTP 401). Update EODHD_API before retrying.';
+
     public function __construct(
         private EodhdApiUsage $apiUsage,
         private EodhdErrorSanitizer $errorSanitizer,
@@ -25,7 +27,7 @@ class EodhdApiClient
         $this->apiUsage->recordCall();
 
         try {
-            return Http::baseUrl((string) config('services.eodhd.base_url', 'https://eodhd.com/api'))
+            $response = Http::baseUrl((string) config('services.eodhd.base_url', 'https://eodhd.com/api'))
                 ->acceptJson()
                 ->connectTimeout((int) config('services.eodhd.connect_timeout', 5))
                 ->timeout((int) config('services.eodhd.timeout', 20))
@@ -36,6 +38,12 @@ class EodhdApiClient
         } catch (ConnectionException $exception) {
             throw new ConnectionException($this->errorSanitizer->message($exception->getMessage()));
         }
+
+        if ($response->status() === 401) {
+            throw new RuntimeException(self::AuthenticationErrorMessage, 401);
+        }
+
+        return $response;
     }
 
     public function configured(): bool

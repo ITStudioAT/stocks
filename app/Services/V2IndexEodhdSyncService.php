@@ -1568,10 +1568,7 @@ class V2IndexEodhdSyncService
     private function responsePayload(Response $response, string $dataType): array
     {
         if ($response->status() === 401) {
-            throw new RuntimeException(
-                'EODHD rejected the configured API token (HTTP 401). Update EODHD_API before retrying.',
-                401,
-            );
+            throw new RuntimeException(EodhdApiClient::AuthenticationErrorMessage, 401);
         }
 
         if ($response->failed()) {

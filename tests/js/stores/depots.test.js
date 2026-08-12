@@ -221,6 +221,43 @@ describe('useDepotStore', () => {
         );
     });
 
+    it('checks and confirms bounded historical row downloads', async () => {
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(jsonResponse({ coverage: { is_complete: false } }))
+            .mockResolvedValueOnce(jsonResponse({ coverage: { is_complete: true } }))
+            .mockResolvedValueOnce(jsonResponse({ depot: null, holdings: [], meta: {} }));
+        vi.stubGlobal('fetch', fetchMock);
+
+        const depots = useDepotStore();
+
+        await depots.loadHistoricalPriceRowCoverage(1000);
+        await depots.ensureHistoricalPriceRows(1000);
+        await depots.loadWatchlistHoldings(1, {
+            allChartHoldings: true,
+            historyRowLimit: 1000,
+            includeCharts: true,
+        });
+
+        expect(fetchMock).toHaveBeenNthCalledWith(
+            1,
+            '/admin/watchlist/holdings/historical-price-rows?row_count=1000',
+            expect.any(Object),
+        );
+        expect(fetchMock).toHaveBeenNthCalledWith(
+            2,
+            '/admin/watchlist/holdings/historical-price-rows',
+            expect.objectContaining({
+                body: JSON.stringify({ row_count: 1000 }),
+                method: 'POST',
+            }),
+        );
+        expect(fetchMock).toHaveBeenNthCalledWith(
+            3,
+            '/admin/watchlist/holdings/charts?page=1&include_charts=1&all_chart_holdings=1&history_row_limit=1000',
+            expect.objectContaining({ method: 'POST' }),
+        );
+    });
+
     it('merges end-of-day repair results without dropping historical data info', async () => {
         const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
             repair: {

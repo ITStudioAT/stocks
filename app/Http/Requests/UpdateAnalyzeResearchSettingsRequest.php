@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Services\AnalyzeResearchSettings;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Validator;
 
@@ -20,7 +21,7 @@ class UpdateAnalyzeResearchSettingsRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'rows' => ['required', 'integer', 'min:1', 'max:2000'],
+            'rows' => ['required', 'integer', 'min:1', 'max:'.AnalyzeResearchSettings::MaxRowCount],
             'buy_rules' => ['required', 'array', 'min:1', 'max:20'],
             'buy_rules.*' => ['required', 'array:enabled,from,to'],
             'buy_rules.*.enabled' => ['required', 'boolean'],

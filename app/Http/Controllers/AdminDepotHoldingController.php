@@ -16,6 +16,7 @@ use App\Services\DepotHoldingPriceRefreshProgress;
 use App\Services\DepotTransactionBooker;
 use App\Services\EndOfDayDataUpdateScheduler;
 use App\Services\EodhdApiUsage;
+use App\Services\EodhdHistoricalDataService;
 use App\Services\EodhdMarketData;
 use App\Services\IndexDataUpdateScheduler;
 use App\Services\IndexPriceRefreshSettings;
@@ -63,6 +64,9 @@ class AdminDepotHoldingController extends Controller
 
     public function index(Request $request): JsonResponse
     {
+        $validated = $request->validate([
+            'history_row_limit' => ['nullable', 'integer', 'min:1', 'max:'.EodhdHistoricalDataService::MaxAnalysisRowCount],
+        ]);
         $activeDepot = $this->activeDepot();
         $mayFetchMissingIntradaySamples = $request->routeIs('admin.watchlist.holdings.charts');
         $includeCharts = $request->boolean('include_charts');
@@ -74,6 +78,9 @@ class AdminDepotHoldingController extends Controller
             : null;
         $includeIntradayCharts = $includeCharts && ! $includeAllChartHoldings && $this->shouldIncludeIntradayCharts($chartRange);
         $dailyChartStockId = $includeAllChartHoldings ? 0 : $chartStockId;
+        $historyRowLimit = isset($validated['history_row_limit'])
+            ? (int) $validated['history_row_limit']
+            : null;
         $relations = [
             'latestRealtimePrice',
             'latestStockPrice',
@@ -83,11 +90,24 @@ class AdminDepotHoldingController extends Controller
             $historyRange = $this->stockHistoricalPriceService->range();
             $relations = [
                 ...$relations,
-                'dailyPrices' => fn ($query) => $this->selectedChartRelation($query, $dailyChartStockId)
-                    ->whereDate('trading_date', '>=', $historyRange['from']->toDateString())
-                    ->whereDate('trading_date', '<=', $historyRange['to']->toDateString())
-                    ->orderBy('trading_date')
-                    ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'adjusted_close', 'volume', 'currency']),
+                'dailyPrices' => function ($query) use ($dailyChartStockId, $historyRange, $historyRowLimit) {
+                    $query = $this->selectedChartRelation($query, $dailyChartStockId)
+                        ->whereDate('trading_date', '<=', $historyRange['to']->toDateString())
+                        ->where(fn ($query) => $query
+                            ->whereNotNull('adjusted_close')
+                            ->orWhereNotNull('close'))
+                        ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'adjusted_close', 'volume', 'currency']);
+
+                    if ($historyRowLimit !== null) {
+                        return $query
+                            ->orderByDesc('trading_date')
+                            ->limit($historyRowLimit + 1);
+                    }
+
+                    return $query
+                        ->whereDate('trading_date', '>=', $historyRange['from']->toDateString())
+                        ->orderBy('trading_date');
+                },
             ];
 
             if ($includeIntradayCharts) {
@@ -1749,6 +1769,7 @@ class AdminDepotHoldingController extends Controller
         }
 
         $dailyPrices = $holding->dailyPrices
+            ->sortBy('trading_date')
             ->map(fn (StockHoldingDailyPrice $price): array => [
                 'trading_date' => $price->trading_date->toDateString(),
                 'price' => (string) ($price->adjusted_close ?? $price->close),

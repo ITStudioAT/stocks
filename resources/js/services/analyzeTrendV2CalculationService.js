@@ -1,3 +1,5 @@
+const maxAnalyzeTrendRowLimit = 1000;
+
 export function calculateAnalyzeTrendV2Rows(
     dailyPrices,
     {
@@ -626,7 +628,9 @@ function normalizePositiveNumber(value) {
 function normalizeRowLimit(rowLimit) {
     const number = Number(rowLimit);
 
-    return Number.isFinite(number) && number > 0 ? Math.floor(number) : 1;
+    return Number.isFinite(number) && number > 0
+        ? Math.min(Math.floor(number), maxAnalyzeTrendRowLimit)
+        : 1;
 }
 
 function priceChangePercent(price, referencePrice) {

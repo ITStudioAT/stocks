@@ -93,6 +93,22 @@ describe('analyze Trend V2 calculation service', () => {
         expect(calculateAnalyzeTrendV2Total(rows)).toBeNull();
     });
 
+    it('never calculates more than one thousand analysis rows', () => {
+        const prices = Array.from({ length: 1005 }, (_, index) => ({
+            trading_date: new Date(Date.UTC(2020, 0, index + 1)).toISOString().slice(0, 10),
+            price: String(100 + index),
+        }));
+
+        const rows = calculateAnalyzeTrendV2Rows(prices, {
+            rowLimit: 2000,
+            virtualBuyAmount: 7000,
+            buyThresholds,
+            sellThreshold: 3,
+        });
+
+        expect(rows).toHaveLength(1000);
+    });
+
     it('returns no rows for missing price data', () => {
         expect(calculateAnalyzeTrendV2Rows(null, {
             virtualBuyAmount: 7000,

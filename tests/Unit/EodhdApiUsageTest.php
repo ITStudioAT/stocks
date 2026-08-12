@@ -5,9 +5,11 @@ namespace Tests\Unit;
 use App\Services\EodhdApiClient;
 use App\Services\EodhdApiUsage;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use RuntimeException;
 use Tests\TestCase;
 
 class EodhdApiUsageTest extends TestCase
@@ -94,5 +96,26 @@ class EodhdApiUsageTest extends TestCase
             $this->assertStringContainsString('api_token=[redacted]', $exception->getMessage());
             $this->assertNull($exception->getPrevious());
         }
+    }
+
+    public function test_the_api_client_reports_an_actionable_authentication_error(): void
+    {
+        config(['services.eodhd.key' => 'invalid-test-token']);
+        Http::preventStrayRequests();
+        Http::fake([
+            'eodhd.com/api/*' => Http::response([], 401),
+        ]);
+
+        try {
+            app(EodhdApiClient::class)->get('eod/AAPL.US', ['fmt' => 'json']);
+            $this->fail('Expected the invalid EODHD token to be rejected.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame(401, $exception->getCode());
+            $this->assertSame(EodhdApiClient::AuthenticationErrorMessage, $exception->getMessage());
+            $this->assertStringNotContainsString('invalid-test-token', $exception->getMessage());
+        }
+
+        Http::assertSentCount(1);
+        Http::assertSent(fn (Request $request): bool => $request['api_token'] === 'invalid-test-token');
     }
 }

@@ -54,14 +54,14 @@ class UiPreferencesTest extends TestCase
 
         $this->actingAs($admin)
             ->patchJson('/admin/ui-preferences', [
-                'analyze_trend_row_limit' => 500,
+                'analyze_trend_row_limit' => 1000,
             ])
             ->assertOk()
-            ->assertJsonPath('ui_preferences.analyze_trend_row_limit', 500);
+            ->assertJsonPath('ui_preferences.analyze_trend_row_limit', 1000);
 
         $config = AppConfig::query()->where('key', "ui.preferences.user.{$admin->id}")->firstOrFail();
 
-        $this->assertSame(500, $config->value['analyze_trend_row_limit']);
+        $this->assertSame(1000, $config->value['analyze_trend_row_limit']);
 
         $this->actingAs($admin)
             ->patchJson('/admin/ui-preferences', [
@@ -217,6 +217,18 @@ class UiPreferencesTest extends TestCase
             ])
             ->assertUnprocessable()
             ->assertJsonValidationErrors('analyze_trend_virtual_buy_amount');
+    }
+
+    public function test_analyze_trend_row_limit_cannot_exceed_one_thousand(): void
+    {
+        $admin = $this->adminUser();
+
+        $this->actingAs($admin)
+            ->patchJson('/admin/ui-preferences', [
+                'analyze_trend_row_limit' => 1001,
+            ])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('analyze_trend_row_limit');
     }
 
     public function test_admin_cannot_update_removed_analyze_trend_preferences(): void

@@ -1129,6 +1129,13 @@ describe('App', () => {
                 value: 80000,
             },
         };
+        let historicalPriceRowCoverage = {
+            requested_row_count: 200,
+            required_price_count: 201,
+            missing_holding_count: 0,
+            minimum_available_row_count: 200,
+            is_complete: true,
+        };
         const fetchMock = vi.fn((path, options = {}) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -1162,6 +1169,30 @@ describe('App', () => {
 
                 return Promise.resolve(jsonResponse({
                     research_settings: currentResearchSettings,
+                }));
+            }
+
+            if (path.startsWith('/admin/watchlist/holdings/historical-price-rows?')) {
+                return Promise.resolve(jsonResponse({
+                    coverage: historicalPriceRowCoverage,
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/historical-price-rows' && options.method === 'POST') {
+                const payload = JSON.parse(options.body);
+                historicalPriceRowCoverage = {
+                    requested_row_count: payload.row_count,
+                    required_price_count: payload.row_count + 1,
+                    missing_holding_count: 0,
+                    minimum_available_row_count: payload.row_count,
+                    is_complete: true,
+                };
+
+                return Promise.resolve(jsonResponse({
+                    coverage: historicalPriceRowCoverage,
+                    errors: [],
+                    failed_count: 0,
+                    stored_count: payload.row_count,
                 }));
             }
 
@@ -1701,6 +1732,10 @@ describe('App', () => {
         expect(researchSimulationResults.text()).toContain('No simulation results yet.');
 
         await simulateResearchButton.trigger('click');
+        for (let index = 0; index < 8; index += 1) {
+            await Promise.resolve();
+        }
+        await wrapper.vm.$nextTick();
 
         expect(simulateResearchButton.attributes('disabled')).toBeDefined();
         expect(stopResearchSimulationButton.attributes('disabled')).toBeUndefined();
@@ -1863,7 +1898,32 @@ describe('App', () => {
             .click();
         await flushPromises();
 
-        expect(currentResearchSettings.rows).toBe(200);
+        historicalPriceRowCoverage = {
+            requested_row_count: 300,
+            required_price_count: 301,
+            missing_holding_count: 3,
+            minimum_available_row_count: 25,
+            is_complete: false,
+        };
+        await analyzeResearch.find('[aria-label="Edit research rows"]').trigger('click');
+        await flushPromises();
+        researchSettingsDialog = document.body.querySelector('.analyze-research-settings-dialog');
+        expect(researchSettingsDialog.querySelector('[aria-label="Research rows"]').max).toBe('1000');
+        updateResearchInput(researchSettingsDialog, 'Research rows', '300');
+        Array.from(researchSettingsDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Save settings'))
+            .click();
+        await flushPromises();
+
+        const historicalRowsDialog = document.body.querySelector('.historical-price-rows-confirmation-dialog');
+        expect(historicalRowsDialog.classList.contains('v-overlay--active')).toBe(true);
+        expect(historicalRowsDialog.textContent).toContain('300 analysis rows were requested');
+        Array.from(historicalRowsDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Cancel'))
+            .click();
+        await flushPromises();
+
+        expect(currentResearchSettings.rows).toBe(300);
         expect(currentResearchSettings.buy_rules[0]).toEqual({ enabled: false, from: -4, to: -4 });
         expect(currentResearchSettings.buy_step).toBe(0.05);
         expect(currentResearchSettings.sell).toEqual({ from: 3, to: 3, step: 0.25 });
@@ -3754,6 +3814,165 @@ describe('App', () => {
         expect(analyzeOverview.find('.analyze-history-status').exists()).toBe(false);
 
         wrapper.unmount();
+    });
+
+    it('downloads missing analysis rows only after explicit confirmation', async () => {
+        window.history.pushState({}, '', '/admin/menu/analyze/trend-v2?stock=1');
+        const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 1, from: 1, to: 1 };
+        const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
+        let requestedRowCount = 200;
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: { id: 1, name: 'Admin User', email: 'admin@example.com', roles: ['admin'] },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                    ui_preferences: {
+                        depot_price_source: 'latest',
+                        analyze_trend_row_limit: requestedRowCount,
+                    },
+                }));
+            }
+
+            if (isWatchlistHoldingsRequest(path)) {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [{
+                        id: 1,
+                        symbol: 'AAPL',
+                        name: 'Apple',
+                        currency: 'USD',
+                        latest_price: '190.000000',
+                        daily_prices: [
+                            { trading_date: '2026-06-03', price: '188.000000', currency: 'USD' },
+                            { trading_date: '2026-06-04', price: '189.000000', currency: 'USD' },
+                            { trading_date: '2026-06-05', price: '190.000000', currency: 'USD' },
+                        ],
+                    }],
+                    meta: pagination,
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                    ui_preferences: {
+                        depot_price_source: 'latest',
+                        analyze_trend_row_limit: requestedRowCount,
+                    },
+                }));
+            }
+
+            if (path === '/admin/ui-preferences' && options.method === 'PATCH') {
+                requestedRowCount = JSON.parse(options.body).analyze_trend_row_limit;
+
+                return Promise.resolve(jsonResponse({
+                    message: 'UI preferences updated.',
+                    ui_preferences: {
+                        depot_price_source: 'latest',
+                        analyze_trend_row_limit: requestedRowCount,
+                    },
+                }));
+            }
+
+            if (path.startsWith('/admin/watchlist/holdings/historical-price-rows?')) {
+                return Promise.resolve(jsonResponse({
+                    coverage: {
+                        requested_row_count: requestedRowCount,
+                        required_price_count: requestedRowCount + 1,
+                        missing_holding_count: 1,
+                        minimum_available_row_count: 2,
+                        is_complete: false,
+                    },
+                }));
+            }
+
+            if (path === '/admin/watchlist/holdings/historical-price-rows' && options.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    coverage: {
+                        requested_row_count: requestedRowCount,
+                        required_price_count: requestedRowCount + 1,
+                        missing_holding_count: 0,
+                        minimum_available_row_count: requestedRowCount,
+                        is_complete: true,
+                    },
+                    errors: [],
+                    failed_count: 0,
+                    stored_count: requestedRowCount - 2,
+                }));
+            }
+
+            if (path === '/admin/watchlist/exchange-trading-times') {
+                return Promise.resolve(jsonResponse({ exchange_trading_times: [] }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({ depots: [depot], meta: pagination }));
+            }
+
+            return Promise.resolve(jsonResponse({}));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const rowControl = wrapper.find('[aria-label="Edit trend row count"]');
+        await rowControl.trigger('click');
+        await flushPromises();
+
+        const rowDialog = document.body.querySelector('.analyze-trend-rows-dialog');
+        const rowInput = rowDialog.querySelector('input');
+        expect(rowInput.max).toBe('1000');
+        rowInput.value = '500';
+        rowInput.dispatchEvent(new Event('input', { bubbles: true }));
+        Array.from(rowDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Save'))
+            .click();
+        await flushPromises();
+
+        let confirmationDialog = document.body.querySelector('.historical-price-rows-confirmation-dialog');
+        expect(confirmationDialog.classList.contains('v-overlay--active')).toBe(true);
+        expect(confirmationDialog.textContent).toContain('500 analysis rows were requested');
+        expect(fetchMock.mock.calls.some(([path, options]) => (
+            path === '/admin/watchlist/holdings/historical-price-rows' && options.method === 'POST'
+        ))).toBe(false);
+
+        Array.from(confirmationDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Cancel'))
+            .click();
+        await flushPromises();
+
+        expect(fetchMock.mock.calls.some(([path, options]) => (
+            path === '/admin/watchlist/holdings/historical-price-rows' && options.method === 'POST'
+        ))).toBe(false);
+
+        await rowControl.trigger('click');
+        await flushPromises();
+        Array.from(rowDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Save'))
+            .click();
+        await flushPromises();
+
+        confirmationDialog = document.body.querySelector('.historical-price-rows-confirmation-dialog');
+        Array.from(confirmationDialog.querySelectorAll('button'))
+            .find((button) => button.textContent.includes('Download'))
+            .click();
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/admin/watchlist/holdings/historical-price-rows',
+            expect.objectContaining({
+                body: JSON.stringify({ row_count: 500 }),
+                method: 'POST',
+            }),
+        );
+        expect(fetchMock.mock.calls.some(([path]) => (
+            path.startsWith('/admin/watchlist/holdings/charts?')
+            && path.includes('history_row_limit=500')
+        ))).toBe(true);
     });
 
     it('does not show historical stock price result messages on the Analyze overview', async () => {

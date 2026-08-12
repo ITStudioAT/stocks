@@ -30,7 +30,7 @@ const logoMarkUrl = '/images/gkstocks-logo-mark.png';
 const displayTimeZone = 'Europe/Vienna';
 const kestTaxRate = 0.275;
 const defaultAnalyzeTrendRowLimit = 200;
-const maxAnalyzeTrendRowLimit = 2000;
+const maxAnalyzeTrendRowLimit = 1000;
 const indexPriceRangeItems = [
     { key: 'intraday', label: 'Intraday' },
     { key: '1w', label: '1 week' },
@@ -58,7 +58,7 @@ const defaultAnalyzeResearchSellThreshold = 3;
 const defaultAnalyzeResearchBuyStep = 0.1;
 const defaultAnalyzeResearchSellStep = 0.1;
 const defaultAnalyzeResearchRowLimit = 200;
-const maxAnalyzeResearchRowLimit = 2000;
+const maxAnalyzeResearchRowLimit = 1000;
 const defaultAnalyzeResearchInvest = { from: 7000, to: 7000, step: 100 };
 const defaultAnalyzeResearchMaxInvest = { value: 80000 };
 const maxAnalyzeResearchInvestment = 1000000;
@@ -259,6 +259,11 @@ const isAnalyzeResearchSimulationRunning = ref(false);
 const isAnalyzeResearchSimulationPaused = ref(false);
 const isAnalyzeResearchSimulationDataLoading = ref(false);
 const isAnalyzeResearchSimulationDataLoaded = ref(false);
+const historicalPriceRowsConfirmation = ref(null);
+const historicalPriceRowsChecking = ref(false);
+const historicalPriceRowsDownloading = ref(false);
+const historicalPriceRowsError = ref('');
+const isHistoricalPriceRowsConfirmationOpen = ref(false);
 const analyzeResearchSimulationDescription = ref('');
 const analyzeResearchSimulationResult = ref(null);
 const analyzeResearchSimulationBestResults = ref([]);
@@ -3042,6 +3047,13 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
         || activeSection.value === 'stocks'
         || shouldIncludeTrendSignals
         || (activeSection.value === 'data' && activeDataSubsection.value === 'stocks');
+    const historyRowLimit = shouldIncludeResearchSimulationCharts
+        ? analyzeResearchSettings.value.rows
+        : (activeSection.value === 'analyze'
+            && isAnalyzeTrendSubsection(activeAnalyzeSubsection.value)
+            && shouldIncludeAnalyzeCharts
+                ? analyzeTrendRowLimit.value
+                : null);
 
     if (shouldIncludeResearchSimulationCharts && analyzeResearchSimulationDataRequest !== null) {
         return analyzeResearchSimulationDataRequest;
@@ -3060,6 +3072,7 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
             : shouldIncludeDashboardTrendSignals
                 ? '1y'
                 : (shouldIncludeAnalyzeCharts ? selectedAnalyzeHistoryRange.value : null),
+        historyRowLimit: options.historyRowLimit ?? historyRowLimit,
     });
 
     if (!shouldIncludeResearchSimulationCharts) {
@@ -3876,10 +3889,92 @@ async function saveAnalyzeTrendRowLimit() {
         });
 
         isAnalyzeTrendRowLimitDialogOpen.value = false;
+        await requestHistoricalPriceRows(rowLimit);
     } catch (error) {
         transactionsError.value = error.message;
     } finally {
         isAnalyzeTrendRowLimitSaving.value = false;
+    }
+}
+
+async function requestHistoricalPriceRows(rowCount, options = {}) {
+    if (historicalPriceRowsChecking.value) {
+        return false;
+    }
+
+    try {
+        historicalPriceRowsChecking.value = true;
+        const data = await depotsStore.loadHistoricalPriceRowCoverage(rowCount);
+        const coverage = data.coverage;
+
+        if (coverage?.is_complete !== false) {
+            return true;
+        }
+
+        historicalPriceRowsConfirmation.value = {
+            coverage,
+            resumeResearchSimulation: options.resumeResearchSimulation === true,
+            rowCount,
+        };
+        historicalPriceRowsError.value = '';
+        isHistoricalPriceRowsConfirmationOpen.value = true;
+
+        return false;
+    } finally {
+        historicalPriceRowsChecking.value = false;
+    }
+}
+
+function cancelHistoricalPriceRowsDownload() {
+    if (historicalPriceRowsDownloading.value) {
+        return;
+    }
+
+    historicalPriceRowsConfirmation.value = null;
+    historicalPriceRowsError.value = '';
+    isHistoricalPriceRowsConfirmationOpen.value = false;
+}
+
+async function confirmHistoricalPriceRowsDownload() {
+    const confirmation = historicalPriceRowsConfirmation.value;
+
+    if (confirmation === null || historicalPriceRowsDownloading.value) {
+        return;
+    }
+
+    try {
+        historicalPriceRowsDownloading.value = true;
+        historicalPriceRowsError.value = '';
+        const data = await depotsStore.ensureHistoricalPriceRows(confirmation.rowCount);
+
+        await loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page, {
+            historyRowLimit: confirmation.rowCount,
+            silent: true,
+        });
+
+        if (data.coverage?.is_complete !== true) {
+            const providerError = data.errors?.[0];
+            const availableRows = data.coverage?.minimum_available_row_count ?? 0;
+            historicalPriceRowsConfirmation.value = {
+                ...confirmation,
+                coverage: data.coverage ?? confirmation.coverage,
+            };
+            historicalPriceRowsError.value = providerError
+                ?? `Only ${availableRows} analysis rows are currently available. No more rows were returned.`;
+
+            return;
+        }
+
+        historicalPriceRowsConfirmation.value = null;
+        isHistoricalPriceRowsConfirmationOpen.value = false;
+
+        if (confirmation.resumeResearchSimulation) {
+            await startAnalyzeResearchSimulation({ skipHistoricalPriceCheck: true });
+        }
+    } catch (error) {
+        historicalPriceRowsError.value = error.message;
+    } finally {
+        historicalPriceRowsDownloading.value = false;
     }
 }
 
@@ -4045,7 +4140,7 @@ function normalizeAnalyzeResearchSettings(settings) {
 
     return {
         rows: Number.isInteger(Number(settings?.rows))
-            ? Number(settings.rows)
+            ? Math.min(Math.max(Number(settings.rows), 1), maxAnalyzeResearchRowLimit)
             : defaults.rows,
         buy_rules: buyRules.map((buyRule, index) => {
             const fallback = defaults.buy_rules[index] ?? { enabled: true, from: 0, to: 0 };
@@ -4212,6 +4307,8 @@ async function saveAnalyzeResearchSettings() {
         },
     };
 
+    const shouldCheckHistoricalPriceRows = analyzeResearchEditSection.value === 'rows';
+
     try {
         analyzeResearchSettingsSaving.value = true;
         analyzeResearchSettingsError.value = '';
@@ -4226,6 +4323,10 @@ async function saveAnalyzeResearchSettings() {
         analyzeResearchSettingsMessage.value = data.message ?? 'Research settings saved.';
         isAnalyzeResearchSettingsDialogOpen.value = false;
         analyzeResearchEditSection.value = '';
+
+        if (shouldCheckHistoricalPriceRows) {
+            await requestHistoricalPriceRows(analyzeResearchSettings.value.rows);
+        }
     } catch (error) {
         analyzeResearchSettingsError.value = error.message;
     } finally {
@@ -4233,9 +4334,25 @@ async function saveAnalyzeResearchSettings() {
     }
 }
 
-async function startAnalyzeResearchSimulation() {
+async function startAnalyzeResearchSimulation(options = {}) {
     if (isAnalyzeResearchSimulationRunning.value) {
         return;
+    }
+
+    if (options.skipHistoricalPriceCheck !== true) {
+        try {
+            const isReady = await requestHistoricalPriceRows(analyzeResearchSettings.value.rows, {
+                resumeResearchSimulation: true,
+            });
+
+            if (!isReady) {
+                return;
+            }
+        } catch (error) {
+            analyzeResearchSimulationMessage.value = `Historical price coverage could not be checked: ${error.message}`;
+
+            return;
+        }
     }
 
     const simulationHoldings = holdings.value.filter((holding) => (
@@ -15048,8 +15165,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                         type="button"
                                         variant="flat"
                                         :disabled="isAnalyzeResearchSimulationRunning
+                                            || historicalPriceRowsChecking
                                             || isAnalyzeResearchSimulationDataLoading
                                             || !isAnalyzeResearchSimulationDataLoaded"
+                                        :loading="historicalPriceRowsChecking"
                                         @click="startAnalyzeResearchSimulation"
                                     >
                                         Simulate
@@ -20763,6 +20882,58 @@ function formatIndexDataUpdateSchedule(settings) {
                 </v-container>
             </v-main>
         </template>
+
+        <v-dialog
+            v-model="isHistoricalPriceRowsConfirmationOpen"
+            class="historical-price-rows-confirmation-dialog"
+            persistent
+            max-width="520"
+        >
+            <v-card>
+                <v-card-title>Download historical prices?</v-card-title>
+                <v-card-text>
+                    <v-alert
+                        v-if="historicalPriceRowsError"
+                        class="mb-4"
+                        density="compact"
+                        type="error"
+                        variant="tonal"
+                    >
+                        {{ historicalPriceRowsError }}
+                    </v-alert>
+                    <p>
+                        {{ historicalPriceRowsConfirmation?.rowCount }} analysis rows were requested, but at least one
+                        stock has only {{ historicalPriceRowsConfirmation?.coverage?.minimum_available_row_count ?? 0 }}
+                        stored rows available.
+                    </p>
+                    <p class="mt-3 text-medium-emphasis">
+                        Download the missing daily prices for
+                        {{ historicalPriceRowsConfirmation?.coverage?.missing_holding_count ?? 0 }} stock(s)?
+                        Requests are capped at 1,000 analysis rows.
+                    </p>
+                </v-card-text>
+                <v-card-actions>
+                    <v-spacer />
+                    <v-btn
+                        type="button"
+                        variant="text"
+                        :disabled="historicalPriceRowsDownloading"
+                        @click="cancelHistoricalPriceRowsDownload"
+                    >
+                        Cancel
+                    </v-btn>
+                    <v-btn
+                        type="button"
+                        color="primary"
+                        variant="flat"
+                        :loading="historicalPriceRowsDownloading"
+                        @click="confirmHistoricalPriceRowsDownload"
+                    >
+                        Download
+                    </v-btn>
+                </v-card-actions>
+            </v-card>
+        </v-dialog>
     </v-app>
 </template>
 

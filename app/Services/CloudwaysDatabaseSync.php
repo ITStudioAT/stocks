@@ -211,6 +211,7 @@ class CloudwaysDatabaseSync
                             ]);
                         }
 
+                        $this->refreshSourceConnection($sourceConnectionName);
                         $syncedTable = $this->syncTable($sourceConnectionName, $targetConnectionName, $table);
                         $syncedTables[] = $syncedTable;
 
@@ -976,6 +977,17 @@ class CloudwaysDatabaseSync
             'status' => 'imported',
             'message' => "Imported {$table}: {$rows} row(s), ".count($columns).' column(s).',
         ];
+    }
+
+    protected function refreshSourceConnection(string $sourceConnectionName): void
+    {
+        $driver = config("database.connections.{$sourceConnectionName}.driver");
+
+        if (! in_array($driver, ['mysql', 'mariadb'], true)) {
+            return;
+        }
+
+        DB::purge($sourceConnectionName);
     }
 
     /**

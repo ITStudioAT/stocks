@@ -10,6 +10,7 @@ use App\Http\Controllers\AdminDepotController;
 use App\Http\Controllers\AdminDepotHoldingController;
 use App\Http\Controllers\AdminDepotStockPeriodController;
 use App\Http\Controllers\AdminDepotTransactionController;
+use App\Http\Controllers\AdminHistoricalPriceRowsController;
 use App\Http\Controllers\AdminIndexWatchItemController;
 use App\Http\Controllers\AdminInfoController;
 use App\Http\Controllers\AdminPriceRefreshSettingsController;
@@ -227,6 +228,11 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
     Route::post('/admin/watchlist/holdings/historical-prices/ensure', [AdminStockHistoricalPriceController::class, 'ensure'])
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.watchlist.holdings.historical-prices.ensure');
+    Route::get('/admin/watchlist/holdings/historical-price-rows', [AdminHistoricalPriceRowsController::class, 'show'])
+        ->name('admin.watchlist.holdings.historical-price-rows.show');
+    Route::post('/admin/watchlist/holdings/historical-price-rows', [AdminHistoricalPriceRowsController::class, 'store'])
+        ->middleware('throttle:admin.costly-operation')
+        ->name('admin.watchlist.holdings.historical-price-rows.store');
     Route::patch('/admin/watchlist/holdings/{holding}', [AdminDepotHoldingController::class, 'update'])->name('admin.watchlist.holdings.update');
     Route::patch('/admin/watchlist/holdings/{holding}/flatex-price', [AdminDepotHoldingController::class, 'updateFlatexPrice'])->name('admin.watchlist.holdings.flatex-price');
     Route::delete('/admin/watchlist/holdings/{holding}', [AdminDepotHoldingController::class, 'destroy'])->name('admin.watchlist.holdings.destroy');

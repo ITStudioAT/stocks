@@ -7,6 +7,8 @@ use App\Models\User;
 
 class AnalyzeResearchSettings
 {
+    public const MaxRowCount = 1000;
+
     /**
      * @var array<int, float>
      */
@@ -124,7 +126,7 @@ class AnalyzeResearchSettings
         $legacyStep = $this->normalizeDecimal($settings['step'] ?? null, 0.1, 0.000001, 100.0);
 
         return [
-            'rows' => $this->normalizeInteger($settings['rows'] ?? null, 200, 1, 2000),
+            'rows' => $this->normalizeInteger($settings['rows'] ?? null, 200, 1, self::MaxRowCount),
             'buy_rules' => array_values(array_map(
                 fn (mixed $buyRule): array => $this->normalizeBuyRule($buyRule),
                 $buyRules,

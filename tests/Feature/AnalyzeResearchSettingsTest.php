@@ -49,7 +49,7 @@ class AnalyzeResearchSettingsTest extends TestCase
         $admin = $this->adminUser();
 
         $payload = [
-            'rows' => 350,
+            'rows' => 1000,
             'buy_rules' => [
                 ['enabled' => true, 'from' => -5.75, 'to' => -3.25],
                 ['enabled' => false, 'from' => -3.2, 'to' => -1.05],
@@ -71,6 +71,13 @@ class AnalyzeResearchSettingsTest extends TestCase
         $setting = AnalyzeResearchSetting::query()->whereBelongsTo($admin)->firstOrFail();
 
         $this->assertSame($payload, $setting->settings);
+
+        $payload['rows'] = 1001;
+
+        $this->actingAs($admin)
+            ->patchJson('/admin/analyze/research-settings', $payload)
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('rows');
     }
 
     public function test_research_settings_are_user_specific(): void

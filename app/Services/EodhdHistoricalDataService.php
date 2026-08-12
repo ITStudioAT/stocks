@@ -7,18 +7,97 @@ use App\Models\StockHoldingDailyPrice;
 use App\Models\StockPrice;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
+use InvalidArgumentException;
 use RuntimeException;
 use Throwable;
 
 class EodhdHistoricalDataService
 {
+    public const MaxAnalysisRowCount = 1000;
+
     public function __construct(
         private EodhdApiClient $apiClient,
         private EodhdErrorSanitizer $errorSanitizer,
         private EodhdMarketData $marketData,
         private StockPriceCatalog $stockPriceCatalog,
+        private CompletedTradingDay $completedTradingDay,
     ) {}
+
+    /**
+     * @return array{
+     *     requested_row_count: int,
+     *     required_price_count: int,
+     *     holding_count: int,
+     *     missing_holding_count: int,
+     *     minimum_available_row_count: int,
+     *     is_complete: bool,
+     *     holdings: array<int, array{id: int, label: string, stored_price_count: int, available_row_count: int, missing_price_count: int}>,
+     * }
+     */
+    public function rowCoverage(int $rowCount): array
+    {
+        $this->validateAnalysisRowCount($rowCount);
+
+        return $this->rowCoverageForHoldings($this->holdingsWithStoredPriceCounts(), $rowCount);
+    }
+
+    /**
+     * @return array{
+     *     requested_count: int,
+     *     stored_count: int,
+     *     skipped_count: int,
+     *     failed_count: int,
+     *     errors: array<int, string>,
+     *     coverage: array<string, mixed>,
+     * }
+     */
+    public function ensureRows(int $rowCount): array
+    {
+        $this->validateAnalysisRowCount($rowCount);
+
+        $requiredPriceCount = $rowCount + 1;
+        $holdings = $this->holdingsWithStoredPriceCounts();
+        $requestedCount = 0;
+        $storedCount = 0;
+        $skippedCount = 0;
+        $failedCount = 0;
+        $errors = [];
+
+        foreach ($holdings as $holding) {
+            if ((int) $holding->stored_price_count >= $requiredPriceCount) {
+                $skippedCount++;
+
+                continue;
+            }
+
+            try {
+                $result = Cache::lock("eodhd-historical-row-backfill:{$holding->id}", 120)
+                    ->block(5, fn (): array => $this->backfillHoldingRows($holding, $requiredPriceCount));
+
+                $requestedCount += $result['requested_count'];
+                $storedCount += $result['stored_count'];
+                $skippedCount += $result['skipped_count'];
+            } catch (Throwable $exception) {
+                $failedCount++;
+                $errors[] = $this->errorSanitizer->message($exception->getMessage());
+
+                if ($exception->getCode() === 401) {
+                    break;
+                }
+            }
+        }
+
+        return [
+            'requested_count' => $requestedCount,
+            'stored_count' => $storedCount,
+            'skipped_count' => $skippedCount,
+            'failed_count' => $failedCount,
+            'errors' => $errors,
+            'coverage' => $this->rowCoverage($rowCount),
+        ];
+    }
 
     /**
      * @return array{
@@ -60,6 +139,10 @@ class EodhdHistoricalDataService
             } catch (Throwable $exception) {
                 $failedCount++;
                 $errors[] = $this->errorSanitizer->message($exception->getMessage());
+
+                if ($exception->getCode() === 401) {
+                    break;
+                }
 
                 continue;
             }
@@ -116,6 +199,120 @@ class EodhdHistoricalDataService
             ->get(['id', 'name', 'isin', 'wkn', 'symbol', 'exchange', 'mic_code', 'currency', 'trading_times']);
     }
 
+    /**
+     * @return Collection<int, StockHolding>
+     */
+    private function holdingsWithStoredPriceCounts(): Collection
+    {
+        return StockHolding::query()
+            ->select(['id', 'name', 'subtitle', 'isin', 'wkn', 'symbol', 'exchange', 'mic_code', 'currency', 'trading_times'])
+            ->withCount([
+                'dailyPrices as stored_price_count' => fn ($query) => $query
+                    ->where(fn ($query) => $query
+                        ->whereNotNull('adjusted_close')
+                        ->orWhereNotNull('close')),
+            ])
+            ->orderBy('id')
+            ->get();
+    }
+
+    /**
+     * @param  Collection<int, StockHolding>  $holdings
+     * @return array{
+     *     requested_row_count: int,
+     *     required_price_count: int,
+     *     holding_count: int,
+     *     missing_holding_count: int,
+     *     minimum_available_row_count: int,
+     *     is_complete: bool,
+     *     holdings: array<int, array{id: int, label: string, stored_price_count: int, available_row_count: int, missing_price_count: int}>,
+     * }
+     */
+    private function rowCoverageForHoldings(Collection $holdings, int $rowCount): array
+    {
+        $requiredPriceCount = $rowCount + 1;
+        $coverageHoldings = $holdings
+            ->map(function (StockHolding $holding) use ($requiredPriceCount): array {
+                $storedPriceCount = (int) $holding->stored_price_count;
+
+                return [
+                    'id' => $holding->id,
+                    'label' => collect([$holding->symbol, $holding->name, $holding->subtitle])->filter()->implode(' - '),
+                    'stored_price_count' => $storedPriceCount,
+                    'available_row_count' => max($storedPriceCount - 1, 0),
+                    'missing_price_count' => max($requiredPriceCount - $storedPriceCount, 0),
+                ];
+            })
+            ->values();
+        $missingHoldingCount = $coverageHoldings
+            ->where('missing_price_count', '>', 0)
+            ->count();
+
+        return [
+            'requested_row_count' => $rowCount,
+            'required_price_count' => $requiredPriceCount,
+            'holding_count' => $coverageHoldings->count(),
+            'missing_holding_count' => $missingHoldingCount,
+            'minimum_available_row_count' => (int) ($coverageHoldings->min('available_row_count') ?? 0),
+            'is_complete' => $missingHoldingCount === 0,
+            'holdings' => $coverageHoldings->all(),
+        ];
+    }
+
+    /**
+     * @return array{requested_count: int, stored_count: int, skipped_count: int}
+     */
+    private function backfillHoldingRows(StockHolding $holding, int $requiredPriceCount): array
+    {
+        $storedPriceCount = $this->storedPriceCount($holding);
+
+        if ($storedPriceCount >= $requiredPriceCount) {
+            return [
+                'requested_count' => 0,
+                'stored_count' => 0,
+                'skipped_count' => 1,
+            ];
+        }
+
+        $missingPriceCount = $requiredPriceCount - $storedPriceCount;
+        $earliestTradingDate = StockHoldingDailyPrice::query()
+            ->where('stock_holding_id', $holding->id)
+            ->where(fn ($query) => $query
+                ->whereNotNull('adjusted_close')
+                ->orWhereNotNull('close'))
+            ->min('trading_date');
+        $dateTo = $earliestTradingDate === null
+            ? $this->completedTradingDay->date()
+            : Carbon::parse($earliestTradingDate, 'Europe/Vienna')->subDay()->startOfDay();
+        $dateFrom = $dateTo->copy()->subDays(max(45, ($missingPriceCount * 2) + 14));
+
+        $this->storePrices($holding, $dateFrom, $dateTo, $missingPriceCount);
+        $updatedStoredPriceCount = $this->storedPriceCount($holding);
+
+        return [
+            'requested_count' => 1,
+            'stored_count' => max($updatedStoredPriceCount - $storedPriceCount, 0),
+            'skipped_count' => 0,
+        ];
+    }
+
+    private function storedPriceCount(StockHolding $holding): int
+    {
+        return StockHoldingDailyPrice::query()
+            ->where('stock_holding_id', $holding->id)
+            ->where(fn ($query) => $query
+                ->whereNotNull('adjusted_close')
+                ->orWhereNotNull('close'))
+            ->count();
+    }
+
+    private function validateAnalysisRowCount(int $rowCount): void
+    {
+        if ($rowCount < 1 || $rowCount > self::MaxAnalysisRowCount) {
+            throw new InvalidArgumentException('The requested analysis row count must be between 1 and 1,000.');
+        }
+    }
+
     private function nextMissingDate(StockHolding $holding): Carbon
     {
         $latestAsOf = $this->stockPriceCatalog->pricesForHolding($holding)
@@ -143,8 +340,12 @@ class EodhdHistoricalDataService
             ->first();
     }
 
-    private function storePrices(StockHolding $holding, Carbon $dateFrom, Carbon $dateTo): int
-    {
+    private function storePrices(
+        StockHolding $holding,
+        Carbon $dateFrom,
+        Carbon $dateTo,
+        ?int $maximumRecordCount = null,
+    ): int {
         $symbol = $this->symbol($holding);
         $exchangeCode = $this->marketData->exchangeCodeForHolding($holding);
 
@@ -183,8 +384,26 @@ class EodhdHistoricalDataService
         $sourceUrl = $this->sourceUrl($symbol, $exchangeCode, $dateFrom, $dateTo);
         $now = now();
         $storedCount = 0;
+        $dateFromString = $dateFrom->toDateString();
+        $dateToString = $dateTo->toDateString();
 
-        foreach ($payload as $record) {
+        $records = collect($payload)
+            ->filter(function (mixed $record) use ($dateFromString, $dateToString): bool {
+                if (! is_array($record) || ! is_numeric($record['close'] ?? null) || ! is_string($record['date'] ?? null)) {
+                    return false;
+                }
+
+                $tradingDate = $this->date($record['date']);
+
+                return $tradingDate !== null && $tradingDate >= $dateFromString && $tradingDate <= $dateToString;
+            })
+            ->sortBy(fn (array $record): string => $record['date'])
+            ->when(
+                $maximumRecordCount !== null,
+                fn (Collection $records): Collection => $records->take(-max($maximumRecordCount, 0)),
+            );
+
+        foreach ($records as $record) {
             $row = $this->stockPriceRow($holding, $instrumentKey, $symbol, $sourceUrl, $record, $now);
             $dailyPriceRow = $this->dailyPriceRow($holding, $sourceUrl, $record, $now);
 

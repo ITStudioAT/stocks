@@ -28,7 +28,7 @@ class UiPreferences
 
     private const DefaultAnalyzeTrendRowLimit = 200;
 
-    private const MaxAnalyzeTrendRowLimit = 2000;
+    public const MaxAnalyzeTrendRowLimit = 1000;
 
     private const DefaultAnalyzeTrendMaxInvestAmount = 0;
 

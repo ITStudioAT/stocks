@@ -55,6 +55,9 @@ return [
                 'excluded_columns' => ['id'],
                 'key_prefixes' => ['ui.preferences.user.'],
             ],
+            'stock_holdings' => [
+                'excluded_columns' => ['latest_realtime_price_id'],
+            ],
         ],
         'deployment' => [
             'base_url' => env('CLOUDWAYS_API_BASE_URL', 'https://api.cloudways.com/api/v2'),

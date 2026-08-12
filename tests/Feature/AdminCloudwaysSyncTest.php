@@ -61,6 +61,10 @@ class AdminCloudwaysSyncTest extends TestCase
             ['ui.preferences.user.'],
             config('services.cloudways.sync_table_scopes.app_configs.key_prefixes'),
         );
+        $this->assertSame(
+            ['latest_realtime_price_id'],
+            config('services.cloudways.sync_table_scopes.stock_holdings.excluded_columns'),
+        );
         $this->assertNotContains('index_eodhd_sync_runs', $tables);
         $this->assertNotContains('stock_eodhd_sync_runs', $tables);
         $this->assertNotContains('jobs', $tables);
@@ -761,6 +765,16 @@ class AdminCloudwaysSyncTest extends TestCase
             'id' => 2,
             'name' => 'Cloudways current item',
         ]);
+        $cloudwaysDatabaseSync = new class extends CloudwaysDatabaseSync
+        {
+            public int $refreshCount = 0;
+
+            protected function refreshSourceConnection(string $sourceConnectionName): void
+            {
+                $this->refreshCount++;
+            }
+        };
+        $this->app->instance(CloudwaysDatabaseSync::class, $cloudwaysDatabaseSync);
 
         $deleteQueries = [];
         DB::listen(function (QueryExecuted $query) use (&$deleteQueries): void {
@@ -792,6 +806,37 @@ class AdminCloudwaysSyncTest extends TestCase
         $this->assertCount(1, $deleteQueries);
         $this->assertStringContainsString('compatible_items', $deleteQueries[0]);
         $this->assertStringNotContainsString('cloud_items', $deleteQueries[0]);
+        $this->assertSame(1, $cloudwaysDatabaseSync->refreshCount);
+    }
+
+    public function test_cloudways_sync_refreshes_long_running_mysql_source_connections(): void
+    {
+        Config::set('database.connections.cloudways_mysql_testing.driver', 'mysql');
+        Config::set('database.connections.cloudways_mariadb_testing.driver', 'mariadb');
+        Config::set('database.connections.cloudways_sqlite_testing.driver', 'sqlite');
+
+        $databaseManager = DB::getFacadeRoot();
+        $this->assertInstanceOf(DatabaseManager::class, $databaseManager);
+        $mockDatabaseManager = Mockery::mock(DatabaseManager::class);
+        $mockDatabaseManager->shouldReceive('purge')
+            ->once()
+            ->with('cloudways_mysql_testing');
+        $mockDatabaseManager->shouldReceive('purge')
+            ->once()
+            ->with('cloudways_mariadb_testing');
+
+        DB::swap($mockDatabaseManager);
+
+        try {
+            $refreshSourceConnection = new ReflectionMethod(CloudwaysDatabaseSync::class, 'refreshSourceConnection');
+            $cloudwaysDatabaseSync = app(CloudwaysDatabaseSync::class);
+
+            $refreshSourceConnection->invoke($cloudwaysDatabaseSync, 'cloudways_mysql_testing');
+            $refreshSourceConnection->invoke($cloudwaysDatabaseSync, 'cloudways_mariadb_testing');
+            $refreshSourceConnection->invoke($cloudwaysDatabaseSync, 'cloudways_sqlite_testing');
+        } finally {
+            DB::swap($databaseManager);
+        }
     }
 
     public function test_cloudways_sync_table_selection_must_be_an_array_of_distinct_strings(): void
@@ -1003,7 +1048,7 @@ class AdminCloudwaysSyncTest extends TestCase
         ]);
     }
 
-    public function test_cloudways_sync_does_not_link_invalid_realtime_price_and_keeps_tables_identical(): void
+    public function test_cloudways_sync_repairs_selectable_links_skips_invalid_prices_and_keeps_tables_identical(): void
     {
         $this->configureCloudwaysTestingConnection();
         Config::set('database.connections.cloudways_target_testing', [
@@ -1020,13 +1065,22 @@ class AdminCloudwaysSyncTest extends TestCase
         $now = '2026-06-14 10:00:00';
 
         DB::connection('cloudways_testing')->table('stock_holdings')->insert([
-            'id' => 123,
-            'symbol' => 'ARGT',
-            'latest_realtime_price_id' => null,
-            'created_at' => $now,
-            'updated_at' => $now,
+            [
+                'id' => 123,
+                'symbol' => 'ARGT',
+                'latest_realtime_price_id' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
+            [
+                'id' => 124,
+                'symbol' => 'INVALID',
+                'latest_realtime_price_id' => null,
+                'created_at' => $now,
+                'updated_at' => $now,
+            ],
         ]);
-        DB::connection('cloudways_testing')->table('stock_realtime_prices')->insert(
+        DB::connection('cloudways_testing')->table('stock_realtime_prices')->insert([
             $this->cloudRealtimePriceAttributes(
                 id: 990,
                 stockHoldingId: 123,
@@ -1034,9 +1088,17 @@ class AdminCloudwaysSyncTest extends TestCase
                 price: '96.12000000',
                 asOf: '2026-06-14 20:00:00',
                 now: $now,
+            ),
+            $this->cloudRealtimePriceAttributes(
+                id: 991,
+                stockHoldingId: 124,
+                quoteHash: str_repeat('b', 64),
+                price: '97.12000000',
+                asOf: '2026-06-14 20:00:00',
+                now: $now,
                 validationStatus: 'invalid',
             ),
-        );
+        ]);
 
         $cloudwaysDatabaseSync = app(CloudwaysDatabaseSync::class);
         $sync = $cloudwaysDatabaseSync->syncAllTables(
@@ -1046,10 +1108,17 @@ class AdminCloudwaysSyncTest extends TestCase
         );
 
         $this->assertSame(2, $sync['synced_tables']);
-        $this->assertNull(
+        $this->assertSame(
+            990,
             DB::connection('cloudways_target_testing')
                 ->table('stock_holdings')
                 ->where('id', 123)
+                ->value('latest_realtime_price_id'),
+        );
+        $this->assertNull(
+            DB::connection('cloudways_target_testing')
+                ->table('stock_holdings')
+                ->where('id', 124)
                 ->value('latest_realtime_price_id'),
         );
 
