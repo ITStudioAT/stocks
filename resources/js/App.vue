@@ -204,6 +204,7 @@ const loginPassword = ref('');
 const loginMode = ref('password');
 const localError = ref('');
 const activeSection = ref('dashboard');
+const activeDashboardSubsection = ref('overview');
 const infoTables = ref([]);
 const infoMethods = ref([]);
 const infoTablesLoading = ref(false);
@@ -336,6 +337,11 @@ const holdingError = ref('');
 const dashboardVersions = ref(null);
 const dashboardVersionsLoading = ref(false);
 const dashboardVersionsError = ref('');
+const dashboardKiResearches = ref({});
+const dashboardKiResearchErrors = ref({});
+const dashboardKiResearchStartingIds = ref([]);
+const dashboardKiResearchTimer = ref(null);
+const isDashboardReloading = ref(false);
 const isDashboardVersionDetailsVisible = ref(false);
 const indexMessage = ref('');
 const indexError = ref('');
@@ -1824,6 +1830,18 @@ const eodhdUsageItems = computed(() => {
         },
     ].filter(item => item.usage);
 });
+const dashboardSubmenuItems = [
+    {
+        key: 'overview',
+        label: 'Übersicht',
+        icon: 'mdi-view-dashboard-outline',
+    },
+    {
+        key: 'ki',
+        label: 'KI',
+        icon: 'mdi-robot-outline',
+    },
+];
 const analyzeSubmenuItems = [
     {
         key: 'trend-v2',
@@ -2246,8 +2264,8 @@ watch(
 );
 
 watch(
-    [activeSection, activeAnalyzeSubsection, activeDataSubsection, activeInfoSubsection],
-    ([section, subsection, dataSubsection]) => {
+    [activeSection, activeDashboardSubsection, activeAnalyzeSubsection, activeDataSubsection, activeInfoSubsection],
+    ([section, dashboardSubsection, subsection, dataSubsection]) => {
         ensureAnalyzeHoldingSelection();
 
         if (section === 'analyze' && subsection === 'tests') {
@@ -2280,12 +2298,18 @@ watch(
             restoreStockEodhdSync().catch(() => {});
         }
 
-        if (section === 'dashboard' && dashboardVersions.value === null) {
+        if (section === 'dashboard' && dashboardSubsection === 'overview' && dashboardVersions.value === null) {
             loadDashboardVersions().catch(() => {});
         }
 
-        if (section === 'dashboard' && dashboardDailyPerformance.value === null) {
+        if (section === 'dashboard' && dashboardSubsection === 'overview' && dashboardDailyPerformance.value === null) {
             depotsStore.loadDashboardDailyPerformance().catch(() => {});
+        }
+
+        if (section === 'dashboard' && dashboardSubsection === 'ki') {
+            loadDashboardKiResearches().catch(() => {});
+        } else {
+            stopDashboardKiResearchPolling();
         }
 
         if (section === 'infos' && infoTables.value.length === 0 && infoMethods.value.length === 0) {
@@ -2398,10 +2422,10 @@ onMounted(async () => {
 
     await Promise.all([
         depotsStore.loadActiveDepot(),
-        activeSection.value === 'dashboard'
+        isDashboardOverview()
             ? loadDashboardVersions()
             : Promise.resolve(),
-        activeSection.value === 'dashboard'
+        isDashboardOverview()
             ? depotsStore.loadDashboardDailyPerformance()
             : Promise.resolve(),
     ]);
@@ -2451,6 +2475,7 @@ onBeforeUnmount(() => {
     stopDataIntradayReloadPolling();
     stopIndexEodhdSyncPolling();
     stopStockEodhdSyncPolling();
+    stopDashboardKiResearchPolling();
     stopIndexRealtimeOverdueMonitoring();
     stopActiveItemRefresh();
     stopHoldingDialogKeyboardShortcuts();
@@ -2671,6 +2696,10 @@ function navigateSection(section) {
 
     activeSection.value = section;
 
+    if (section === 'dashboard') {
+        activeDashboardSubsection.value = 'overview';
+    }
+
     if (section === 'analyze' && !isAnalyzeSubsection(activeAnalyzeSubsection.value)) {
         activeAnalyzeSubsection.value = 'trend-v2';
     }
@@ -2733,7 +2762,7 @@ function navigateSection(section) {
         loadWatchlistHoldingsForActiveSection(1).catch(() => {});
     }
 
-    if (section === 'dashboard') {
+    if (section === 'dashboard' && activeDashboardSubsection.value === 'overview') {
         loadWatchlistHoldingsForActiveSection(1).catch(() => {});
     }
 
@@ -2865,6 +2894,20 @@ async function refreshVisibleApplicationData() {
     }
 
     await Promise.allSettled(refreshRequests);
+}
+
+async function reloadDashboard() {
+    if (isDashboardReloading.value) {
+        return;
+    }
+
+    isDashboardReloading.value = true;
+
+    try {
+        await refreshVisibleApplicationData();
+    } finally {
+        isDashboardReloading.value = false;
+    }
 }
 
 async function refreshVisibleDataSection() {
@@ -3033,7 +3076,7 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
     const shouldIncludeAnalyzeCharts = activeSection.value === 'analyze'
         && (selectedAnalyzeHoldingId.value !== null || shouldIncludeResearchSimulationCharts);
     const shouldIncludeStockChart = activeSection.value === 'stocks' && selectedStockWatchItem.value !== null;
-    const shouldIncludeDashboardTrendSignals = activeSection.value === 'dashboard';
+    const shouldIncludeDashboardTrendSignals = isDashboardOverview();
     const shouldIncludeTrendSignals = shouldIncludeDashboardTrendSignals
         || activeSection.value === 'stocks'
         || (activeSection.value === 'depot' && activeDepotSubsection.value === 'overview');
@@ -3045,6 +3088,7 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
         ));
     const shouldIncludeAllHoldings = activeSection.value === 'analyze'
         || activeSection.value === 'stocks'
+        || activeSection.value === 'dashboard'
         || shouldIncludeTrendSignals
         || (activeSection.value === 'data' && activeDataSubsection.value === 'stocks');
     const historyRowLimit = shouldIncludeResearchSimulationCharts
@@ -3566,6 +3610,162 @@ function cloudwaysCheckStatusLabel(table) {
     }[table?.status] ?? 'Unknown';
 }
 
+function navigateDashboardSubsection(subsection) {
+    if (!isDashboardSubsection(subsection) || activeDashboardSubsection.value === subsection) {
+        return;
+    }
+
+    activeDashboardSubsection.value = subsection;
+    activeSection.value = 'dashboard';
+    clearSectionMessages();
+    updateUrlPath();
+
+    loadWatchlistHoldingsForActiveSection(1).catch(() => {});
+}
+
+function dashboardKiResearch(holdingId) {
+    return dashboardKiResearches.value[String(holdingId)] ?? null;
+}
+
+function isDashboardKiResearchRunning(holdingId) {
+    return ['queued', 'running'].includes(dashboardKiResearch(holdingId)?.status)
+        || dashboardKiResearchStartingIds.value.includes(holdingId);
+}
+
+function dashboardKiResearchError(holdingId) {
+    return dashboardKiResearchErrors.value[String(holdingId)] ?? '';
+}
+
+function setDashboardKiResearch(research) {
+    if (!research?.stock_holding_id) {
+        return;
+    }
+
+    dashboardKiResearches.value = {
+        ...dashboardKiResearches.value,
+        [String(research.stock_holding_id)]: research,
+    };
+}
+
+function setDashboardKiResearchError(holdingId, message = '') {
+    dashboardKiResearchErrors.value = {
+        ...dashboardKiResearchErrors.value,
+        [String(holdingId)]: message,
+    };
+}
+
+async function loadDashboardKiResearches() {
+    const data = await request('/admin/dashboard/ai/stock-researches');
+    const researches = Array.isArray(data.researches) ? data.researches : [];
+
+    dashboardKiResearches.value = Object.fromEntries(
+        researches.map((research) => [String(research.stock_holding_id), research]),
+    );
+
+    syncDashboardKiResearchPolling();
+
+    return data;
+}
+
+async function loadDashboardKiResearch(holding) {
+    if (!holding?.id || isDashboardKiResearchRunning(holding.id)) {
+        return;
+    }
+
+    dashboardKiResearchStartingIds.value = [...dashboardKiResearchStartingIds.value, holding.id];
+    setDashboardKiResearchError(holding.id);
+
+    try {
+        const data = await request(`/admin/dashboard/ai/stocks/${holding.id}/researches`, {
+            method: 'POST',
+        });
+
+        setDashboardKiResearch(data.research);
+        syncDashboardKiResearchPolling();
+    } catch (error) {
+        setDashboardKiResearchError(holding.id, error.message);
+    } finally {
+        dashboardKiResearchStartingIds.value = dashboardKiResearchStartingIds.value
+            .filter((holdingId) => holdingId !== holding.id);
+    }
+}
+
+function syncDashboardKiResearchPolling() {
+    const hasRunningResearch = Object.values(dashboardKiResearches.value)
+        .some((research) => ['queued', 'running'].includes(research?.status));
+
+    if (!hasRunningResearch || activeSection.value !== 'dashboard' || activeDashboardSubsection.value !== 'ki') {
+        stopDashboardKiResearchPolling();
+
+        return;
+    }
+
+    if (dashboardKiResearchTimer.value !== null) {
+        return;
+    }
+
+    dashboardKiResearchTimer.value = window.setInterval(pollDashboardKiResearches, 2000);
+}
+
+function stopDashboardKiResearchPolling() {
+    if (dashboardKiResearchTimer.value === null) {
+        return;
+    }
+
+    window.clearInterval(dashboardKiResearchTimer.value);
+    dashboardKiResearchTimer.value = null;
+}
+
+async function pollDashboardKiResearches() {
+    const runningResearches = Object.values(dashboardKiResearches.value)
+        .filter((research) => ['queued', 'running'].includes(research?.status));
+
+    await Promise.all(runningResearches.map(async (research) => {
+        try {
+            const data = await request(
+                `/admin/dashboard/ai/stocks/${research.stock_holding_id}/researches/${research.id}`,
+            );
+            setDashboardKiResearch(data.research);
+            setDashboardKiResearchError(research.stock_holding_id);
+        } catch (error) {
+            setDashboardKiResearchError(research.stock_holding_id, error.message);
+        }
+    }));
+
+    syncDashboardKiResearchPolling();
+}
+
+function dashboardKiRecommendationLabel(recommendation) {
+    return {
+        buy: 'Kaufen',
+        hold: 'Halten',
+        sell: 'Verkaufen',
+    }[recommendation] ?? recommendation;
+}
+
+function dashboardKiRecommendationColor(recommendation) {
+    return {
+        buy: 'success',
+        hold: 'warning',
+        sell: 'error',
+    }[recommendation] ?? 'default';
+}
+
+function formatDashboardKiResearchTime(value) {
+    if (!value) {
+        return '';
+    }
+
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: displayTimeZone,
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(new Date(value));
+}
+
 function navigateAnalyzeSubsection(subsection) {
     if (!isAnalyzeSubsection(subsection) || activeAnalyzeSubsection.value === subsection) {
         return;
@@ -3733,6 +3933,18 @@ function dataStandaloneStockPageAriaLabel(subsection) {
 
 function selectAnalyzeHolding(holdingId) {
     selectedAnalyzeHoldingId.value = holdingId;
+    updateUrlPath();
+}
+
+function analyzeTrendV2Path(holdingId) {
+    return `/admin/menu/analyze/trend-v2?stock=${encodeURIComponent(String(holdingId))}`;
+}
+
+function openAnalyzeTrendV2(holdingId) {
+    selectedAnalyzeHoldingId.value = holdingId;
+    activeAnalyzeSubsection.value = 'trend-v2';
+    activeSection.value = 'analyze';
+    clearSectionMessages();
     updateUrlPath();
 }
 
@@ -4534,6 +4746,14 @@ function toggleDashboardMenuCompact() {
 function applyRouteFromPath() {
     const path = window.location.pathname.replace(/\/+$/, '') || '/admin';
 
+    if (path === '/admin' || path === '/admin/dashboard') {
+        activeSection.value = 'dashboard';
+        activeDashboardSubsection.value = 'overview';
+        updateUrlPath({ replace: true });
+
+        return;
+    }
+
     if (path === '/admin/profile') {
         activeSection.value = 'profile';
 
@@ -4546,6 +4766,16 @@ function applyRouteFromPath() {
             .split('/')
             .map((segment) => decodeURIComponent(segment));
         const normalizedSection = sectionSegment ?? '';
+
+        if (normalizedSection === 'dashboard') {
+            activeSection.value = 'dashboard';
+            activeDashboardSubsection.value = isDashboardSubsection(subsectionSegment)
+                ? subsectionSegment
+                : 'overview';
+            updateUrlPath({ replace: true });
+
+            return;
+        }
 
         if (normalizedSection === 'analyze') {
             activeSection.value = 'analyze';
@@ -4611,12 +4841,15 @@ function applyRouteFromPath() {
     }
 
     activeSection.value = 'dashboard';
+    activeDashboardSubsection.value = 'overview';
     updateUrlPath({ replace: true });
 }
 
 function updateUrlPath(options = {}) {
     const path = activeSection.value === 'dashboard'
-        ? '/admin/dashboard'
+        ? activeDashboardSubsection.value === 'overview'
+            ? '/admin/dashboard'
+            : `/admin/menu/dashboard/${activeDashboardSubsection.value}`
         : activeSection.value === 'profile'
             ? '/admin/profile'
             : activeSection.value === 'analyze'
@@ -4653,6 +4886,14 @@ function updateUrlPath(options = {}) {
 
 function isAnalyzeSubsection(subsection) {
     return analyzeSubsectionKeys.includes(subsection);
+}
+
+function isDashboardSubsection(subsection) {
+    return dashboardSubmenuItems.some((item) => item.key === subsection);
+}
+
+function isDashboardOverview() {
+    return activeSection.value === 'dashboard' && activeDashboardSubsection.value === 'overview';
 }
 
 function isAnalyzeResearchSubsection(subsection) {
@@ -12118,7 +12359,25 @@ function formatIndexDataUpdateSchedule(settings) {
             <v-main>
                 <v-container class="py-8" :fluid="lgAndDown">
                     <section v-if="['dashboard', 'indices', 'stocks'].includes(activeSection)">
-                        <div v-if="activeSection === 'dashboard'" class="dashboard-version-page">
+                        <div v-if="activeSection === 'dashboard'" aria-label="Dashboard">
+                            <v-tabs
+                                :model-value="activeDashboardSubsection"
+                                aria-label="Dashboard sections"
+                                class="mb-6"
+                                color="primary"
+                                @update:model-value="navigateDashboardSubsection"
+                            >
+                                <v-tab
+                                    v-for="item in dashboardSubmenuItems"
+                                    :key="item.key"
+                                    :prepend-icon="item.icon"
+                                    :value="item.key"
+                                >
+                                    {{ item.label }}
+                                </v-tab>
+                            </v-tabs>
+
+                            <div v-if="activeDashboardSubsection === 'overview'" class="dashboard-version-page">
                             <v-card
                                 class="dashboard-version-card"
                                 flat
@@ -12134,18 +12393,33 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 v{{ dashboardCurrentVersion }}
                                             </div>
                                         </div>
-                                        <v-btn
-                                            class="dashboard-version-toggle"
-                                            size="small"
-                                            variant="text"
-                                            color="primary"
-                                            :append-icon="isDashboardVersionDetailsVisible ? 'mdi-chevron-up' : 'mdi-chevron-down'"
-                                            :aria-expanded="isDashboardVersionDetailsVisible"
-                                            aria-controls="dashboard-version-details"
-                                            @click="isDashboardVersionDetailsVisible = !isDashboardVersionDetailsVisible"
-                                        >
-                                            {{ isDashboardVersionDetailsVisible ? 'Weniger anzeigen' : 'Mehr anzeigen' }}
-                                        </v-btn>
+                                        <div class="dashboard-version-actions">
+                                            <v-btn
+                                                class="dashboard-reload-button"
+                                                size="small"
+                                                variant="outlined"
+                                                color="primary"
+                                                prepend-icon="mdi-refresh"
+                                                aria-label="Reload dashboard data"
+                                                :disabled="isDashboardReloading"
+                                                :loading="isDashboardReloading"
+                                                @click="reloadDashboard"
+                                            >
+                                                Reload
+                                            </v-btn>
+                                            <v-btn
+                                                class="dashboard-version-toggle"
+                                                size="small"
+                                                variant="text"
+                                                color="primary"
+                                                :append-icon="isDashboardVersionDetailsVisible ? 'mdi-chevron-up' : 'mdi-chevron-down'"
+                                                :aria-expanded="isDashboardVersionDetailsVisible"
+                                                aria-controls="dashboard-version-details"
+                                                @click="isDashboardVersionDetailsVisible = !isDashboardVersionDetailsVisible"
+                                            >
+                                                {{ isDashboardVersionDetailsVisible ? 'Weniger anzeigen' : 'Mehr anzeigen' }}
+                                            </v-btn>
+                                        </div>
                                     </div>
 
                                     <v-progress-linear
@@ -12301,9 +12575,12 @@ function formatIndexDataUpdateSchedule(settings) {
                                             'dashboard-stock-signal-card--buy': card.recommendation.key === 'buy',
                                             'dashboard-stock-signal-card--sell': card.recommendation.key === 'sell',
                                         }"
+                                        :aria-label="`Open Trend v2 analysis for ${stockDisplayName(card.holding)}`"
+                                        :href="analyzeTrendV2Path(card.holding.id)"
                                         flat
                                         border
                                         rounded="xl"
+                                        @click.prevent="openAnalyzeTrendV2(card.holding.id)"
                                     >
                                         <v-card-text class="pa-4">
                                             <div class="dashboard-stock-signal-card-heading">
@@ -12330,6 +12607,160 @@ function formatIndexDataUpdateSchedule(settings) {
                                 </div>
                             </section>
 
+                            </div>
+
+                            <section v-else class="dashboard-ki-page" aria-label="Dashboard KI">
+                                <v-progress-linear
+                                    v-if="holdingsLoading"
+                                    class="mb-4"
+                                    color="primary"
+                                    indeterminate
+                                />
+
+                                <div class="dashboard-ki-stock-grid">
+                                    <v-card
+                                        v-for="holding in holdings"
+                                        :key="holding.id"
+                                        class="dashboard-ki-stock-card w-100"
+                                        flat
+                                        border
+                                        rounded="xl"
+                                    >
+                                        <div class="dashboard-ki-stock-card-content">
+                                            <div class="dashboard-ki-stock-copy">
+                                                <v-card-title class="dashboard-ki-stock-title">
+                                                    {{ stockDisplayName(holding) }}
+                                                </v-card-title>
+                                                <div
+                                                    v-if="holding.subtitle || holding.stock_subtitle"
+                                                    class="dashboard-ki-stock-subtitle"
+                                                >
+                                                    {{ holding.subtitle || holding.stock_subtitle }}
+                                                </div>
+                                            </div>
+                                            <v-btn
+                                                class="dashboard-ki-load-button"
+                                                color="primary"
+                                                prepend-icon="mdi-magnify"
+                                                size="small"
+                                                type="button"
+                                                variant="tonal"
+                                                :aria-label="`Load ${stockDisplayName(holding)}`"
+                                                :disabled="isDashboardKiResearchRunning(holding.id)"
+                                                :loading="isDashboardKiResearchRunning(holding.id)"
+                                                @click="loadDashboardKiResearch(holding)"
+                                            >
+                                                Load
+                                            </v-btn>
+                                        </div>
+
+                                        <div
+                                            v-if="dashboardKiResearchError(holding.id)"
+                                            class="dashboard-ki-research-result"
+                                        >
+                                            <v-alert density="compact" type="error" variant="tonal">
+                                                {{ dashboardKiResearchError(holding.id) }}
+                                            </v-alert>
+                                        </div>
+
+                                        <div
+                                            v-if="['queued', 'running'].includes(dashboardKiResearch(holding.id)?.status)"
+                                            class="dashboard-ki-research-result"
+                                        >
+                                            <v-progress-linear class="mb-3" color="primary" indeterminate />
+                                            <p class="text-body-2 text-medium-emphasis mb-0">
+                                                {{ dashboardKiResearch(holding.id)?.message || 'Aktuelle Informationen werden recherchiert.' }}
+                                            </p>
+                                        </div>
+
+                                        <div
+                                            v-else-if="dashboardKiResearch(holding.id)?.status === 'no_new_information'"
+                                            class="dashboard-ki-research-result"
+                                        >
+                                            <v-alert
+                                                class="dashboard-ki-no-update"
+                                                density="compact"
+                                                icon="mdi-information-outline"
+                                                type="info"
+                                                variant="tonal"
+                                            >
+                                                {{ dashboardKiResearch(holding.id).summary }}
+                                            </v-alert>
+                                        </div>
+
+                                        <div
+                                            v-else-if="dashboardKiResearch(holding.id)?.status === 'failed'"
+                                            class="dashboard-ki-research-result"
+                                        >
+                                            <v-alert density="compact" type="error" variant="tonal">
+                                                {{ dashboardKiResearch(holding.id).message }}
+                                            </v-alert>
+                                        </div>
+
+                                        <div
+                                            v-else-if="dashboardKiResearch(holding.id)?.status === 'finished'"
+                                            class="dashboard-ki-research-result"
+                                        >
+                                            <div class="dashboard-ki-research-heading">
+                                                <p class="text-overline text-primary mb-0">Aktuelle KI-Analyse</p>
+                                                <v-chip
+                                                    class="dashboard-ki-recommendation"
+                                                    :color="dashboardKiRecommendationColor(dashboardKiResearch(holding.id).recommendation)"
+                                                    size="small"
+                                                    variant="tonal"
+                                                >
+                                                    {{ dashboardKiRecommendationLabel(dashboardKiResearch(holding.id).recommendation) }}
+                                                </v-chip>
+                                            </div>
+
+                                            <p class="dashboard-ki-research-summary">
+                                                {{ dashboardKiResearch(holding.id).summary }}
+                                            </p>
+
+                                            <div class="dashboard-ki-scenarios">
+                                                <div class="dashboard-ki-scenario dashboard-ki-scenario--stronger">
+                                                    <strong>Stärker</strong>
+                                                    <p>{{ dashboardKiResearch(holding.id).stronger_case }}</p>
+                                                </div>
+                                                <div class="dashboard-ki-scenario dashboard-ki-scenario--weaker">
+                                                    <strong>Schwächer</strong>
+                                                    <p>{{ dashboardKiResearch(holding.id).weaker_case }}</p>
+                                                </div>
+                                            </div>
+
+                                            <p class="dashboard-ki-research-detail">
+                                                <strong>Donald Trump / Politik:</strong>
+                                                {{ dashboardKiResearch(holding.id).trump_connection }}
+                                            </p>
+                                            <p class="dashboard-ki-research-detail">
+                                                <strong>Begründung:</strong>
+                                                {{ dashboardKiResearch(holding.id).justification }}
+                                            </p>
+
+                                            <div
+                                                v-if="dashboardKiResearch(holding.id).sources?.length"
+                                                class="dashboard-ki-sources"
+                                            >
+                                                <strong>Quellen</strong>
+                                                <a
+                                                    v-for="source in dashboardKiResearch(holding.id).sources"
+                                                    :key="source.url"
+                                                    :href="source.url"
+                                                    rel="noopener noreferrer"
+                                                    target="_blank"
+                                                >
+                                                    {{ source.title || source.url }}
+                                                </a>
+                                            </div>
+
+                                            <p class="dashboard-ki-research-meta mb-0">
+                                                Stand: {{ formatDashboardKiResearchTime(dashboardKiResearch(holding.id).finished_at) }}
+                                                · Nur eine allgemeine Information, keine persönliche Anlageberatung.
+                                            </p>
+                                        </div>
+                                    </v-card>
+                                </div>
+                            </section>
                         </div>
 
                         <div v-if="activeSection === 'stocks'" aria-label="Stocks dashboard">
@@ -21044,6 +21475,138 @@ function formatIndexDataUpdateSchedule(settings) {
     margin-top: 24px;
 }
 
+.dashboard-ki-page {
+    width: 100%;
+}
+
+.dashboard-ki-stock-grid {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.dashboard-ki-stock-card {
+    min-width: 0;
+    width: 100%;
+}
+
+.dashboard-ki-stock-card-content {
+    align-items: center;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+    padding: 18px;
+}
+
+.dashboard-ki-stock-copy {
+    min-width: 0;
+}
+
+.dashboard-ki-stock-title {
+    font-size: 0.95rem;
+    font-weight: 750;
+    min-width: 0;
+    padding: 0;
+}
+
+.dashboard-ki-stock-subtitle {
+    color: rgb(var(--v-theme-info));
+    font-size: 0.75rem;
+    font-weight: 500;
+    margin-top: 4px;
+}
+
+.dashboard-ki-load-button {
+    flex: 0 0 auto;
+    text-transform: none;
+}
+
+.dashboard-ki-research-result {
+    border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    padding: 18px;
+}
+
+.dashboard-ki-research-heading {
+    align-items: center;
+    display: flex;
+    gap: 12px;
+    justify-content: space-between;
+}
+
+.dashboard-ki-recommendation {
+    font-weight: 750;
+}
+
+.dashboard-ki-research-summary {
+    font-size: 0.92rem;
+    line-height: 1.55;
+    margin: 12px 0 0;
+}
+
+.dashboard-ki-scenarios {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 14px;
+}
+
+.dashboard-ki-scenario {
+    border-radius: 12px;
+    padding: 12px;
+}
+
+.dashboard-ki-scenario strong {
+    display: block;
+    font-size: 0.78rem;
+    margin-bottom: 4px;
+}
+
+.dashboard-ki-scenario p {
+    font-size: 0.8rem;
+    line-height: 1.45;
+    margin: 0;
+}
+
+.dashboard-ki-scenario--stronger {
+    background: rgba(var(--v-theme-success), 0.1);
+}
+
+.dashboard-ki-scenario--weaker {
+    background: rgba(var(--v-theme-error), 0.1);
+}
+
+.dashboard-ki-research-detail {
+    font-size: 0.82rem;
+    line-height: 1.5;
+    margin: 14px 0 0;
+}
+
+.dashboard-ki-sources {
+    display: flex;
+    flex-direction: column;
+    font-size: 0.76rem;
+    gap: 4px;
+    margin-top: 14px;
+}
+
+.dashboard-ki-sources a {
+    color: rgb(var(--v-theme-primary));
+    overflow-wrap: anywhere;
+}
+
+.dashboard-ki-research-meta {
+    color: rgba(var(--v-theme-on-surface), 0.58);
+    font-size: 0.68rem;
+    line-height: 1.45;
+    margin-top: 16px;
+}
+
+@media (max-width: 600px) {
+    .dashboard-ki-scenarios {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
+
 .dashboard-stock-signal-grid {
     display: grid;
     gap: 10px;
@@ -21132,6 +21695,18 @@ function formatIndexDataUpdateSchedule(settings) {
     font-size: 0.68rem;
     letter-spacing: 0;
     margin-top: 1px;
+    text-transform: none;
+}
+
+.dashboard-version-actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    justify-content: flex-end;
+}
+
+.dashboard-reload-button {
     text-transform: none;
 }
 

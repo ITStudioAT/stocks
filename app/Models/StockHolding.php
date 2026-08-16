@@ -66,6 +66,14 @@ class StockHolding extends Model
     }
 
     /**
+     * @return HasMany<StockAiResearch, $this>
+     */
+    public function aiResearches(): HasMany
+    {
+        return $this->hasMany(StockAiResearch::class);
+    }
+
+    /**
      * @return HasMany<DepotTransaction, $this>
      */
     public function depotTransactions(): HasMany

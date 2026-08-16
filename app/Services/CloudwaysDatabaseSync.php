@@ -174,6 +174,7 @@ class CloudwaysDatabaseSync
         }
 
         if ($syncTables !== []) {
+            $this->refreshSourceConnection($sourceConnectionName);
             Schema::connection($targetConnectionName)->disableForeignKeyConstraints();
 
             try {
@@ -211,8 +212,12 @@ class CloudwaysDatabaseSync
                             ]);
                         }
 
-                        $this->refreshSourceConnection($sourceConnectionName);
-                        $syncedTable = $this->syncTable($sourceConnectionName, $targetConnectionName, $table);
+                        try {
+                            $syncedTable = $this->syncTable($sourceConnectionName, $targetConnectionName, $table);
+                        } finally {
+                            $this->refreshSourceConnection($sourceConnectionName);
+                        }
+
                         $syncedTables[] = $syncedTable;
 
                         if ($onTableSynced !== null) {
@@ -987,7 +992,7 @@ class CloudwaysDatabaseSync
             return;
         }
 
-        DB::purge($sourceConnectionName);
+        @DB::purge($sourceConnectionName);
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\AnalyzeStockResearch;
 use App\Jobs\BackfillMissingStockHoldingIntradayCandles;
 use App\Jobs\RefreshDepotHoldingPrices;
 use App\Jobs\ReloadEodhdExchanges;
@@ -19,6 +20,7 @@ class QueueConfigurationTest extends TestCase
             (new ReloadEodhdExchanges('test-refresh'))->timeout,
             (new ReloadStockHoldingIntradayData('test-refresh'))->timeout,
             (new SyncStockEodhdData('test-refresh'))->timeout,
+            (new AnalyzeStockResearch('test-research', 1, 1))->timeout,
         ]);
 
         foreach (['database', 'redis'] as $connection) {

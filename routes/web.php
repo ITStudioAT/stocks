@@ -17,6 +17,7 @@ use App\Http\Controllers\AdminPriceRefreshSettingsController;
 use App\Http\Controllers\AdminProfileController;
 use App\Http\Controllers\AdminQueueStatusController;
 use App\Http\Controllers\AdminRoleController;
+use App\Http\Controllers\AdminStockAiResearchController;
 use App\Http\Controllers\AdminStockHistoricalPriceController;
 use App\Http\Controllers\AdminStockSearchController;
 use App\Http\Controllers\AdminStockTradingTimeHealthCheckController;
@@ -95,6 +96,11 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
     Route::get('/admin/me', [AdminAuthController::class, 'me'])->name('admin.me');
     Route::get('/admin/dashboard/version', [AdminDashboardVersionController::class, 'show'])->name('admin.dashboard.version.show');
     Route::get('/admin/dashboard/performance', [AdminDepotTransactionController::class, 'dailyPerformance'])->name('admin.dashboard.performance.show');
+    Route::get('/admin/dashboard/ai/stock-researches', [AdminStockAiResearchController::class, 'index'])->name('admin.dashboard.ai.stockResearches.index');
+    Route::post('/admin/dashboard/ai/stocks/{stockHolding}/researches', [AdminStockAiResearchController::class, 'store'])
+        ->middleware('throttle:admin.costly-operation')
+        ->name('admin.dashboard.ai.stockResearches.store');
+    Route::get('/admin/dashboard/ai/stocks/{stockHolding}/researches/{stockAiResearch}', [AdminStockAiResearchController::class, 'show'])->name('admin.dashboard.ai.stockResearches.show');
     Route::get('/admin/infos', [AdminInfoController::class, 'show'])->name('admin.infos.show');
     Route::get('/admin/depots', [AdminDepotController::class, 'index'])->name('admin.depots.index');
     Route::get('/admin/depots/active', [AdminDepotController::class, 'active'])->name('admin.depots.active');

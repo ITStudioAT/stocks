@@ -402,6 +402,7 @@ function indexMonthPrices(direction = 'up') {
 }
 
 const dashboardWatchlistHoldingsPath = '/admin/watchlist/holdings/charts?page=1&include_charts=1&all_chart_holdings=1&all=1&chart_range=1y';
+const dashboardKiWatchlistHoldingsPath = '/admin/watchlist/holdings?page=1&all=1';
 const stocksWatchlistHoldingsPath = '/admin/watchlist/holdings/charts?page=1&include_charts=1&all_chart_holdings=1&all=1';
 
 function isWatchlistHoldingsRequest(path) {
@@ -6225,7 +6226,7 @@ describe('App', () => {
             .find('[aria-label="Stock EODHD synchronization status"]').exists()).toBe(false);
     }, 10000);
 
-    it('loads the new dashboard without a market-data reload action', async () => {
+    it('loads and manually reloads the new dashboard without a market-data sync action', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
         const emptyPagination = {
             current_page: 1,
@@ -6344,7 +6345,7 @@ describe('App', () => {
                             daily_prices: streakRecommendationDailyPrices().slice(0, 4),
                         },
                         {
-                            id: 2,
+                            id: 21,
                             symbol: 'SELL',
                             name: 'Sell Signal Fund',
                             daily_prices: streakRecommendationDailyPrices(),
@@ -6355,6 +6356,20 @@ describe('App', () => {
                             name: 'No Signal Fund',
                             daily_prices: [],
                         },
+                    ],
+                    meta: { ...emptyPagination, total: 3, from: 1, to: 3 },
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === dashboardKiWatchlistHoldingsPath) {
+                return Promise.resolve(jsonResponse({
+                    depot,
+                    holdings: [
+                        { id: 1, symbol: 'BUY', name: 'Buy Signal Fund' },
+                        { id: 21, symbol: 'SELL', name: 'Sell Signal Fund' },
+                        { id: 3, symbol: 'NONE', name: 'No Signal Fund' },
                     ],
                     meta: { ...emptyPagination, total: 3, from: 1, to: 3 },
                     price_refresh_settings: priceRefreshSettings(),
@@ -6381,6 +6396,10 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/dashboard/ai/stock-researches') {
+                return Promise.resolve(jsonResponse({ researches: [] }));
+            }
+
             return Promise.reject(new Error(`Unexpected request: ${path}`));
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -6388,6 +6407,11 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
+        const dashboardSectionTabs = wrapper.get('[aria-label="Dashboard sections"]');
+        const dashboardSectionTabButtons = dashboardSectionTabs.findAll('[role="tab"]');
+        expect(dashboardSectionTabButtons).toHaveLength(2);
+        expect(dashboardSectionTabButtons[0].text()).toContain('Übersicht');
+        expect(dashboardSectionTabButtons[1].text()).toContain('KI');
         expect(wrapper.find('.dashboard-action-button').exists()).toBe(false);
         expect(wrapper.find('.watch-list-section').exists()).toBe(false);
         expect(wrapper.get('.dashboard-version-page').element.firstElementChild.classList)
@@ -6431,6 +6455,7 @@ describe('App', () => {
         expect(dashboardSignalCards[1].text()).toContain('SELL');
         expect(dashboardSignalCards[1].text()).toContain('VBUY/VSELL');
         expect(dashboardSignalCards[1].classes()).toContain('dashboard-stock-signal-card--sell');
+        expect(dashboardSignalCards[1].attributes('href')).toBe('/admin/menu/analyze/trend-v2?stock=21');
         expect(wrapper.get('[aria-label="Stocks with Trend v2 signals"]').text()).not.toContain('No Signal Fund');
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/version')).toHaveLength(1);
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/performance')).toHaveLength(1);
@@ -6442,6 +6467,210 @@ describe('App', () => {
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/sync'))).toBe(false);
+
+        const reloadButton = wrapper.get('[aria-label="Reload dashboard data"]');
+        expect(reloadButton.text()).toContain('Reload');
+
+        await reloadButton.trigger('click');
+        await flushPromises();
+
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/version')).toHaveLength(2);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/performance')).toHaveLength(2);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(2);
+        expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(2);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(1);
+        expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/sync'))).toBe(false);
+
+        await dashboardSectionTabButtons[1].trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/dashboard/ki');
+        expect(wrapper.find('[aria-label="Dashboard KI"]').exists()).toBe(true);
+        expect(wrapper.find('.dashboard-version-page').exists()).toBe(false);
+
+        await wrapper.get('[aria-label="Dashboard sections"]')
+            .findAll('[role="tab"]')[0]
+            .trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/dashboard');
+        expect(wrapper.find('.dashboard-version-page').exists()).toBe(true);
+
+        await wrapper.findAll('.dashboard-stock-signal-card')[1].trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analyze/trend-v2');
+        expect(window.location.search).toBe('?stock=21');
+        expect(wrapper.find('[aria-label="Analyze trend v2"]').exists()).toBe(true);
+    });
+
+    it('opens KI dashboard stock cards directly without loading overview data', async () => {
+        window.history.pushState({}, '', '/admin/menu/dashboard/ki');
+        let currentResearch = null;
+        let researchSequence = 0;
+        const fetchMock = vi.fn((path, options = {}) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({
+                    user: {
+                        id: 1,
+                        name: 'Admin User',
+                        email: 'admin@example.com',
+                        roles: ['admin'],
+                    },
+                }));
+            }
+
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    app_version: '0.1.5',
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/index-watch-items') {
+                return Promise.resolve(jsonResponse({ indexes: [] }));
+            }
+
+            if (path === '/admin/dashboard/ai/stock-researches') {
+                return Promise.resolve(jsonResponse({
+                    researches: currentResearch ? [currentResearch] : [],
+                }));
+            }
+
+            if (path === '/admin/dashboard/ai/stocks/11/researches' && options.method === 'POST') {
+                researchSequence += 1;
+                currentResearch = {
+                    id: `apple-research-${researchSequence}`,
+                    stock_holding_id: 11,
+                    status: 'queued',
+                    message: 'KI-Recherche wurde eingereiht.',
+                    sources: [],
+                };
+
+                return Promise.resolve(jsonResponse({ research: currentResearch }));
+            }
+
+            if (path === `/admin/dashboard/ai/stocks/11/researches/apple-research-${researchSequence}`) {
+                currentResearch = researchSequence === 1
+                    ? {
+                        id: 'apple-research-1',
+                        stock_holding_id: 11,
+                        status: 'finished',
+                        summary: 'Neue Nachfrageindikatoren stützen Apple kurzfristig.',
+                        stronger_case: 'Starke Nachfrage könnte den Kurs stützen.',
+                        weaker_case: 'Eine hohe Bewertung könnte den Kurs belasten.',
+                        trump_connection: 'Kein materieller Zusammenhang mit aktuellen Trump-Aussagen.',
+                        recommendation: 'hold',
+                        justification: 'Chancen und Risiken sind ausgeglichen.',
+                        sources: [{ url: 'https://example.com/apple', title: 'Apple source' }],
+                        finished_at: '2026-08-16T10:00:00+02:00',
+                    }
+                    : {
+                        id: 'apple-research-2',
+                        stock_holding_id: 11,
+                        status: 'no_new_information',
+                        summary: 'Keine wichtigen neueren Informationen seit 16.08.2026, 10:00 gefunden.',
+                        recommendation: 'unchanged',
+                        sources: [],
+                        finished_at: '2026-08-16T10:05:00+02:00',
+                    };
+
+                return Promise.resolve(jsonResponse({ research: currentResearch }));
+            }
+
+            if (path === dashboardKiWatchlistHoldingsPath) {
+                return Promise.resolve(jsonResponse({
+                    depot: null,
+                    holdings: [
+                        { id: 11, symbol: 'AAPL', name: 'Apple Inc.', subtitle: 'Technology hardware' },
+                        { id: 12, symbol: 'MSFT', name: 'Microsoft Corporation', stock_subtitle: 'Software' },
+                    ],
+                    meta: {
+                        current_page: 1,
+                        last_page: 1,
+                        per_page: 10,
+                        total: 2,
+                        from: 1,
+                        to: 2,
+                    },
+                    price_refresh_settings: priceRefreshSettings(),
+                    index_price_refresh_settings: indexPriceRefreshSettings(),
+                }));
+            }
+
+            if (path === '/admin/depots?page=1') {
+                return Promise.resolve(jsonResponse({
+                    depots: [],
+                    meta: {
+                        current_page: 1,
+                        last_page: 1,
+                        per_page: 10,
+                        total: 0,
+                        from: null,
+                        to: null,
+                    },
+                }));
+            }
+
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/dashboard/ki');
+        expect(wrapper.get('[aria-label="Dashboard sections"]').text()).toContain('Übersicht');
+        expect(wrapper.get('[aria-label="Dashboard sections"]').text()).toContain('KI');
+        expect(wrapper.find('[aria-label="Dashboard KI"]').exists()).toBe(true);
+        expect(wrapper.find('.dashboard-version-page').exists()).toBe(false);
+        const stockCards = wrapper.findAll('.dashboard-ki-stock-card');
+        expect(stockCards).toHaveLength(2);
+        expect(stockCards.every((card) => card.classes().includes('w-100'))).toBe(true);
+        expect(stockCards[0].get('.dashboard-ki-stock-title').text()).toBe('Apple Inc.');
+        expect(stockCards[1].get('.dashboard-ki-stock-title').text()).toBe('Microsoft Corporation');
+        expect(stockCards[0].get('.dashboard-ki-stock-subtitle').text()).toBe('Technology hardware');
+        expect(stockCards[1].get('.dashboard-ki-stock-subtitle').text()).toBe('Software');
+        expect(wrapper.text()).not.toContain('AAPL');
+        expect(wrapper.text()).not.toContain('MSFT');
+        const loadButtons = wrapper.findAll('.dashboard-ki-load-button');
+        expect(loadButtons).toHaveLength(2);
+        expect(loadButtons.every((button) => button.text() === 'Load')).toBe(true);
+
+        await loadButtons[0].trigger('click');
+        await flushPromises();
+
+        expect(fetchMock).toHaveBeenCalledWith(
+            '/admin/dashboard/ai/stocks/11/researches',
+            expect.objectContaining({ method: 'POST' }),
+        );
+        expect(stockCards[0].text()).toContain('KI-Recherche wurde eingereiht.');
+
+        await wrapper.vm.pollDashboardKiResearches();
+        await flushPromises();
+
+        expect(stockCards[0].text()).toContain('Neue Nachfrageindikatoren stützen Apple kurzfristig.');
+        expect(stockCards[0].text()).toContain('Stärker');
+        expect(stockCards[0].text()).toContain('Schwächer');
+        expect(stockCards[0].text()).toContain('Donald Trump / Politik:');
+        expect(stockCards[0].text()).toContain('Halten');
+        expect(stockCards[0].text()).toContain('Apple source');
+
+        await loadButtons[0].trigger('click');
+        await flushPromises();
+        await wrapper.vm.pollDashboardKiResearches();
+        await flushPromises();
+
+        expect(stockCards[0].text()).toContain('Keine wichtigen neueren Informationen');
+        expect(stockCards[0].text()).not.toContain('Neue Nachfrageindikatoren');
+        expect(window.location.pathname).toBe('/admin/menu/dashboard/ki');
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/dashboard/version')).toBe(false);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/dashboard/performance')).toBe(false);
+        expect(fetchMock.mock.calls.filter(([path]) => path === dashboardKiWatchlistHoldingsPath)).toHaveLength(1);
+        expect(fetchMock.mock.calls.some(([path]) => path.startsWith('/admin/watchlist/holdings/charts'))).toBe(false);
     });
 
     it('does not automatically reload the new dashboard', async () => {

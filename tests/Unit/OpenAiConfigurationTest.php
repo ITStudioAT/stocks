@@ -2,36 +2,50 @@
 
 namespace Tests\Unit;
 
-use Illuminate\Support\Env;
+use Symfony\Component\Process\Process;
 use Tests\TestCase;
 
 class OpenAiConfigurationTest extends TestCase
 {
     public function test_openai_provider_key_uses_project_environment_variable_name(): void
     {
-        Env::getRepository()->clear('OPENAI_API_KEY');
-        Env::getRepository()->set('OPEN_AI_KEY', 'project-openai-key');
+        $fingerprint = $this->configuredKeyFingerprint([
+            'OPENAI_API_KEY' => false,
+            'OPEN_AI_KEY' => 'project-openai-key',
+        ]);
 
-        $config = require base_path('config/ai.php');
-
-        $this->assertSame('project-openai-key', $config['providers']['openai']['key']);
+        $this->assertSame(hash('sha256', 'project-openai-key'), $fingerprint);
     }
 
     public function test_openai_provider_key_prefers_standard_environment_variable_name(): void
     {
-        Env::getRepository()->set('OPENAI_API_KEY', 'standard-openai-key');
-        Env::getRepository()->set('OPEN_AI_KEY', 'project-openai-key');
+        $fingerprint = $this->configuredKeyFingerprint([
+            'OPENAI_API_KEY' => 'standard-openai-key',
+            'OPEN_AI_KEY' => 'project-openai-key',
+        ]);
 
-        $config = require base_path('config/ai.php');
-
-        $this->assertSame('standard-openai-key', $config['providers']['openai']['key']);
+        $this->assertSame(hash('sha256', 'standard-openai-key'), $fingerprint);
     }
 
-    protected function tearDown(): void
+    /**
+     * @param  array<string, string|false>  $environment
+     */
+    private function configuredKeyFingerprint(array $environment): string
     {
-        Env::getRepository()->clear('OPENAI_API_KEY');
-        Env::getRepository()->clear('OPEN_AI_KEY');
+        $script = <<<'PHP'
+require $argv[1];
+$config = require $argv[2];
+echo hash('sha256', (string) $config['providers']['openai']['key']);
+PHP;
+        $process = new Process([
+            PHP_BINARY,
+            '-r',
+            $script,
+            base_path('vendor/autoload.php'),
+            base_path('config/ai.php'),
+        ], base_path(), $environment);
+        $process->mustRun();
 
-        parent::tearDown();
+        return trim($process->getOutput());
     }
 }

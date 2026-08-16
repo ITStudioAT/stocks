@@ -806,7 +806,44 @@ class AdminCloudwaysSyncTest extends TestCase
         $this->assertCount(1, $deleteQueries);
         $this->assertStringContainsString('compatible_items', $deleteQueries[0]);
         $this->assertStringNotContainsString('cloud_items', $deleteQueries[0]);
-        $this->assertSame(1, $cloudwaysDatabaseSync->refreshCount);
+        $this->assertSame(2, $cloudwaysDatabaseSync->refreshCount);
+    }
+
+    public function test_cloudways_sync_releases_source_connections_between_table_imports(): void
+    {
+        $this->configureCloudwaysTestingConnection();
+        $this->createCloudItemsTable();
+        $this->createCloudItemsTable('cloudways_testing');
+        $this->createCompatibleItemsTable();
+        $this->createCompatibleItemsTable('cloudways_testing');
+
+        DB::connection('cloudways_testing')->table('cloud_items')->insert([
+            'id' => 1,
+            'name' => 'Cloud item',
+            'quantity' => 10,
+        ]);
+        DB::connection('cloudways_testing')->table('compatible_items')->insert([
+            'id' => 2,
+            'name' => 'Compatible item',
+        ]);
+
+        $cloudwaysDatabaseSync = new class extends CloudwaysDatabaseSync
+        {
+            public int $refreshCount = 0;
+
+            protected function refreshSourceConnection(string $sourceConnectionName): void
+            {
+                $this->refreshCount++;
+            }
+        };
+
+        $sync = $cloudwaysDatabaseSync->syncAllTables(
+            checkedDifferentTables: ['cloud_items', 'compatible_items'],
+            sourceConnectionName: 'cloudways_testing',
+        );
+
+        $this->assertSame(2, $sync['synced_tables']);
+        $this->assertSame(3, $cloudwaysDatabaseSync->refreshCount);
     }
 
     public function test_cloudways_sync_refreshes_long_running_mysql_source_connections(): void
@@ -834,6 +871,33 @@ class AdminCloudwaysSyncTest extends TestCase
             $refreshSourceConnection->invoke($cloudwaysDatabaseSync, 'cloudways_mysql_testing');
             $refreshSourceConnection->invoke($cloudwaysDatabaseSync, 'cloudways_mariadb_testing');
             $refreshSourceConnection->invoke($cloudwaysDatabaseSync, 'cloudways_sqlite_testing');
+        } finally {
+            DB::swap($databaseManager);
+        }
+    }
+
+    public function test_cloudways_sync_ignores_ssl_warnings_when_releasing_a_source_connection(): void
+    {
+        Config::set('database.connections.cloudways_mysql_testing.driver', 'mysql');
+
+        $databaseManager = DB::getFacadeRoot();
+        $this->assertInstanceOf(DatabaseManager::class, $databaseManager);
+        $mockDatabaseManager = Mockery::mock(DatabaseManager::class);
+        $mockDatabaseManager->shouldReceive('purge')
+            ->once()
+            ->with('cloudways_mysql_testing')
+            ->andReturnUsing(function (): void {
+                trigger_error('SSL: remote connection was already closed', E_USER_WARNING);
+            });
+
+        DB::swap($mockDatabaseManager);
+
+        try {
+            $refreshSourceConnection = new ReflectionMethod(CloudwaysDatabaseSync::class, 'refreshSourceConnection');
+            $refreshSourceConnection->invoke(
+                app(CloudwaysDatabaseSync::class),
+                'cloudways_mysql_testing',
+            );
         } finally {
             DB::swap($databaseManager);
         }

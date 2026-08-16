@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Jobs\AnalyzeStockResearch;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -77,6 +78,10 @@ class AppServiceProvider extends ServiceProvider
                 Limit::perMinute(10)->by("admin-costly-operation-minute:{$userAndIp}"),
                 Limit::perHour(60)->by("admin-costly-operation-hour:{$userAndIp}"),
             ];
+        });
+
+        RateLimiter::for('stock-ai-research', function (AnalyzeStockResearch $job): Limit {
+            return Limit::perMinute(20)->by("stock-ai-research-user:{$job->userId}");
         });
     }
 

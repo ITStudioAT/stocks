@@ -12,6 +12,7 @@ class HttpMethodSecurityTest extends TestCase
         $urls = [
             '/admin/logout',
             '/admin/cloudways/check',
+            '/admin/dashboard/ai/stocks/1/researches',
             '/admin/tests/tickers',
             '/admin/tests/exchanges',
             '/admin/tests/stocks/1/intraday',
@@ -31,6 +32,7 @@ class HttpMethodSecurityTest extends TestCase
             'admin.active-depot.holdings.refresh-prices',
             'admin.cloudways.show',
             'admin.cloudways.sync',
+            'admin.dashboard.ai.stockResearches.store',
             'admin.data.endOfDay.sync',
             'admin.data.exchanges.reload',
             'admin.data.historical.sync',
