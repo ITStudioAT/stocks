@@ -82,7 +82,7 @@ class StockResearchEventAssessment
             'source_confidence' => $this->lowestConfidence($reliable->all()),
             'affected_etf_share_pct' => $this->totalAffectedShare($reliable->all()),
             'time_horizons' => $this->timeHorizons($reliable->all()),
-            'reason' => 'Aggregation ausschließlich belastbarer aktueller Ereignisse; keine Kauf- oder Verkaufsempfehlung.',
+            'reason' => 'Aggregation ausschließlich belastbarer aktueller Ereignisse; die separate KI-Bewertung verwendet zusätzliche Schutzregeln.',
             'method' => 'aggregate_reliable_current_events_only',
         ];
     }

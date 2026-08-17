@@ -342,6 +342,8 @@ const dashboardKiResearchErrors = ref({});
 const dashboardKiResearchStartingIds = ref([]);
 const dashboardKiLoadAllError = ref('');
 const dashboardKiResearchTimer = ref(null);
+const dashboardKiCoverageDialogHoldingId = ref(null);
+const isDashboardKiCoverageDialogOpen = ref(false);
 const isDashboardKiLoadingAll = ref(false);
 const isDashboardReloading = ref(false);
 const isDashboardVersionDetailsVisible = ref(false);
@@ -3814,12 +3816,16 @@ function dashboardKiNowRelevantSections(research) {
     const icons = {
         last_72_hours: 'mdi-clock-fast',
         current_top_positions: 'mdi-format-list-bulleted',
+        position_news: 'mdi-newspaper-variant-outline',
         position_changes: 'mdi-swap-vertical',
         latest_earnings: 'mdi-chart-box-outline',
         upcoming_events: 'mdi-calendar-clock',
         current_guidance: 'mdi-sign-direction',
         rumors: 'mdi-account-voice',
         unusual_activity: 'mdi-pulse',
+        politics: 'mdi-earth',
+        analyst_consensus: 'mdi-account-group-outline',
+        other_developments: 'mdi-text-box-search-outline',
         data_coverage: 'mdi-database-check-outline',
     };
     const blocks = Array.isArray(research?.now_relevant?.blocks) ? research.now_relevant.blocks : [];
@@ -3832,6 +3838,7 @@ function dashboardKiNowRelevantSections(research) {
         coverage: block.coverage,
         items: (Array.isArray(block.items) ? block.items : []).map((item, index) => ({
             ...item,
+            detail: block.key === 'data_coverage' ? dashboardKiProviderStatusLabel(item.detail) : item.detail,
             key: `${block.key}-${item.type ?? 'item'}-${item.subject ?? index}-${item.event_at ?? index}`,
             label: item.status ? dashboardKiDevelopmentStatusLabel(item.status) : null,
             tone: item.status ? dashboardKiDevelopmentStatusColor(item.status) : null,
@@ -3844,41 +3851,92 @@ function dashboardKiNowRelevantActiveSections(research) {
         .filter((section) => section.key !== 'data_coverage' && section.items.length > 0);
 }
 
-function dashboardKiNowRelevantEmptySections(research) {
-    return dashboardKiNowRelevantSections(research)
-        .filter((section) => section.key !== 'data_coverage' && section.items.length === 0);
-}
-
-function dashboardKiNowRelevantEmptySummary(research) {
-    const count = dashboardKiNowRelevantEmptySections(research).length;
-
-    return count === 1
-        ? '1 Bereich ohne aktuellen Treffer'
-        : `${count} Bereiche ohne aktuelle Treffer`;
-}
-
-function dashboardKiNowRelevantCoverageSection(research) {
+function dashboardKiCoverageSection(research) {
     return dashboardKiNowRelevantSections(research)
         .find((section) => section.key === 'data_coverage') ?? null;
 }
 
-function dashboardKiNowRelevantCoverageSummary(research) {
-    const items = dashboardKiNowRelevantCoverageSection(research)?.items ?? [];
-    const counts = items.reduce((summary, item) => {
-        const coverage = ['complete', 'partial', 'source_failed'].includes(item.coverage)
-            ? item.coverage
-            : 'partial';
+function dashboardKiCoverageDialogHolding() {
+    return holdings.value.find((holding) => holding.id === dashboardKiCoverageDialogHoldingId.value) ?? null;
+}
 
-        summary[coverage] += 1;
+function openDashboardKiCoverageDialog(holdingId) {
+    dashboardKiCoverageDialogHoldingId.value = holdingId;
+    isDashboardKiCoverageDialogOpen.value = true;
+}
 
-        return summary;
-    }, { complete: 0, partial: 0, source_failed: 0 });
+function closeDashboardKiCoverageDialog() {
+    isDashboardKiCoverageDialogOpen.value = false;
+    dashboardKiCoverageDialogHoldingId.value = null;
+}
 
-    return [
-        counts.complete > 0 ? `${counts.complete} vollst\u00e4ndig` : null,
-        counts.partial > 0 ? `${counts.partial} teilweise` : null,
-        counts.source_failed > 0 ? `${counts.source_failed} ausgefallen` : null,
-    ].filter(Boolean).join(' \u00b7 ') || 'Keine Quelleninformationen';
+function dashboardKiResearchUpdatedAt(holdingId) {
+    const research = dashboardKiResearch(holdingId);
+    const finishedAt = research?.finished_at ?? research?.previous_result?.finished_at;
+
+    return finishedAt ? formatDashboardKiResearchTime(finishedAt) : 'Noch nicht ausgeführt';
+}
+
+function dashboardKiRecommendation(holdingId) {
+    const currentResearch = dashboardKiResearch(holdingId);
+    const displayedResearch = dashboardKiDisplayedResearch(holdingId);
+    const storedRecommendation = [currentResearch, displayedResearch]
+        .map((research) => dashboardKiValidatedRecommendation(research))
+        .find((recommendation) => recommendation !== null);
+
+    return storedRecommendation ?? dashboardKiFallbackRecommendation(currentResearch);
+}
+
+function dashboardKiValidatedRecommendation(research) {
+    const percentages = research?.recommendation_percentages;
+
+    if (!percentages || !['buy', 'hold', 'sell'].includes(research?.recommendation)) {
+        return null;
+    }
+
+    const buy = Number(percentages.buy);
+    const hold = Number(percentages.hold);
+    const sell = Number(percentages.sell);
+
+    if (![buy, hold, sell].every((percentage) => Number.isInteger(percentage) && percentage >= 0 && percentage <= 100)) {
+        return null;
+    }
+
+    if (buy + hold + sell !== 100) {
+        return null;
+    }
+
+    return {
+        label: research.recommendation.toUpperCase(),
+        recommendation: research.recommendation,
+        percentages: { buy, hold, sell },
+        justification: research.justification,
+        isFallback: false,
+    };
+}
+
+function dashboardKiFallbackRecommendation(research) {
+    const justification = {
+        queued: 'Vorläufig HOLD 100 %, bis die eingereihte KI-Recherche eine belegte Bewertung liefert.',
+        running: 'Vorläufig HOLD 100 %, bis die laufende KI-Recherche eine belegte Bewertung liefert.',
+        failed: 'HOLD 100 % als Sicherheits-Fallback, weil die letzte KI-Recherche fehlgeschlagen ist.',
+    }[research?.status] ?? 'HOLD 100 % als Sicherheits-Fallback, bis eine aktuelle KI-Bewertung verfügbar ist.';
+
+    return {
+        label: 'HOLD',
+        recommendation: 'hold',
+        percentages: { buy: 0, hold: 100, sell: 0 },
+        justification,
+        isFallback: true,
+    };
+}
+
+function dashboardKiRecommendationColor(recommendation) {
+    return {
+        buy: 'success',
+        hold: 'warning',
+        sell: 'error',
+    }[recommendation] ?? 'default';
 }
 
 function dashboardKiNowRelevantMoments(item) {
@@ -13082,6 +13140,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </v-card-text>
                                     </v-card>
                                 </div>
+
                             </section>
 
                             </div>
@@ -13131,15 +13190,91 @@ function formatIndexDataUpdateSchedule(settings) {
                                     >
                                         <div class="dashboard-ki-stock-card-content">
                                             <div class="dashboard-ki-stock-copy">
-                                                <v-card-title class="dashboard-ki-stock-title">
-                                                    {{ stockDisplayName(holding) }}
-                                                </v-card-title>
+                                                <div class="dashboard-ki-stock-heading">
+                                                    <v-card-title class="dashboard-ki-stock-title">
+                                                        {{ stockDisplayName(holding) }}
+                                                    </v-card-title>
+                                                    <v-btn
+                                                        v-if="dashboardKiCoverageSection(dashboardKiNowRelevantResearch(holding.id))?.items.length"
+                                                        class="dashboard-ki-coverage-button"
+                                                        color="primary"
+                                                        prepend-icon="mdi-database-eye-outline"
+                                                        size="x-small"
+                                                        type="button"
+                                                        variant="tonal"
+                                                        :aria-label="`Datenstand und Rechercheabdeckung für ${stockDisplayName(holding)} anzeigen`"
+                                                        @click="openDashboardKiCoverageDialog(holding.id)"
+                                                    >
+                                                        Datenstand
+                                                    </v-btn>
+                                                </div>
+                                                <div class="dashboard-ki-stock-isin">
+                                                    ISIN: {{ holding.isin || '–' }}
+                                                </div>
                                                 <div
                                                     v-if="holding.subtitle || holding.stock_subtitle"
                                                     class="dashboard-ki-stock-subtitle"
                                                 >
                                                     {{ holding.subtitle || holding.stock_subtitle }}
                                                 </div>
+                                                <div class="dashboard-ki-stock-facts">
+                                                    <span>
+                                                        <small>Letzter Kurs</small>
+                                                        <strong>{{ formatHoldingCardPrice(holding) }}</strong>
+                                                    </span>
+                                                    <span>
+                                                        <small>Letzte Veränderung</small>
+                                                        <strong :class="priceChangePercentClass(Number(holding.latest_price_change_pct))">
+                                                            {{ formatLatestPriceChangePercent(holding) || '–' }}
+                                                        </strong>
+                                                    </span>
+                                                    <span>
+                                                        <small>Im Depot</small>
+                                                        <strong>{{ formatPositionPieces(holding) }} Stück</strong>
+                                                    </span>
+                                                    <span>
+                                                        <small>Kursstand</small>
+                                                        <strong>{{ formatDashboardKiResearchTime(holding.latest_price_as_of || holding.latest_price_fetched_at) || '–' }}</strong>
+                                                    </span>
+                                                    <span>
+                                                        <small>Letzte KI-Aktualisierung</small>
+                                                        <strong>{{ dashboardKiResearchUpdatedAt(holding.id) }}</strong>
+                                                    </span>
+                                                </div>
+                                                <section class="dashboard-ki-recommendation" aria-label="KI-Bewertung">
+                                                    <div class="dashboard-ki-recommendation-heading">
+                                                        <strong>KI-Bewertung</strong>
+                                                        <v-chip
+                                                            :color="dashboardKiRecommendationColor(dashboardKiRecommendation(holding.id).recommendation)"
+                                                            size="x-small"
+                                                            variant="tonal"
+                                                        >
+                                                            {{ dashboardKiRecommendation(holding.id).label }}
+                                                        </v-chip>
+                                                    </div>
+                                                    <div
+                                                        class="dashboard-ki-recommendation-values"
+                                                    >
+                                                        <span class="dashboard-ki-recommendation-value dashboard-ki-recommendation-value--buy">
+                                                            BUY <strong>{{ dashboardKiRecommendation(holding.id).percentages.buy }} %</strong>
+                                                        </span>
+                                                        <span class="dashboard-ki-recommendation-value dashboard-ki-recommendation-value--hold">
+                                                            HOLD <strong>{{ dashboardKiRecommendation(holding.id).percentages.hold }} %</strong>
+                                                        </span>
+                                                        <span class="dashboard-ki-recommendation-value dashboard-ki-recommendation-value--sell">
+                                                            SELL <strong>{{ dashboardKiRecommendation(holding.id).percentages.sell }} %</strong>
+                                                        </span>
+                                                    </div>
+                                                    <p v-if="dashboardKiRecommendation(holding.id)?.justification">
+                                                        {{ dashboardKiRecommendation(holding.id).justification }}
+                                                    </p>
+                                                    <small>
+                                                        Summe 100 % ·
+                                                        {{ dashboardKiRecommendation(holding.id).isFallback
+                                                            ? 'Sicherheits-Fallback bis zur belastbaren KI-Auswertung.'
+                                                            : 'KI-Auswertung, keine persönliche Anlageberatung.' }}
+                                                    </small>
+                                                </section>
                                             </div>
                                             <v-btn
                                                 class="dashboard-ki-load-button"
@@ -13261,6 +13396,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                                                     </v-chip>
                                                                 </div>
                                                                 <p v-if="item.detail">{{ item.detail }}</p>
+                                                                <p v-if="item.relevance" class="dashboard-ki-item-relevance">
+                                                                    <strong>Relevanz:</strong> {{ item.relevance }}
+                                                                </p>
                                                                 <ul
                                                                     v-if="dashboardKiNowRelevantMoments(item).length"
                                                                     class="dashboard-ki-calculated-moments"
@@ -13297,65 +13435,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                                                 <a
                                                                     v-if="item.source_url"
                                                                     :href="item.source_url"
+                                                                    class="dashboard-ki-item-source"
                                                                     rel="noopener noreferrer"
                                                                     target="_blank"
-                                                                >
-                                                                    {{ item.source_title || item.source_url }}
-                                                                </a>
+                                                                >Quelle: {{ item.source_title || item.source_url }}</a>
+                                                                <span v-else class="dashboard-ki-item-source">
+                                                                    Quelle: {{ item.source_title || 'EODHD' }}
+                                                                </span>
                                                             </article>
                                                         </div>
                                                     </section>
                                                 </div>
-
-                                                <details
-                                                    v-if="dashboardKiNowRelevantEmptySections(dashboardKiNowRelevantResearch(holding.id)).length"
-                                                    class="dashboard-ki-compact-disclosure dashboard-ki-empty-sections"
-                                                >
-                                                    <summary>
-                                                        <v-icon icon="mdi-information-outline" size="16" />
-                                                        <strong>{{ dashboardKiNowRelevantEmptySummary(dashboardKiNowRelevantResearch(holding.id)) }}</strong>
-                                                    </summary>
-                                                    <ul class="dashboard-ki-compact-empty-list">
-                                                        <li
-                                                            v-for="section in dashboardKiNowRelevantEmptySections(dashboardKiNowRelevantResearch(holding.id))"
-                                                            :key="section.key"
-                                                        >
-                                                            <strong>{{ section.title }}:</strong> {{ section.empty }}
-                                                        </li>
-                                                    </ul>
-                                                </details>
-
-                                                <details
-                                                    v-if="dashboardKiNowRelevantCoverageSection(dashboardKiNowRelevantResearch(holding.id))"
-                                                    class="dashboard-ki-compact-disclosure dashboard-ki-coverage-disclosure"
-                                                >
-                                                    <summary>
-                                                        <v-icon icon="mdi-database-check-outline" size="16" />
-                                                        <strong>Datenabdeckung</strong>
-                                                        <small>{{ dashboardKiNowRelevantCoverageSummary(dashboardKiNowRelevantResearch(holding.id)) }}</small>
-                                                    </summary>
-                                                    <div class="dashboard-ki-coverage-list">
-                                                        <article
-                                                            v-for="item in dashboardKiNowRelevantCoverageSection(dashboardKiNowRelevantResearch(holding.id)).items"
-                                                            :key="item.key"
-                                                            class="dashboard-ki-coverage-row"
-                                                        >
-                                                            <strong>{{ item.title }}</strong>
-                                                            <v-chip
-                                                                v-if="item.coverage"
-                                                                :color="dashboardKiDevelopmentCoverageColor(item.coverage)"
-                                                                size="x-small"
-                                                                variant="tonal"
-                                                            >
-                                                                {{ dashboardKiDevelopmentCoverageLabel(item.coverage) }}
-                                                            </v-chip>
-                                                            <span v-if="item.detail">{{ dashboardKiProviderStatusLabel(item.detail) }}</span>
-                                                            <time v-if="item.retrieved_at">
-                                                                {{ formatDashboardKiDevelopmentMoment(item.retrieved_at) }}
-                                                            </time>
-                                                        </article>
-                                                    </div>
-                                                </details>
                                             </section>
 
                                             <details
@@ -13443,6 +13533,88 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </div>
                                     </v-card>
                                 </div>
+
+                                <v-dialog
+                                    v-model="isDashboardKiCoverageDialogOpen"
+                                    class="dashboard-ki-coverage-dialog"
+                                    max-width="680"
+                                >
+                                    <v-card rounded="xl">
+                                        <v-card-title class="dashboard-ki-coverage-dialog-heading">
+                                            <div>
+                                                <span>Datenstand und Rechercheabdeckung</span>
+                                                <small v-if="dashboardKiCoverageDialogHolding()">
+                                                    {{ stockDisplayName(dashboardKiCoverageDialogHolding()) }}
+                                                </small>
+                                            </div>
+                                            <v-btn
+                                                class="dashboard-ki-coverage-dialog-close"
+                                                icon="mdi-close"
+                                                size="small"
+                                                type="button"
+                                                variant="text"
+                                                aria-label="Dialog schließen"
+                                                @click="closeDashboardKiCoverageDialog"
+                                            />
+                                        </v-card-title>
+                                        <v-card-text>
+                                            <div
+                                                v-if="dashboardKiCoverageSection(dashboardKiNowRelevantResearch(dashboardKiCoverageDialogHoldingId))?.items.length"
+                                                class="dashboard-ki-coverage-dialog-list"
+                                            >
+                                                <article
+                                                    v-for="item in dashboardKiCoverageSection(dashboardKiNowRelevantResearch(dashboardKiCoverageDialogHoldingId)).items"
+                                                    :key="item.key"
+                                                    class="dashboard-ki-calculated-item"
+                                                >
+                                                    <div class="dashboard-ki-calculated-item-heading">
+                                                        <strong>{{ item.title }}</strong>
+                                                        <v-chip
+                                                            v-if="item.coverage"
+                                                            :color="dashboardKiDevelopmentCoverageColor(item.coverage)"
+                                                            size="x-small"
+                                                            variant="tonal"
+                                                        >
+                                                            {{ dashboardKiDevelopmentCoverageLabel(item.coverage) }}
+                                                        </v-chip>
+                                                    </div>
+                                                    <p v-if="item.detail">{{ item.detail }}</p>
+                                                    <ul
+                                                        v-if="dashboardKiNowRelevantMoments(item).length"
+                                                        class="dashboard-ki-calculated-moments"
+                                                    >
+                                                        <li
+                                                            v-for="moment in dashboardKiNowRelevantMoments(item)"
+                                                            :key="moment.key"
+                                                        >
+                                                            <span>{{ moment.label }}</span>
+                                                            {{ formatDashboardKiDevelopmentMoment(moment.value) }}
+                                                        </li>
+                                                    </ul>
+                                                    <a
+                                                        v-if="item.source_url"
+                                                        :href="item.source_url"
+                                                        class="dashboard-ki-item-source"
+                                                        rel="noopener noreferrer"
+                                                        target="_blank"
+                                                    >Quelle: {{ item.source_title || item.source_url }}</a>
+                                                    <span v-else class="dashboard-ki-item-source">
+                                                        Quelle: {{ item.source_title || 'EODHD' }}
+                                                    </span>
+                                                </article>
+                                            </div>
+                                            <v-alert v-else density="compact" type="info" variant="tonal">
+                                                Für diese Auswertung liegen keine Angaben zur Rechercheabdeckung vor.
+                                            </v-alert>
+                                        </v-card-text>
+                                        <v-card-actions>
+                                            <v-spacer />
+                                            <v-btn type="button" variant="text" @click="closeDashboardKiCoverageDialog">
+                                                Schließen
+                                            </v-btn>
+                                        </v-card-actions>
+                                    </v-card>
+                                </v-dialog>
                             </section>
                         </div>
 
@@ -22189,13 +22361,28 @@ function formatIndexDataUpdateSchedule(settings) {
 
 .dashboard-ki-stock-copy {
     min-width: 0;
+    width: 100%;
+}
+
+.dashboard-ki-stock-heading {
+    align-items: center;
+    display: flex;
+    gap: 10px;
+    justify-content: space-between;
+    min-width: 0;
 }
 
 .dashboard-ki-stock-title {
+    flex: 1 1 auto;
     font-size: 0.95rem;
     font-weight: 750;
     min-width: 0;
     padding: 0;
+}
+
+.dashboard-ki-coverage-button {
+    flex: 0 0 auto;
+    text-transform: none;
 }
 
 .dashboard-ki-stock-subtitle {
@@ -22203,6 +22390,109 @@ function formatIndexDataUpdateSchedule(settings) {
     font-size: 0.75rem;
     font-weight: 500;
     margin-top: 4px;
+}
+
+.dashboard-ki-stock-isin {
+    color: rgba(var(--v-theme-on-surface), 0.68);
+    font-size: 0.72rem;
+    font-weight: 650;
+    margin-top: 3px;
+}
+
+.dashboard-ki-stock-facts {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+    margin-top: 12px;
+}
+
+.dashboard-ki-stock-facts span {
+    background: rgba(var(--v-theme-primary), 0.045);
+    border-radius: 7px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    padding: 7px 9px;
+}
+
+.dashboard-ki-stock-facts small {
+    color: rgba(var(--v-theme-on-surface), 0.56);
+    font-size: 0.62rem;
+}
+
+.dashboard-ki-stock-facts strong {
+    font-size: 0.74rem;
+    overflow-wrap: anywhere;
+}
+
+.dashboard-ki-recommendation {
+    background: rgba(var(--v-theme-on-surface), 0.035);
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 9px;
+    margin-top: 10px;
+    padding: 9px;
+}
+
+.dashboard-ki-recommendation-heading {
+    align-items: center;
+    display: flex;
+    gap: 10px;
+    justify-content: space-between;
+}
+
+.dashboard-ki-recommendation-heading > strong {
+    font-size: 0.76rem;
+}
+
+.dashboard-ki-recommendation-values {
+    display: grid;
+    gap: 6px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    margin-top: 7px;
+}
+
+.dashboard-ki-recommendation-value {
+    border-radius: 6px;
+    display: flex;
+    font-size: 0.67rem;
+    font-weight: 700;
+    gap: 5px;
+    justify-content: center;
+    padding: 6px;
+}
+
+.dashboard-ki-recommendation-value--buy {
+    background: rgba(var(--v-theme-success), 0.12);
+    color: rgb(var(--v-theme-success));
+}
+
+.dashboard-ki-recommendation-value--hold {
+    background: rgba(var(--v-theme-warning), 0.12);
+    color: rgb(var(--v-theme-warning));
+}
+
+.dashboard-ki-recommendation-value--sell {
+    background: rgba(var(--v-theme-error), 0.12);
+    color: rgb(var(--v-theme-error));
+}
+
+.dashboard-ki-recommendation > p {
+    color: rgba(var(--v-theme-on-surface), 0.72);
+    font-size: 0.68rem;
+    line-height: 1.4;
+    margin: 7px 0 0;
+}
+
+.dashboard-ki-recommendation > small {
+    color: rgba(var(--v-theme-on-surface), 0.52);
+    display: block;
+    font-size: 0.6rem;
+    margin-top: 5px;
+}
+
+.dashboard-ki-recommendation .dashboard-ki-recommendation-empty {
+    margin-bottom: 0;
 }
 
 .dashboard-ki-load-button {
@@ -22213,6 +22503,38 @@ function formatIndexDataUpdateSchedule(settings) {
 .dashboard-ki-research-result {
     border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
     padding: 18px;
+}
+
+.dashboard-ki-coverage-dialog-heading {
+    align-items: flex-start;
+    display: flex;
+    gap: 16px;
+    justify-content: space-between;
+    white-space: normal;
+}
+
+.dashboard-ki-coverage-dialog-heading > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.dashboard-ki-coverage-dialog-heading span {
+    font-size: 1rem;
+    font-weight: 750;
+}
+
+.dashboard-ki-coverage-dialog-heading small {
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    font-size: 0.72rem;
+    font-weight: 500;
+}
+
+.dashboard-ki-coverage-dialog-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
 }
 
 .dashboard-ki-research-heading {
@@ -22287,8 +22609,8 @@ function formatIndexDataUpdateSchedule(settings) {
 
 .dashboard-ki-calculated-grid {
     display: grid;
-    gap: 6px;
-    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 9px;
+    grid-template-columns: minmax(0, 1fr);
     margin-top: 7px;
 }
 
@@ -22342,6 +22664,10 @@ function formatIndexDataUpdateSchedule(settings) {
     font-size: 0.72rem;
     line-height: 1.45;
     margin: 4px 0 0;
+}
+
+.dashboard-ki-calculated-item .dashboard-ki-item-relevance {
+    color: rgba(var(--v-theme-on-surface), 0.76);
 }
 
 .dashboard-ki-calculated-moments {
@@ -22447,10 +22773,11 @@ function formatIndexDataUpdateSchedule(settings) {
     margin-top: 5px;
 }
 
-.dashboard-ki-calculated-item a {
+.dashboard-ki-item-source {
     color: rgb(var(--v-theme-primary));
-    display: inline-block;
+    display: block;
     font-size: 0.68rem;
+    font-weight: 600;
     margin-top: 5px;
     overflow-wrap: anywhere;
 }

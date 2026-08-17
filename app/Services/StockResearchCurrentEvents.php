@@ -32,6 +32,8 @@ class StockResearchCurrentEvents
                 'scope' => $this->positionScope($evidence['etf_snapshot']['positions'] ?? []),
                 'data_as_of' => $this->dateTimeOrDate($evidence['etf_snapshot']['source_as_of'] ?? null),
                 'retrieved_at' => $this->dateTime($evidence['etf_snapshot']['retrieved_at'] ?? null),
+                'source_title' => $this->string($evidence['etf_snapshot']['source_title'] ?? null),
+                'source_url' => $this->string($evidence['etf_snapshot']['source_url'] ?? null),
                 'positions' => $this->positions($evidence['etf_snapshot']['positions'] ?? []),
             ],
             'guidance' => $this->guidanceSnapshot($evidence['structured_guidance'] ?? []),
@@ -206,6 +208,8 @@ class StockResearchCurrentEvents
             'freshness' => ($currentSnapshot['data_as_of'] ?? null) === null ? 'delayed' : 'current',
             'coverage' => ($currentSnapshot['data_as_of'] ?? null) === null ? 'partial' : 'complete',
             'source_datasets' => ['etf_snapshot'],
+            'source_title' => $currentSnapshot['source_title'] ?? null,
+            'source_url' => $currentSnapshot['source_url'] ?? null,
             'comparison_snapshot_id' => $comparisonSnapshotId,
             'calculation' => [
                 'method' => 'current_weight_pct - previous_weight_pct',

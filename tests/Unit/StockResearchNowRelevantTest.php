@@ -35,6 +35,15 @@ class StockResearchNowRelevantTest extends TestCase
             'time_horizon' => 'today_72h',
             'assessment_status' => 'reliable',
         ]];
+        $research->analyst_consensus = [[
+            'as_of' => '2026-08-17',
+            'analyst_count' => 10,
+            'buy_pct' => 60,
+            'hold_pct' => 30,
+            'sell_pct' => 10,
+            'source_title' => 'Consensus Provider',
+            'source_url' => 'https://example.com/consensus',
+        ]];
         $research->calculated_events = [
             'calculated_at' => '2026-08-17T12:00:00+02:00',
             'etf_positions' => [
@@ -47,6 +56,8 @@ class StockResearchNowRelevantTest extends TestCase
                     'current_weight_pct' => 8.25,
                     'event_at' => '2026-08-17',
                     'coverage' => 'partial',
+                    'source_title' => 'Official factsheet',
+                    'source_url' => 'https://example.com/factsheet',
                 ]],
             ],
             'earnings' => [],
@@ -71,19 +82,24 @@ class StockResearchNowRelevantTest extends TestCase
         $blocks = collect($result['blocks'])->keyBy('key');
 
         $this->assertSame([
-            'last_72_hours',
             'current_top_positions',
-            'position_changes',
-            'latest_earnings',
+            'position_news',
+            'unusual_activity',
             'upcoming_events',
+            'latest_earnings',
             'current_guidance',
             'rumors',
-            'unusual_activity',
+            'politics',
+            'analyst_consensus',
+            'other_developments',
+            'position_changes',
             'data_coverage',
         ], array_column($result['blocks'], 'key'));
         $this->assertSame('Alpha: Ergebnistermin', $blocks['upcoming_events']['items'][0]['title']);
         $this->assertSame('debunked', $blocks['rumors']['items'][0]['status']);
         $this->assertSame('Kein vergleichbarer datierter offizieller Positions-Snapshot verfügbar.', $blocks['position_changes']['empty_message']);
+        $this->assertStringContainsString('BUY 60,0 %', $blocks['analyst_consensus']['items'][0]['detail']);
+        $this->assertSame('Official factsheet', $blocks['current_top_positions']['items'][0]['source_title']);
         $this->assertFalse($blocks['data_coverage']['coverage'] === 'complete');
     }
 }

@@ -81,7 +81,7 @@ class AppServiceProvider extends ServiceProvider
         });
 
         RateLimiter::for('stock-ai-research', function (AnalyzeStockResearch $job): Limit {
-            return Limit::perMinute(20)->by("stock-ai-research-user:{$job->userId}");
+            return Limit::perMinute(6)->by("stock-ai-research-user:{$job->userId}");
         });
     }
 

@@ -13,6 +13,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Laravel\Ai\Exceptions\RateLimitedException;
 use Laravel\Ai\Responses\Data\UrlCitation;
 use Laravel\Ai\Responses\StructuredAgentResponse;
 use RuntimeException;
@@ -25,6 +26,7 @@ class StockAiResearchService
         private EodhdStockResearchData $eodhdStockResearchData,
         private StockResearchCurrentEvents $stockResearchCurrentEvents,
         private StockResearchEventAssessment $stockResearchEventAssessment,
+        private StockResearchRecommendation $stockResearchRecommendation,
         private StockResearchNowRelevant $stockResearchNowRelevant,
     ) {}
 
@@ -143,13 +145,38 @@ class StockAiResearchService
                 throw new UnexpectedValueException('AI provider returned an unexpected response type.');
             }
 
+            $responseData = $response->toArray();
+            $retrievedAt = now('Europe/Vienna')->toIso8601String();
             $guidanceInputs = $this->validatedGuidanceInputs(
-                $response->toArray()['guidance_inputs'] ?? [],
-                now('Europe/Vienna')->toIso8601String(),
+                $responseData['guidance_inputs'] ?? [],
+                $retrievedAt,
             );
+            $webEtfSnapshot = $this->validatedEtfPositionSnapshot(
+                $responseData['etf_position_snapshot'] ?? null,
+                $retrievedAt,
+            );
+            $recalculateEvents = false;
 
             if ($guidanceInputs !== []) {
                 $eodhdData['structured_guidance'] = $guidanceInputs;
+                $recalculateEvents = true;
+            }
+
+            $providerPositionCount = count($eodhdData['etf_snapshot']['positions'] ?? []);
+            $officialPositionCount = count($webEtfSnapshot['positions'] ?? []);
+
+            if ($webEtfSnapshot !== [] && $officialPositionCount > $providerPositionCount) {
+                $eodhdData['etf_snapshot'] = $webEtfSnapshot;
+                $eodhdData['coverage'][] = [
+                    'dataset' => 'official_position_snapshot',
+                    'symbol' => $eodhdData['instrument']['eodhd_symbol'] ?? null,
+                    'status' => 'fresh',
+                    'retrieved_at' => $retrievedAt,
+                ];
+                $recalculateEvents = true;
+            }
+
+            if ($recalculateEvents) {
                 $calculationSnapshot = $this->stockResearchCurrentEvents->snapshot($eodhdData);
                 $calculatedEvents = $this->stockResearchCurrentEvents->calculate(
                     $eodhdData,
@@ -165,11 +192,26 @@ class StockAiResearchService
             }
 
             $this->storeResponse($research, $previousResearch, $response, $eodhdData);
+        } catch (RateLimitedException $exception) {
+            throw $exception;
         } catch (Throwable $exception) {
             $this->fail($researchId);
 
             throw $exception;
         }
+    }
+
+    public function markForRetry(string $researchId): void
+    {
+        StockAiResearch::query()
+            ->whereKey($researchId)
+            ->whereIn('status', ['queued', 'running'])
+            ->update([
+                'status' => 'queued',
+                'message' => 'Der KI-Anbieter ist momentan ausgelastet. Die Recherche wird automatisch erneut versucht.',
+                'error' => null,
+                'finished_at' => null,
+            ]);
     }
 
     public function fail(string $researchId): void
@@ -192,6 +234,7 @@ class StockAiResearchService
     {
         $research->loadMissing(['sources', 'stockHolding']);
         $previousResult = $this->previousResult($research);
+        $recommendation = $this->recommendationPayload($research);
 
         return [
             'id' => $research->id,
@@ -204,6 +247,11 @@ class StockAiResearchService
             'assessment' => $research->assessment ?? $this->stockResearchEventAssessment->summarize(
                 $this->developmentPayloads($research),
             ),
+            'analyst_consensus' => $research->analyst_consensus ?? [],
+            'recommendation' => $recommendation['recommendation'] ?? null,
+            'recommendation_percentages' => $recommendation['percentages'] ?? null,
+            'justification' => $recommendation['justification'] ?? null,
+            'recommendation_method' => $recommendation['method'] ?? null,
             'now_relevant' => $this->stockResearchNowRelevant->build($research),
             'stronger_case' => $research->stronger_case,
             'weaker_case' => $research->weaker_case,
@@ -313,6 +361,7 @@ class StockAiResearchService
     private function resultPayload(StockAiResearch $research): array
     {
         $research->loadMissing(['sources', 'stockHolding']);
+        $recommendation = $this->recommendationPayload($research);
 
         return [
             'id' => $research->id,
@@ -323,6 +372,11 @@ class StockAiResearchService
             'assessment' => $research->assessment ?? $this->stockResearchEventAssessment->summarize(
                 $this->developmentPayloads($research),
             ),
+            'analyst_consensus' => $research->analyst_consensus ?? [],
+            'recommendation' => $recommendation['recommendation'] ?? null,
+            'recommendation_percentages' => $recommendation['percentages'] ?? null,
+            'justification' => $recommendation['justification'] ?? null,
+            'recommendation_method' => $recommendation['method'] ?? null,
             'now_relevant' => $this->stockResearchNowRelevant->build($research),
             'trump_connection' => $research->trump_connection,
             'sources' => $research->sources->map(fn (StockAiResearchSource $source): array => [
@@ -443,7 +497,7 @@ class StockAiResearchService
                 'recent_daily_closes' => $dailyPrices,
             ],
             'research_parameters' => [
-                'top_holdings_limit' => 5,
+                'minimum_position_weight_pct' => 2,
                 'earnings_lookback_days' => 45,
                 'earnings_lookahead_days' => 30,
                 'rumor_lookback_days' => 14,
@@ -489,6 +543,10 @@ class StockAiResearchService
             $research->calculated_events ?? [],
         );
         $assessment = $this->stockResearchEventAssessment->summarize($result['developments']);
+        $recommendation = $this->stockResearchRecommendation->resolve(
+            $result['ai_recommendation'],
+            $assessment,
+        );
 
         $previousKnownInformation = collect($previousResearch?->known_information ?? [])
             ->filter(fn (mixed $value): bool => is_string($value) && trim($value) !== '')
@@ -499,7 +557,7 @@ class StockAiResearchService
             $research,
             $response,
             $newDevelopments,
-            collect($result['consulted_sources']),
+            collect($result['consulted_sources'])->concat($this->structuredSources($result)),
             $retrievedAt,
         );
 
@@ -512,6 +570,7 @@ class StockAiResearchService
             $newSources,
             $hasNoConcreteDevelopment,
             $assessment,
+            $recommendation,
         ): void {
             if ($hasNoConcreteDevelopment) {
                 $cutoff = $previousResearch?->finished_at?->timezone('Europe/Vienna')->format('d.m.Y, H:i');
@@ -525,11 +584,15 @@ class StockAiResearchService
                         : "Keine konkreten, belegten Entwicklungen zu Unternehmen, Quartalszahlen oder Ger\u{00FC}chten gefunden.",
                     'developments' => [],
                     'assessment' => $assessment,
+                    'analyst_consensus' => $result['analyst_consensus'],
                     'stronger_case' => null,
                     'weaker_case' => null,
                     'trump_connection' => null,
-                    'recommendation' => null,
-                    'justification' => null,
+                    'recommendation' => $recommendation['recommendation'],
+                    'recommendation_buy_pct' => $recommendation['percentages']['buy'],
+                    'recommendation_hold_pct' => $recommendation['percentages']['hold'],
+                    'recommendation_sell_pct' => $recommendation['percentages']['sell'],
+                    'justification' => $recommendation['justification'],
                     'known_information' => $previousKnownInformation->all(),
                     'message' => $previousResearch
                         ? 'Keine wichtigen neueren Informationen gefunden.'
@@ -561,11 +624,15 @@ class StockAiResearchService
                 'summary' => $result['summary'],
                 'developments' => $newDevelopments->all(),
                 'assessment' => $assessment,
+                'analyst_consensus' => $result['analyst_consensus'],
                 'stronger_case' => null,
                 'weaker_case' => null,
                 'trump_connection' => $result['trump_connection'] !== '' ? $result['trump_connection'] : null,
-                'recommendation' => null,
-                'justification' => null,
+                'recommendation' => $recommendation['recommendation'],
+                'recommendation_buy_pct' => $recommendation['percentages']['buy'],
+                'recommendation_hold_pct' => $recommendation['percentages']['hold'],
+                'recommendation_sell_pct' => $recommendation['percentages']['sell'],
+                'justification' => $recommendation['justification'],
                 'known_information' => $knownInformation->all(),
                 'message' => 'KI-Analyse abgeschlossen.',
                 'error' => null,
@@ -585,7 +652,7 @@ class StockAiResearchService
 
     /**
      * @param  array<string, mixed>  $result
-     * @return array{summary: string, developments: array<int, array<string, mixed>>, consulted_sources: array<int, array<string, mixed>>, trump_connection: string}
+     * @return array<string, mixed>
      */
     private function validatedResult(array $result, string $retrievedAt, string $coverage): array
     {
@@ -622,8 +689,46 @@ class StockAiResearchService
             'summary' => Str::limit($summary, 6000, ''),
             'developments' => $developments,
             'consulted_sources' => $this->validatedConsultedSources($result['consulted_sources']),
+            'etf_position_snapshot' => $this->validatedEtfPositionSnapshot(
+                $result['etf_position_snapshot'] ?? null,
+                $retrievedAt,
+            ),
+            'analyst_consensus' => $this->validatedAnalystConsensus(
+                $result['analyst_consensus'] ?? null,
+            ),
+            'ai_recommendation' => $result['ai_recommendation'] ?? null,
             'trump_connection' => Str::limit(trim($result['trump_connection']), 4000, ''),
         ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function recommendationPayload(StockAiResearch $research): ?array
+    {
+        if (! in_array($research->status, ['finished', 'no_new_information'], true)) {
+            return null;
+        }
+
+        if ($research->recommendation_buy_pct === null
+            || $research->recommendation_hold_pct === null
+            || $research->recommendation_sell_pct === null
+            || ! is_string($research->justification)
+            || trim($research->justification) === '') {
+            return null;
+        }
+
+        $candidate = [
+            'buy_pct' => $research->recommendation_buy_pct,
+            'hold_pct' => $research->recommendation_hold_pct,
+            'sell_pct' => $research->recommendation_sell_pct,
+            'justification' => $research->justification,
+        ];
+        $assessment = $research->assessment ?? $this->stockResearchEventAssessment->summarize(
+            $this->developmentPayloads($research),
+        );
+
+        return $this->stockResearchRecommendation->resolve($candidate, $assessment);
     }
 
     /**
@@ -660,7 +765,7 @@ class StockAiResearchService
             ? Str::upper(Str::limit(trim($development['subject_symbol']), 64, ''))
             : null;
 
-        if (! in_array($category, ['top_holding', 'earnings', 'rumor', 'unusual_activity', 'other'], true)) {
+        if (! in_array($category, ['top_holding', 'earnings', 'rumor', 'unusual_activity', 'politics', 'other'], true)) {
             throw new UnexpectedValueException('AI provider returned an invalid stock development category.');
         }
 
@@ -759,6 +864,184 @@ class StockAiResearchService
             ->take(100)
             ->values()
             ->all();
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function validatedEtfPositionSnapshot(mixed $snapshot, string $retrievedAt): array
+    {
+        if (! is_array($snapshot)) {
+            return [];
+        }
+
+        $classification = is_string($snapshot['classification'] ?? null)
+            ? strtolower(trim($snapshot['classification']))
+            : 'unavailable';
+
+        if (in_array($classification, ['not_applicable', 'unavailable'], true)) {
+            return [];
+        }
+
+        if (! in_array($classification, ['fund_holdings', 'index_constituents'], true)) {
+            return [];
+        }
+
+        $sourceTitle = is_string($snapshot['source_title'] ?? null) ? trim($snapshot['source_title']) : '';
+        $sourceUrl = is_string($snapshot['source_url'] ?? null)
+            ? $this->canonicalUrl($snapshot['source_url'])
+            : null;
+
+        try {
+            $sourceAsOf = $this->temporalValue($snapshot['data_as_of'] ?? null, required: true);
+        } catch (UnexpectedValueException) {
+            return [];
+        }
+
+        if ($sourceTitle === '' || $sourceUrl === null || ! is_array($snapshot['positions'] ?? null)) {
+            return [];
+        }
+
+        $positions = collect($snapshot['positions'])
+            ->filter(fn (mixed $position): bool => is_array($position))
+            ->map(function (array $position): ?array {
+                $name = is_string($position['name'] ?? null) ? trim($position['name']) : '';
+                $symbol = is_string($position['symbol'] ?? null)
+                    ? Str::upper(Str::limit(trim($position['symbol']), 64, ''))
+                    : null;
+                $weight = is_numeric($position['weight_pct'] ?? null)
+                    ? round((float) $position['weight_pct'], 4)
+                    : null;
+
+                if (($name === '' && empty($symbol)) || $weight === null || $weight < 2 || $weight > 100) {
+                    return null;
+                }
+
+                return [
+                    'symbol' => $symbol !== '' ? $symbol : null,
+                    'name' => $name !== '' ? Str::limit($name, 255, '') : $symbol,
+                    'sector' => null,
+                    'weight_pct' => $weight,
+                ];
+            })
+            ->filter()
+            ->unique(fn (array $position): string => $position['symbol'] ?? mb_strtolower($position['name']))
+            ->sortByDesc('weight_pct')
+            ->take(50)
+            ->values()
+            ->map(fn (array $position, int $index): array => ['rank' => $index + 1, ...$position])
+            ->all();
+
+        if ($positions === []) {
+            return [];
+        }
+
+        $classificationLabel = $classification === 'fund_holdings'
+            ? 'issuer_reported_fund_holdings'
+            : 'issuer_reported_index_constituents';
+
+        return [
+            'classification' => $classificationLabel,
+            'source_as_of' => $sourceAsOf,
+            'provider_updated_at' => null,
+            'retrieved_at' => $retrievedAt,
+            'date_note' => $classification === 'fund_holdings'
+                ? 'Offizieller, datierter Fondsbestands-Snapshot des Emittenten.'
+                : 'Offizieller, datierter Index-Snapshot; Indexpositionen sind nicht als tatsächliche Fondsbestände klassifiziert.',
+            'source_title' => Str::limit($sourceTitle, 255, ''),
+            'source_url' => $sourceUrl,
+            'positions' => $positions,
+        ];
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function validatedAnalystConsensus(mixed $consensusItems): array
+    {
+        if (! is_array($consensusItems)) {
+            return [];
+        }
+
+        return collect($consensusItems)
+            ->filter(fn (mixed $consensus): bool => is_array($consensus))
+            ->map(function (array $consensus): ?array {
+                $sourceTitle = is_string($consensus['source_title'] ?? null)
+                    ? trim($consensus['source_title'])
+                    : '';
+                $sourceUrl = is_string($consensus['source_url'] ?? null)
+                    ? $this->canonicalUrl($consensus['source_url'])
+                    : null;
+                $percentages = collect(['buy_pct', 'hold_pct', 'sell_pct'])
+                    ->mapWithKeys(fn (string $key): array => [
+                        $key => is_numeric($consensus[$key] ?? null) ? round((float) $consensus[$key], 2) : null,
+                    ]);
+
+                if ($sourceTitle === '' || $sourceUrl === null || $percentages->contains(null)) {
+                    return null;
+                }
+
+                if ($percentages->contains(fn (?float $value): bool => $value < 0 || $value > 100)) {
+                    return null;
+                }
+
+                $total = $percentages->sum();
+
+                if ($total < 98.5 || $total > 101.5) {
+                    return null;
+                }
+
+                try {
+                    $asOf = $this->temporalValue($consensus['as_of'] ?? null, required: true);
+                } catch (UnexpectedValueException) {
+                    return null;
+                }
+
+                $analystCount = $consensus['analyst_count'] ?? null;
+
+                if ($analystCount !== null && (! is_int($analystCount) || $analystCount < 1)) {
+                    return null;
+                }
+
+                return [
+                    'as_of' => $asOf,
+                    'analyst_count' => $analystCount,
+                    'buy_pct' => $percentages['buy_pct'],
+                    'hold_pct' => $percentages['hold_pct'],
+                    'sell_pct' => $percentages['sell_pct'],
+                    'source_title' => Str::limit($sourceTitle, 255, ''),
+                    'source_url' => $sourceUrl,
+                ];
+            })
+            ->filter()
+            ->unique(fn (array $consensus): string => $consensus['source_url'].'|'.$consensus['as_of'])
+            ->take(5)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * @param  array<string, mixed>  $result
+     * @return Collection<int, array<string, string>>
+     */
+    private function structuredSources(array $result): Collection
+    {
+        $snapshot = $result['etf_position_snapshot'] ?? [];
+        $snapshotSources = ! empty($snapshot['source_url'])
+            ? [[
+                'url' => $snapshot['source_url'],
+                'title' => $snapshot['source_title'],
+                'source_type' => 'issuer',
+            ]]
+            : [];
+        $consensusSources = collect($result['analyst_consensus'] ?? [])
+            ->map(fn (array $consensus): array => [
+                'url' => $consensus['source_url'],
+                'title' => $consensus['source_title'],
+                'source_type' => 'market_data',
+            ]);
+
+        return collect($snapshotSources)->concat($consensusSources)->values();
     }
 
     /**
@@ -1072,6 +1355,12 @@ class StockAiResearchService
             'bafin.de',
             'fca.org.uk',
             'finra.org',
+            'whitehouse.gov',
+            'state.gov',
+            'consilium.europa.eu',
+            'nato.int',
+            'un.org',
+            'bundesregierung.de',
             'nasdaq.com',
             'nyse.com',
             'deutsche-boerse.com',

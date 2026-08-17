@@ -13,8 +13,10 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\RateLimiter as RateLimiterFacade;
 use Laravel\Ai\Attributes\Model;
 use Laravel\Ai\Enums\Lab;
+use Laravel\Ai\Exceptions\RateLimitedException;
 use Laravel\Ai\Prompts\AgentPrompt;
 use Laravel\Ai\Providers\Tools\WebSearch;
 use Laravel\Ai\Responses\Data\Meta;
@@ -107,8 +109,13 @@ class AdminStockAiResearchTest extends TestCase
         Carbon::setTestNow('2026-08-17 10:00:00');
 
         $job = new AnalyzeStockResearch('research-id', 1, 2);
+        $middleware = $job->middleware();
+        $rateLimit = RateLimiterFacade::limiter('stock-ai-research')($job);
 
         $this->assertSame(0, $job->tries);
+        $this->assertSame(60, $middleware[0]->releaseAfter);
+        $this->assertSame(6, $rateLimit->maxAttempts);
+        $this->assertSame(60, $rateLimit->decaySeconds);
         $this->assertSame(
             now()->addHours(6)->getTimestamp(),
             $job->retryUntil()->getTimestamp(),
@@ -132,7 +139,7 @@ class AdminStockAiResearchTest extends TestCase
     {
         $instructions = (string) (new StockResearchAgent)->instructions();
 
-        $this->assertStringContainsString('current five largest positions', $instructions);
+        $this->assertStringContainsString('weight of at least 2%', $instructions);
         $this->assertStringContainsString('results released in the last 45 days', $instructions);
         $this->assertStringContainsString('earnings scheduled in the next 30 days', $instructions);
         $this->assertStringContainsString('unconfirmed reports from the last 14 days', $instructions);
@@ -156,7 +163,13 @@ class AdminStockAiResearchTest extends TestCase
         $this->assertStringContainsString('structured provider evidence and server-calculated events', $instructions);
         $this->assertStringContainsString('issuer investor-relations pages and official fund factsheets', $instructions);
         $this->assertStringContainsString('Open-web search is a fallback', $instructions);
-        $this->assertStringContainsString('Never return Buy, Hold, Sell', $instructions);
+        $this->assertStringContainsString('three whole-number percentages for BUY, HOLD, and SELL that total exactly 100', $instructions);
+        $this->assertStringContainsString('return BUY 0, HOLD 100, SELL 0', $instructions);
+        $this->assertStringContainsString('analyst_consensus', $instructions);
+        $this->assertStringContainsString('ai_recommendation', $instructions);
+        $this->assertStringContainsString('war escalation or de-escalation', $instructions);
+        $this->assertStringContainsString('category politics', $instructions);
+        $this->assertStringContainsString('fallback for every material gap', $instructions);
         $this->assertStringContainsString('Return every consulted source in consulted_sources', $instructions);
 
         $agent = new StockResearchAgent;
@@ -219,6 +232,26 @@ class AdminStockAiResearchTest extends TestCase
             'developments' => [],
             'consulted_sources' => [],
             'guidance_inputs' => [],
+            'etf_position_snapshot' => [
+                'classification' => 'index_constituents',
+                'data_as_of' => '2026-07-31',
+                'positions' => [
+                    ['symbol' => 'LIN.DE', 'name' => 'Linde', 'weight_pct' => 5.9],
+                    ['symbol' => 'IBE.MC', 'name' => 'Iberdrola', 'weight_pct' => 5.4],
+                    ['symbol' => 'SMALL.DE', 'name' => 'Small Position', 'weight_pct' => 1.5],
+                ],
+                'source_title' => 'Amundi Monatsfactsheet',
+                'source_url' => 'https://www.amundietf.de/factsheet/FR0010930644',
+            ],
+            'analyst_consensus' => [[
+                'as_of' => '2026-08-16',
+                'analyst_count' => 20,
+                'buy_pct' => 55,
+                'hold_pct' => 35,
+                'sell_pct' => 10,
+                'source_title' => 'Seriöser Analystenkonsens',
+                'source_url' => 'https://example.com/analyst-consensus',
+            ]],
             'trump_connection' => '',
         ]])->preventStrayPrompts();
 
@@ -226,15 +259,34 @@ class AdminStockAiResearchTest extends TestCase
 
         $research->refresh();
         $this->assertSame(1, $research->calculation_snapshot['version']);
+        $this->assertSame('issuer_reported_index_constituents', $research->calculation_snapshot['etf']['classification']);
+        $this->assertCount(2, $research->calculation_snapshot['etf']['positions']);
         $this->assertSame('comparison_only', $research->calculated_events['history_usage']);
         $this->assertSame(0.4967, $research->calculated_events['market_reactions'][0]['reaction_pct']);
         $this->assertSame('latest_available_session', $research->calculated_events['market_reactions'][0]['session_label']);
+        $this->assertSame(55, $research->analyst_consensus[0]['buy_pct']);
+        $this->assertSame('hold', $research->recommendation);
+        $this->assertSame(100, $research->recommendation_hold_pct);
+        $this->assertSame(100, $research->recommendation_buy_pct + $research->recommendation_hold_pct + $research->recommendation_sell_pct);
+        $this->assertDatabaseHas('stock_ai_research_sources', [
+            'url' => 'https://www.amundietf.de/factsheet/FR0010930644',
+            'source_type' => 'issuer',
+        ]);
+        $this->assertDatabaseHas('stock_ai_research_sources', [
+            'url' => 'https://example.com/analyst-consensus',
+            'source_type' => 'market_data',
+        ]);
 
         $this->actingAs($admin)
             ->getJson("/admin/dashboard/ai/stocks/{$holding->id}/researches/{$research->id}")
             ->assertOk()
             ->assertJsonPath('research.calculated_events.market_reactions.0.reaction_pct', 0.4967)
-            ->assertJsonPath('research.calculated_events.history_usage', 'comparison_only');
+            ->assertJsonPath('research.calculated_events.history_usage', 'comparison_only')
+            ->assertJsonPath('research.analyst_consensus.0.buy_pct', 55)
+            ->assertJsonPath('research.recommendation', 'hold')
+            ->assertJsonPath('research.recommendation_percentages.hold', 100)
+            ->assertJsonPath('research.now_relevant.blocks.0.items.0.title', 'Linde')
+            ->assertJsonPath('research.now_relevant.blocks.8.items.0.title', 'Externer Analystenkonsens');
 
         StockResearchAgent::assertPrompted(
             fn (AgentPrompt $prompt): bool => str_contains($prompt->prompt, '"eodhd_current_evidence"')
@@ -315,7 +367,8 @@ class AdminStockAiResearchTest extends TestCase
         ]);
         $this->assertSame('finished', $research->status);
         $this->assertTrue($research->has_material_update);
-        $this->assertNull($research->recommendation);
+        $this->assertSame('hold', $research->recommendation);
+        $this->assertSame(100, $research->recommendation_hold_pct);
         $this->assertSame('no_reliable_assessment', $research->assessment['current_impact']);
         $this->assertSame($structured['summary'], $research->summary);
         $this->assertSame([$normalizedDevelopment], $research->developments);
@@ -337,7 +390,13 @@ class AdminStockAiResearchTest extends TestCase
             ->assertOk()
             ->assertJsonPath('research.developments.0', $normalizedDevelopment)
             ->assertJsonPath('research.assessment.current_impact', 'no_reliable_assessment')
-            ->assertJsonPath('research.now_relevant.blocks.0.title', 'Heute / letzte 72 Stunden')
+            ->assertJsonPath('research.recommendation', 'hold')
+            ->assertJsonPath('research.recommendation_percentages', [
+                'buy' => 0,
+                'hold' => 100,
+                'sell' => 0,
+            ])
+            ->assertJsonPath('research.now_relevant.blocks.0.title', 'Positionen ab 2 %')
             ->assertJsonPath('research.calculated_events.guidance.0.classification', 'raised')
             ->assertJsonPath('research.sources.0', [
                 'url' => $normalizedDevelopment['source_url'],
@@ -384,8 +443,9 @@ class AdminStockAiResearchTest extends TestCase
         $this->assertStringContainsString('Keine konkreten, belegten Entwicklungen', $research->summary);
         $this->assertSame([], $research->developments);
         $this->assertSame([], $research->known_information);
-        $this->assertNull($research->recommendation);
-        $this->assertNull($research->justification);
+        $this->assertSame('hold', $research->recommendation);
+        $this->assertSame(100, $research->recommendation_hold_pct);
+        $this->assertStringContainsString('keine belastbare aktive BUY- oder SELL-Bewertung', $research->justification);
         $this->assertNull($research->trump_connection);
         $this->assertDatabaseCount('stock_ai_research_sources', 0);
 
@@ -490,7 +550,8 @@ class AdminStockAiResearchTest extends TestCase
         $this->assertStringNotContainsString('Old summary', $research->summary);
         $this->assertSame([], $research->developments);
         $this->assertNull($research->stronger_case);
-        $this->assertNull($research->recommendation);
+        $this->assertSame('hold', $research->recommendation);
+        $this->assertSame(100, $research->recommendation_hold_pct);
         $this->assertSame([$serializedKnownDevelopment], $research->known_information);
         $this->assertDatabaseCount('stock_ai_research_sources', 3);
         $this->assertDatabaseHas('stock_ai_research_sources', [
@@ -628,6 +689,78 @@ class AdminStockAiResearchTest extends TestCase
             ->assertJsonPath('research.previous_result.summary', 'Letzte belastbare Analyse vor dem Providerfehler.');
     }
 
+    public function test_provider_rate_limit_requeues_research_and_next_attempt_can_finish(): void
+    {
+        Queue::fake();
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create();
+        $research = app(StockAiResearchService::class)->dispatch($admin, $holding);
+        $rateLimitException = RateLimitedException::forProvider('openai', 429);
+        $attempts = 0;
+        StockResearchAgent::fake(function () use (&$attempts, $rateLimitException): array {
+            $attempts++;
+
+            if ($attempts === 1) {
+                throw $rateLimitException;
+            }
+
+            return $this->analysisResult([]);
+        })->preventStrayPrompts();
+        $job = (new AnalyzeStockResearch(
+            $research->id,
+            (int) $admin->id,
+            (int) $holding->id,
+        ))->withFakeQueueInteractions();
+
+        $job->handle(app(StockAiResearchService::class));
+
+        $research->refresh();
+        $job->assertReleased(60)->assertNotFailed();
+        $this->assertSame('queued', $research->status);
+        $this->assertSame(
+            'Der KI-Anbieter ist momentan ausgelastet. Die Recherche wird automatisch erneut versucht.',
+            $research->message,
+        );
+        $this->assertNull($research->error);
+        $this->assertNull($research->finished_at);
+
+        $retryJob = (new AnalyzeStockResearch(
+            $research->id,
+            (int) $admin->id,
+            (int) $holding->id,
+        ))->withFakeQueueInteractions();
+        $retryJob->job->attempts = 2;
+
+        $retryJob->handle(app(StockAiResearchService::class));
+
+        $research->refresh();
+        $retryJob->assertNotReleased()->assertNotFailed();
+        $this->assertSame(2, $attempts);
+        $this->assertSame('no_new_information', $research->status);
+        $this->assertNotNull($research->finished_at);
+    }
+
+    public function test_rate_limited_research_is_finalized_after_queue_retries_expire(): void
+    {
+        Queue::fake();
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create();
+        $research = app(StockAiResearchService::class)->dispatch($admin, $holding);
+        $researchService = app(StockAiResearchService::class);
+        $researchService->markForRetry($research->id);
+        $job = new AnalyzeStockResearch(
+            $research->id,
+            (int) $admin->id,
+            (int) $holding->id,
+        );
+
+        $job->failed(RateLimitedException::forProvider('openai', 429));
+
+        $research->refresh();
+        $this->assertSame('failed', $research->status);
+        $this->assertNotNull($research->finished_at);
+    }
+
     public function test_incomplete_development_marks_research_as_failed(): void
     {
         Queue::fake();
@@ -714,6 +847,12 @@ class AdminStockAiResearchTest extends TestCase
                 'source_type' => $firstDevelopment['source_type'],
             ]],
             'guidance_inputs' => [],
+            'ai_recommendation' => [
+                'buy_pct' => 55,
+                'hold_pct' => 35,
+                'sell_pct' => 10,
+                'justification' => 'Die aktuelle Quellenlage spricht überwiegend für BUY.',
+            ],
             'trump_connection' => '',
         ];
     }

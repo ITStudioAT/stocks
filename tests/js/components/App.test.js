@@ -6555,7 +6555,7 @@ describe('App', () => {
                 },
                 {
                     key: 'current_top_positions',
-                    title: 'Aktuelle Top-Positionen',
+                    title: 'Positionen ab 2 %',
                     coverage: 'partial',
                     empty_message: 'Keine Positionen.',
                     items: [{
@@ -6568,8 +6568,25 @@ describe('App', () => {
                     }],
                 },
                 {
+                    key: 'position_news',
+                    title: 'Bemerkenswertes zu Positionen',
+                    coverage: 'complete',
+                    empty_message: 'Keine bemerkenswerte Entwicklung.',
+                    items: [{
+                        type: 'development',
+                        subject: 'Iberdrola',
+                        title: 'Iberdrola erhält Netzkonzession',
+                        detail: 'Die Konzession betrifft eine Position des ETF.',
+                        relevance: 'Iberdrola hat ein Gewicht von 6,85 %.',
+                        event_at: '2026-08-15',
+                        coverage: 'complete',
+                        source_title: 'Iberdrola Investor Relations',
+                        source_url: 'https://example.com/iberdrola-concession',
+                    }],
+                },
+                {
                     key: 'position_changes',
-                    title: 'Änderungen seit dem letzten offiziellen Factsheet',
+                    title: 'Änderungen seit dem vorherigen offiziellen Stand',
                     coverage: 'partial',
                     empty_message: 'Kein vergleichbarer Snapshot.',
                     items: [{
@@ -6620,7 +6637,7 @@ describe('App', () => {
                         type: 'guidance_change',
                         subject: 'Linde',
                         title: 'Linde: Guidance angehoben',
-                        detail: 'FY2026 · EPS · USD',
+                        detail: 'FY2026 · EPS · USD · Aktuell: 17,40 · Zuvor: 17,10',
                         event_at: '2026-08-12',
                         coverage: 'complete',
                     }],
@@ -6644,6 +6661,38 @@ describe('App', () => {
                         detail: '2,5x des 5-Tage-Medians',
                         event_at: '2026-08-16T09:55:00+02:00',
                         coverage: 'complete',
+                    }],
+                },
+                {
+                    key: 'politics',
+                    title: 'Politik und Geopolitik',
+                    coverage: 'complete',
+                    empty_message: 'Keine relevante politische Entwicklung.',
+                    items: [{
+                        type: 'development',
+                        subject: 'Linde',
+                        title: 'EU beschließt Wasserstoff-Förderrahmen',
+                        detail: 'Der datierte Beschluss betrifft den Wasserstoffsektor.',
+                        relevance: 'Linde ist eine Position des ETF.',
+                        event_at: '2026-08-15',
+                        coverage: 'complete',
+                        source_title: 'Rat der Europäischen Union',
+                        source_url: 'https://example.com/eu-hydrogen',
+                    }],
+                },
+                {
+                    key: 'analyst_consensus',
+                    title: 'Analystenkonsens: BUY / HOLD / SELL',
+                    coverage: 'complete',
+                    empty_message: 'Kein Konsens.',
+                    items: [{
+                        type: 'analyst_consensus',
+                        title: 'Externer Analystenkonsens',
+                        detail: 'BUY 55,0 % · HOLD 35,0 % · SELL 10,0 % · 20 Analysten',
+                        data_as_of: '2026-08-16',
+                        coverage: 'complete',
+                        source_title: 'Seriöser Analystenkonsens',
+                        source_url: 'https://example.com/consensus',
                     }],
                 },
                 {
@@ -6826,6 +6875,13 @@ describe('App', () => {
                             time_horizons: ['current_quarter'],
                             reason: 'Keine belastbare Einschätzung bei teilweise ausgefallener Abdeckung.',
                         },
+                        recommendation: 'hold',
+                        recommendation_percentages: {
+                            buy: 0,
+                            hold: 100,
+                            sell: 0,
+                        },
+                        justification: 'Die Abdeckung reicht nicht für eine aktive BUY- oder SELL-Bewertung.',
                         now_relevant: finishedNowRelevant,
                         trump_connection: '',
                         sources: [{ url: 'https://example.com/apple', title: 'Apple source' }],
@@ -6861,6 +6917,13 @@ describe('App', () => {
                             time_horizons: [],
                             reason: 'Keine belastbare Einschätzung bei unvollständiger Abdeckung.',
                         },
+                        recommendation: 'sell',
+                        recommendation_percentages: {
+                            buy: 10,
+                            hold: 20,
+                            sell: 70,
+                        },
+                        justification: 'Die aktuelle belegte Bewertung fällt überwiegend negativ aus.',
                         now_relevant: {
                             ...finishedNowRelevant,
                             generated_at: '2026-08-16T10:05:00+02:00',
@@ -6905,8 +6968,27 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [
-                        { id: 11, symbol: 'AAPL', name: 'Apple Inc.', subtitle: 'Technology hardware', instrument_type: 'ETF' },
-                        { id: 12, symbol: 'MSFT', name: 'Microsoft Corporation', stock_subtitle: 'Software' },
+                        {
+                            id: 11,
+                            symbol: 'AAPL',
+                            name: 'Apple Inc.',
+                            subtitle: 'Technology hardware',
+                            instrument_type: 'ETF',
+                            isin: 'US0378331005',
+                            latest_price: '190.50',
+                            latest_price_change_pct: '1.25',
+                            latest_price_as_of: '2026-08-16T09:55:00+02:00',
+                            position_pieces: '12.50000000',
+                            currency: 'USD',
+                        },
+                        {
+                            id: 12,
+                            symbol: 'MSFT',
+                            name: 'Microsoft Corporation',
+                            stock_subtitle: 'Software',
+                            isin: 'US5949181045',
+                            position_pieces: '0.00000000',
+                        },
                     ],
                     meta: {
                         current_page: 1,
@@ -6962,6 +7044,17 @@ describe('App', () => {
         expect(stockCards[1].get('.dashboard-ki-stock-title').text()).toBe('Microsoft Corporation');
         expect(stockCards[0].get('.dashboard-ki-stock-subtitle').text()).toBe('Technology hardware');
         expect(stockCards[1].get('.dashboard-ki-stock-subtitle').text()).toBe('Software');
+        expect(stockCards[0].text()).toContain('ISIN: US0378331005');
+        expect(stockCards[0].text()).toContain('190.50 USD');
+        expect(stockCards[0].text()).toContain('+1.25%');
+        expect(stockCards[0].text()).toContain('12.5 Stück');
+        expect(stockCards[0].text()).toContain('Kursstand');
+        expect(stockCards[0].text()).toContain('Letzte KI-Aktualisierung');
+        expect(stockCards.every((card) => card.find('.dashboard-ki-recommendation').exists())).toBe(true);
+        expect(stockCards.every((card) => card.get('.dashboard-ki-recommendation').text().includes('BUY 0 %'))).toBe(true);
+        expect(stockCards.every((card) => card.get('.dashboard-ki-recommendation').text().includes('HOLD 100 %'))).toBe(true);
+        expect(stockCards.every((card) => card.get('.dashboard-ki-recommendation').text().includes('SELL 0 %'))).toBe(true);
+        expect(stockCards[0].get('.dashboard-ki-recommendation').text()).toContain('Sicherheits-Fallback');
         expect(wrapper.text()).not.toContain('AAPL');
         expect(wrapper.text()).not.toContain('MSFT');
         const loadButtons = wrapper.findAll('.dashboard-ki-load-button');
@@ -6987,26 +7080,39 @@ describe('App', () => {
 
         expect(stockCards[0].text()).toContain('Neue Nachfrageindikatoren stützen Apple kurzfristig.');
         expect(stockCards[0].text()).not.toContain('Donald Trump / Politik:');
-        expect(stockCards[0].text()).not.toContain('Halten');
-        expect(stockCards[0].text()).not.toContain('Kaufen');
-        expect(stockCards[0].text()).not.toContain('Verkaufen');
+        expect(stockCards[0].text()).toContain('BUY 55,0 %');
+        expect(stockCards[0].text()).toContain('HOLD 35,0 %');
+        expect(stockCards[0].text()).toContain('SELL 10,0 %');
+        const aiRecommendation = stockCards[0].get('.dashboard-ki-recommendation');
+
+        expect(aiRecommendation.text()).toContain('HOLD');
+        expect(aiRecommendation.text()).toContain('BUY 0 %');
+        expect(aiRecommendation.text()).toContain('HOLD 100 %');
+        expect(aiRecommendation.text()).toContain('SELL 0 %');
+        expect(aiRecommendation.text()).toContain('Summe 100 %');
+        expect(aiRecommendation.text()).toContain('nicht für eine aktive BUY- oder SELL-Bewertung');
         expect(stockCards[0].text()).toContain('Apple source');
         expect(stockCards[0].text()).toContain('Jetzt relevant');
         expectSingleCompactResearchLayout(stockCards[0]);
         expect(stockCards[0].text()).toContain('Heute / letzte 72 Stunden');
-        expect(stockCards[0].text()).toContain('Aktuelle Top-Positionen');
-        expect(stockCards[0].text()).toContain('Änderungen seit dem letzten offiziellen Factsheet');
+        expect(stockCards[0].text()).toContain('Positionen ab 2 %');
+        expect(stockCards[0].text()).toContain('Bemerkenswertes zu Positionen');
+        expect(stockCards[0].text()).toContain('Änderungen seit dem vorherigen offiziellen Stand');
         expect(stockCards[0].text()).toContain('Zuletzt veröffentlichte Zahlen');
         expect(stockCards[0].text()).toContain('Nächste Termine');
         expect(stockCards[0].text()).toContain('Aktuelle Guidance');
-        expect(stockCards[0].text()).toContain('Ger\u00fcchte');
+        expect(stockCards[0].text()).not.toContain('Ger\u00fcchte');
         expect(stockCards[0].text()).toContain('Au\u00dfergew\u00f6hnliche Aktivit\u00e4ten');
-        expect(stockCards[0].text()).toContain('Datenabdeckung');
+        expect(stockCards[0].text()).not.toContain('Datenstand und Rechercheabdeckung');
+        expect(stockCards[0].text()).toContain('Politik und Geopolitik');
+        expect(stockCards[0].text()).toContain('Analystenkonsens: BUY / HOLD / SELL');
         expect(stockCards[0].text()).toContain('Iberdrola hebt den Investitionsplan an.');
         expect(stockCards[0].text()).toContain('Linde meldet Zahlen');
         expect(stockCards[0].text()).toContain('Linde: Ergebnistermin');
         expect(stockCards[0].text()).toContain('Linde: Guidance angehoben');
-        expect(stockCards[0].text()).toContain('Keine belastbaren aktuellen Ger\u00fcchte');
+        expect(stockCards[0].text()).toContain('Aktuell: 17,40');
+        expect(stockCards[0].text()).toContain('Zuvor: 17,10');
+        expect(stockCards[0].text()).toContain('EU beschließt Wasserstoff-Förderrahmen');
         expect(stockCards[0].text()).toContain('Ereignis');
         expect(stockCards[0].text()).toContain('Ver\u00f6ffentlicht');
         expect(stockCards[0].text()).toContain('Abgerufen');
@@ -7028,22 +7134,40 @@ describe('App', () => {
         expect(stockCards[0].text()).toContain('Aktuelles Quartal');
         expect(stockCards[0].text()).not.toContain('Aktuelle Ereignisse, Termine und Abdeckung');
         expect(stockCards[0].get('.dashboard-ki-calculated').text()).not.toContain('Nicht ausgewiesen');
-        expect(stockCards[0].findAll('.dashboard-ki-calculated-section')).toHaveLength(7);
+        expect(stockCards[0].findAll('.dashboard-ki-calculated-section')).toHaveLength(10);
         expect(stockCards[0].findAll('.dashboard-ki-calculated-section')
             .some((section) => section.text().includes('Ger\u00fcchte'))).toBe(false);
         expect(stockCards[0].findAll('.dashboard-ki-calculated-section')
-            .some((section) => section.text().includes('Datenabdeckung'))).toBe(false);
-        expect(stockCards[0].get('.dashboard-ki-empty-sections').attributes('open')).toBeUndefined();
-        expect(stockCards[0].get('.dashboard-ki-empty-sections').text()).toContain('1 Bereich ohne aktuellen Treffer');
-        expect(stockCards[0].get('.dashboard-ki-coverage-disclosure').attributes('open')).toBeUndefined();
-        expect(stockCards[0].get('.dashboard-ki-coverage-disclosure').text()).toContain('1 vollst\u00e4ndig');
+            .some((section) => section.text().includes('Datenstand und Rechercheabdeckung'))).toBe(false);
+        const coverageButton = stockCards[0].get('.dashboard-ki-coverage-button');
+
+        expect(coverageButton.text()).toBe('Datenstand');
+        await coverageButton.trigger('click');
+        await flushPromises();
+
+        const coverageDialog = document.body.querySelector('.dashboard-ki-coverage-dialog');
+
+        expect(coverageDialog).not.toBeNull();
+        expect(coverageDialog.textContent).toContain('Datenstand und Rechercheabdeckung');
+        expect(coverageDialog.textContent).toContain('Apple Inc.');
+        expect(coverageDialog.textContent).toContain('Earnings Calendar');
+        expect(coverageDialog.textContent).toContain('Aktuell');
+        expect(coverageDialog.textContent).toContain('Quelle: EODHD');
+        coverageDialog.querySelector('.dashboard-ki-coverage-dialog-close').click();
+        await flushPromises();
+
+        expect(wrapper.vm.isDashboardKiCoverageDialogOpen).toBe(false);
+        expect(stockCards[0].find('.dashboard-ki-empty-sections').exists()).toBe(false);
+        expect(stockCards[0].find('.dashboard-ki-coverage-disclosure').exists()).toBe(false);
         expect(stockCards[0].get('.dashboard-ki-assessment').attributes('open')).toBeUndefined();
         const currentPositionsSection = stockCards[0]
             .findAll('.dashboard-ki-calculated-section')
-            .find((section) => section.text().includes('Aktuelle Top-Positionen'));
+            .find((section) => section.text().includes('Positionen ab 2 %'));
 
         expect(currentPositionsSection.find('.dashboard-ki-calculated-item-heading .v-chip').exists()).toBe(false);
         expect(currentPositionsSection.get('.dashboard-ki-development-meta').text()).toContain('Abdeckung teilweise');
+        expect(stockCards[0].findAll('.dashboard-ki-calculated-item')
+            .every((item) => item.text().includes('Quelle:'))).toBe(true);
 
         await loadButtons[0].trigger('click');
         await flushPromises();
@@ -7055,7 +7179,11 @@ describe('App', () => {
         expect(stockCards[0].text()).toContain('Neue Nachfrageindikatoren');
         expect(stockCards[0].text()).not.toContain('Iberdrola hebt den Investitionsplan an.');
         expect(stockCards[0].text()).toContain('Apple source');
-        expect(stockCards[0].text()).not.toContain('Halten');
+        expect(stockCards[0].text()).toContain('HOLD 35,0 %');
+        expect(stockCards[0].get('.dashboard-ki-recommendation').text()).toContain('BUY 10 %');
+        expect(stockCards[0].get('.dashboard-ki-recommendation').text()).toContain('HOLD 20 %');
+        expect(stockCards[0].get('.dashboard-ki-recommendation').text()).toContain('SELL 70 %');
+        expect(stockCards[0].get('.dashboard-ki-recommendation').text()).toContain('überwiegend negativ');
         expect(stockCards[0].text()).toContain('Abgerufen');
         expect(stockCards[0].text()).toContain('Abdeckung teilweise');
         expect(stockCards[0].text()).toContain('+1,25 % gegen\u00fcber dem vorherigen Schlusskurs');
@@ -7072,6 +7200,9 @@ describe('App', () => {
         expect(stockCards[0].text()).toContain('Iberdrola hebt den Investitionsplan an.');
         expect(stockCards[0].text()).toContain('Apple source');
         expect(stockCards[0].text()).toContain('Letzter erfolgreicher Stand');
+        expect(stockCards[0].get('.dashboard-ki-recommendation').text()).toContain('BUY 0 %');
+        expect(stockCards[0].get('.dashboard-ki-recommendation').text()).toContain('HOLD 100 %');
+        expect(stockCards[0].get('.dashboard-ki-recommendation').text()).toContain('SELL 0 %');
         expectSingleCompactResearchLayout(stockCards[0]);
 
         const loadAllButton = wrapper.get('.dashboard-ki-load-all-button');

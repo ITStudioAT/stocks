@@ -17,7 +17,9 @@ class EodhdStockResearchData
 
     private const EtfFundamentalsFilter = 'General,ETF_Data';
 
-    private const MaxTopHoldings = 5;
+    private const MaxEnrichedHoldings = 10;
+
+    private const MinimumDisplayedHoldingWeight = 2.0;
 
     private const NewsLookbackDays = 30;
 
@@ -77,7 +79,7 @@ class EodhdStockResearchData
         );
         $topHoldings = collect($etf['positions'] ?? []);
         $companySymbols = $this->isFund($holding)
-            ? $topHoldings->pluck('symbol')->filter()->take(self::MaxTopHoldings)->values()
+            ? $topHoldings->pluck('symbol')->filter()->take(self::MaxEnrichedHoldings)->values()
             : collect([$symbol]);
         $companyFundamentals = $this->companyFundamentals($companySymbols, $coverage, $now);
         $earnings = $this->earnings($companySymbols, $coverage, $now);
@@ -498,14 +500,17 @@ class EodhdStockResearchData
                 ];
             })
             ->filter(fn (?array $position): bool => $position !== null && $position['symbol'] !== null)
+            ->filter(fn (array $position): bool => is_numeric($position['weight_pct'])
+                && (float) $position['weight_pct'] >= self::MinimumDisplayedHoldingWeight)
             ->sortByDesc(fn (array $position): float => (float) ($position['weight_pct'] ?? 0))
-            ->take(self::MaxTopHoldings)
             ->values()
             ->map(fn (array $position, int $index): array => ['rank' => $index + 1, ...$position])
             ->all();
 
         return [
             'classification' => 'provider_reported_etf_holdings',
+            'source_title' => 'EODHD ETF-Fundamentaldaten',
+            'source_url' => null,
             'source_as_of' => null,
             'provider_updated_at' => $this->string($general['UpdatedAt'] ?? null),
             'retrieved_at' => $retrievedAt,

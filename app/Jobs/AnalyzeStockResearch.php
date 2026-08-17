@@ -8,6 +8,8 @@ use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Queue\Middleware\RateLimited;
+use Illuminate\Support\Facades\Log;
+use Laravel\Ai\Exceptions\RateLimitedException;
 use Throwable;
 
 class AnalyzeStockResearch implements ShouldBeUnique, ShouldQueue
@@ -42,7 +44,7 @@ class AnalyzeStockResearch implements ShouldBeUnique, ShouldQueue
     public function middleware(): array
     {
         return [
-            (new RateLimited('stock-ai-research'))->releaseAfter(30),
+            (new RateLimited('stock-ai-research'))->releaseAfter(60),
         ];
     }
 
@@ -51,11 +53,36 @@ class AnalyzeStockResearch implements ShouldBeUnique, ShouldQueue
      */
     public function handle(StockAiResearchService $researchService): void
     {
-        $researchService->run($this->researchId);
+        try {
+            $researchService->run($this->researchId);
+        } catch (RateLimitedException) {
+            $retryAfterSeconds = $this->rateLimitBackoff();
+
+            $researchService->markForRetry($this->researchId);
+
+            Log::notice('Stock AI research rate limited; retry scheduled.', [
+                'research_id' => $this->researchId,
+                'stock_holding_id' => $this->stockHoldingId,
+                'attempt' => $this->attempts(),
+                'retry_after_seconds' => $retryAfterSeconds,
+            ]);
+
+            $this->release($retryAfterSeconds);
+        }
     }
 
     public function failed(?Throwable $exception): void
     {
         app(StockAiResearchService::class)->fail($this->researchId);
+    }
+
+    private function rateLimitBackoff(): int
+    {
+        return match (true) {
+            $this->attempts() <= 1 => 60,
+            $this->attempts() === 2 => 120,
+            $this->attempts() === 3 => 300,
+            default => 600,
+        };
     }
 }

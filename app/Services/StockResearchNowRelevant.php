@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Models\StockAiResearch;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 
 class StockResearchNowRelevant
@@ -27,46 +26,48 @@ class StockResearchNowRelevant
             'history_usage' => 'comparison_only',
             'blocks' => [
                 $this->block(
-                    'last_72_hours',
-                    'Heute / letzte 72 Stunden',
-                    $this->last72Hours($developments->all(), $events, $calculatedAt),
-                    'Keine belegte Meldung oder Marktbeobachtung in den letzten 72 Stunden.',
-                ),
-                $this->block(
                     'current_top_positions',
-                    'Aktuelle Top-Positionen',
+                    'Positionen ab 2 %',
                     $positions
                         ->reject(fn (array $position): bool => ($position['membership'] ?? null) === 'left_scope')
                         ->map(fn (array $position): array => $this->positionItem($position, false))
                         ->all(),
-                    'Keine aktuelle Top-Positionsliste verfügbar.',
+                    'Keine datierte Positionsliste ab 2 % verfügbar.',
                 ),
                 $this->block(
-                    'position_changes',
-                    'Änderungen seit dem letzten offiziellen Factsheet',
-                    ($events['etf_positions']['comparison_status'] ?? null) === 'compared'
-                        && ! empty($events['etf_positions']['current_data_as_of'])
-                        && ! empty($events['etf_positions']['previous_data_as_of'])
-                        ? $positions
-                            ->filter(fn (array $position): bool => ($position['membership'] ?? null) !== 'unchanged'
-                                || ($position['weight_direction'] ?? null) !== 'unchanged')
-                            ->map(fn (array $position): array => $this->positionItem($position, true))
-                            ->all()
-                        : [],
-                    'Kein vergleichbarer datierter offizieller Positions-Snapshot verfügbar.',
-                    $events['etf_positions']['coverage'] ?? 'partial',
+                    'position_news',
+                    'Bemerkenswertes zu Positionen',
+                    $developments
+                        ->where('category', 'top_holding')
+                        ->map(fn (array $development): array => $this->developmentItem($development))
+                        ->all(),
+                    'Keine bemerkenswerte, belegte Entwicklung zu den Positionen gefunden.',
                 ),
                 $this->block(
-                    'latest_earnings',
-                    'Zuletzt veröffentlichte Zahlen',
-                    collect($events['earnings'] ?? [])->map(fn (array $event): array => $this->earningsItem($event))->all(),
-                    'Keine aktuellen veröffentlichten Zahlen in der Abdeckung.',
+                    'unusual_activity',
+                    'Außergewöhnliche Aktivitäten',
+                    [
+                        ...$developments
+                            ->where('category', 'unusual_activity')
+                            ->map(fn (array $development): array => $this->developmentItem($development))
+                            ->all(),
+                        ...collect($events['unusual_volume'] ?? [])
+                            ->map(fn (array $event): array => $this->unusualVolumeItem($event))
+                            ->all(),
+                    ],
+                    'Keine belastbare außergewöhnliche Aktivität festgestellt.',
                 ),
                 $this->block(
                     'upcoming_events',
                     'Nächste Termine',
                     collect($events['upcoming_events'] ?? [])->map(fn (array $event): array => $this->upcomingItem($event))->all(),
                     'Keine anstehenden Ergebnistermine in der Abdeckung.',
+                ),
+                $this->block(
+                    'latest_earnings',
+                    'Zuletzt veröffentlichte Zahlen',
+                    collect($events['earnings'] ?? [])->map(fn (array $event): array => $this->earningsItem($event))->all(),
+                    'Keine aktuellen veröffentlichten Zahlen in der Abdeckung.',
                 ),
                 $this->block(
                     'current_guidance',
@@ -85,18 +86,46 @@ class StockResearchNowRelevant
                     'Keine belastbaren aktuellen Gerüchte gefunden.',
                 ),
                 $this->block(
-                    'unusual_activity',
-                    'Außergewöhnliche Aktivitäten',
-                    [
-                        ...$developments
-                            ->where('category', 'unusual_activity')
-                            ->map(fn (array $development): array => $this->developmentItem($development))
-                            ->all(),
-                        ...collect($events['unusual_volume'] ?? [])
-                            ->map(fn (array $event): array => $this->unusualVolumeItem($event))
-                            ->all(),
-                    ],
-                    'Keine belastbare außergewöhnliche Aktivität festgestellt.',
+                    'politics',
+                    'Politik und Geopolitik',
+                    $developments
+                        ->where('category', 'politics')
+                        ->map(fn (array $development): array => $this->developmentItem($development))
+                        ->all(),
+                    'Keine konkret relevante politische oder geopolitische Entwicklung gefunden.',
+                ),
+                $this->block(
+                    'analyst_consensus',
+                    'Analystenkonsens: BUY / HOLD / SELL',
+                    collect($research->analyst_consensus ?? [])
+                        ->filter(fn (mixed $consensus): bool => is_array($consensus))
+                        ->map(fn (array $consensus): array => $this->analystConsensusItem($consensus))
+                        ->all(),
+                    'Kein seriöser, prozentualer Analystenkonsens gefunden.',
+                ),
+                $this->block(
+                    'other_developments',
+                    'Weitere aktuelle Entwicklungen',
+                    $developments
+                        ->where('category', 'other')
+                        ->map(fn (array $development): array => $this->developmentItem($development))
+                        ->all(),
+                    'Keine weiteren belegten Entwicklungen gefunden.',
+                ),
+                $this->block(
+                    'position_changes',
+                    'Änderungen seit dem vorherigen offiziellen Stand',
+                    ($events['etf_positions']['comparison_status'] ?? null) === 'compared'
+                        && ! empty($events['etf_positions']['current_data_as_of'])
+                        && ! empty($events['etf_positions']['previous_data_as_of'])
+                        ? $positions
+                            ->filter(fn (array $position): bool => ($position['membership'] ?? null) !== 'unchanged'
+                                || ($position['weight_direction'] ?? null) !== 'unchanged')
+                            ->map(fn (array $position): array => $this->positionItem($position, true))
+                            ->all()
+                        : [],
+                    'Kein vergleichbarer datierter offizieller Positions-Snapshot verfügbar.',
+                    $events['etf_positions']['coverage'] ?? 'partial',
                 ),
                 $this->coverageBlock($events['data_coverage'] ?? [], $calculatedAt),
             ],
@@ -121,48 +150,6 @@ class StockResearchNowRelevant
             'empty_message' => $emptyMessage,
             'coverage' => $coverage,
         ];
-    }
-
-    /**
-     * @param  array<int, array<string, mixed>>  $developments
-     * @param  array<string, mixed>  $events
-     * @return array<int, array<string, mixed>>
-     */
-    private function last72Hours(array $developments, array $events, mixed $calculatedAt): array
-    {
-        try {
-            $reference = Carbon::parse((string) $calculatedAt);
-        } catch (\Throwable) {
-            return [];
-        }
-
-        $items = collect($developments)
-            ->filter(function (array $development) use ($reference): bool {
-                $timestamp = $development['published_at'] ?? $development['event_at'] ?? null;
-
-                if (! is_string($timestamp)) {
-                    return false;
-                }
-
-                try {
-                    $eventTime = Carbon::parse($timestamp);
-                } catch (\Throwable) {
-                    return false;
-                }
-
-                return $eventTime->betweenIncluded($reference->copy()->subHours(72), $reference);
-            })
-            ->map(fn (array $development): array => $this->developmentItem($development));
-
-        $marketItems = collect($events['market_reactions'] ?? [])
-            ->filter(fn (mixed $event): bool => is_array($event))
-            ->map(fn (array $event): array => $this->marketReactionItem($event));
-
-        return $items
-            ->concat($marketItems)
-            ->sortByDesc('event_at')
-            ->values()
-            ->all();
     }
 
     /**
@@ -229,6 +216,8 @@ class StockResearchNowRelevant
             'data_as_of' => $position['data_as_of'] ?? null,
             'freshness' => $position['freshness'] ?? null,
             'coverage' => $position['coverage'] ?? 'partial',
+            'source_title' => $position['source_title'] ?? 'EODHD ETF-Fundamentaldaten',
+            'source_url' => $position['source_url'] ?? null,
         ];
     }
 
@@ -295,8 +284,37 @@ class StockResearchNowRelevant
         return $this->serverItem(
             $event,
             (string) $symbol.': Guidance '.$classification,
-            implode(' · ', array_filter([$event['metric'] ?? null, $event['period'] ?? null, $event['unit'] ?? null])),
+            implode(' · ', array_filter([
+                $event['metric'] ?? null,
+                $event['period'] ?? null,
+                $event['unit'] ?? null,
+                'Aktuell: '.$this->guidanceValue($event['current'] ?? []),
+                'Zuvor: '.$this->guidanceValue($event['previous'] ?? []),
+            ])),
         );
+    }
+
+    /** @param array<string, mixed> $consensus */
+    private function analystConsensusItem(array $consensus): array
+    {
+        $analystCount = is_numeric($consensus['analyst_count'] ?? null)
+            ? (int) $consensus['analyst_count'].' Analysten'
+            : null;
+
+        return [
+            'type' => 'analyst_consensus',
+            'title' => 'Externer Analystenkonsens',
+            'detail' => implode(' · ', array_filter([
+                'BUY '.number_format((float) ($consensus['buy_pct'] ?? 0), 1, ',', '.').' %',
+                'HOLD '.number_format((float) ($consensus['hold_pct'] ?? 0), 1, ',', '.').' %',
+                'SELL '.number_format((float) ($consensus['sell_pct'] ?? 0), 1, ',', '.').' %',
+                $analystCount,
+            ])),
+            'data_as_of' => $consensus['as_of'] ?? null,
+            'coverage' => 'complete',
+            'source_title' => $consensus['source_title'] ?? null,
+            'source_url' => $consensus['source_url'] ?? null,
+        ];
     }
 
     /** @param array<string, mixed> $event */
@@ -308,18 +326,6 @@ class StockResearchNowRelevant
             : 'auffälliges Volumen';
 
         return $this->serverItem($event, (string) $symbol.': auffälliges Volumen', $ratio);
-    }
-
-    /** @param array<string, mixed> $event */
-    private function marketReactionItem(array $event): array
-    {
-        $symbol = $event['subject']['name'] ?? $event['subject']['symbol'] ?? 'Wertpapier';
-        $reaction = is_numeric($event['reaction_pct'] ?? null)
-            ? sprintf('%+.2f %%', (float) $event['reaction_pct'])
-            : 'keine berechenbare Reaktion';
-        $label = ($event['is_same_day'] ?? false) ? 'heutige Kursreaktion' : 'letzte Handelssitzung';
-
-        return $this->serverItem($event, (string) $symbol.': '.$label, $reaction);
     }
 
     /**
@@ -339,9 +345,35 @@ class StockResearchNowRelevant
             'data_as_of' => $event['data_as_of'] ?? null,
             'freshness' => $event['freshness'] ?? null,
             'coverage' => $event['coverage'] ?? 'partial',
-            'source_title' => $event['source_title'] ?? null,
+            'source_title' => $event['source_title'] ?? $this->datasetSourceTitle($event['source_datasets'] ?? []),
             'source_url' => $event['source_url'] ?? null,
         ];
+    }
+
+    /** @param array<string, mixed> $values */
+    private function guidanceValue(array $values): string
+    {
+        if (is_numeric($values['value'] ?? null)) {
+            return number_format((float) $values['value'], 2, ',', '.');
+        }
+
+        if (is_numeric($values['low'] ?? null) && is_numeric($values['high'] ?? null)) {
+            return number_format((float) $values['low'], 2, ',', '.')
+                .'–'.number_format((float) $values['high'], 2, ',', '.');
+        }
+
+        return 'nicht ausgewiesen';
+    }
+
+    /** @param array<int, mixed> $datasets */
+    private function datasetSourceTitle(array $datasets): string
+    {
+        $labels = collect($datasets)
+            ->filter(fn (mixed $dataset): bool => is_string($dataset) && trim($dataset) !== '')
+            ->map(fn (string $dataset): string => Str::headline($dataset))
+            ->implode(', ');
+
+        return $labels !== '' ? 'EODHD – '.$labels : 'EODHD';
     }
 
     private function surpriseText(mixed $surprise): string
@@ -366,6 +398,8 @@ class StockResearchNowRelevant
                 'coverage' => in_array($dataset['status'] ?? null, ['fresh', 'cached_fresh'], true)
                     ? 'complete'
                     : (($dataset['status'] ?? null) === 'unavailable' ? 'source_failed' : 'partial'),
+                'source_title' => $coverage['provider'] ?? 'EODHD',
+                'source_url' => null,
             ])
             ->all();
 
