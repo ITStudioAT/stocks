@@ -244,6 +244,15 @@ function installFrontendDependencies(): int
         return 0;
     }
 
+    if (PHP_OS_FAMILY === 'Windows') {
+        $cleanupCommand = ['node', updateProjectPath('scripts/dev-stop-stale-vite.mjs'), '--strict'];
+        $cleanupExitCode = runUpdateCommand(windowsShellCommand($cleanupCommand));
+
+        if ($cleanupExitCode !== 0) {
+            return $cleanupExitCode;
+        }
+    }
+
     $command = ['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'];
     $exitCode = runUpdateCommand(PHP_OS_FAMILY === 'Windows' ? windowsShellCommand($command) : $command);
 

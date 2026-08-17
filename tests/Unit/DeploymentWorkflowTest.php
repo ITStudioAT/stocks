@@ -204,8 +204,40 @@ class DeploymentWorkflowTest extends TestCase
     {
         $cleanup = file_get_contents($this->projectPath('scripts/dev-stop-stale-vite.mjs'));
 
-        $this->assertStringContainsString("commandLine.Contains('\\\\node_modules\\\\vite\\\\bin\\\\vite.js')", $cleanup);
+        $this->assertStringContainsString("commandLine.Contains('node_modules')", $cleanup);
+        $this->assertStringContainsString(
+            "commandLine.Contains('vite\\\\bin\\\\vite.js')",
+            $cleanup,
+        );
+        $this->assertStringContainsString("commandLine.Contains('vite/bin/vite.js')", $cleanup);
         $this->assertStringNotContainsString("commandLine.Contains('vite')", $cleanup);
+        $this->assertStringContainsString("unlinkSync('public/hot')", $cleanup);
+    }
+
+    public function test_local_frontend_dependency_install_stops_vite_before_npm_ci_on_windows(): void
+    {
+        $updateLauncher = file_get_contents($this->projectPath('scripts/update.php'));
+        $installFunctionPosition = strpos($updateLauncher, 'function installFrontendDependencies(): int');
+        $runLocalUpdatePosition = strpos($updateLauncher, 'function runLocalUpdate(bool $prepareOnly): int');
+
+        $this->assertIsInt($installFunctionPosition);
+        $this->assertIsInt($runLocalUpdatePosition);
+
+        $installFunction = substr(
+            $updateLauncher,
+            $installFunctionPosition,
+            $runLocalUpdatePosition - $installFunctionPosition,
+        );
+        $cleanupPosition = strpos($installFunction, "updateProjectPath('scripts/dev-stop-stale-vite.mjs')");
+        $npmCiPosition = strpos($installFunction, "['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund']");
+
+        $this->assertStringContainsString("if (PHP_OS_FAMILY === 'Windows')", $installFunction);
+        $this->assertStringContainsString("'--strict'", $installFunction);
+        $this->assertStringContainsString('if ($cleanupExitCode !== 0)', $installFunction);
+        $this->assertStringContainsString('return $cleanupExitCode;', $installFunction);
+        $this->assertIsInt($cleanupPosition);
+        $this->assertIsInt($npmCiPosition);
+        $this->assertLessThan($npmCiPosition, $cleanupPosition);
     }
 
     public function test_cloudways_deployment_uses_the_verified_artifact_and_stock_update_flags(): void

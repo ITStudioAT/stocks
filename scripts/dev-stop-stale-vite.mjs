@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { unlinkSync } from 'node:fs';
 
 const isStrict = process.argv.includes('--strict');
 
@@ -31,8 +32,11 @@ function Add-TargetProcess {
     $commandLine = ([string] $process.CommandLine).ToLowerInvariant()
     $processName = ([string] $process.Name).ToLowerInvariant()
     $isViteEntryPoint =
-        $commandLine.Contains('\\node_modules\\vite\\bin\\vite.js') -or
-        $commandLine.Contains('/node_modules/vite/bin/vite.js')
+        $commandLine.Contains('node_modules') -and
+        (
+            $commandLine.Contains('vite\\bin\\vite.js') -or
+            $commandLine.Contains('vite/bin/vite.js')
+        )
 
     if ($processName -eq 'node.exe' -and $commandLine.Contains($workspace) -and $isViteEntryPoint) {
         $targets[$process.ProcessId] = $process
@@ -73,6 +77,14 @@ try {
     execFileSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command], {
         stdio: 'inherit',
     });
+
+    try {
+        unlinkSync('public/hot');
+    } catch (error) {
+        if (error.code !== 'ENOENT') {
+            throw error;
+        }
+    }
 } catch (error) {
     console.warn('Could not check for stale Vite processes before starting dev server.');
 
