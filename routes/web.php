@@ -17,6 +17,7 @@ use App\Http\Controllers\AdminPriceRefreshSettingsController;
 use App\Http\Controllers\AdminProfileController;
 use App\Http\Controllers\AdminQueueStatusController;
 use App\Http\Controllers\AdminRoleController;
+use App\Http\Controllers\AdminStockAiResearchBatchController;
 use App\Http\Controllers\AdminStockAiResearchController;
 use App\Http\Controllers\AdminStockHistoricalPriceController;
 use App\Http\Controllers\AdminStockSearchController;
@@ -97,6 +98,9 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
     Route::get('/admin/dashboard/version', [AdminDashboardVersionController::class, 'show'])->name('admin.dashboard.version.show');
     Route::get('/admin/dashboard/performance', [AdminDepotTransactionController::class, 'dailyPerformance'])->name('admin.dashboard.performance.show');
     Route::get('/admin/dashboard/ai/stock-researches', [AdminStockAiResearchController::class, 'index'])->name('admin.dashboard.ai.stockResearches.index');
+    Route::post('/admin/dashboard/ai/stock-researches', [AdminStockAiResearchBatchController::class, 'store'])
+        ->middleware('throttle:admin.costly-operation')
+        ->name('admin.dashboard.ai.stockResearches.batch.store');
     Route::post('/admin/dashboard/ai/stocks/{stockHolding}/researches', [AdminStockAiResearchController::class, 'store'])
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.dashboard.ai.stockResearches.store');

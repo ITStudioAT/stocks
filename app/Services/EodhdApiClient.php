@@ -16,7 +16,7 @@ class EodhdApiClient
         private EodhdErrorSanitizer $errorSanitizer,
     ) {}
 
-    public function get(string $path, array $query = []): Response
+    public function get(string $path, array $query = [], int $usageUnits = 1): Response
     {
         $apiToken = config('services.eodhd.key');
 
@@ -24,7 +24,7 @@ class EodhdApiClient
             throw new RuntimeException('EODHD API token is not configured.');
         }
 
-        $this->apiUsage->recordCall();
+        $this->apiUsage->recordCall($usageUnits);
 
         try {
             $response = Http::baseUrl((string) config('services.eodhd.base_url', 'https://eodhd.com/api'))

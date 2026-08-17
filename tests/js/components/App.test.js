@@ -6507,8 +6507,160 @@ describe('App', () => {
 
     it('opens KI dashboard stock cards directly without loading overview data', async () => {
         window.history.pushState({}, '', '/admin/menu/dashboard/ki');
-        let currentResearch = null;
+        let currentResearch = {
+            id: 'legacy-apple-research',
+            stock_holding_id: 11,
+            status: 'finished',
+            summary: 'Alte Analyse ohne strukturierte Entwicklungen.',
+            developments: [],
+            stronger_case: 'Generisches positives Szenario.',
+            weaker_case: 'Generisches negatives Szenario.',
+            trump_connection: 'Kein materieller politischer Zusammenhang.',
+            recommendation: 'hold',
+            justification: 'Generische alte Begruendung.',
+            sources: [],
+        };
         let researchSequence = 0;
+        let lastFinishedResearch = null;
+        const finishedNowRelevant = {
+            generated_at: '2026-08-16T10:00:00+02:00',
+            history_usage: 'comparison_only',
+            blocks: [
+                {
+                    key: 'last_72_hours',
+                    title: 'Heute / letzte 72 Stunden',
+                    coverage: 'partial',
+                    empty_message: 'Keine aktuelle Meldung.',
+                    items: [{
+                        type: 'development',
+                        subject: 'Iberdrola',
+                        title: 'Iberdrola hebt den Investitionsplan an.',
+                        detail: 'Der Konzern nennt einen konkreten Ausbau der Stromnetze bis 2028.',
+                        event_at: '2026-08-14',
+                        published_at: '2026-08-16T09:50:00+02:00',
+                        retrieved_at: '2026-08-16T10:00:00+02:00',
+                        data_as_of: '2026-08-16T09:50:00+02:00',
+                        freshness: 'live',
+                        coverage: 'partial',
+                        status: 'confirmed',
+                        source_title: 'Iberdrola Investor Relations',
+                        source_url: 'https://example.com/iberdrola-update',
+                        current_impact: 'no_reliable_assessment',
+                        materiality: null,
+                        source_confidence: 'high',
+                        affected_etf_share_pct: 6.85,
+                        time_horizon: 'current_quarter',
+                        assessment_status: 'no_reliable_assessment',
+                    }],
+                },
+                {
+                    key: 'current_top_positions',
+                    title: 'Aktuelle Top-Positionen',
+                    coverage: 'partial',
+                    empty_message: 'Keine Positionen.',
+                    items: [{
+                        type: 'current_position',
+                        subject: 'Iberdrola',
+                        title: 'Iberdrola',
+                        detail: 'Rang 1 · 6,85 %',
+                        event_at: '2026-08-16T09:55:00+02:00',
+                        coverage: 'partial',
+                    }],
+                },
+                {
+                    key: 'position_changes',
+                    title: 'Änderungen seit dem letzten offiziellen Factsheet',
+                    coverage: 'partial',
+                    empty_message: 'Kein vergleichbarer Snapshot.',
+                    items: [{
+                        type: 'position_change',
+                        subject: 'Iberdrola',
+                        title: 'Iberdrola: neu im beobachteten Top-Positionsbereich',
+                        detail: '6,85 % aktuell',
+                        event_at: '2026-08-16T09:55:00+02:00',
+                        coverage: 'partial',
+                    }],
+                },
+                {
+                    key: 'latest_earnings',
+                    title: 'Zuletzt veröffentlichte Zahlen',
+                    coverage: 'complete',
+                    empty_message: 'Keine Zahlen.',
+                    items: [{
+                        type: 'earnings_actual_vs_consensus',
+                        subject: 'Linde',
+                        title: 'Linde meldet Zahlen',
+                        detail: 'EPS 4,09 (+2,25 % vs. Konsens)',
+                        event_at: '2026-08-12',
+                        data_as_of: '2026-06-30',
+                        freshness: 'stale',
+                        coverage: 'complete',
+                    }],
+                },
+                {
+                    key: 'upcoming_events',
+                    title: 'Nächste Termine',
+                    coverage: 'complete',
+                    empty_message: 'Keine Termine.',
+                    items: [{
+                        type: 'scheduled_earnings',
+                        subject: 'Linde',
+                        title: 'Linde: Ergebnistermin',
+                        detail: '22.08.2026 laut Ergebniskalender',
+                        event_at: '2026-08-22',
+                        coverage: 'complete',
+                    }],
+                },
+                {
+                    key: 'current_guidance',
+                    title: 'Aktuelle Guidance',
+                    coverage: 'complete',
+                    empty_message: 'Keine Guidance.',
+                    items: [{
+                        type: 'guidance_change',
+                        subject: 'Linde',
+                        title: 'Linde: Guidance angehoben',
+                        detail: 'FY2026 · EPS · USD',
+                        event_at: '2026-08-12',
+                        coverage: 'complete',
+                    }],
+                },
+                {
+                    key: 'rumors',
+                    title: 'Gerüchte',
+                    coverage: 'complete',
+                    empty_message: 'Keine belastbaren aktuellen Gerüchte gefunden.',
+                    items: [],
+                },
+                {
+                    key: 'unusual_activity',
+                    title: 'Außergewöhnliche Aktivitäten',
+                    coverage: 'complete',
+                    empty_message: 'Keine Aktivität.',
+                    items: [{
+                        type: 'market_reaction',
+                        subject: 'Iberdrola',
+                        title: 'Iberdrola: auffälliges Volumen',
+                        detail: '2,5x des 5-Tage-Medians',
+                        event_at: '2026-08-16T09:55:00+02:00',
+                        coverage: 'complete',
+                    }],
+                },
+                {
+                    key: 'data_coverage',
+                    title: 'Datenstand und Rechercheabdeckung',
+                    coverage: 'partial',
+                    empty_message: 'Keine Abdeckung.',
+                    items: [{
+                        type: 'coverage',
+                        title: 'Earnings Calendar',
+                        detail: 'fresh',
+                        retrieved_at: '2026-08-16T10:00:00+02:00',
+                        coverage: 'complete',
+                    }],
+                },
+            ],
+        };
         const fetchMock = vi.fn((path, options = {}) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -6534,6 +6686,26 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ indexes: [] }));
             }
 
+            if (path === '/admin/dashboard/ai/stock-researches' && options.method === 'POST') {
+                return Promise.resolve(jsonResponse({
+                    count: 2,
+                    researches: [
+                        {
+                            id: 'batch-research-11',
+                            stock_holding_id: 11,
+                            status: 'queued',
+                            message: 'KI-Recherche wurde eingereiht.',
+                        },
+                        {
+                            id: 'batch-research-12',
+                            stock_holding_id: 12,
+                            status: 'queued',
+                            message: 'KI-Recherche wurde eingereiht.',
+                        },
+                    ],
+                }, 202));
+            }
+
             if (path === '/admin/dashboard/ai/stock-researches') {
                 return Promise.resolve(jsonResponse({
                     researches: currentResearch ? [currentResearch] : [],
@@ -6554,29 +6726,177 @@ describe('App', () => {
             }
 
             if (path === `/admin/dashboard/ai/stocks/11/researches/apple-research-${researchSequence}`) {
-                currentResearch = researchSequence === 1
-                    ? {
+                if (researchSequence === 1) {
+                    currentResearch = {
                         id: 'apple-research-1',
                         stock_holding_id: 11,
                         status: 'finished',
+                        developments: [
+                            {
+                                category: 'top_holding',
+                                subject: 'Iberdrola',
+                                event_at: '2026-08-14',
+                                published_at: '2026-08-16T09:50:00+02:00',
+                                retrieved_at: '2026-08-16T10:00:00+02:00',
+                                data_as_of: '2026-08-16T09:50:00+02:00',
+                                freshness: 'live',
+                                coverage: 'partial',
+                                headline: 'Iberdrola hebt den Investitionsplan an.',
+                                details: 'Der Konzern nennt einen konkreten Ausbau der Stromnetze bis 2028.',
+                                relevance: 'Iberdrola ist eine der groessten Positionen des ETF.',
+                                status: 'confirmed',
+                                source_title: 'Iberdrola Investor Relations',
+                                source_url: 'https://example.com/iberdrola-update',
+                            },
+                            {
+                                category: 'earnings',
+                                subject: 'Linde',
+                                event_at: '2026-08-12T07:00:00+02:00',
+                                published_at: '2026-08-12T07:05:00+02:00',
+                                retrieved_at: '2026-08-16T10:00:00+02:00',
+                                data_as_of: '2026-06-30',
+                                freshness: 'stale',
+                                coverage: 'complete',
+                                headline: 'Linde uebertrifft im zweiten Quartal die Gewinnerwartung.',
+                                details: 'Der bereinigte Gewinn je Aktie liegt ueber dem Vorjahreswert; die Prognose wurde bestaetigt.',
+                                relevance: 'Linde hat als Top-Position einen messbaren Einfluss auf den ETF.',
+                                status: 'confirmed',
+                                source_title: 'Linde Q2 results',
+                                source_url: 'https://example.com/linde-results',
+                            },
+                        ],
                         summary: 'Neue Nachfrageindikatoren stützen Apple kurzfristig.',
-                        stronger_case: 'Starke Nachfrage könnte den Kurs stützen.',
-                        weaker_case: 'Eine hohe Bewertung könnte den Kurs belasten.',
-                        trump_connection: 'Kein materieller Zusammenhang mit aktuellen Trump-Aussagen.',
-                        recommendation: 'hold',
-                        justification: 'Chancen und Risiken sind ausgeglichen.',
+                        calculated_events: {
+                            history_usage: 'comparison_only',
+                            etf_positions: {
+                                scope: 'top_5',
+                                positions: [{
+                                    subject: { symbol: 'IBE.MC', name: 'Iberdrola' },
+                                    membership: 'entered_scope',
+                                    weight_direction: null,
+                                    current_weight_pct: 6.85,
+                                    previous_weight_pct: null,
+                                    weight_change_pp: null,
+                                    event_at: '2026-08-16T09:55:00+02:00',
+                                }],
+                            },
+                            earnings: [{
+                                subject: { symbol: 'LIN.DE', name: null },
+                                event_at: '2026-08-12',
+                                currency: 'USD',
+                                eps: { actual: 4.09, consensus: 4, surprise_pct: 2.25 },
+                                revenue: { actual: 8500, consensus: 8400, surprise_pct: 1.1905 },
+                            }],
+                            guidance: [{
+                                subject: { symbol: 'LIN.DE', name: null },
+                                metric: 'EPS',
+                                period: 'FY2026',
+                                unit: 'USD',
+                                classification: 'raised',
+                                current: { value: 17.4 },
+                                previous: { value: 17.1 },
+                                event_at: '2026-08-12',
+                            }],
+                            guidance_coverage: { status: 'available' },
+                            market_reactions: [{
+                                subject: { symbol: 'IBE.MC', name: null },
+                                event_at: '2026-08-16T09:55:00+02:00',
+                                session_date: '2026-08-16',
+                                is_same_day: true,
+                                session_complete: false,
+                                reaction_pct: 3.4,
+                                relative_volume: 2.5,
+                                baseline_sessions: 5,
+                                is_unusual_volume: true,
+                            }],
+                            etf_relevance: [{
+                                subject: { symbol: 'IBE.MC', name: 'Iberdrola' },
+                                event_at: '2026-08-16T09:55:00+02:00',
+                                weight_pct: 6.85,
+                                reaction_pct: 3.4,
+                                estimated_contribution_pct_points: 0.2329,
+                            }],
+                        },
+                        assessment: {
+                            status: 'no_reliable_assessment',
+                            current_impact: 'no_reliable_assessment',
+                            materiality: null,
+                            source_confidence: 'high',
+                            affected_etf_share_pct: 6.85,
+                            time_horizons: ['current_quarter'],
+                            reason: 'Keine belastbare Einschätzung bei teilweise ausgefallener Abdeckung.',
+                        },
+                        now_relevant: finishedNowRelevant,
+                        trump_connection: '',
                         sources: [{ url: 'https://example.com/apple', title: 'Apple source' }],
                         finished_at: '2026-08-16T10:00:00+02:00',
-                    }
-                    : {
+                    };
+                    lastFinishedResearch = currentResearch;
+                } else if (researchSequence === 2) {
+                    currentResearch = {
                         id: 'apple-research-2',
                         stock_holding_id: 11,
                         status: 'no_new_information',
                         summary: 'Keine wichtigen neueren Informationen seit 16.08.2026, 10:00 gefunden.',
-                        recommendation: 'unchanged',
+                        calculated_events: {
+                            history_usage: 'comparison_only',
+                            market_reactions: [{
+                                subject: { symbol: 'IBE.MC', name: null },
+                                event_at: '2026-08-16T10:05:00+02:00',
+                                session_date: '2026-08-16',
+                                is_same_day: true,
+                                session_complete: false,
+                                reaction_pct: 1.25,
+                                relative_volume: 1.4,
+                                baseline_sessions: 5,
+                                is_unusual_volume: null,
+                            }],
+                        },
+                        assessment: {
+                            status: 'no_reliable_assessment',
+                            current_impact: 'no_reliable_assessment',
+                            materiality: null,
+                            source_confidence: null,
+                            affected_etf_share_pct: null,
+                            time_horizons: [],
+                            reason: 'Keine belastbare Einschätzung bei unvollständiger Abdeckung.',
+                        },
+                        now_relevant: {
+                            ...finishedNowRelevant,
+                            generated_at: '2026-08-16T10:05:00+02:00',
+                            blocks: finishedNowRelevant.blocks.map((block) => (block.key === 'last_72_hours'
+                                ? {
+                                    ...block,
+                                    items: [{
+                                        type: 'market_reaction',
+                                        subject: 'Iberdrola',
+                                        title: 'Iberdrola: heutige Kursreaktion',
+                                        detail: '+1,25 % gegenüber dem vorherigen Schlusskurs',
+                                        event_at: '2026-08-16T10:05:00+02:00',
+                                        retrieved_at: '2026-08-16T10:05:00+02:00',
+                                        coverage: 'partial',
+                                    }],
+                                }
+                                : block)),
+                        },
                         sources: [],
                         finished_at: '2026-08-16T10:05:00+02:00',
+                        previous_result: lastFinishedResearch,
                     };
+                } else {
+                    currentResearch = {
+                        id: 'apple-research-3',
+                        stock_holding_id: 11,
+                        status: 'failed',
+                        message: 'Die KI-Recherche ist fehlgeschlagen. Bitte erneut laden.',
+                        calculated_events: {},
+                        assessment: null,
+                        now_relevant: { blocks: [] },
+                        sources: [],
+                        finished_at: '2026-08-16T10:10:00+02:00',
+                        previous_result: lastFinishedResearch,
+                    };
+                }
 
                 return Promise.resolve(jsonResponse({ research: currentResearch }));
             }
@@ -6585,7 +6905,7 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({
                     depot: null,
                     holdings: [
-                        { id: 11, symbol: 'AAPL', name: 'Apple Inc.', subtitle: 'Technology hardware' },
+                        { id: 11, symbol: 'AAPL', name: 'Apple Inc.', subtitle: 'Technology hardware', instrument_type: 'ETF' },
                         { id: 12, symbol: 'MSFT', name: 'Microsoft Corporation', stock_subtitle: 'Software' },
                     ],
                     meta: {
@@ -6628,6 +6948,14 @@ describe('App', () => {
         expect(wrapper.find('[aria-label="Dashboard KI"]').exists()).toBe(true);
         expect(wrapper.find('.dashboard-version-page').exists()).toBe(false);
         const stockCards = wrapper.findAll('.dashboard-ki-stock-card');
+
+        function expectSingleCompactResearchLayout(card) {
+            expect(card.find('.dashboard-ki-calculated').exists()).toBe(true);
+            expect(card.find('.dashboard-ki-calculated-grid').exists()).toBe(true);
+            expect(card.find('.dashboard-ki-development-grid').exists()).toBe(false);
+            expect(card.findAll('.dashboard-ki-development-section')).toHaveLength(0);
+        }
+
         expect(stockCards).toHaveLength(2);
         expect(stockCards.every((card) => card.classes().includes('w-100'))).toBe(true);
         expect(stockCards[0].get('.dashboard-ki-stock-title').text()).toBe('Apple Inc.');
@@ -6639,6 +6967,11 @@ describe('App', () => {
         const loadButtons = wrapper.findAll('.dashboard-ki-load-button');
         expect(loadButtons).toHaveLength(2);
         expect(loadButtons.every((button) => button.text() === 'Load')).toBe(true);
+        expect(stockCards[0].text()).toContain('Alte Analyse ohne strukturierte Entwicklungen.');
+        expect(stockCards[0].text()).not.toContain('Generisches positives Szenario.');
+        expect(stockCards[0].text()).not.toContain('Generisches negatives Szenario.');
+        expect(stockCards[0].text()).not.toContain('Kein materieller politischer Zusammenhang.');
+        expect(stockCards[0].text()).not.toContain('Generische alte Begruendung.');
 
         await loadButtons[0].trigger('click');
         await flushPromises();
@@ -6653,11 +6986,64 @@ describe('App', () => {
         await flushPromises();
 
         expect(stockCards[0].text()).toContain('Neue Nachfrageindikatoren stützen Apple kurzfristig.');
-        expect(stockCards[0].text()).toContain('Stärker');
-        expect(stockCards[0].text()).toContain('Schwächer');
-        expect(stockCards[0].text()).toContain('Donald Trump / Politik:');
-        expect(stockCards[0].text()).toContain('Halten');
+        expect(stockCards[0].text()).not.toContain('Donald Trump / Politik:');
+        expect(stockCards[0].text()).not.toContain('Halten');
+        expect(stockCards[0].text()).not.toContain('Kaufen');
+        expect(stockCards[0].text()).not.toContain('Verkaufen');
         expect(stockCards[0].text()).toContain('Apple source');
+        expect(stockCards[0].text()).toContain('Jetzt relevant');
+        expectSingleCompactResearchLayout(stockCards[0]);
+        expect(stockCards[0].text()).toContain('Heute / letzte 72 Stunden');
+        expect(stockCards[0].text()).toContain('Aktuelle Top-Positionen');
+        expect(stockCards[0].text()).toContain('Änderungen seit dem letzten offiziellen Factsheet');
+        expect(stockCards[0].text()).toContain('Zuletzt veröffentlichte Zahlen');
+        expect(stockCards[0].text()).toContain('Nächste Termine');
+        expect(stockCards[0].text()).toContain('Aktuelle Guidance');
+        expect(stockCards[0].text()).toContain('Ger\u00fcchte');
+        expect(stockCards[0].text()).toContain('Au\u00dfergew\u00f6hnliche Aktivit\u00e4ten');
+        expect(stockCards[0].text()).toContain('Datenabdeckung');
+        expect(stockCards[0].text()).toContain('Iberdrola hebt den Investitionsplan an.');
+        expect(stockCards[0].text()).toContain('Linde meldet Zahlen');
+        expect(stockCards[0].text()).toContain('Linde: Ergebnistermin');
+        expect(stockCards[0].text()).toContain('Linde: Guidance angehoben');
+        expect(stockCards[0].text()).toContain('Keine belastbaren aktuellen Ger\u00fcchte');
+        expect(stockCards[0].text()).toContain('Ereignis');
+        expect(stockCards[0].text()).toContain('Ver\u00f6ffentlicht');
+        expect(stockCards[0].text()).toContain('Abgerufen');
+        expect(stockCards[0].text()).toContain('Datenstand');
+        expect(stockCards[0].text()).toContain('Live');
+        expect(stockCards[0].text()).toContain('Veraltet');
+        expect(stockCards[0].text()).toContain('Abdeckung teilweise');
+        expect(stockCards[0].text()).toContain('Abdeckung vollst\u00e4ndig');
+        expect(stockCards[0].text()).toContain('Vergleich, keine Prognose');
+        expect(stockCards[0].text()).toContain('neu im beobachteten Top-Positionsbereich');
+        expect(stockCards[0].text()).toContain('6,85 %');
+        expect(stockCards[0].text()).toContain('EPS 4,09 (+2,25 % vs. Konsens)');
+        expect(stockCards[0].text()).toContain('auffälliges Volumen');
+        expect(stockCards[0].text()).toContain('Ereignisbewertung');
+        expect(stockCards[0].text()).toContain('Keine belastbare Einschätzung');
+        expect(stockCards[0].text()).toContain('Materialität nicht belastbar');
+        expect(stockCards[0].text()).toContain('Quellenvertrauen hoch');
+        expect(stockCards[0].text()).toContain('Betroffener ETF-Anteil: 6,85 %');
+        expect(stockCards[0].text()).toContain('Aktuelles Quartal');
+        expect(stockCards[0].text()).not.toContain('Aktuelle Ereignisse, Termine und Abdeckung');
+        expect(stockCards[0].get('.dashboard-ki-calculated').text()).not.toContain('Nicht ausgewiesen');
+        expect(stockCards[0].findAll('.dashboard-ki-calculated-section')).toHaveLength(7);
+        expect(stockCards[0].findAll('.dashboard-ki-calculated-section')
+            .some((section) => section.text().includes('Ger\u00fcchte'))).toBe(false);
+        expect(stockCards[0].findAll('.dashboard-ki-calculated-section')
+            .some((section) => section.text().includes('Datenabdeckung'))).toBe(false);
+        expect(stockCards[0].get('.dashboard-ki-empty-sections').attributes('open')).toBeUndefined();
+        expect(stockCards[0].get('.dashboard-ki-empty-sections').text()).toContain('1 Bereich ohne aktuellen Treffer');
+        expect(stockCards[0].get('.dashboard-ki-coverage-disclosure').attributes('open')).toBeUndefined();
+        expect(stockCards[0].get('.dashboard-ki-coverage-disclosure').text()).toContain('1 vollst\u00e4ndig');
+        expect(stockCards[0].get('.dashboard-ki-assessment').attributes('open')).toBeUndefined();
+        const currentPositionsSection = stockCards[0]
+            .findAll('.dashboard-ki-calculated-section')
+            .find((section) => section.text().includes('Aktuelle Top-Positionen'));
+
+        expect(currentPositionsSection.find('.dashboard-ki-calculated-item-heading .v-chip').exists()).toBe(false);
+        expect(currentPositionsSection.get('.dashboard-ki-development-meta').text()).toContain('Abdeckung teilweise');
 
         await loadButtons[0].trigger('click');
         await flushPromises();
@@ -6665,7 +7051,41 @@ describe('App', () => {
         await flushPromises();
 
         expect(stockCards[0].text()).toContain('Keine wichtigen neueren Informationen');
-        expect(stockCards[0].text()).not.toContain('Neue Nachfrageindikatoren');
+        expect(stockCards[0].text()).toContain('Letzte relevante KI-Analyse');
+        expect(stockCards[0].text()).toContain('Neue Nachfrageindikatoren');
+        expect(stockCards[0].text()).not.toContain('Iberdrola hebt den Investitionsplan an.');
+        expect(stockCards[0].text()).toContain('Apple source');
+        expect(stockCards[0].text()).not.toContain('Halten');
+        expect(stockCards[0].text()).toContain('Abgerufen');
+        expect(stockCards[0].text()).toContain('Abdeckung teilweise');
+        expect(stockCards[0].text()).toContain('+1,25 % gegen\u00fcber dem vorherigen Schlusskurs');
+        expectSingleCompactResearchLayout(stockCards[0]);
+
+        await loadButtons[0].trigger('click');
+        await flushPromises();
+        await wrapper.vm.pollDashboardKiResearches();
+        await flushPromises();
+
+        expect(stockCards[0].text()).toContain('Die KI-Recherche ist fehlgeschlagen. Bitte erneut laden.');
+        expect(stockCards[0].text()).toContain('Letzte relevante KI-Analyse');
+        expect(stockCards[0].text()).toContain('Neue Nachfrageindikatoren');
+        expect(stockCards[0].text()).toContain('Iberdrola hebt den Investitionsplan an.');
+        expect(stockCards[0].text()).toContain('Apple source');
+        expect(stockCards[0].text()).toContain('Letzter erfolgreicher Stand');
+        expectSingleCompactResearchLayout(stockCards[0]);
+
+        const loadAllButton = wrapper.get('.dashboard-ki-load-all-button');
+
+        expect(loadAllButton.text()).toBe('Load all');
+        await loadAllButton.trigger('click');
+        await flushPromises();
+
+        expect(fetchMock.mock.calls.filter(([path, options = {}]) => (
+            path === '/admin/dashboard/ai/stock-researches' && options.method === 'POST'
+        ))).toHaveLength(1);
+        expect(wrapper.get('.dashboard-ki-load-all-button').attributes('disabled')).toBeDefined();
+        expect(stockCards[0].text()).toContain('KI-Recherche wurde eingereiht.');
+        expect(stockCards[1].text()).toContain('KI-Recherche wurde eingereiht.');
         expect(window.location.pathname).toBe('/admin/menu/dashboard/ki');
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/dashboard/version')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/dashboard/performance')).toBe(false);

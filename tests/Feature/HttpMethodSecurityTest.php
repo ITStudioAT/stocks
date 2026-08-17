@@ -32,6 +32,7 @@ class HttpMethodSecurityTest extends TestCase
             'admin.active-depot.holdings.refresh-prices',
             'admin.cloudways.show',
             'admin.cloudways.sync',
+            'admin.dashboard.ai.stockResearches.batch.store',
             'admin.dashboard.ai.stockResearches.store',
             'admin.data.endOfDay.sync',
             'admin.data.exchanges.reload',

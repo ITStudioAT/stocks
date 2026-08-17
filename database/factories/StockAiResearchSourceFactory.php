@@ -29,6 +29,10 @@ class StockAiResearchSourceFactory extends Factory
             'url' => $url,
             'url_hash' => hash('sha256', $url),
             'title' => $this->faker->sentence(),
+            'source_type' => 'issuer',
+            'confidence' => 'high',
+            'is_primary' => true,
+            'retrieved_at' => now(),
         ];
     }
 }

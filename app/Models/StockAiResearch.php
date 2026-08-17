@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['id', 'user_id', 'stock_holding_id', 'previous_research_id', 'status', 'has_material_update', 'summary', 'stronger_case', 'weaker_case', 'trump_connection', 'recommendation', 'justification', 'known_information', 'message', 'error', 'started_at', 'finished_at'])]
+#[Fillable(['id', 'user_id', 'stock_holding_id', 'previous_research_id', 'status', 'has_material_update', 'summary', 'developments', 'calculation_snapshot', 'calculated_events', 'assessment', 'stronger_case', 'weaker_case', 'trump_connection', 'recommendation', 'justification', 'known_information', 'message', 'error', 'started_at', 'finished_at'])]
 class StockAiResearch extends Model
 {
     /** @use HasFactory<StockAiResearchFactory> */
@@ -32,6 +32,10 @@ class StockAiResearch extends Model
     {
         return [
             'has_material_update' => 'boolean',
+            'developments' => 'array',
+            'calculation_snapshot' => 'array',
+            'calculated_events' => 'array',
+            'assessment' => 'array',
             'known_information' => 'array',
             'started_at' => 'datetime',
             'finished_at' => 'datetime',

@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Services\StockAiResearchService;
+use DateTimeInterface;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -15,7 +16,7 @@ class AnalyzeStockResearch implements ShouldBeUnique, ShouldQueue
 
     public int $timeout = 240;
 
-    public int $tries = 1;
+    public int $tries = 0;
 
     public int $uniqueFor = 300;
 
@@ -28,6 +29,11 @@ class AnalyzeStockResearch implements ShouldBeUnique, ShouldQueue
     public function uniqueId(): string
     {
         return "{$this->userId}:{$this->stockHoldingId}";
+    }
+
+    public function retryUntil(): DateTimeInterface
+    {
+        return now()->addHours(6);
     }
 
     /**

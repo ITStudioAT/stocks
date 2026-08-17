@@ -29,13 +29,14 @@ class EodhdApiUsage
         ];
     }
 
-    public function recordCall(): void
+    public function recordCall(int $units = 1): void
     {
+        $units = max($units, 1);
         $now = $this->now();
         $this->ensureCounters($now);
 
-        Cache::increment($this->hourKey($now));
-        Cache::increment($this->dayKey($now));
+        Cache::increment($this->hourKey($now), $units);
+        Cache::increment($this->dayKey($now), $units);
     }
 
     private function ensureCounters(Carbon $now): void

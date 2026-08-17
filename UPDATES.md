@@ -1,6 +1,6 @@
-## 1.0.0 x
+## 1.0.0
 
-### AI-ANALYSIS !!!
+### AI-ANALYSIS
 
 - Show this under Stocks and under Depot and on the Dashboard
 

@@ -340,7 +340,9 @@ const dashboardVersionsError = ref('');
 const dashboardKiResearches = ref({});
 const dashboardKiResearchErrors = ref({});
 const dashboardKiResearchStartingIds = ref([]);
+const dashboardKiLoadAllError = ref('');
 const dashboardKiResearchTimer = ref(null);
+const isDashboardKiLoadingAll = ref(false);
 const isDashboardReloading = ref(false);
 const isDashboardVersionDetailsVisible = ref(false);
 const indexMessage = ref('');
@@ -3627,6 +3629,32 @@ function dashboardKiResearch(holdingId) {
     return dashboardKiResearches.value[String(holdingId)] ?? null;
 }
 
+function dashboardKiDisplayedResearch(holdingId) {
+    const research = dashboardKiResearch(holdingId);
+
+    if (['no_new_information', 'failed'].includes(research?.status)) {
+        return research.previous_result ?? null;
+    }
+
+    return research;
+}
+
+function dashboardKiNowRelevantResearch(holdingId) {
+    const research = dashboardKiResearch(holdingId);
+
+    if (research?.status === 'failed') {
+        return research.previous_result ?? null;
+    }
+
+    return research;
+}
+
+function dashboardKiNowRelevantHeading(holdingId) {
+    return dashboardKiResearch(holdingId)?.status === 'failed'
+        ? 'Letzter erfolgreicher Stand'
+        : 'Jetzt relevant';
+}
+
 function isDashboardKiResearchRunning(holdingId) {
     return ['queued', 'running'].includes(dashboardKiResearch(holdingId)?.status)
         || dashboardKiResearchStartingIds.value.includes(holdingId);
@@ -3690,6 +3718,33 @@ async function loadDashboardKiResearch(holding) {
     }
 }
 
+function hasDashboardKiLoadableHoldings() {
+    return holdings.value.some((holding) => holding?.id && !isDashboardKiResearchRunning(holding.id));
+}
+
+async function loadAllDashboardKiResearches() {
+    if (isDashboardKiLoadingAll.value || !hasDashboardKiLoadableHoldings()) {
+        return;
+    }
+
+    isDashboardKiLoadingAll.value = true;
+    dashboardKiLoadAllError.value = '';
+
+    try {
+        const data = await request('/admin/dashboard/ai/stock-researches', {
+            method: 'POST',
+        });
+        const researches = Array.isArray(data.researches) ? data.researches : [];
+
+        researches.forEach((research) => setDashboardKiResearch(research));
+        syncDashboardKiResearchPolling();
+    } catch (error) {
+        dashboardKiLoadAllError.value = error.message;
+    } finally {
+        isDashboardKiLoadingAll.value = false;
+    }
+}
+
 function syncDashboardKiResearchPolling() {
     const hasRunningResearch = Object.values(dashboardKiResearches.value)
         .some((research) => ['queued', 'running'].includes(research?.status));
@@ -3720,6 +3775,26 @@ async function pollDashboardKiResearches() {
     const runningResearches = Object.values(dashboardKiResearches.value)
         .filter((research) => ['queued', 'running'].includes(research?.status));
 
+    if (runningResearches.length > 1) {
+        try {
+            const data = await request('/admin/dashboard/ai/stock-researches');
+            const researches = Array.isArray(data.researches) ? data.researches : [];
+
+            researches.forEach((research) => {
+                setDashboardKiResearch(research);
+                setDashboardKiResearchError(research.stock_holding_id);
+            });
+        } catch (error) {
+            runningResearches.forEach((research) => {
+                setDashboardKiResearchError(research.stock_holding_id, error.message);
+            });
+        }
+
+        syncDashboardKiResearchPolling();
+
+        return;
+    }
+
     await Promise.all(runningResearches.map(async (research) => {
         try {
             const data = await request(
@@ -3735,20 +3810,422 @@ async function pollDashboardKiResearches() {
     syncDashboardKiResearchPolling();
 }
 
-function dashboardKiRecommendationLabel(recommendation) {
-    return {
-        buy: 'Kaufen',
-        hold: 'Halten',
-        sell: 'Verkaufen',
-    }[recommendation] ?? recommendation;
+function dashboardKiNowRelevantSections(research) {
+    const icons = {
+        last_72_hours: 'mdi-clock-fast',
+        current_top_positions: 'mdi-format-list-bulleted',
+        position_changes: 'mdi-swap-vertical',
+        latest_earnings: 'mdi-chart-box-outline',
+        upcoming_events: 'mdi-calendar-clock',
+        current_guidance: 'mdi-sign-direction',
+        rumors: 'mdi-account-voice',
+        unusual_activity: 'mdi-pulse',
+        data_coverage: 'mdi-database-check-outline',
+    };
+    const blocks = Array.isArray(research?.now_relevant?.blocks) ? research.now_relevant.blocks : [];
+
+    return blocks.map((block) => ({
+        key: block.key,
+        title: block.title,
+        icon: icons[block.key] ?? 'mdi-information-outline',
+        empty: block.empty_message,
+        coverage: block.coverage,
+        items: (Array.isArray(block.items) ? block.items : []).map((item, index) => ({
+            ...item,
+            key: `${block.key}-${item.type ?? 'item'}-${item.subject ?? index}-${item.event_at ?? index}`,
+            label: item.status ? dashboardKiDevelopmentStatusLabel(item.status) : null,
+            tone: item.status ? dashboardKiDevelopmentStatusColor(item.status) : null,
+        })),
+    }));
 }
 
-function dashboardKiRecommendationColor(recommendation) {
+function dashboardKiNowRelevantActiveSections(research) {
+    return dashboardKiNowRelevantSections(research)
+        .filter((section) => section.key !== 'data_coverage' && section.items.length > 0);
+}
+
+function dashboardKiNowRelevantEmptySections(research) {
+    return dashboardKiNowRelevantSections(research)
+        .filter((section) => section.key !== 'data_coverage' && section.items.length === 0);
+}
+
+function dashboardKiNowRelevantEmptySummary(research) {
+    const count = dashboardKiNowRelevantEmptySections(research).length;
+
+    return count === 1
+        ? '1 Bereich ohne aktuellen Treffer'
+        : `${count} Bereiche ohne aktuelle Treffer`;
+}
+
+function dashboardKiNowRelevantCoverageSection(research) {
+    return dashboardKiNowRelevantSections(research)
+        .find((section) => section.key === 'data_coverage') ?? null;
+}
+
+function dashboardKiNowRelevantCoverageSummary(research) {
+    const items = dashboardKiNowRelevantCoverageSection(research)?.items ?? [];
+    const counts = items.reduce((summary, item) => {
+        const coverage = ['complete', 'partial', 'source_failed'].includes(item.coverage)
+            ? item.coverage
+            : 'partial';
+
+        summary[coverage] += 1;
+
+        return summary;
+    }, { complete: 0, partial: 0, source_failed: 0 });
+
+    return [
+        counts.complete > 0 ? `${counts.complete} vollst\u00e4ndig` : null,
+        counts.partial > 0 ? `${counts.partial} teilweise` : null,
+        counts.source_failed > 0 ? `${counts.source_failed} ausgefallen` : null,
+    ].filter(Boolean).join(' \u00b7 ') || 'Keine Quelleninformationen';
+}
+
+function dashboardKiNowRelevantMoments(item) {
+    return [
+        { key: 'event_at', label: 'Ereignis', value: item.event_at },
+        { key: 'published_at', label: 'Ver\u00f6ffentlicht', value: item.published_at },
+        { key: 'retrieved_at', label: 'Abgerufen', value: item.retrieved_at },
+        { key: 'data_as_of', label: 'Datenstand', value: item.data_as_of },
+    ].filter((moment) => moment.value);
+}
+
+function dashboardKiProviderStatusLabel(status) {
     return {
-        buy: 'success',
-        hold: 'warning',
-        sell: 'error',
-    }[recommendation] ?? 'default';
+        cached_fresh: 'Cache aktuell',
+        fresh: 'Aktuell',
+        no_data: 'Keine Daten',
+        unsupported_subscription: 'Im Tarif nicht enthalten',
+        failed: 'Abruf fehlgeschlagen',
+        stale: 'Veraltet',
+    }[status] ?? status;
+}
+
+function dashboardKiAssessmentImpactLabel(impact) {
+    return {
+        positive: 'Positiver aktueller Einfluss',
+        negative: 'Negativer aktueller Einfluss',
+        mixed: 'Gemischter aktueller Einfluss',
+        no_reliable_assessment: 'Keine belastbare Einschätzung',
+    }[impact] ?? 'Einfluss nicht bewertet';
+}
+
+function dashboardKiAssessmentImpactColor(impact) {
+    return {
+        positive: 'success',
+        negative: 'error',
+        mixed: 'warning',
+        no_reliable_assessment: 'default',
+    }[impact] ?? 'default';
+}
+
+function dashboardKiMaterialityLabel(materiality) {
+    return {
+        high: 'Materialität hoch',
+        medium: 'Materialität mittel',
+        low: 'Materialität niedrig',
+    }[materiality] ?? 'Materialität nicht belastbar';
+}
+
+function dashboardKiSourceConfidenceLabel(confidence) {
+    return {
+        high: 'Quellenvertrauen hoch',
+        medium: 'Quellenvertrauen mittel',
+        low: 'Quellenvertrauen niedrig',
+    }[confidence] ?? 'Quellenvertrauen nicht bewertet';
+}
+
+function dashboardKiHorizonLabel(horizon) {
+    return {
+        today_72h: 'Heute / 72 Stunden',
+        current_quarter: 'Aktuelles Quartal',
+        next_event: 'Bis zum nächsten Termin',
+        long_term: 'Strukturell / langfristig',
+        unknown: 'Zeithorizont unklar',
+    }[horizon] ?? horizon;
+}
+
+function dashboardKiCalculatedSections(research) {
+    const events = research?.calculated_events ?? {};
+    const positionScope = String(events?.etf_positions?.scope ?? '').replace('top_', 'Top-');
+    const positionItems = Array.isArray(events?.etf_positions?.positions)
+        ? events.etf_positions.positions.map((position, index) => ({
+            key: `position-${position?.subject?.symbol ?? position?.subject?.name ?? index}`,
+            title: position?.subject?.name || position?.subject?.symbol || 'ETF-Position',
+            label: dashboardKiPositionChangeLabel(position, positionScope),
+            details: dashboardKiPositionDetails(position),
+            eventAt: position?.event_at,
+            tone: ['entered_scope', 'increased'].includes(position?.membership ?? position?.weight_direction)
+                ? 'success'
+                : (['left_scope', 'decreased'].includes(position?.membership ?? position?.weight_direction) ? 'warning' : 'info'),
+        }))
+        : [];
+    const earningsItems = (Array.isArray(events?.earnings) ? events.earnings : []).map((earnings, index) => ({
+        key: `earnings-${earnings?.subject?.symbol ?? index}-${earnings?.event_at ?? index}`,
+        title: earnings?.subject?.symbol || 'Quartalszahlen',
+        label: 'Ist versus Konsens',
+        details: dashboardKiEarningsDetails(earnings),
+        eventAt: earnings?.event_at,
+        tone: 'info',
+    }));
+    const guidanceItems = (Array.isArray(events?.guidance) ? events.guidance : []).map((guidance, index) => ({
+        key: `guidance-${guidance?.subject?.symbol ?? index}-${guidance?.metric ?? index}`,
+        title: `${guidance?.subject?.symbol || 'Guidance'} · ${guidance?.metric || 'Ausblick'}`,
+        label: dashboardKiGuidanceLabel(guidance?.classification),
+        details: dashboardKiGuidanceDetails(guidance),
+        eventAt: guidance?.event_at,
+        sourceUrl: guidance?.source_url,
+        sourceTitle: guidance?.source_title,
+        tone: guidance?.classification === 'raised'
+            ? 'success'
+            : (guidance?.classification === 'lowered' ? 'warning' : 'info'),
+    }));
+    const marketItems = (Array.isArray(events?.market_reactions) ? events.market_reactions : []).map((market, index) => ({
+        key: `market-${market?.subject?.symbol ?? index}-${market?.session_date ?? index}`,
+        title: market?.subject?.symbol || 'Kursreaktion',
+        label: market?.is_same_day ? 'Heutige Kursreaktion' : 'Letzte verfügbare Handelssitzung',
+        details: dashboardKiMarketDetails(market),
+        eventAt: market?.event_at,
+        tone: market?.is_unusual_volume === true ? 'warning' : 'info',
+    }));
+    const relevanceItems = (Array.isArray(events?.etf_relevance) ? events.etf_relevance : []).map((relevance, index) => ({
+        key: `relevance-${relevance?.subject?.symbol ?? index}-${relevance?.event_at ?? index}`,
+        title: relevance?.subject?.name || relevance?.subject?.symbol || 'ETF-Relevanz',
+        label: 'Grobe ETF-Relevanz',
+        details: `${formatDashboardKiSignedNumber(relevance?.estimated_contribution_pct_points, 4)} Prozentpunkte`
+            + ` = ${formatDashboardKiNumber(relevance?.weight_pct)} % Gewicht × ${formatDashboardKiSignedNumber(relevance?.reaction_pct)} % Kursreaktion.`,
+        eventAt: relevance?.event_at,
+        tone: 'info',
+    }));
+    const sections = [
+        { key: 'positions', title: 'ETF-Positionen', icon: 'mdi-format-list-bulleted', items: positionItems, empty: '' },
+        { key: 'earnings', title: 'Quartalszahlen', icon: 'mdi-chart-box-outline', items: earningsItems, empty: '' },
+        {
+            key: 'guidance',
+            title: 'Guidance',
+            icon: 'mdi-sign-direction',
+            items: guidanceItems,
+            empty: events?.guidance_coverage?.status === 'unavailable'
+                ? 'Keine vergleichbaren strukturierten Guidance-Werte verfügbar.'
+                : '',
+        },
+        { key: 'market', title: 'Kurs & Volumen', icon: 'mdi-pulse', items: marketItems, empty: '' },
+        { key: 'relevance', title: 'ETF-Relevanz', icon: 'mdi-chart-bell-curve', items: relevanceItems, empty: '' },
+    ];
+
+    return sections.filter((section) => section.items.length > 0 || section.empty !== '');
+}
+
+function dashboardKiPositionChangeLabel(position, scope) {
+    if (position?.membership === 'baseline_only') {
+        return 'Aktueller Ausgangsstand';
+    }
+
+    if (position?.membership === 'entered_scope') {
+        return `Neu in ${scope || 'Top-Liste'}`;
+    }
+
+    if (position?.membership === 'left_scope') {
+        return `${scope || 'Top-Liste'} verlassen`;
+    }
+
+    return {
+        increased: 'Gewicht gestiegen',
+        decreased: 'Gewicht gesunken',
+        unchanged: 'Gewicht nahezu unverändert',
+    }[position?.weight_direction] ?? 'Verglichen';
+}
+
+function dashboardKiPositionDetails(position) {
+    const currentWeight = position?.current_weight_pct === null || position?.current_weight_pct === undefined
+        ? 'nicht mehr in der beobachteten Liste'
+        : `${formatDashboardKiNumber(position.current_weight_pct)} % aktuell`;
+    const change = position?.weight_change_pp === null || position?.weight_change_pp === undefined
+        ? 'noch ohne vergleichbaren vorherigen Wert'
+        : `${formatDashboardKiSignedNumber(position.weight_change_pp)} Prozentpunkte zum letzten Snapshot`;
+
+    return `${currentWeight}; ${change}.`;
+}
+
+function dashboardKiEarningsDetails(earnings) {
+    const currency = earnings?.currency ? ` ${earnings.currency}` : '';
+    const values = [];
+
+    if (earnings?.eps?.actual !== null && earnings?.eps?.actual !== undefined) {
+        values.push(`EPS ${formatDashboardKiNumber(earnings.eps.actual)} statt ${formatDashboardKiNumber(earnings.eps.consensus)} Konsens`
+            + dashboardKiSurpriseSuffix(earnings.eps));
+    }
+
+    if (earnings?.revenue?.actual !== null && earnings?.revenue?.actual !== undefined) {
+        values.push(`Umsatz ${formatDashboardKiNumber(earnings.revenue.actual)}${currency} statt ${formatDashboardKiNumber(earnings.revenue.consensus)}${currency} Konsens`
+            + dashboardKiSurpriseSuffix(earnings.revenue));
+    }
+
+    return values.join('; ');
+}
+
+function dashboardKiSurpriseSuffix(metric) {
+    return metric?.surprise_pct === null || metric?.surprise_pct === undefined
+        ? ''
+        : ` (${formatDashboardKiSignedNumber(metric.surprise_pct)} %)`;
+}
+
+function dashboardKiGuidanceLabel(classification) {
+    return {
+        raised: 'Angehoben',
+        confirmed: 'Bestätigt',
+        lowered: 'Gesenkt',
+        mixed: 'Uneinheitlich verändert',
+    }[classification] ?? 'Nicht vergleichbar';
+}
+
+function dashboardKiGuidanceDetails(guidance) {
+    const unit = guidance?.unit ? ` ${guidance.unit}` : '';
+    const current = guidance?.current?.value ?? null;
+    const previous = guidance?.previous?.value ?? null;
+
+    if (current !== null && previous !== null) {
+        return `${guidance?.period || 'Zeitraum'}: ${formatDashboardKiNumber(current)}${unit} aktuell, zuvor ${formatDashboardKiNumber(previous)}${unit}.`;
+    }
+
+    return `${guidance?.period || 'Zeitraum'}: strukturierte Spannen wurden serverseitig verglichen.`;
+}
+
+function dashboardKiMarketDetails(market) {
+    const details = [`${formatDashboardKiSignedNumber(market?.reaction_pct)} % gegenüber dem vorherigen Schlusskurs`];
+
+    if (market?.relative_volume !== null && market?.relative_volume !== undefined) {
+        details.push(`${formatDashboardKiNumber(market.relative_volume)}× Median der ${market.baseline_sessions} vorherigen Sitzungen`);
+    }
+
+    if (market?.is_unusual_volume === true) {
+        details.push('Volumen auffällig');
+    } else if (market?.is_unusual_volume === null && market?.session_complete === false) {
+        details.push('laufende Sitzung noch nicht abschließend unauffällig');
+    }
+
+    return `${details.join('; ')}.`;
+}
+
+function formatDashboardKiNumber(value, maximumFractionDigits = 2) {
+    if (value === null || value === undefined || value === '') {
+        return 'nicht verfügbar';
+    }
+
+    const numericValue = Number(value);
+
+    if (!Number.isFinite(numericValue)) {
+        return 'nicht verfügbar';
+    }
+
+    return new Intl.NumberFormat('de-AT', {
+        maximumFractionDigits,
+        minimumFractionDigits: 0,
+    }).format(numericValue);
+}
+
+function formatDashboardKiSignedNumber(value, maximumFractionDigits = 2) {
+    if (value === null || value === undefined || value === '') {
+        return 'nicht verfügbar';
+    }
+
+    const numericValue = Number(value);
+
+    if (!Number.isFinite(numericValue)) {
+        return 'nicht verfügbar';
+    }
+
+    const sign = numericValue > 0 ? '+' : '';
+
+    return `${sign}${formatDashboardKiNumber(numericValue, maximumFractionDigits)}`;
+}
+
+function dashboardKiDevelopmentStatusLabel(status) {
+    return {
+        confirmed: 'Best\u00e4tigt',
+        scheduled: 'Angek\u00fcndigt',
+        unconfirmed: 'Unbest\u00e4tigt',
+        debunked: 'Widerlegt',
+        stale: 'Veraltet',
+    }[status] ?? status;
+}
+
+function dashboardKiDevelopmentStatusColor(status) {
+    return {
+        confirmed: 'success',
+        scheduled: 'info',
+        unconfirmed: 'warning',
+        debunked: 'error',
+        stale: 'default',
+    }[status] ?? 'default';
+}
+
+function dashboardKiDevelopmentFreshnessLabel(freshness) {
+    return {
+        live: 'Live',
+        current: 'Aktuell',
+        delayed: 'Verzögert',
+        stale: 'Veraltet',
+    }[freshness] ?? 'Unbekannt';
+}
+
+function dashboardKiDevelopmentFreshnessColor(freshness) {
+    return {
+        live: 'success',
+        current: 'info',
+        delayed: 'warning',
+        stale: 'error',
+    }[freshness] ?? 'default';
+}
+
+function dashboardKiDevelopmentCoverageLabel(coverage) {
+    return {
+        complete: 'Abdeckung vollständig',
+        partial: 'Abdeckung teilweise',
+        source_failed: 'Datenquelle ausgefallen',
+    }[coverage] ?? 'Abdeckung unbekannt';
+}
+
+function dashboardKiDevelopmentCoverageColor(coverage) {
+    return {
+        complete: 'success',
+        partial: 'warning',
+        source_failed: 'error',
+    }[coverage] ?? 'default';
+}
+
+function formatDashboardKiDevelopmentMoment(value) {
+    if (!value) {
+        return 'Nicht ausgewiesen';
+    }
+
+    const stringValue = String(value);
+    const dateParts = stringValue.split('-').map(Number);
+
+    if (dateParts.length === 3 && dateParts.every((datePart) => Number.isInteger(datePart))) {
+        const [year, month, day] = dateParts;
+
+        return new Intl.DateTimeFormat('de-AT', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+        }).format(new Date(Date.UTC(year, month - 1, day, 12)));
+    }
+
+    const moment = new Date(stringValue);
+
+    if (Number.isNaN(moment.getTime())) {
+        return stringValue;
+    }
+
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: displayTimeZone,
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+    }).format(moment);
 }
 
 function formatDashboardKiResearchTime(value) {
@@ -12610,6 +13087,32 @@ function formatIndexDataUpdateSchedule(settings) {
                             </div>
 
                             <section v-else class="dashboard-ki-page" aria-label="Dashboard KI">
+                                <div class="dashboard-ki-actions">
+                                    <v-btn
+                                        class="dashboard-ki-load-all-button"
+                                        color="primary"
+                                        prepend-icon="mdi-magnify-scan"
+                                        size="small"
+                                        type="button"
+                                        variant="tonal"
+                                        :disabled="holdingsLoading || !hasDashboardKiLoadableHoldings()"
+                                        :loading="isDashboardKiLoadingAll"
+                                        @click="loadAllDashboardKiResearches"
+                                    >
+                                        Load all
+                                    </v-btn>
+                                </div>
+
+                                <v-alert
+                                    v-if="dashboardKiLoadAllError"
+                                    class="mb-3"
+                                    density="compact"
+                                    type="error"
+                                    variant="tonal"
+                                >
+                                    {{ dashboardKiLoadAllError }}
+                                </v-alert>
+
                                 <v-progress-linear
                                     v-if="holdingsLoading"
                                     class="mb-4"
@@ -12674,76 +13177,255 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </div>
 
                                         <div
-                                            v-else-if="dashboardKiResearch(holding.id)?.status === 'no_new_information'"
+                                            v-else-if="['finished', 'no_new_information', 'failed'].includes(dashboardKiResearch(holding.id)?.status)"
                                             class="dashboard-ki-research-result"
                                         >
                                             <v-alert
-                                                class="dashboard-ki-no-update"
+                                                v-if="dashboardKiResearch(holding.id).status === 'failed'"
+                                                class="mb-4"
+                                                density="compact"
+                                                icon="mdi-alert-circle-outline"
+                                                type="error"
+                                                variant="tonal"
+                                            >
+                                                {{ dashboardKiResearch(holding.id).message }}
+                                            </v-alert>
+
+                                            <v-alert
+                                                v-else-if="dashboardKiResearch(holding.id).status === 'no_new_information'"
+                                                class="dashboard-ki-no-update mb-4"
                                                 density="compact"
                                                 icon="mdi-information-outline"
                                                 type="info"
                                                 variant="tonal"
+                                             >
+                                                 {{ dashboardKiResearch(holding.id).summary }}
+                                             </v-alert>
+
+                                            <section
+                                                v-if="dashboardKiNowRelevantSections(dashboardKiNowRelevantResearch(holding.id)).length"
+                                                class="dashboard-ki-calculated"
                                             >
-                                                {{ dashboardKiResearch(holding.id).summary }}
-                                            </v-alert>
-                                        </div>
-
-                                        <div
-                                            v-else-if="dashboardKiResearch(holding.id)?.status === 'failed'"
-                                            class="dashboard-ki-research-result"
-                                        >
-                                            <v-alert density="compact" type="error" variant="tonal">
-                                                {{ dashboardKiResearch(holding.id).message }}
-                                            </v-alert>
-                                        </div>
-
-                                        <div
-                                            v-else-if="dashboardKiResearch(holding.id)?.status === 'finished'"
-                                            class="dashboard-ki-research-result"
-                                        >
-                                            <div class="dashboard-ki-research-heading">
-                                                <p class="text-overline text-primary mb-0">Aktuelle KI-Analyse</p>
-                                                <v-chip
-                                                    class="dashboard-ki-recommendation"
-                                                    :color="dashboardKiRecommendationColor(dashboardKiResearch(holding.id).recommendation)"
-                                                    size="small"
-                                                    variant="tonal"
+                                                <div class="dashboard-ki-calculated-heading">
+                                                    <p class="text-overline text-primary mb-0">
+                                                        {{ dashboardKiNowRelevantHeading(holding.id) }}
+                                                    </p>
+                                                    <small>Vergleich, keine Prognose</small>
+                                                </div>
+                                                <div
+                                                    v-if="dashboardKiNowRelevantActiveSections(dashboardKiNowRelevantResearch(holding.id)).length"
+                                                    class="dashboard-ki-calculated-grid"
                                                 >
-                                                    {{ dashboardKiRecommendationLabel(dashboardKiResearch(holding.id).recommendation) }}
-                                                </v-chip>
+                                                    <section
+                                                        v-for="section in dashboardKiNowRelevantActiveSections(dashboardKiNowRelevantResearch(holding.id))"
+                                                        :key="section.key"
+                                                        class="dashboard-ki-calculated-section"
+                                                    >
+                                                        <div class="dashboard-ki-development-section-heading">
+                                                            <v-icon :icon="section.icon" size="18" />
+                                                            <strong>{{ section.title }}</strong>
+                                                        </div>
+                                                        <div v-if="section.items.length" class="dashboard-ki-calculated-list">
+                                                            <article
+                                                                v-for="item in section.items"
+                                                                :key="item.key"
+                                                                class="dashboard-ki-calculated-item"
+                                                            >
+                                                                <div class="dashboard-ki-calculated-item-heading">
+                                                                    <strong>{{ item.title }}</strong>
+                                                                    <v-chip
+                                                                        v-if="item.label"
+                                                                        :color="item.tone"
+                                                                        size="x-small"
+                                                                        variant="tonal"
+                                                                    >
+                                                                        {{ item.label }}
+                                                                    </v-chip>
+                                                                </div>
+                                                                <div class="dashboard-ki-development-meta">
+                                                                    <v-chip
+                                                                        v-if="item.freshness"
+                                                                        :color="dashboardKiDevelopmentFreshnessColor(item.freshness)"
+                                                                        size="x-small"
+                                                                        variant="tonal"
+                                                                    >
+                                                                        {{ dashboardKiDevelopmentFreshnessLabel(item.freshness) }}
+                                                                    </v-chip>
+                                                                    <v-chip
+                                                                        v-if="item.coverage"
+                                                                        :color="dashboardKiDevelopmentCoverageColor(item.coverage)"
+                                                                        size="x-small"
+                                                                        variant="tonal"
+                                                                    >
+                                                                        {{ dashboardKiDevelopmentCoverageLabel(item.coverage) }}
+                                                                    </v-chip>
+                                                                </div>
+                                                                <p v-if="item.detail">{{ item.detail }}</p>
+                                                                <ul
+                                                                    v-if="dashboardKiNowRelevantMoments(item).length"
+                                                                    class="dashboard-ki-calculated-moments"
+                                                                >
+                                                                    <li
+                                                                        v-for="moment in dashboardKiNowRelevantMoments(item)"
+                                                                        :key="moment.key"
+                                                                    >
+                                                                        <span>{{ moment.label }}</span>
+                                                                        {{ formatDashboardKiDevelopmentMoment(moment.value) }}
+                                                                    </li>
+                                                                </ul>
+                                                                <div v-if="item.assessment_status" class="dashboard-ki-assessment-chips">
+                                                                    <v-chip
+                                                                        :color="dashboardKiAssessmentImpactColor(item.current_impact)"
+                                                                        size="x-small"
+                                                                        variant="tonal"
+                                                                    >
+                                                                        {{ dashboardKiAssessmentImpactLabel(item.current_impact) }}
+                                                                    </v-chip>
+                                                                    <v-chip size="x-small" variant="tonal">
+                                                                        {{ dashboardKiMaterialityLabel(item.materiality) }}
+                                                                    </v-chip>
+                                                                    <v-chip size="x-small" variant="tonal">
+                                                                        {{ dashboardKiSourceConfidenceLabel(item.source_confidence) }}
+                                                                    </v-chip>
+                                                                    <v-chip v-if="item.affected_etf_share_pct !== null && item.affected_etf_share_pct !== undefined" size="x-small" variant="tonal">
+                                                                        Betroffener ETF-Anteil: {{ formatDashboardKiNumber(item.affected_etf_share_pct) }} %
+                                                                    </v-chip>
+                                                                    <v-chip v-if="item.time_horizon" size="x-small" variant="tonal">
+                                                                        {{ dashboardKiHorizonLabel(item.time_horizon) }}
+                                                                    </v-chip>
+                                                                </div>
+                                                                <a
+                                                                    v-if="item.source_url"
+                                                                    :href="item.source_url"
+                                                                    rel="noopener noreferrer"
+                                                                    target="_blank"
+                                                                >
+                                                                    {{ item.source_title || item.source_url }}
+                                                                </a>
+                                                            </article>
+                                                        </div>
+                                                    </section>
+                                                </div>
+
+                                                <details
+                                                    v-if="dashboardKiNowRelevantEmptySections(dashboardKiNowRelevantResearch(holding.id)).length"
+                                                    class="dashboard-ki-compact-disclosure dashboard-ki-empty-sections"
+                                                >
+                                                    <summary>
+                                                        <v-icon icon="mdi-information-outline" size="16" />
+                                                        <strong>{{ dashboardKiNowRelevantEmptySummary(dashboardKiNowRelevantResearch(holding.id)) }}</strong>
+                                                    </summary>
+                                                    <ul class="dashboard-ki-compact-empty-list">
+                                                        <li
+                                                            v-for="section in dashboardKiNowRelevantEmptySections(dashboardKiNowRelevantResearch(holding.id))"
+                                                            :key="section.key"
+                                                        >
+                                                            <strong>{{ section.title }}:</strong> {{ section.empty }}
+                                                        </li>
+                                                    </ul>
+                                                </details>
+
+                                                <details
+                                                    v-if="dashboardKiNowRelevantCoverageSection(dashboardKiNowRelevantResearch(holding.id))"
+                                                    class="dashboard-ki-compact-disclosure dashboard-ki-coverage-disclosure"
+                                                >
+                                                    <summary>
+                                                        <v-icon icon="mdi-database-check-outline" size="16" />
+                                                        <strong>Datenabdeckung</strong>
+                                                        <small>{{ dashboardKiNowRelevantCoverageSummary(dashboardKiNowRelevantResearch(holding.id)) }}</small>
+                                                    </summary>
+                                                    <div class="dashboard-ki-coverage-list">
+                                                        <article
+                                                            v-for="item in dashboardKiNowRelevantCoverageSection(dashboardKiNowRelevantResearch(holding.id)).items"
+                                                            :key="item.key"
+                                                            class="dashboard-ki-coverage-row"
+                                                        >
+                                                            <strong>{{ item.title }}</strong>
+                                                            <v-chip
+                                                                v-if="item.coverage"
+                                                                :color="dashboardKiDevelopmentCoverageColor(item.coverage)"
+                                                                size="x-small"
+                                                                variant="tonal"
+                                                            >
+                                                                {{ dashboardKiDevelopmentCoverageLabel(item.coverage) }}
+                                                            </v-chip>
+                                                            <span v-if="item.detail">{{ dashboardKiProviderStatusLabel(item.detail) }}</span>
+                                                            <time v-if="item.retrieved_at">
+                                                                {{ formatDashboardKiDevelopmentMoment(item.retrieved_at) }}
+                                                            </time>
+                                                        </article>
+                                                    </div>
+                                                </details>
+                                            </section>
+
+                                            <details
+                                                v-if="dashboardKiResearch(holding.id).assessment"
+                                                class="dashboard-ki-assessment dashboard-ki-compact-disclosure"
+                                            >
+                                                <summary>
+                                                    <v-icon icon="mdi-scale-balance" size="16" />
+                                                    <strong>Ereignisbewertung</strong>
+                                                    <v-chip
+                                                        :color="dashboardKiAssessmentImpactColor(dashboardKiResearch(holding.id).assessment.current_impact)"
+                                                        size="x-small"
+                                                        variant="tonal"
+                                                    >
+                                                        {{ dashboardKiAssessmentImpactLabel(dashboardKiResearch(holding.id).assessment.current_impact) }}
+                                                    </v-chip>
+                                                </summary>
+                                                <div class="dashboard-ki-assessment-chips dashboard-ki-assessment-details">
+                                                    <v-chip size="x-small" variant="tonal">
+                                                        {{ dashboardKiMaterialityLabel(dashboardKiResearch(holding.id).assessment.materiality) }}
+                                                    </v-chip>
+                                                    <v-chip size="x-small" variant="tonal">
+                                                        {{ dashboardKiSourceConfidenceLabel(dashboardKiResearch(holding.id).assessment.source_confidence) }}
+                                                    </v-chip>
+                                                    <v-chip
+                                                        v-if="dashboardKiResearch(holding.id).assessment.affected_etf_share_pct !== null"
+                                                        size="x-small"
+                                                        variant="tonal"
+                                                    >
+                                                        Betroffener ETF-Anteil: {{ formatDashboardKiNumber(dashboardKiResearch(holding.id).assessment.affected_etf_share_pct) }} %
+                                                    </v-chip>
+                                                    <v-chip
+                                                        v-for="horizon in dashboardKiResearch(holding.id).assessment.time_horizons || []"
+                                                        :key="horizon"
+                                                        size="x-small"
+                                                        variant="tonal"
+                                                    >
+                                                        {{ dashboardKiHorizonLabel(horizon) }}
+                                                    </v-chip>
+                                                </div>
+                                                <p>{{ dashboardKiResearch(holding.id).assessment.reason }}</p>
+                                            </details>
+
+                                            <template v-if="dashboardKiDisplayedResearch(holding.id)">
+                                            <div class="dashboard-ki-research-heading">
+                                                <p class="text-overline text-primary mb-0">
+                                                    {{ dashboardKiResearch(holding.id).status === 'finished'
+                                                        ? 'Aktuelle KI-Analyse'
+                                                        : 'Letzte relevante KI-Analyse' }}
+                                                </p>
                                             </div>
 
                                             <p class="dashboard-ki-research-summary">
-                                                {{ dashboardKiResearch(holding.id).summary }}
+                                                {{ dashboardKiDisplayedResearch(holding.id).summary }}
                                             </p>
 
-                                            <div class="dashboard-ki-scenarios">
-                                                <div class="dashboard-ki-scenario dashboard-ki-scenario--stronger">
-                                                    <strong>Stärker</strong>
-                                                    <p>{{ dashboardKiResearch(holding.id).stronger_case }}</p>
-                                                </div>
-                                                <div class="dashboard-ki-scenario dashboard-ki-scenario--weaker">
-                                                    <strong>Schwächer</strong>
-                                                    <p>{{ dashboardKiResearch(holding.id).weaker_case }}</p>
-                                                </div>
-                                            </div>
-
-                                            <p class="dashboard-ki-research-detail">
+                                            <p
+                                                v-if="dashboardKiDisplayedResearch(holding.id).developments?.length && dashboardKiDisplayedResearch(holding.id).trump_connection"
+                                                class="dashboard-ki-research-detail"
+                                            >
                                                 <strong>Donald Trump / Politik:</strong>
-                                                {{ dashboardKiResearch(holding.id).trump_connection }}
+                                                {{ dashboardKiDisplayedResearch(holding.id).trump_connection }}
                                             </p>
-                                            <p class="dashboard-ki-research-detail">
-                                                <strong>Begründung:</strong>
-                                                {{ dashboardKiResearch(holding.id).justification }}
-                                            </p>
-
                                             <div
-                                                v-if="dashboardKiResearch(holding.id).sources?.length"
+                                                v-if="dashboardKiDisplayedResearch(holding.id).sources?.length"
                                                 class="dashboard-ki-sources"
                                             >
                                                 <strong>Quellen</strong>
                                                 <a
-                                                    v-for="source in dashboardKiResearch(holding.id).sources"
+                                                    v-for="source in dashboardKiDisplayedResearch(holding.id).sources"
                                                     :key="source.url"
                                                     :href="source.url"
                                                     rel="noopener noreferrer"
@@ -12754,9 +13436,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                             </div>
 
                                             <p class="dashboard-ki-research-meta mb-0">
-                                                Stand: {{ formatDashboardKiResearchTime(dashboardKiResearch(holding.id).finished_at) }}
+                                                Stand: {{ formatDashboardKiResearchTime(dashboardKiDisplayedResearch(holding.id).finished_at) }}
                                                 · Nur eine allgemeine Information, keine persönliche Anlageberatung.
                                             </p>
+                                            </template>
                                         </div>
                                     </v-card>
                                 </div>
@@ -21479,6 +22162,12 @@ function formatIndexDataUpdateSchedule(settings) {
     width: 100%;
 }
 
+.dashboard-ki-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 10px;
+}
+
 .dashboard-ki-stock-grid {
     display: grid;
     gap: 12px;
@@ -21533,46 +22222,253 @@ function formatIndexDataUpdateSchedule(settings) {
     justify-content: space-between;
 }
 
-.dashboard-ki-recommendation {
-    font-weight: 750;
-}
-
 .dashboard-ki-research-summary {
     font-size: 0.92rem;
     line-height: 1.55;
     margin: 12px 0 0;
 }
 
-.dashboard-ki-scenarios {
-    display: grid;
-    gap: 10px;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    margin-top: 14px;
+.dashboard-ki-calculated {
+    border: 1px solid rgba(var(--v-theme-primary), 0.26);
+    border-radius: 10px;
+    margin-bottom: 10px;
+    padding: 9px;
 }
 
-.dashboard-ki-scenario {
-    border-radius: 12px;
-    padding: 12px;
+.dashboard-ki-assessment {
+    background: rgba(var(--v-theme-info), 0.055);
+    border: 1px solid rgba(var(--v-theme-info), 0.26);
+    border-radius: 10px;
+    margin-bottom: 10px;
+    padding: 9px;
 }
 
-.dashboard-ki-scenario strong {
-    display: block;
-    font-size: 0.78rem;
-    margin-bottom: 4px;
-}
-
-.dashboard-ki-scenario p {
-    font-size: 0.8rem;
+.dashboard-ki-assessment > p {
+    color: rgba(var(--v-theme-on-surface), 0.72);
+    font-size: 0.76rem;
     line-height: 1.45;
-    margin: 0;
+    margin: 6px 0 0;
 }
 
-.dashboard-ki-scenario--stronger {
-    background: rgba(var(--v-theme-success), 0.1);
+.dashboard-ki-assessment-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
 }
 
-.dashboard-ki-scenario--weaker {
-    background: rgba(var(--v-theme-error), 0.1);
+.dashboard-ki-calculated-heading,
+.dashboard-ki-calculated-item-heading {
+    display: flex;
+    gap: 10px;
+    justify-content: space-between;
+    min-width: 0;
+}
+
+.dashboard-ki-calculated-heading {
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.dashboard-ki-calculated-heading small {
+    color: rgba(var(--v-theme-on-surface), 0.56);
+    font-size: 0.64rem;
+}
+
+.dashboard-ki-calculated-item-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+}
+
+.dashboard-ki-calculated-heading h3 {
+    font-size: 0.92rem;
+    line-height: 1.3;
+}
+
+.dashboard-ki-calculated-grid {
+    display: grid;
+    gap: 6px;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    margin-top: 7px;
+}
+
+.dashboard-ki-calculated-section {
+    background: rgba(var(--v-theme-primary), 0.045);
+    border-radius: 7px;
+    min-width: 0;
+    padding: 7px;
+}
+
+.dashboard-ki-calculated-list {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-top: 5px;
+}
+
+.dashboard-ki-calculated-item {
+    background: rgba(var(--v-theme-surface), 0.78);
+    border-radius: 6px;
+    padding: 7px;
+}
+
+.dashboard-ki-calculated-item-heading strong {
+    flex: 1 1 140px;
+    font-size: 0.76rem;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.dashboard-ki-calculated :deep(.v-chip),
+.dashboard-ki-assessment :deep(.v-chip) {
+    height: auto;
+    max-width: 100%;
+    min-height: 20px;
+    white-space: normal;
+}
+
+.dashboard-ki-calculated :deep(.v-chip__content),
+.dashboard-ki-assessment :deep(.v-chip__content) {
+    line-height: 1.25;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    padding-bottom: 2px;
+    padding-top: 2px;
+    text-overflow: clip;
+    white-space: normal;
+}
+
+.dashboard-ki-calculated-item p {
+    font-size: 0.72rem;
+    line-height: 1.45;
+    margin: 4px 0 0;
+}
+
+.dashboard-ki-calculated-moments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px 12px;
+    list-style: none;
+    margin: 5px 0 0;
+    padding: 0;
+}
+
+.dashboard-ki-calculated-moments li {
+    color: rgba(var(--v-theme-on-surface), 0.68);
+    font-size: 0.65rem;
+}
+
+.dashboard-ki-calculated-moments span {
+    color: rgba(var(--v-theme-on-surface), 0.48);
+    font-weight: 750;
+    margin-right: 3px;
+}
+
+.dashboard-ki-compact-disclosure {
+    border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    margin-top: 7px;
+    padding-top: 7px;
+}
+
+.dashboard-ki-compact-disclosure summary {
+    align-items: center;
+    cursor: pointer;
+    display: flex;
+    font-size: 0.72rem;
+    gap: 6px;
+    list-style: none;
+    min-width: 0;
+}
+
+.dashboard-ki-compact-disclosure summary::-webkit-details-marker {
+    display: none;
+}
+
+.dashboard-ki-compact-disclosure summary::after {
+    color: rgba(var(--v-theme-on-surface), 0.48);
+    content: '›';
+    font-size: 1rem;
+    line-height: 1;
+    margin-left: auto;
+    transition: transform 0.15s ease;
+}
+
+.dashboard-ki-compact-disclosure[open] summary::after {
+    transform: rotate(90deg);
+}
+
+.dashboard-ki-compact-disclosure summary small {
+    color: rgba(var(--v-theme-on-surface), 0.56);
+    font-size: 0.64rem;
+    overflow-wrap: anywhere;
+}
+
+.dashboard-ki-compact-empty-list {
+    color: rgba(var(--v-theme-on-surface), 0.66);
+    display: grid;
+    font-size: 0.68rem;
+    gap: 4px;
+    list-style: none;
+    margin: 7px 0 0;
+    padding: 0 0 0 22px;
+}
+
+.dashboard-ki-coverage-list {
+    display: grid;
+    gap: 4px;
+    margin-top: 7px;
+}
+
+.dashboard-ki-coverage-row {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 0.66rem;
+    gap: 4px 8px;
+}
+
+.dashboard-ki-coverage-row strong {
+    min-width: 100px;
+}
+
+.dashboard-ki-coverage-row span,
+.dashboard-ki-coverage-row time {
+    color: rgba(var(--v-theme-on-surface), 0.58);
+}
+
+.dashboard-ki-assessment-details {
+    padding-left: 22px;
+}
+
+.dashboard-ki-calculated-item small {
+    color: rgba(var(--v-theme-on-surface), 0.56);
+    display: block;
+    font-size: 0.64rem;
+    margin-top: 5px;
+}
+
+.dashboard-ki-calculated-item a {
+    color: rgb(var(--v-theme-primary));
+    display: inline-block;
+    font-size: 0.68rem;
+    margin-top: 5px;
+    overflow-wrap: anywhere;
+}
+
+.dashboard-ki-development-section-heading {
+    align-items: center;
+    display: flex;
+    font-size: 0.82rem;
+    gap: 7px;
+}
+
+.dashboard-ki-development-meta {
+    align-items: center;
+    color: rgba(var(--v-theme-on-surface), 0.62);
+    display: flex;
+    flex-wrap: wrap;
+    font-size: 0.68rem;
+    gap: 6px;
 }
 
 .dashboard-ki-research-detail {
@@ -21599,12 +22495,6 @@ function formatIndexDataUpdateSchedule(settings) {
     font-size: 0.68rem;
     line-height: 1.45;
     margin-top: 16px;
-}
-
-@media (max-width: 600px) {
-    .dashboard-ki-scenarios {
-        grid-template-columns: minmax(0, 1fr);
-    }
 }
 
 .dashboard-stock-signal-grid {

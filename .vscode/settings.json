@@ -1,0 +1,16 @@
+{
+    "files.autoGuessEncoding": false,
+    "files.encoding": "utf8",
+    "files.eol": "\n",
+    "terminal.integrated.defaultProfile.windows": "PowerShell (UTF-8)",
+    "terminal.integrated.profiles.windows": {
+        "PowerShell (UTF-8)": {
+            "args": [
+                "-NoExit",
+                "-Command",
+                "[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false); [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false); $global:OutputEncoding=[Console]::OutputEncoding"
+            ],
+            "source": "PowerShell"
+        }
+    }
+}
