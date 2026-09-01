@@ -746,7 +746,7 @@ class DepotTransactionTest extends TestCase
         }
     }
 
-    public function test_month_start_balance_uses_realtime_price_when_daily_price_is_stale(): void
+    public function test_month_start_balance_uses_latest_price_from_previous_month_end(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-07-03 12:00:00', 'Europe/Vienna'));
 
@@ -776,7 +776,7 @@ class DepotTransactionTest extends TestCase
             ]);
             StockRealtimePrice::factory()->for($holding)->create([
                 'price' => '110.00000000',
-                'as_of' => '2026-07-01 15:36:00',
+                'as_of' => '2026-06-30 15:36:00',
                 'fetched_at' => '2026-07-02 07:12:08',
                 'freshness_status' => 'stale',
             ]);

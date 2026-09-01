@@ -2434,8 +2434,15 @@ onMounted(async () => {
             : Promise.resolve(),
     ]);
 
+    const isLoadingDepotOverview = activeSection.value === 'depot'
+        && activeDepotSubsection.value === 'overview';
+
     if (activeSection.value === 'depot' && depotSubsectionRequiresTransactions(activeDepotSubsection.value)) {
-        depotsStore.loadTransactions();
+        const transactionsRequest = depotsStore.loadTransactions();
+
+        if (isLoadingDepotOverview) {
+            await transactionsRequest.catch(() => {});
+        }
     }
 
     if (activeSection.value === 'depot' && isDepotStockPeriodPage()) {
@@ -2734,12 +2741,10 @@ function navigateSection(section) {
     if (section === 'depot') {
         depotsStore.loadActiveDepot();
 
-        if (depotSubsectionRequiresTransactions(activeDepotSubsection.value)) {
-            depotsStore.loadTransactions();
-        }
-
         if (activeDepotSubsection.value === 'overview') {
-            loadWatchlistHoldingsForActiveSection(1).catch(() => {});
+            loadDepotOverviewData(1).catch(() => {});
+        } else if (depotSubsectionRequiresTransactions(activeDepotSubsection.value)) {
+            depotsStore.loadTransactions();
         }
 
         if (isDepotStockPeriodPage()) {
@@ -2866,14 +2871,13 @@ async function refreshVisibleApplicationData() {
     }
 
     if (activeSection.value === 'depot') {
-        if (depotSubsectionRequiresTransactions(activeDepotSubsection.value)) {
-            refreshRequests.push(depotsStore.loadTransactions());
-        }
-
         if (activeDepotSubsection.value === 'overview') {
-            refreshRequests.push(
-                loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page, { silent: true }),
-            );
+            refreshRequests.push(loadDepotOverviewData(
+                holdingsPagination.value.current_page,
+                { silent: true },
+            ));
+        } else if (depotSubsectionRequiresTransactions(activeDepotSubsection.value)) {
+            refreshRequests.push(depotsStore.loadTransactions());
         }
 
         if (isDepotStockPeriodPage()) {
@@ -3153,6 +3157,12 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
     analyzeResearchSimulationDataRequest = trackedRequest;
 
     return trackedRequest;
+}
+
+async function loadDepotOverviewData(page = holdingsPagination.value.current_page, options = {}) {
+    await depotsStore.loadTransactions().catch(() => {});
+
+    return loadWatchlistHoldingsForActiveSection(page, options);
 }
 
 async function loadDashboardVersions() {
@@ -4419,12 +4429,10 @@ function navigateDepotSubsection(subsection) {
     clearSectionMessages();
     updateUrlPath();
 
-    if (depotSubsectionRequiresTransactions(subsection)) {
-        depotsStore.loadTransactions();
-    }
-
     if (subsection === 'overview') {
-        loadWatchlistHoldingsForActiveSection(1).catch(() => {});
+        loadDepotOverviewData(1).catch(() => {});
+    } else if (depotSubsectionRequiresTransactions(subsection)) {
+        depotsStore.loadTransactions();
     }
 
     if (subsection === 'all-stocks') {
@@ -8293,9 +8301,9 @@ function formatOneWeekAgoDayMonth() {
     return formatDayMonth(date);
 }
 
-function formatMonthStartDayMonth() {
+function formatPreviousMonthEndDayMonth() {
     const date = currentDisplayDate();
-    date.setUTCDate(1);
+    date.setUTCDate(0);
 
     return formatDayMonth(date);
 }
@@ -17399,6 +17407,21 @@ function formatIndexDataUpdateSchedule(settings) {
                                         >
                                             {{ holding.subtitle || holding.stock_subtitle }}
                                         </span>
+                                        <span class="analyze-holding-card-meta--compact">
+                                            <span class="analyze-holding-card-pieces">
+                                                Holdings: {{ formatPositionPieces(holding) }}
+                                            </span>
+                                            <span
+                                                v-if="holding.isin"
+                                                class="analyze-holding-card-isin analyze-holding-card-isin-copy"
+                                                :title="`Copy ISIN ${holding.isin}`"
+                                                :aria-label="`Copy ISIN ${holding.isin}`"
+                                                @click.stop="copyToClipboard(holding.isin)"
+                                            >
+                                                {{ holding.isin }}
+                                                <v-icon icon="mdi-content-copy" size="11" />
+                                            </span>
+                                        </span>
                                     </button>
                                 </div>
                             </div>
@@ -21022,7 +21045,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                 <v-table density="compact">
                                     <tbody>
                                         <tr>
-                                            <td class="text-medium-emphasis text-caption">Balance {{ formatMonthStartDayMonth() }}</td>
+                                            <td class="text-medium-emphasis text-caption">Balance {{ formatPreviousMonthEndDayMonth() }}</td>
                                             <td class="text-right">{{ formatDepotMonthStartBalance() }}</td>
                                         </tr>
                                         <tr>
@@ -25575,12 +25598,12 @@ function formatIndexDataUpdateSchedule(settings) {
 }
 
 .analyze-trend-holding-item .analyze-holding-card--compact {
-    gap: 0;
-    height: 54px;
-    min-height: 54px;
-    padding: 4px 6px 0;
+    gap: 3px;
+    height: 106px;
+    min-height: 106px;
+    padding: 7px 8px 6px;
     position: relative;
-    width: 108px;
+    width: 164px;
 }
 
 .analyze-trend-holding-item .analyze-holding-card--compact .analyze-holding-card-name {
@@ -25615,6 +25638,40 @@ function formatIndexDataUpdateSchedule(settings) {
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
     text-overflow: ellipsis;
+}
+
+.analyze-holding-card-meta--compact {
+    align-items: flex-start;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    justify-content: flex-end;
+    margin-top: auto;
+    min-width: 0;
+    width: 100%;
+}
+
+.analyze-holding-card-isin-copy {
+    align-items: center;
+    border-radius: 3px;
+    cursor: pointer;
+    display: inline-flex;
+    flex-shrink: 1;
+    gap: 2px;
+    min-width: 0;
+    padding: 2px 3px;
+}
+
+.analyze-holding-card-isin-copy:hover {
+    background: rgba(var(--v-theme-primary), 0.1);
+    color: rgb(var(--v-theme-primary));
+}
+
+.analyze-trend-holding-item .analyze-holding-card--compact .analyze-holding-card-pieces {
+    flex-shrink: 0;
+    font-size: 0.6rem;
+    margin-top: 0;
+    white-space: nowrap;
 }
 
 .analyze-holding-card--all {

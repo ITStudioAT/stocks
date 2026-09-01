@@ -67,11 +67,11 @@ class AdminDepotTransactionController extends Controller
         $previousDayBalance = $this->previousDayAccountBalance($depot, $previousDayCutoff);
         $previousDayExternalCashFlowAmount = $this->externalCashFlowAfter($depot, $previousDayCutoff);
         $depotValuation = $this->depotValuationPayload(
-            $depot,
             $depotHoldings,
             'latest',
             $previousDayBalance,
             $previousDayExternalCashFlowAmount,
+            $this->depotValuationBaselines($depot),
         );
 
         return response()->json([
@@ -476,62 +476,82 @@ class AdminDepotTransactionController extends Controller
         $previousDayCutoff = now()->subDay()->endOfDay();
         $previousDayBalance = $this->previousDayAccountBalance($depot, $previousDayCutoff);
         $previousDayExternalCashFlowAmount = $this->externalCashFlowAfter($depot, $previousDayCutoff);
+        $baselines = $this->depotValuationBaselines($depot);
 
         return [
             'latest' => $this->depotValuationPayload(
-                $depot,
                 $depotHoldings,
                 'latest',
                 $previousDayBalance,
                 $previousDayExternalCashFlowAmount,
+                $baselines,
             ),
             'flatex' => $this->depotValuationPayload(
-                $depot,
                 $depotHoldings,
                 'flatex',
                 $previousDayBalance,
                 $previousDayExternalCashFlowAmount,
+                $baselines,
             ),
         ];
     }
 
     /**
+     * @return array{
+     *     cash_balance: float,
+     *     cash_flow_summary: array<string, float>,
+     *     month_start_balance: float,
+     *     one_week_start_balance: float,
+     *     open_buy_lot_cost: float
+     * }
+     */
+    private function depotValuationBaselines(Depot $depot): array
+    {
+        $cashBalance = (float) $depot->account_balance;
+        $oneWeekStartCutoff = now()->startOfWeek()->subSecond();
+        $monthStartCutoff = now()->startOfMonth()->subSecond();
+
+        return [
+            'cash_balance' => $cashBalance,
+            'cash_flow_summary' => $this->cashFlowSummary($depot, $cashBalance, now()->endOfDay()),
+            'one_week_start_balance' => $this->performanceAccountBalanceAt($depot, $oneWeekStartCutoff),
+            'month_start_balance' => $this->performanceAccountBalanceAt($depot, $monthStartCutoff),
+            'open_buy_lot_cost' => $this->openBuyLotCostByHoldingId($depot, now()->endOfDay())->sum(),
+        ];
+    }
+
+    /**
      * @param  array<int, array{id: int, symbol: ?string, name: ?string, isin: ?string, currency: ?string, latest_price: ?string, previous_day_price: ?string, previous_day_price_date: ?string, previous_day_change_percent: ?string, flatex_price: ?string, year_start_price: ?string, latest_price_fetched_at: ?string, latest_price_status: string, position_pieces: string}>  $depotHoldings
+     * @param  array{cash_balance: float, cash_flow_summary: array<string, float>, month_start_balance: float, one_week_start_balance: float, open_buy_lot_cost: float}  $baselines
      * @return array<string, string>
      */
     private function depotValuationPayload(
-        Depot $depot,
         array $depotHoldings,
         string $source,
         float $previousDayBalance,
         float $previousDayExternalCashFlowAmount,
+        array $baselines,
     ): array {
         $stockBalance = $this->holdingStockBalance(
             $depotHoldings,
             $source === 'flatex' ? 'flatex_price' : 'latest_price',
         );
-        $cashBalance = (float) $depot->account_balance;
+        $cashBalance = $baselines['cash_balance'];
         $currentBalance = $cashBalance + $stockBalance;
         $previousDayPerformanceBaseline = $previousDayBalance + $previousDayExternalCashFlowAmount;
         $previousDayChangeAmount = $currentBalance - $previousDayPerformanceBaseline;
         $previousDayChangePercent = $previousDayPerformanceBaseline === 0.0
             ? 0.0
             : ($previousDayChangeAmount / $previousDayPerformanceBaseline) * 100;
-        $cashFlowSummary = $this->cashFlowSummary($depot, $cashBalance, now()->endOfDay());
+        $cashFlowSummary = $baselines['cash_flow_summary'];
         $balanceChangeWithBrokerBonusAmount = $currentBalance
             + $cashFlowSummary['total_withdrawals']
             - $cashFlowSummary['total_deposits']
             - $cashFlowSummary['opening_balance'];
         $balanceChangeAmount = $balanceChangeWithBrokerBonusAmount - $cashFlowSummary['broker_bonus_amount'];
         $yearStartBalance = $currentBalance - $balanceChangeWithBrokerBonusAmount;
-        $oneWeekStartCutoff = now()->startOfWeek()->subSecond();
-        $oneWeekStartBalance = $this->cashBalanceAt($depot, $oneWeekStartCutoff)
-            + $this->stockMarketBalanceAt($depot, $oneWeekStartCutoff)
-            + $this->externalCashFlowAfter($depot, $oneWeekStartCutoff);
-        $monthStartCutoff = now()->startOfMonth()->endOfDay();
-        $monthStartBalance = $this->cashBalanceAt($depot, $monthStartCutoff)
-            + $this->stockMarketBalanceAt($depot, $monthStartCutoff)
-            + $this->externalCashFlowAfter($depot, $monthStartCutoff);
+        $oneWeekStartBalance = $baselines['one_week_start_balance'];
+        $monthStartBalance = $baselines['month_start_balance'];
         $balanceChangePercent = $yearStartBalance === 0.0
             ? 0.0
             : ($balanceChangeAmount / $yearStartBalance) * 100;
@@ -543,7 +563,11 @@ class AdminDepotTransactionController extends Controller
         $oneWeekChangePercent = $oneWeekStartBalance === 0.0
             ? 0.0
             : ($oneWeekChangeAmount / $oneWeekStartBalance) * 100;
-        $taxableStockGainAmount = $this->taxableStockGainAmount($depot, $depotHoldings, $source);
+        $taxableStockGainAmount = $this->taxableStockGainAmount(
+            $depotHoldings,
+            $source,
+            $baselines['open_buy_lot_cost'],
+        );
 
         return [
             'stock_balance' => $this->decimal($stockBalance, 2),
@@ -946,11 +970,11 @@ class AdminDepotTransactionController extends Controller
     /**
      * @param  array<int, array{id: int, symbol: ?string, name: ?string, isin: ?string, currency: ?string, latest_price: ?string, previous_day_price: ?string, previous_day_price_date: ?string, previous_day_change_percent: ?string, flatex_price: ?string, year_start_price: ?string, latest_price_fetched_at: ?string, latest_price_status: string, position_pieces: string}>  $depotHoldings
      */
-    private function taxableStockGainAmount(Depot $depot, array $depotHoldings, string $source): float
-    {
-        $openBuyLotCostByHoldingId = $this->openBuyLotCostByHoldingId($depot, now()->endOfDay());
-        $openBuyLotCost = $openBuyLotCostByHoldingId->sum();
-
+    private function taxableStockGainAmount(
+        array $depotHoldings,
+        string $source,
+        float $openBuyLotCost,
+    ): float {
         $holdingBalance = collect($depotHoldings)->sum(function (array $holding) use ($source): float {
             $price = $source === 'flatex'
                 ? $holding['flatex_price']
@@ -1178,10 +1202,18 @@ class AdminDepotTransactionController extends Controller
             return collect();
         }
 
-        return StockRealtimePrice::query()
+        $rankedRealtimePrices = StockRealtimePrice::query()
             ->whereIn('stock_holding_id', $holdingIds->all())
             ->whereNotNull('price')
             ->where('as_of', '<=', now()->endOfDay())
+            ->select(['id', 'stock_holding_id', 'price', 'as_of'])
+            ->selectRaw(
+                'ROW_NUMBER() OVER (PARTITION BY stock_holding_id, DATE(as_of) ORDER BY as_of DESC, id DESC) AS daily_rank',
+            );
+
+        return StockRealtimePrice::query()
+            ->fromSub($rankedRealtimePrices, 'ranked_realtime_prices')
+            ->where('daily_rank', 1)
             ->orderByDesc('as_of')
             ->orderByDesc('id')
             ->get(['id', 'stock_holding_id', 'price', 'as_of'])

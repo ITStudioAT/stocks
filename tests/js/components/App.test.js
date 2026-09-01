@@ -361,6 +361,28 @@ function previousWeekEndDate() {
     }).format(viennaDate);
 }
 
+function previousMonthEndDate() {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Vienna',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).formatToParts(new Date());
+    const dateParts = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    const viennaDate = new Date(Date.UTC(
+        Number(dateParts.year),
+        Number(dateParts.month) - 1,
+        0,
+    ));
+
+    return new Intl.DateTimeFormat('de-AT', {
+        timeZone: 'UTC',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+    }).format(viennaDate);
+}
+
 function localDateKey(timeZone) {
     const parts = new Intl.DateTimeFormat('en-CA', {
         timeZone,
@@ -1092,6 +1114,11 @@ describe('App', () => {
 
     it('shows Trend v2 as the default Analyze page with only the supported submenu items', async () => {
         window.history.pushState({}, '', '/admin/menu/analyze');
+        const clipboardWriteText = vi.fn();
+        Object.defineProperty(navigator, 'clipboard', {
+            configurable: true,
+            value: { writeText: clipboardWriteText },
+        });
         const pagination = { current_page: 1, last_page: 1, per_page: 10, total: 0, from: null, to: null };
         const depot = { id: 1, name: 'Main depot', account_balance: '1000.00', is_active: true };
         let currentUiPreferences = {
@@ -1955,9 +1982,9 @@ describe('App', () => {
             '#1', '#10', '#11', '#12', '#2', '#3', '#4', '#5', '#6', '#7', '#8', '#9',
         ]);
         expect(analyzeTrendV2.find('.analyze-holding-card-symbol').exists()).toBe(false);
-        expect(analyzeTrendV2.find('.analyze-holding-card-isin').exists()).toBe(false);
+        expect(analyzeTrendV2.find('.analyze-holding-card-isin').exists()).toBe(true);
         expect(analyzeTrendV2.find('.analyze-holding-card-price').exists()).toBe(false);
-        expect(analyzeTrendV2.find('.analyze-holding-card-pieces').exists()).toBe(false);
+        expect(analyzeTrendV2.find('.analyze-holding-card-pieces').exists()).toBe(true);
         const trendV2AppleHoldingCard = analyzeTrendV2.findAll('.analyze-holding-card')
             .find((button) => button.text().includes('Apple'));
         const trendV2MicrosoftHoldingCard = analyzeTrendV2.findAll('.analyze-holding-card')
@@ -1965,6 +1992,15 @@ describe('App', () => {
         expect(trendV2AppleHoldingCard.classes()).toContain('analyze-trend-holding-card--selected');
         expect(trendV2MicrosoftHoldingCard.classes()).not.toContain('analyze-trend-holding-card--selected');
         expect(trendV2AppleHoldingCard.classes()).toContain('analyze-holding-card--held');
+        expect(trendV2AppleHoldingCard.find('.analyze-holding-card-pieces').text()).toBe('Holdings: 2');
+        const trendV2AppleMetaItems = trendV2AppleHoldingCard.findAll('.analyze-holding-card-meta--compact > span');
+        expect(trendV2AppleMetaItems[0].classes()).toContain('analyze-holding-card-pieces');
+        expect(trendV2AppleMetaItems[1].classes()).toContain('analyze-holding-card-isin-copy');
+        const trendV2AppleIsinCopy = trendV2AppleHoldingCard.find('.analyze-holding-card-isin-copy');
+        expect(trendV2AppleIsinCopy.text()).toBe('US0378331005');
+        await trendV2AppleIsinCopy.trigger('click');
+        expect(clipboardWriteText).toHaveBeenCalledOnce();
+        expect(clipboardWriteText).toHaveBeenCalledWith('US0378331005');
         expect(trendV2MicrosoftHoldingCard.classes()).not.toContain('analyze-holding-card--held');
         expect(trendV2MicrosoftHoldingCard.classes()).not.toContain('analyze-holding-card--signal');
         const trendV2TinyCard = analyzeTrendV2.findAll('.analyze-holding-card')
@@ -10511,6 +10547,13 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
+        const transactionRequestIndex = fetchMock.mock.calls
+            .findIndex(([path]) => path === '/admin/depot-transactions');
+        const holdingsRequestIndex = fetchMock.mock.calls
+            .findIndex(([path]) => isWatchlistHoldingsRequest(path));
+        expect(transactionRequestIndex).toBeGreaterThanOrEqual(0);
+        expect(holdingsRequestIndex).toBeGreaterThan(transactionRequestIndex);
+
         expect(wrapper.text()).toContain('Depot stocks');
         expect(wrapper.text()).toContain('Depot');
         expect(wrapper.text()).toContain('Depot balance');
@@ -10544,7 +10587,7 @@ describe('App', () => {
         expect(wrapper.text()).toContain('1 week');
         expect(wrapper.text()).toContain('+4.34% · +43.00 EUR');
         expect(wrapper.text()).toContain('Aktueller Monat');
-        expect(wrapper.text()).toContain(`Balance 01.${sessionHeaderDate(0).slice(3, 6)}`);
+        expect(wrapper.text()).toContain(`Balance ${previousMonthEndDate().slice(0, 6)}`);
         expect(wrapper.text()).toContain('Month');
         expect(wrapper.text()).toContain('+3.30% · +33.00 EUR');
         expect(wrapper.findAll('.depot-balance-card')).toHaveLength(4);
