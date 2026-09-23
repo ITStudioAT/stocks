@@ -1,0 +1,17 @@
+{
+    "repository": "ITStudioAT/stocks",
+    "serverId": "1486907",
+    "serverAddress": "165.227.156.99",
+    "sourceAppId": "6468818",
+    "sourceUrl": "https://gkstocks.at",
+    "sourceDatabase": "cfbckymfgk",
+    "sourceDatabaseUser": "cfbckymfgk",
+    "targetAppId": "6690486",
+    "targetUrl": "https://vorschau.gkstocks.at",
+    "targetDatabase": "hbnucgvzmy",
+    "targetDatabaseUser": "hbnucgvzmy",
+    "targetFolder": "hbnucgvzmy",
+    "webroot": "public_html/public",
+    "canonicalTargetRoot": null,
+    "sshUser": null
+}

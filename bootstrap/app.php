@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\EnsureAuthenticationRevisionIsCurrent;
+use App\Http\Middleware\EnsurePreviewIsolation;
 use App\Http\Middleware\EnsureTrustedHost;
 use App\Http\Middleware\SecurityHeaders;
 use App\Http\Middleware\TrustConfiguredProxies;
@@ -19,6 +20,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->replace(TrustProxies::class, TrustConfiguredProxies::class);
         $middleware->prepend(EnsureTrustedHost::class);
+        $middleware->prepend(EnsurePreviewIsolation::class);
         $middleware->append(SecurityHeaders::class);
 
         $middleware->alias([

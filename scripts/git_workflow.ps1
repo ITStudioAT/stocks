@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('gitstart', 'gitwork', 'gitmain', 'gitsave', 'gitupdate', 'gitprepare', 'gitcheck')]
+    [ValidateSet('gitstart', 'gitwork', 'gitmain', 'gitsave', 'gitupdate', 'gitprepare', 'gitcheck', 'gitpreview')]
     [string]$Command,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$CommandArguments
@@ -29,6 +29,11 @@ switch ($Command) {
     'gitsave' {
         if ($arguments.Count -ne 1) { throw 'Usage: gitsave "DESCRIPTION" (no version or release flags)' }
         $parameters.Message = $arguments[0]
+    }
+    'gitpreview' {
+        if ($arguments.Count -gt 1 -or ($arguments.Count -eq 1 -and $arguments[0] -cne 'prepare')) {
+            throw 'Only gitpreview prepare is available until the initial Cloudways installation and restore gates are verified.'
+        }
     }
     default {
         if ($arguments.Count -gt 0) { throw "Unexpected arguments for $Command." }

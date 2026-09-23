@@ -4,6 +4,8 @@ set -Eeuo pipefail
 project_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_directory"
 
+php scripts/preview-guard.php
+
 prepare_only=false
 
 if [ "${1:-}" = "--prepare" ]; then
