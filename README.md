@@ -2,6 +2,12 @@
 
 Stocks is a Laravel SPA foundation for creating and editing homepages.
 
+## Git auf Windows
+
+Die [Anleitung zum Windows-Git-Workflow](docs/windows-git-workflow.md) beschreibt
+`gitstart`, `gitsave`, `gitwork`, `gitmain`, `gitupdate` und die lokale Vorbereitung.
+`gitpush` bleibt der bestehende Stocks-Releasebefehl; Cloudways wird separat bedient.
+
 ## Stack
 
 - Laravel 13 with Laravel AI SDK

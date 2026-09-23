@@ -1,9 +1,13 @@
-$documentsPath = [Environment]::GetFolderPath('MyDocuments')
-$profilePaths = @(
-    $PROFILE.CurrentUserCurrentHost
-    (Join-Path $documentsPath 'PowerShell\Microsoft.PowerShell_profile.ps1')
-    (Join-Path $documentsPath 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1')
-) | Select-Object -Unique
+param(
+    [string[]]$ProfilePaths = @(
+        $PROFILE.CurrentUserCurrentHost
+        (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PowerShell\Microsoft.PowerShell_profile.ps1')
+        (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1')
+    )
+)
+
+$ErrorActionPreference = 'Stop'
+$profilePaths = $ProfilePaths | Select-Object -Unique
 $legacyStartMarker = '# >>> schooltool managed helpers >>>'
 $legacyEndMarker = '# <<< schooltool managed helpers <<<'
 $startMarker = '# >>> project git dispatcher >>>'
@@ -97,7 +101,7 @@ function gitpush {
         `$pushUrl = `$pushUrl.Trim()
         `$pushMatch = [regex]::Match(`$pushUrl, `$trustedRemotePattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
 
-        if (-not `$pushMatch.Success) {
+        if (-not `$pushMatch.Success -or `$pushMatch.Groups['repository'].Value -ine `$remoteMatch.Groups['repository'].Value) {
             throw "gitpush does not trust the origin push URL: `$pushUrl"
         }
     }
@@ -117,6 +121,59 @@ function gitpush {
         Pop-Location
     }
 }
+
+function gitpull {
+    git pull @args
+    if (`$LASTEXITCODE -ne 0) {
+        throw "git pull failed with exit code `$LASTEXITCODE."
+    }
+    `$viennaTimeZone = [TimeZoneInfo]::FindSystemTimeZoneById('W. Europe Standard Time')
+    `$finishedAt = [TimeZoneInfo]::ConvertTime([DateTimeOffset]::UtcNow, `$viennaTimeZone)
+    Write-Host ("Abgeschlossen: {0} (Europe/Vienna)" -f `$finishedAt.ToString('dd.MM.yyyy HH:mm:ss zzz')) -ForegroundColor Green
+}
+
+function Invoke-ProjectGitWorkflow {
+    param([string]`$Command, [string[]]`$CommandArguments)
+    `$repositoryRoot = git rev-parse --show-toplevel 2>`$null
+    if (`$LASTEXITCODE -ne 0 -or -not `$repositoryRoot) {
+        throw 'Run this command inside the Stocks or Schooltool repository.'
+    }
+    `$repositoryRoot = `$repositoryRoot.Trim()
+    `$urls = @(git -C `$repositoryRoot remote get-url --all origin 2>`$null)
+    if (`$LASTEXITCODE -ne 0 -or `$urls.Count -ne 1) {
+        throw 'The workflow requires exactly one origin fetch URL.'
+    }
+    `$pushUrls = @(git -C `$repositoryRoot remote get-url --all --push origin 2>`$null)
+    if (`$LASTEXITCODE -ne 0 -or `$pushUrls.Count -ne 1) {
+        throw 'The workflow requires exactly one origin push URL.'
+    }
+    `$repository = `$null
+    foreach (`$url in @(`$urls + `$pushUrls)) {
+        `$match = [regex]::Match(`$url.Trim(), '^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)(?<repository>ITStudioAT/(?:schooltool|stocks))(?:\.git)?/?$', 'IgnoreCase')
+        if (-not `$match.Success -or (`$repository -and `$repository -ine `$match.Groups['repository'].Value)) {
+            throw 'The workflow requires matching trusted fetch and push repositories.'
+        }
+        `$repository = `$match.Groups['repository'].Value
+    }
+    `$workflow = Join-Path `$repositoryRoot 'scripts/git_workflow.ps1'
+    if (-not (Test-Path -LiteralPath `$workflow -PathType Leaf)) {
+        throw 'This branch does not contain the workflow helpers yet. Incorporate the workflow setup before using these commands.'
+    }
+    Push-Location -LiteralPath `$repositoryRoot
+    try { & `$workflow -Command `$Command -CommandArguments `$CommandArguments }
+    finally { Pop-Location }
+}
+function gitstart { Invoke-ProjectGitWorkflow 'gitstart' `$args }
+function gitwork { Invoke-ProjectGitWorkflow 'gitwork' `$args }
+function gitmain { Invoke-ProjectGitWorkflow 'gitmain' `$args }
+function gitsave { Invoke-ProjectGitWorkflow 'gitsave' `$args }
+function gitupdate { Invoke-ProjectGitWorkflow 'gitupdate' `$args }
+function gitprepare { Invoke-ProjectGitWorkflow 'gitprepare' `$args }
+function gitcheck { Invoke-ProjectGitWorkflow 'gitcheck' `$args }
+function gitrelease { Invoke-ProjectGitWorkflow 'gitrelease' `$args }
+function gitdiscard { Invoke-ProjectGitWorkflow 'gitdiscard' `$args }
+function gitpreview { Invoke-ProjectGitWorkflow 'gitpreview' `$args }
+function gitdeploy { Invoke-ProjectGitWorkflow 'gitdeploy' `$args }
 $endMarker
 "@
 $sshManagedBlock = @"
@@ -184,6 +241,7 @@ foreach ($profilePath in $profilePaths) {
     else {
         ''
     }
+    $originalContent = $profileContent
 
     foreach ($markers in @(
         @($legacyStartMarker, $legacyEndMarker),
@@ -205,14 +263,22 @@ foreach ($profilePath in $profilePaths) {
 
     $profileContent += $managedBlock + [Environment]::NewLine + [Environment]::NewLine
     $profileContent += $sshManagedBlock + [Environment]::NewLine
-    [System.IO.File]::WriteAllText($profilePath, $profileContent, $windowsPowerShellUtf8)
+    if ($profileContent -ne $originalContent) {
+        if (Test-Path -LiteralPath $profilePath) {
+            $backupPath = $profilePath + '.stocks-backup-' + [guid]::NewGuid().ToString('N')
+            [System.IO.File]::Copy($profilePath, $backupPath)
+        }
+        [System.IO.File]::WriteAllText($profilePath, $profileContent, $windowsPowerShellUtf8)
+    }
 
     Write-Host "Project-aware helpers installed in $profilePath" -ForegroundColor Green
 }
 
-git config core.hooksPath .githooks
+$repositoryRoot = Split-Path -Parent $PSScriptRoot
+git -C $repositoryRoot config --local core.hooksPath .githooks
 if ($LASTEXITCODE -ne 0) {
     throw 'Could not configure the repository hooks path.'
 }
 
-Write-Host 'Open a new PowerShell terminal before using gitpush, mu, or sshx.' -ForegroundColor Cyan
+Write-Host 'Open a new PowerShell terminal or run: . $PROFILE' -ForegroundColor Cyan
+Write-Host 'Stocks: gitstart, gitwork, gitmain, gitsave, gitupdate, gitprepare, gitcheck. gitpush remains the release command.' -ForegroundColor Cyan
