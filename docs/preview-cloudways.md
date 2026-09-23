@@ -4,7 +4,33 @@
 
 `gitstart`, `gitsave`, `gitwork`, `gitmain`, `gitupdate`, `gitprepare` und `gitcheck` bleiben der Geräte-/Feature-Workflow. `gitpreview prepare` schreibt bei sauberem Checkout einen **lokalen Prüfplan für den exakten Commit** unter `.git/stocks-preview/`. `gitpreview bundle` verlangt erfolgreiche GitHub-CI für genau diesen gespeicherten Commit und baut in einem eigenen Verzeichnis ein ZIP mit Frontend und Produktions-PHP-Abhängigkeiten aus den Lockfiles. Der Befehl lädt nichts hoch und kopiert keine Daten. Feature-Pushes unter `codex/**` durchlaufen die PHP-/Frontend-CI; nur main benötigt das bestehende Release-Artefakt.
 
-Dieser Stand liefert Laufzeitisolation, Konfigurationsprüfung, einen auf eine **leere** Preview-DB begrenzten Erstinstaller und getestete Snapshot-Formatbausteine. Produktiver Snapshot-Export/-Import, spätere Updates bestehender Preview-Daten und ein serverbestätigter Preview-Beleg bleiben eine eigene Phase. `gitpreview deploy`, `gitrelease`, `gitdeploy` und `gitdiscard` dürfen nicht als fertig eingerichtet betrachtet werden. `gitpush` bleibt der bestehende, ausdrücklich auf main begrenzte Veröffentlichungsweg; er ist kein Vorschau-Deploy.
+Die Erstinstallation auf Stocks-Feature wurde am **24. September 2026 (Europe/Vienna)** einschließlich Freigabe und tatsächlichem Browser-Login abgeschlossen. Dieser Stand liefert Laufzeitisolation, Konfigurationsprüfung, den auf eine **leere** Preview-DB begrenzten Erstinstaller und getestete Snapshot-Formatbausteine. Produktiver Snapshot-Export/-Import, spätere Updates bestehender Preview-Daten und automatisierte Deploy-Belege bleiben eine eigene Phase. `gitpreview deploy`, `gitrelease`, `gitdeploy` und `gitdiscard` dürfen nicht als fertig eingerichtet betrachtet werden. `gitpush` bleibt der bestehende, ausdrücklich auf main begrenzte Veröffentlichungsweg; er ist kein Vorschau-Deploy.
+
+## Nachweis der abgeschlossenen Erstinstallation
+
+Die folgenden Remote-Ergebnisse wurden über die eigene SSH-Sitzung und den Browser des Nutzers bestätigt, zuletzt mit einem Screenshot des angemeldeten Dashboards. Der Agent hatte keinen eigenen authentifizierten SSH-Zugang. Diese Dokumentation ist ein manueller Abschlussnachweis und kein automatisch erzeugter Serverbeleg für spätere Deployments.
+
+| Nachweis | Bestätigter Stand |
+| --- | --- |
+| Ziel | Stocks-Feature, App 6690486, Server 1486907 |
+| Installierter Anwendungscode | `75e531e6b022a09c424d6c73db4bff6923493b53` |
+| ZIP-SHA-256 | `aa154c794bd285629b64d57e6d59c544e916ad396dff60fee8d2819c7b136bfd` |
+| Zusatzhelfer zur Vorlagenkonfiguration | Commit `c182a93a8f6789aa96dcab4082e200e36718ccd3`; Anwendungspaket unverändert |
+| Root / HTTP-DocumentRoot | `/home/1486907.cloudwaysapps.com/hbnucgvzmy/public_html` / `public_html/public` |
+| Dateirechte | Root UID 1013 / GID 33 / 775; privater Arbeitsbereich 0700; neue `.env` 0600 |
+| Eigene DB / eigener DB-Benutzer | `hbnucgvzmy`; Datenbankrechte auf eigenes Schema und anfängliche Leere geprüft |
+| CLI / Web-PHP | 8.4.25 / 8.4.25, Web-SAPI `fpm-fcgi`; Zip, Sodium und PDO-MySQL vorhanden |
+| Web-Dateiidentität | Exklusiv vom Webprozess erstellte neue Datei mit UID 1013; anschließend entfernt; `.env` lesbar |
+| Initialisierung / Freigabe | `preview:check`, `preview:initialize` und `preview:activate --web-php=8.4.25` erfolgreich |
+| HTTP-Schutz | Ohne Basic Auth 401; mit Basic Auth 200; `X-Stocks-Preview: true`, `Cache-Control: no-store`, `X-Robots-Tag: noindex` bestätigt |
+| Browser-Login | Angemeldetes Dashboard unter `https://vorschau.gkstocks.at/admin/dashboard`, sichtbare Version 1.0.2 |
+| Datenbestand | Neues Preview-Schema mit eigenem Admin; Dashboard zeigt „Keine Daten“; keine Live-Datenkopie |
+
+Die vollständigen CI-Läufe für [Anwendungspaket 75e531e](https://github.com/ITStudioAT/stocks/actions/runs/35930318882) und [Zusatzhelfer c182a93](https://github.com/ITStudioAT/stocks/actions/runs/35932176927) waren erfolgreich. Root-erhaltender Austausch, Wiederherstellung nach Unterbrechungen, Dateiintegrität, Isolation und Konfigurationsänderung wurden getestet. Die ursprüngliche Vorlage wurde unter `/home/1486907.cloudwaysapps.com/hbnucgvzmy/public_html/.stocks-preview-private/template-4d55f90649a111fee8953a409c94c5d0` gesichert. Nach Freigabe ist der begrenzte `restore-template`-Befehl gesperrt; diese Sicherung ist kein Datenbank-Rollback für spätere Updates.
+
+Die beiden eigenen Zugänge wurden ausschließlich im Nutzerterminal abgerufen. Keine Passwörter oder Schlüssel werden hier dokumentiert. Für die Anmeldung zuerst den Basic-Auth-Zugang verwenden, anschließend unter `https://vorschau.gkstocks.at/admin/login` den Tab **Password** mit dem eigenen Preview-Admin. Temporäre Web-Prüfdateien wurden entfernt. Live und dessen Datenbank wurden nicht verändert; `main` blieb auf `4cb0ab0d532c75738c4ca19dd29185f90fe9b740`.
+
+Für diese Erstinstallation sind keine weiteren Prüfungen offen. Die nachfolgende Installationsanleitung dient als Referenz und darf nicht erneut auf die nun aktive Preview angewendet werden. Noch nicht umgesetzt sind die bereinigte Live-Datenkopie mit Import-/DB-Restore-Test, sichere Folge-Updates sowie die automatisierten Preview-/Release-/Deploy-/Discard-Kommandos. Diese Ausbauarbeiten wurden mit dem Abschluss nicht begonnen.
 
 ## Bestätigtes Ziel
 
@@ -16,7 +42,7 @@ Die nicht geheimen Identitäten stehen in `scripts/stocks_preview_target.json`:
 | Domain | gkstocks.at | vorschau.gkstocks.at |
 | Datenbank / DB-Benutzer | cfbckymfgk | hbnucgvzmy |
 
-Beide liegen auf Server2025, ID 1486907, 165.227.156.99. Preview-Ordner: `hbnucgvzmy`; Webroot: `public_html/public`. Der Nutzer hat SSH als `sftp_for_gkstocks_feature` eingerichtet; die Sitzung meldet `whoami=hbnucgvzmy`, `/home/1486907.cloudwaysapps.com/hbnucgvzmy/public_html` und CLI PHP 8.4.25. Vor der Installation noch mit `pwd -P`, `id -u` und `stat -c '%u %U %a' .` kanonischen Pfad und numerischen Eigentümer abgleichen. Web-PHP separat verifizieren. Die Nutzersitzung stellt keinen automatischen Agent-Zugang bereit.
+Beide liegen auf Server2025, ID 1486907, 165.227.156.99. Preview-Ordner: `hbnucgvzmy`; Webroot: `public_html/public`. Der Nutzer hat SSH als `sftp_for_gkstocks_feature` eingerichtet; die Sitzung meldet `whoami=hbnucgvzmy`, `/home/1486907.cloudwaysapps.com/hbnucgvzmy/public_html` und CLI PHP 8.4.25. Kanonischer Pfad und numerischer Eigentümer wurden mit `pwd -P`, `id -u` und `stat -c '%u %U %a' .` abgeglichen; Web-PHP wurde separat verifiziert. Die Nutzersitzung stellt keinen automatischen Agent-Zugang bereit.
 
 Die Laravel-10-Vorlage ist nur der anfängliche Inhalt. Stocks bringt Laravel 13 über `composer.lock` mit und verlangt PHP ^8.4.1. Keine Vorlagen-`.env`, `vendor`- oder Bootstrap-Caches übernehmen. Die vorhandenen Deploy-Skripte ersetzen nicht automatisch alle Vorlagenreste. Nachgewiesen sind UID 1013, Root-Eigentümer 1013/GID 33/Modus 775 und CLI PHP 8.4.25 mit Zip/Sodium/PDO-MySQL/POSIX. Der Elternordner gehört root (Modus 755) und ist nicht beschreibbar. Die früheren Uploadbefehle neben `public_html` und das Paket `0e4d4e3` sind daher überholt: Der korrigierte Installer erhält `public_html` und benötigt keine Elternordnerrechte.
 
@@ -96,4 +122,4 @@ Externe Stocks-Integrationen, Laravel-HTTP, Laravel-AI-Ereignisse, Mail, Redis, 
 
 Das ist eine Anwendungsgrenze, keine Sandbox für beliebigen PHP-Code. Direkte PDO-/cURL-/Prozesszugriffe aus neuem Feature-Code benötigen zusätzlich Betriebssystem-/Netzwerkbeschränkungen und Codeprüfung. FPM-`disable_functions` ist kein Beweis für entsprechende CLI-Beschränkungen.
 
-Nach erfolgreicher Erstinstallation folgen Export/Import mit DB-Restore-Test und ein an Ziel/Commit gebundener Deploy-Beleg. Erst auf dieser Grundlage werden die Release-/Deploy-/Discard-Kommandos erweitert. Weder eine manuell gesetzte Flag noch ein lokaler Prüfplan darf diese Gates überspringen.
+Die Erstinstallation ist abgeschlossen. Für den späteren Ausbau sind Export/Import mit DB-Restore-Test und automatisierte, an Ziel/Commit gebundene Deploy-Belege vorgesehen. Erst auf dieser Grundlage werden die Release-/Deploy-/Discard-Kommandos erweitert. Weder eine manuell gesetzte Flag noch ein lokaler Prüfplan darf diese Voraussetzungen überspringen.
