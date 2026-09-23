@@ -43,7 +43,7 @@ function New-StocksPreviewBundle {
             throw 'Preview bundle validation failed.'
         }
         [IO.File]::WriteAllText($bundlePath + '.sha256', $digest + "`n", (New-Object System.Text.UTF8Encoding($false)))
-        foreach ($service in @('PreviewInstallation.php', 'PreviewReleaseBundle.php', 'PreviewDatabaseGuard.php')) {
+        foreach ($service in @('PreviewInstallation.php', 'PreviewReleaseBundle.php', 'PreviewDatabaseGuard.php', 'PreviewFileSwap.php')) {
             Copy-Item -LiteralPath (Join-Path $sourceDirectory "app/Services/$service") -Destination (Join-Path $buildRoot $service)
         }
         foreach ($script in @('preview-install.php', 'stocks_preview_target.json')) {

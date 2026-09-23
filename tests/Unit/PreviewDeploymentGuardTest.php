@@ -23,6 +23,9 @@ class PreviewDeploymentGuardTest extends TestCase
             $environment = ['APP_ENV' => 'local', 'STOCKS_PREVIEW' => 'false'];
             if ($role === 'marker') {
                 file_put_contents($directory.'/storage/framework/stocks-preview-instance', '200');
+            } elseif ($role === 'interrupted-swap') {
+                mkdir($directory.'/.stocks-preview-private', 0700);
+                file_put_contents($directory.'/.stocks-preview-private/swap.json', '{}');
             } elseif ($role === 'cache') {
                 file_put_contents($directory.'/bootstrap/cache/config.php', '<?php return ["security" => ["preview" => ["enabled" => true]]];');
             } elseif ($role === 'environment') {
@@ -44,7 +47,7 @@ class PreviewDeploymentGuardTest extends TestCase
 
     public static function previewRoles(): array
     {
-        return [['marker'], ['cache'], ['environment'], ['dotenv']];
+        return [['marker'], ['interrupted-swap'], ['cache'], ['environment'], ['dotenv']];
     }
 
     public function test_both_cloudways_shell_entrypoints_guard_before_any_deployment_action(): void

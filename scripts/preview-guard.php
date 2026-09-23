@@ -6,6 +6,7 @@ declare(strict_types=1);
 function stocksPreviewInstance(string $root): bool
 {
     if (file_exists($root.'/storage/framework/stocks-preview-instance')
+        || file_exists($root.'/.stocks-preview-private/swap.json')
         || getenv('APP_ENV') === 'preview'
         || in_array(strtolower((string) getenv('STOCKS_PREVIEW')), ['true', '1', '(true)'], true)) {
         return true;

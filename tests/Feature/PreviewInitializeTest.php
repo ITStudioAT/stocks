@@ -23,7 +23,7 @@ class PreviewInitializeTest extends TestCase
         foreach (['storage/framework', 'storage/app/private', 'public', 'vendor'] as $path) {
             mkdir($root.'/'.$path, 0700, true);
         }
-        mkdir($this->directory.'/preview/.stocks-preview-private', 0700);
+        mkdir($root.'/.stocks-preview-private', 0700);
         $this->app->setBasePath($root);
         $this->app->useStoragePath($root.'/storage');
         $this->app->useDatabasePath($databasePath);
@@ -126,6 +126,38 @@ class PreviewInitializeTest extends TestCase
             flock($lock, LOCK_UN);
             fclose($lock);
         }
+    }
+
+    public function test_pending_file_exchange_prevents_initialization_and_activation(): void
+    {
+        file_put_contents(base_path('.stocks-preview-private/swap.json'), '{}');
+        $this->artisan('preview:initialize', ['--commit' => str_repeat('a', 40)])->assertFailed();
+        $this->artisan('preview:activate', ['--commit' => str_repeat('a', 40), '--web-php' => '8.4.25'])->assertFailed();
+        $this->assertSame([], Schema::getTables());
+        $this->assertFileExists(storage_path('framework/down'));
+    }
+
+    public function test_private_backups_are_excluded_but_similarly_named_source_paths_are_not(): void
+    {
+        file_put_contents(base_path('.stocks-preview-private/backup.env'), 'private backup');
+        $this->artisan('preview:initialize', ['--commit' => str_repeat('a', 40)])->assertSuccessful();
+        mkdir(base_path('.stocks-preview-private-extra'));
+        file_put_contents(base_path('.stocks-preview-private-extra/unlisted.php'), 'unlisted code');
+        $this->artisan('preview:activate', ['--commit' => str_repeat('a', 40), '--web-php' => '8.4.25'])->assertFailed();
+        $this->assertFileExists(storage_path('framework/down'));
+    }
+
+    public function test_private_directory_symlink_is_not_accepted_as_an_exclusion(): void
+    {
+        if (PHP_OS_FAMILY === 'Windows') {
+            $this->markTestSkipped('Windows symlink creation requires separate privileges; Linux CI covers this boundary.');
+        }
+        rmdir(base_path('.stocks-preview-private'));
+        mkdir($this->directory.'/outside', 0700);
+        symlink($this->directory.'/outside', base_path('.stocks-preview-private'));
+        $this->artisan('preview:initialize', ['--commit' => str_repeat('a', 40)])->assertFailed();
+        $this->assertSame([], Schema::getTables());
+        $this->assertFileExists(storage_path('framework/down'));
     }
 
     protected function tearDown(): void

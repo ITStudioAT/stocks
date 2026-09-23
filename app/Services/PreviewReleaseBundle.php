@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use FilesystemIterator;
+use RecursiveCallbackFilterIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
@@ -167,6 +168,7 @@ class PreviewReleaseBundle
 
     public function verifyInstalled(string $directory, string $commit, string $manifestDigest): void
     {
+        $directory = realpath($directory) ?: throw new RuntimeException('Installed preview directory is missing.');
         $manifestPath = $directory.'/preview-release.json';
         if (! is_file($manifestPath) || is_link($manifestPath) || ! preg_match('/^[a-f0-9]{64}$/D', $manifestDigest)
             || ! hash_equals($manifestDigest, hash_file('sha256', $manifestPath))) {
@@ -184,7 +186,16 @@ class PreviewReleaseBundle
                 throw new RuntimeException('Installed preview source files changed.');
             }
         }
-        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS)) as $file) {
+        $private = $directory.DIRECTORY_SEPARATOR.'.stocks-preview-private';
+        if (file_exists($private) || is_link($private)) {
+            if (! is_dir($private) || is_link($private) || realpath($private) !== $private || fileowner($private) !== fileowner($directory)
+                || (PHP_OS_FAMILY !== 'Windows' && (fileperms($private) & 0077) !== 0)) {
+                throw new RuntimeException('Invalid installed private preview directory.');
+            }
+        }
+        $iterator = new RecursiveCallbackFilterIterator(new RecursiveDirectoryIterator($directory, FilesystemIterator::SKIP_DOTS),
+            fn ($file): bool => $file->getPathname() !== $private);
+        foreach (new RecursiveIteratorIterator($iterator) as $file) {
             $path = str_replace('\\', '/', substr($file->getPathname(), strlen($directory) + 1));
             if ($file->isLink() || (! isset($manifest['files'][$path]) && ! in_array($path, ['.env', 'preview-release.json'], true)
                 && ! str_starts_with($path, 'storage/') && ! str_starts_with($path, 'bootstrap/cache/'))) {
@@ -199,7 +210,7 @@ class PreviewReleaseBundle
             || preg_match('/[\x00-\x1f\x7f]/', $path) || $path === 'preview-release.json') {
             throw new RuntimeException('Invalid preview archive path.');
         }
-        if ($path === 'public/hot' || $path === 'auth.json'
+        if ($path === '.stocks-preview-private' || str_starts_with($path, '.stocks-preview-private/') || $path === 'public/hot' || $path === 'auth.json'
             || ((str_starts_with($path, 'storage/') || str_starts_with($path, 'bootstrap/cache/')) && basename($path) !== '.gitignore')) {
             throw new RuntimeException('Preview archives cannot contain runtime state or credentials.');
         }

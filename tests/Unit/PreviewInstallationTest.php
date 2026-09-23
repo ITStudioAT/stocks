@@ -49,6 +49,8 @@ class PreviewInstallationTest extends TestCase
         $this->assertSame(hash('sha256', base64_decode(substr($environment['APP_KEY'], 7))), $marker['key_sha256']);
         $access = json_decode(file_get_contents($this->root.'/storage/app/private/preview-access.json'), true);
         $this->assertTrue(password_verify($access['access_password'], $environment['PREVIEW_ACCESS_PASSWORD_HASH']));
+        $this->assertSame($this->root.DIRECTORY_SEPARATOR.'.stocks-preview-private', dirname($result['backup']));
+        (new PreviewReleaseBundle)->verifyInstalled($this->root, $marker['commit'], $marker['manifest_sha256']);
     }
 
     public function test_existing_database_tables_stop_before_any_template_replacement(): void
@@ -91,7 +93,7 @@ class PreviewInstallationTest extends TestCase
         $installer = $this->installer();
         $owner = fileowner($this->root);
         $installer->activate($archive, $digest, $this->root, $owner, fn (): array => [$this->connection([]), $this->database()]);
-        $lock = fopen(dirname($this->root).'/.stocks-preview-private/installation.lock', 'c');
+        $lock = fopen($this->root.'/.stocks-preview-private/installation.lock', 'c');
         flock($lock, LOCK_EX);
         try {
             $installer->restoreTemplate($this->root, $owner, str_repeat('a', 40));

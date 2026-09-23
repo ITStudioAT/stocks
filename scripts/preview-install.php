@@ -5,9 +5,9 @@ use App\Services\PreviewDatabaseGuard;
 use App\Services\PreviewInstallation;
 use App\Services\PreviewReleaseBundle;
 
-/** This launcher and its three services may be uploaded together outside public_html. */
+/** Upload this launcher and its four services only to public_html/.stocks-preview-private/uploads. */
 $serviceDirectory = is_file(__DIR__.'/PreviewInstallation.php') ? __DIR__ : dirname(__DIR__).'/app/Services';
-foreach (['PreviewInstallation', 'PreviewReleaseBundle', 'PreviewDatabaseGuard'] as $service) {
+foreach (['PreviewFileSwap', 'PreviewInstallation', 'PreviewReleaseBundle', 'PreviewDatabaseGuard'] as $service) {
     require $serviceDirectory.'/'.$service.'.php';
 }
 
@@ -17,8 +17,8 @@ try {
         || ! function_exists('posix_geteuid')) {
         throw new RuntimeException('Preview installer requires Linux CLI PHP >= 8.4.1 with zip, sodium, PDO MySQL and POSIX.');
     }
-    if (count($argv) !== 7 || ! in_array($argv[1], ['inspect', 'activate', 'restore-template'], true) || ! ctype_digit($argv[3])) {
-        throw new RuntimeException('Usage: php preview-install.php inspect|activate|restore-template CANONICAL_ROOT OWNER_UID BUNDLE_ZIP TRUSTED_SHA256 TARGET_JSON');
+    if (count($argv) !== 7 || ! in_array($argv[1], ['inspect', 'activate', 'restore-template', 'recover-files'], true) || ! ctype_digit($argv[3])) {
+        throw new RuntimeException('Usage: php preview-install.php inspect|activate|restore-template|recover-files CANONICAL_ROOT OWNER_UID BUNDLE_ZIP TRUSTED_SHA256 TARGET_JSON');
     }
     [, $mode, $root, $owner, $archive, $digest, $targetPath] = $argv;
     $target = json_decode((string) file_get_contents($targetPath), true, 16, JSON_THROW_ON_ERROR);
@@ -33,6 +33,11 @@ try {
     $bundles = new PreviewReleaseBundle;
     $installation = new PreviewInstallation($target, $bundles, new PreviewDatabaseGuard);
     $manifest = $bundles->inspect($archive, $digest);
+    if ($mode === 'recover-files') {
+        $installation->recoverFiles($root, (int) $owner, $manifest['commit']);
+        fwrite(STDOUT, "Preview file recovery completed; database unchanged.\n");
+        exit(0);
+    }
     if ($mode === 'restore-template') {
         $preserved = $installation->restoreTemplate($root, (int) $owner, $manifest['commit']);
         fwrite(STDOUT, json_encode(['restored' => 'original template', 'preserved_preview' => $preserved, 'database' => 'unchanged'], JSON_THROW_ON_ERROR)."\n");

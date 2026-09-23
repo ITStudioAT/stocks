@@ -10,7 +10,8 @@ class PreviewIsolation
     {
         return config('security.preview.enabled', false)
             || config('app.env') === 'preview'
-            || file_exists(base_path('storage/framework/stocks-preview-instance'));
+            || file_exists(base_path('storage/framework/stocks-preview-instance'))
+            || file_exists(base_path('.stocks-preview-private/swap.json'));
     }
 
     public function assertIntegrationAllowed(): void
@@ -30,6 +31,7 @@ class PreviewIsolation
             }
         };
         $preview = config('security.preview', []);
+        $require(! file_exists(base_path('.stocks-preview-private/swap.json')), 'preview.pending_file_exchange');
         foreach (['source_app_id', 'target_app_id', 'server_id', 'source_database', 'source_database_user', 'source_url', 'target_root'] as $field) {
             $require(is_string($preview[$field] ?? null) && trim($preview[$field]) !== '', 'security.preview.'.$field);
         }
@@ -104,7 +106,7 @@ class PreviewIsolation
     public function lockInstallation(): mixed
     {
         $root = realpath(base_path());
-        $private = dirname($root).DIRECTORY_SEPARATOR.'.stocks-preview-private';
+        $private = $root.DIRECTORY_SEPARATOR.'.stocks-preview-private';
         if (! is_dir($private) || realpath($private) !== $private || fileowner($private) !== fileowner($root)
             || is_link($private.'/installation.lock')) {
             throw new RuntimeException('Preview installation lock directory is invalid.');
@@ -112,6 +114,13 @@ class PreviewIsolation
         $lock = fopen($private.'/installation.lock', 'c');
         if ($lock === false || ! flock($lock, LOCK_EX | LOCK_NB)) {
             throw new RuntimeException('Another preview installation operation is running.');
+        }
+        try {
+            app(PreviewFileSwap::class)->assertNoPendingSwap($root);
+        } catch (RuntimeException $exception) {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+            throw $exception;
         }
 
         return $lock;

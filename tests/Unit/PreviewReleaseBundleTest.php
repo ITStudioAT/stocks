@@ -52,7 +52,7 @@ class PreviewReleaseBundleTest extends TestCase
 
     public static function unsafePaths(): array
     {
-        return [['../escape'], ['/absolute'], ['C:/absolute'], ['.env'], ['.env.production'], ['bootstrap/cache/config.php'], ['storage/app/private/credentials.json'], ['public/hot']];
+        return [['../escape'], ['/absolute'], ['C:/absolute'], ['.env'], ['.env.production'], ['bootstrap/cache/config.php'], ['storage/app/private/credentials.json'], ['public/hot'], ['.stocks-preview-private/uploads/installer.php']];
     }
 
     public function test_wrong_digest_is_rejected_before_extraction(): void

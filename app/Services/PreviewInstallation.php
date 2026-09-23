@@ -8,7 +8,7 @@ use RuntimeException;
 class PreviewInstallation
 {
     /** @param array<string, string|null> $target */
-    public function __construct(private array $target, private PreviewReleaseBundle $bundles, private PreviewDatabaseGuard $databases) {}
+    public function __construct(private array $target, private PreviewReleaseBundle $bundles, private PreviewDatabaseGuard $databases, private PreviewFileSwap $files = new PreviewFileSwap) {}
 
     public function assertTarget(string $root, int $expectedOwner, bool $firstInstall = true): void
     {
@@ -47,7 +47,7 @@ class PreviewInstallation
                 throw new RuntimeException('Preview release is incomplete.');
             }
         }
-        $private = dirname($root).DIRECTORY_SEPARATOR.'.stocks-preview-private';
+        $private = $root.DIRECTORY_SEPARATOR.'.stocks-preview-private';
         if (is_link($private) || (file_exists($private) && (! is_dir($private) || realpath($private) !== $private))) {
             throw new RuntimeException('Invalid private preview directory.');
         }
@@ -57,7 +57,9 @@ class PreviewInstallation
         if (! is_dir($private) && ! mkdir($private, 0700)) {
             throw new RuntimeException('Cannot create private preview directory.');
         }
-        chmod($private, 0700);
+        if (! chmod($private, 0700)) {
+            throw new RuntimeException('Cannot protect the private preview directory.');
+        }
         if (is_link($private.'/installation.lock')) {
             throw new RuntimeException('Invalid preview installation lock.');
         }
@@ -67,6 +69,7 @@ class PreviewInstallation
         }
         try {
             $this->assertTarget($root, $expectedOwner);
+            $this->files->assertNoPendingSwap($root);
             $identifier = bin2hex(random_bytes(16));
             $staging = $private.DIRECTORY_SEPARATOR.'release-'.$identifier;
             $backup = $private.DIRECTORY_SEPARATOR.'template-'.$identifier;
@@ -101,16 +104,7 @@ class PreviewInstallation
             ], JSON_THROW_ON_ERROR), 0600);
             $this->write($staging.'/storage/framework/stocks-preview-instance', json_encode($marker, JSON_THROW_ON_ERROR), 0644);
             $this->write($staging.'/storage/framework/down', json_encode(['time' => time(), 'status' => 503, 'retry' => 60, 'stocks_preview_commit' => $manifest['commit']], JSON_THROW_ON_ERROR), 0644);
-            chmod($staging, 0755);
-            if (! rename($root, $backup)) {
-                throw new RuntimeException('Cannot preserve the existing preview template.');
-            }
-            if (! rename($staging, $root)) {
-                if (! rename($backup, $root)) {
-                    throw new RuntimeException('Activation failed; the preserved template requires manual restoration from the private directory.');
-                }
-                throw new RuntimeException('Activation failed; the previous preview template was restored.');
-            }
+            $this->files->exchange($root, $staging, $backup, $manifest['commit']);
 
             return ['commit' => $manifest['commit'], 'backup' => $backup, 'state' => 'pending'];
         } finally {
@@ -123,7 +117,7 @@ class PreviewInstallation
     public function restoreTemplate(string $root, int $expectedOwner, string $commit): string
     {
         $this->assertTarget($root, $expectedOwner, firstInstall: false);
-        $private = dirname($root).DIRECTORY_SEPARATOR.'.stocks-preview-private';
+        $private = $root.DIRECTORY_SEPARATOR.'.stocks-preview-private';
         if (realpath($private) !== $private || ! is_dir($private) || fileowner($private) !== $expectedOwner || is_link($private.'/installation.lock')) {
             throw new RuntimeException('Invalid private preview directory.');
         }
@@ -133,6 +127,7 @@ class PreviewInstallation
         }
         try {
             $this->assertTarget($root, $expectedOwner, firstInstall: false);
+            $this->files->assertNoPendingSwap($root);
             $markerPath = $root.'/storage/framework/stocks-preview-instance';
             if (! is_file($markerPath) || is_link($markerPath)) {
                 throw new RuntimeException('Preview installation marker is missing.');
@@ -147,16 +142,29 @@ class PreviewInstallation
                 || ! preg_match('/^template-[a-f0-9]{32}$/D', basename($backup)) || is_link($private.'/installation.lock')) {
                 throw new RuntimeException('Preview template restoration identity is invalid.');
             }
-            $preserved = $private.'/failed-'.bin2hex(random_bytes(16));
-            if (! rename($root, $preserved)) {
-                throw new RuntimeException('Cannot preserve the pending preview installation.');
-            }
-            if (! rename($backup, $root)) {
-                rename($preserved, $root);
-                throw new RuntimeException('Template restoration failed; inspect the private backups.');
-            }
+            $preserved = $private.DIRECTORY_SEPARATOR.'failed-'.bin2hex(random_bytes(16));
+            $this->files->exchange($root, $backup, $preserved, $commit);
 
             return $preserved;
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
+    public function recoverFiles(string $root, int $expectedOwner, string $commit): void
+    {
+        $this->assertTarget($root, $expectedOwner, firstInstall: false);
+        $private = $root.DIRECTORY_SEPARATOR.'.stocks-preview-private';
+        if (realpath($private) !== $private || ! is_dir($private) || fileowner($private) !== $expectedOwner || is_link($private.'/installation.lock')) {
+            throw new RuntimeException('Invalid private preview directory.');
+        }
+        $lock = fopen($private.'/installation.lock', 'c');
+        if ($lock === false || ! flock($lock, LOCK_EX | LOCK_NB)) {
+            throw new RuntimeException('Another preview installation is running.');
+        }
+        try {
+            $this->files->recover($root, $commit);
         } finally {
             flock($lock, LOCK_UN);
             fclose($lock);
