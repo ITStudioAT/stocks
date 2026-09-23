@@ -31,9 +31,10 @@ switch ($Command) {
         $parameters.Message = $arguments[0]
     }
     'gitpreview' {
-        if ($arguments.Count -gt 1 -or ($arguments.Count -eq 1 -and $arguments[0] -cne 'prepare')) {
-            throw 'Only gitpreview prepare is available until the initial Cloudways installation and restore gates are verified.'
+        if ($arguments.Count -gt 1 -or ($arguments.Count -eq 1 -and $arguments[0] -cnotin @('prepare', 'bundle'))) {
+            throw 'Only gitpreview prepare or bundle is available until the initial Cloudways installation and restore gates are verified.'
         }
+        if ($arguments.Count -eq 1) { $parameters.Mode = $arguments[0] }
     }
     default {
         if ($arguments.Count -gt 0) { throw "Unexpected arguments for $Command." }

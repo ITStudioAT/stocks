@@ -30,11 +30,12 @@ class PreviewIsolation
             }
         };
         $preview = config('security.preview', []);
-        foreach (['source_app_id', 'target_app_id', 'server_id', 'source_database', 'source_database_user', 'source_key_sha256', 'source_url', 'target_root'] as $field) {
+        foreach (['source_app_id', 'target_app_id', 'server_id', 'source_database', 'source_database_user', 'source_url', 'target_root'] as $field) {
             $require(is_string($preview[$field] ?? null) && trim($preview[$field]) !== '', 'security.preview.'.$field);
         }
         $require($this->active() && config('security.preview.enabled') === true && config('app.env') === 'preview', 'preview.role');
         $require(! config('app.debug'), 'app.debug');
+        $require((password_get_info((string) ($preview['access_password_hash'] ?? ''))['algo'] ?? null) !== null, 'preview.access_password_hash');
         $require(($preview['source_app_id'] ?? null) !== ($preview['target_app_id'] ?? null), 'preview.distinct_application');
         $require(realpath((string) ($preview['target_root'] ?? '')) === realpath(base_path()), 'preview.target_root');
         $require($this->ownsStoragePath(storage_path()), 'preview.storage');
@@ -47,8 +48,9 @@ class PreviewIsolation
         $decodedKey = str_starts_with($key, 'base64:') ? base64_decode(substr($key, 7), true) : $key;
         $fingerprint = (string) ($preview['source_key_sha256'] ?? '');
         $require(is_string($decodedKey) && strlen($decodedKey) === 32
-            && preg_match('/^[a-f0-9]{64}$/D', $fingerprint) === 1
-            && ! hash_equals($fingerprint, hash('sha256', $decodedKey)), 'preview.independent_key');
+            && (($this->installationMarker()['key_sha256'] ?? null) === hash('sha256', $decodedKey)
+                || (preg_match('/^[a-f0-9]{64}$/D', $fingerprint) === 1
+                    && ! hash_equals($fingerprint, hash('sha256', $decodedKey)))), 'preview.independent_key');
         $require(config('app.previous_keys', []) === [], 'app.previous_keys');
 
         $database = config('database.connections.'.config('database.default'), []);
@@ -78,6 +80,41 @@ class PreviewIsolation
         }
 
         return array_values(array_unique($problems));
+    }
+
+    /** @return array<string, mixed> */
+    public function installationMarker(): array
+    {
+        $path = base_path('storage/framework/stocks-preview-instance');
+        if (! is_file($path) || is_link($path) || filesize($path) > 4096) {
+            return [];
+        }
+        $marker = json_decode((string) file_get_contents($path), true);
+        if (! is_array($marker) || ($marker['format'] ?? null) !== 'stocks-preview-instance-v1'
+            || ($marker['root'] ?? null) !== realpath(base_path())
+            || ($marker['source_app_id'] ?? null) !== config('security.preview.source_app_id')
+            || ($marker['target_app_id'] ?? null) !== config('security.preview.target_app_id')) {
+            return [];
+        }
+
+        return $marker;
+    }
+
+    /** @return resource */
+    public function lockInstallation(): mixed
+    {
+        $root = realpath(base_path());
+        $private = dirname($root).DIRECTORY_SEPARATOR.'.stocks-preview-private';
+        if (! is_dir($private) || realpath($private) !== $private || fileowner($private) !== fileowner($root)
+            || is_link($private.'/installation.lock')) {
+            throw new RuntimeException('Preview installation lock directory is invalid.');
+        }
+        $lock = fopen($private.'/installation.lock', 'c');
+        if ($lock === false || ! flock($lock, LOCK_EX | LOCK_NB)) {
+            throw new RuntimeException('Another preview installation operation is running.');
+        }
+
+        return $lock;
     }
 
     public function ownsStoragePath(mixed $path): bool

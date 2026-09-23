@@ -13,5 +13,7 @@
     "targetFolder": "hbnucgvzmy",
     "webroot": "public_html/public",
     "canonicalTargetRoot": null,
-    "sshUser": null
+    "expectedTargetRoot": "/home/1486907.cloudwaysapps.com/hbnucgvzmy/public_html",
+    "sshUser": "sftp_for_gkstocks_feature",
+    "unixUser": "hbnucgvzmy"
 }

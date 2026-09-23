@@ -2,9 +2,9 @@
 
 ## Stand und lokale Befehle
 
-`gitstart`, `gitsave`, `gitwork`, `gitmain`, `gitupdate`, `gitprepare` und `gitcheck` bleiben der Geräte-/Feature-Workflow. `gitpreview prepare` schreibt bei sauberem Checkout einen **lokalen Prüfplan für den exakten Commit** unter `.git/stocks-preview/`. Der Befehl lädt nichts hoch und kopiert keine Daten. Feature-Pushes unter `codex/**` durchlaufen jetzt die PHP-/Frontend-CI; nur main benötigt das bestehende Release-Artefakt.
+`gitstart`, `gitsave`, `gitwork`, `gitmain`, `gitupdate`, `gitprepare` und `gitcheck` bleiben der Geräte-/Feature-Workflow. `gitpreview prepare` schreibt bei sauberem Checkout einen **lokalen Prüfplan für den exakten Commit** unter `.git/stocks-preview/`. `gitpreview bundle` verlangt erfolgreiche GitHub-CI für genau diesen gespeicherten Commit und baut in einem eigenen Verzeichnis ein ZIP mit Frontend und Produktions-PHP-Abhängigkeiten aus den Lockfiles. Der Befehl lädt nichts hoch und kopiert keine Daten. Feature-Pushes unter `codex/**` durchlaufen die PHP-/Frontend-CI; nur main benötigt das bestehende Release-Artefakt.
 
-Dieser Stand liefert die Laufzeitisolation, Konfigurationsprüfung und getestete Snapshot-Formatbausteine. Ein produktiver Snapshot-Export/-Import, die Erstinstallation, ein Backup-/Restore-Ablauf und ein serverbestätigter Preview-Beleg sind noch nicht freigeschaltet. `gitpreview deploy`, `gitrelease`, `gitdeploy` und `gitdiscard` dürfen nicht als fertig eingerichtet betrachtet werden. Bis zur Zielprüfung bleibt `gitpush` der bestehende, ausdrücklich auf main begrenzte Veröffentlichungsweg; er ist kein Vorschau-Deploy.
+Dieser Stand liefert Laufzeitisolation, Konfigurationsprüfung, einen auf eine **leere** Preview-DB begrenzten Erstinstaller und getestete Snapshot-Formatbausteine. Produktiver Snapshot-Export/-Import, spätere Updates bestehender Preview-Daten und ein serverbestätigter Preview-Beleg bleiben eine eigene Phase. `gitpreview deploy`, `gitrelease`, `gitdeploy` und `gitdiscard` dürfen nicht als fertig eingerichtet betrachtet werden. `gitpush` bleibt der bestehende, ausdrücklich auf main begrenzte Veröffentlichungsweg; er ist kein Vorschau-Deploy.
 
 ## Bestätigtes Ziel
 
@@ -16,15 +16,15 @@ Die nicht geheimen Identitäten stehen in `scripts/stocks_preview_target.json`:
 | Domain | gkstocks.at | vorschau.gkstocks.at |
 | Datenbank / DB-Benutzer | cfbckymfgk | hbnucgvzmy |
 
-Beide liegen auf Server2025, ID 1486907, 165.227.156.99. Preview-Ordner: `hbnucgvzmy`; Webroot: `public_html/public`. Der absolute kanonische Pfad und Unix-Login sind noch nicht bestätigt. Cloudways meldet serverseitig PHP 8.4; Web-Patchversion und CLI-Version sind separat zu prüfen. Preview-SSH ist noch deaktiviert, die App-SSH/SFTP-Tabelle leer.
+Beide liegen auf Server2025, ID 1486907, 165.227.156.99. Preview-Ordner: `hbnucgvzmy`; Webroot: `public_html/public`. Der Nutzer hat SSH als `sftp_for_gkstocks_feature` eingerichtet; die Sitzung meldet `whoami=hbnucgvzmy`, `/home/1486907.cloudwaysapps.com/hbnucgvzmy/public_html` und CLI PHP 8.4.25. Vor der Installation noch mit `pwd -P`, `id -u` und `stat -c '%u %U %a' .` kanonischen Pfad und numerischen Eigentümer abgleichen. Web-PHP separat verifizieren. Die Nutzersitzung stellt keinen automatischen Agent-Zugang bereit.
 
 Die Laravel-10-Vorlage ist nur der anfängliche Inhalt. Stocks bringt Laravel 13 über `composer.lock` mit und verlangt PHP ^8.4.1. Keine Vorlagen-`.env`, `vendor`- oder Bootstrap-Caches übernehmen. Die vorhandenen Deploy-Skripte ersetzen nicht automatisch alle Vorlagenreste.
 
 ## Einmalige Einrichtung – vor der Erstinstallation
 
 1. Nur für App 6690486 einen Anwendungs-SSH-Zugang mit eingeschränkten Dateirechten einrichten. Mit diesem Login `id -un`, `pwd -P`, den kanonischen App-Pfad, `php -v` und `composer check-platform-reqs` nach Installation prüfen. Web-PHP gesondert verifizieren. Keine globale PHP-Änderung wegen der Preview vornehmen.
-2. Vorschau über Cloudways-Passwortschutz oder eine IP-Freigabe privat halten, HTTPS beibehalten und Varnish/CDN-Caching für sie deaktivieren. Ein Robots-Header ersetzt keinen Zugriffsschutz. Keine Cronjobs, Queue-Worker oder Mailtransporte einrichten.
-3. Neue App-Konfiguration ausschließlich im Ziel anlegen. Eigener zufälliger APP_KEY, keine APP_PREVIOUS_KEYS, kein Kopieren der Live-`.env`, keine EODHD-, Cloudways-, SMTP-, AWS- oder KI-Schlüssel. Live-APP_KEY nur in seiner Live-Umgebung in SHA-256 des **dekodierten Schlüsselmaterials** umwandeln; ausschließlich den Fingerprint für den Vergleich übertragen. Keine Schlüssel im Chat, Git oder Prüfplan.
+2. Der Installer richtet einen eigenen zufälligen Basic-Auth-Zugang für alle Laravel-Routen ein. Cloudways-Passwortschutz/IP-Freigabe kann zusätzlich eingesetzt werden. HTTPS beibehalten und Varnish/CDN-Caching deaktivieren. Ein Robots-Header ersetzt keinen Zugriffsschutz. Keine Cronjobs, Queue-Worker oder Mailtransporte einrichten.
+3. Der Installer erzeugt einen neuen zufälligen APP_KEY und protokolliert dessen Fingerprint im an App-ID/Root gebundenen Marker. Er übernimmt nur die geprüften eigenen DB-Zugangsdaten aus der Preview-Vorlage. Keine APP_PREVIOUS_KEYS, Live-`.env`, EODHD-, Cloudways-, SMTP-, AWS- oder KI-Schlüssel übernehmen. Bei manueller Konfiguration alternativ nur den SHA-256 des dekodierten Live-Key-Materials zum Vergleich verwenden, niemals den Live-Key selbst übertragen. Keine Schlüssel im Chat, Git oder Prüfplan.
 4. Vor dem ersten Start dauerhaft die Datei `storage/framework/stocks-preview-instance` im eigenen Ziel anlegen. Sie bleibt bei allen späteren Releases erhalten und aktiviert den Schutz auch bei veralteter Config. Speicher-/Session-/Cachepfade dürfen weder auf Live noch auf einen gemeinsamen Symlink zeigen. Preview-Dateirechte dürfen keinen Zugriff auf Live-`.env` oder Live-Speicher zulassen.
 5. Datenbankzugriff nur als `hbnucgvzmy`. Der Connector prüft vor Anwendungsabfragen `DATABASE()` und `SHOW GRANTS FOR CURRENT_USER`: nur USAGE global und Rechte auf exakt `hbnucgvzmy` erlaubt, keine Rollen, anderen Schemas, Wildcards oder GRANT OPTION. Ein anderer DB-Name allein beweist keine Isolation. Die Prüfung verändert keine Rechte.
 
@@ -42,6 +42,7 @@ PREVIEW_SOURCE_URL=https://gkstocks.at
 PREVIEW_SOURCE_DATABASE=cfbckymfgk
 PREVIEW_SOURCE_DATABASE_USER=cfbckymfgk
 PREVIEW_SOURCE_KEY_SHA256=<nur Fingerprint>
+PREVIEW_ACCESS_PASSWORD_HASH=<Hash eines eigenen zufälligen Vorschau-Zugangspassworts>
 PREVIEW_TARGET_ROOT=<verifizierter kanonischer App-Pfad>
 DB_CONNECTION=mysql
 DB_DATABASE=hbnucgvzmy
@@ -62,6 +63,19 @@ AWS_USE_DEFAULT_CREDENTIALS=false
 
 APP_KEY und DB_PASSWORD sicher nur im Ziel setzen. SESSION_DOMAIN muss leer/null bleiben. Keine DB_URL-, Read/Write- oder Socket-Overrides. `php artisan preview:check` ist ausschließlich eine Konfigurationsprüfung ohne Datenbankzugriff; Erfolg beweist noch keine Serveridentität oder erfolgreiche Installation. Fehler zeigen Feldnamen, keine Werte. Bei ungültiger Konfiguration antwortet HTTP mit 503 und Datenbankverbindungen bleiben gesperrt.
 
+## Geprüfter Erstinstallationsablauf
+
+Das Bundle und die daneben erzeugten PHP-Helfer sowie `stocks_preview_target.json` per authentifiziertem SCP/SFTP in ein privates Verzeichnis **neben** `public_html` übertragen. Kein Paket/Installer unter dem öffentlichen Webroot ablegen. Den lokal ausgegebenen SHA-256 getrennt übernehmen. `scripts/preview-install.php` ist absichtlich auf Server 1486907 / App 6690486 / DB hbnucgvzmy und Linux PHP >=8.4.1 festgelegt; PHP-FPM und CLI müssen Zip/Sodium/PDO-MySQL unterstützen. Der CLI-Benutzer muss dem verifizierten Verzeichnis-Eigentümer entsprechen.
+
+1. `php preview-install.php inspect ROOT UID BUNDLE SHA256 stocks_preview_target.json` prüft Root/Owner und alle ZIP-Dateien, ohne DB-Zugriff. Das ZIP wird nie ungeprüft per `extractTo` entpackt: absolute Pfade, Traversal, Links, doppelte Pfade, Secrets und Runtime-Caches sind verboten; Dateizahl und Größe sind begrenzt.
+2. Derselbe Aufruf mit `activate` prüft die eigenen DB-Credentials/Rechte und verweigert jede vorhandene Tabelle. Er sichert die **gesamte** Vorlage unter `.stocks-preview-private/template-…`, aktiviert neue Dateien durch Umbenennen, schreibt ausschließlich frische Preview-Konfiguration und hält Wartung aktiv. Keine Datenbank wird dabei verändert. Bei einem Aktivierungsfehler bleibt die Vorlage erhalten. Private Zustandsdateien und die `.env` sind nur für den eigenen Unix-Benutzer lesbar; funktioniert PHP-FPM mit einem anderen Benutzer, zuerst diese Zuordnung klären, nicht pauschal Rechte öffnen.
+3. Im neuen `public_html`: `php artisan preview:check`, dann `php artisan preview:initialize --commit=COMMIT`. Nur bei weiterhin leerem Schema und unveränderten Release-Dateien werden Migrationen und ein eigenes `preview-admin@stocks.invalid`-Konto angelegt. Wartung bleibt aktiv. Ein Fehler führt nicht zu automatischem Löschen oder Wiederholen teilweiser Migrationen.
+4. Erst mit unabhängig bestätigter PHP-FPM-Version: `php artisan preview:activate --commit=COMMIT --web-php=VERSION`. Nur die zur eigenen Installation gehörende Wartungsdatei wird entfernt. Danach HTTPS, anonyme Antwort 401, Basic Auth, Passwortanmeldung und gesperrte Integrationen prüfen.
+
+Die beiden neu erzeugten Zugänge liegen ausschließlich unter `storage/app/private/preview-access.json` (0600). Der Nutzer übernimmt sie direkt über seinen privaten Serverzugang in den Passwortmanager; nicht in Chat oder Logs ausgeben. Basic-Auth-Benutzer ist `preview`, die App-Anmeldung verwendet `preview-admin@stocks.invalid` mit eigenem anderem Passwort.
+
+Vor der endgültigen Aktivierung kann `php preview-install.php restore-template ROOT UID BUNDLE SHA256 stocks_preview_target.json` die gesicherte Vorlage zurückbringen. Dabei bleibt die neue Installation in einem privaten `failed-…`-Verzeichnis erhalten; **die DB bleibt unverändert**. Dies ist ein getesteter Datei-Restore für die Erstinstallation, kein DB-Rollback und kein Update-Restore für befüllte Vorschauen. Nach Aktivierung ist dieser Vorlagen-Restore gesperrt.
+
 ## Datenkopie und Rückkehr zum vorherigen Stand
 
 Die Vorbereitung kopiert **noch keine Daten**. `PreviewSnapshotPolicy` lässt ausdrücklich nur Depot-/Transaktions-/Wertpapier-/Kurstabellen zu. IDs, Beziehungen, Bestände und Beträge bleiben erhalten; Kontonummern, Notizen, Beschreibungen, Rohantworten und URLs werden entfernt, Depotnamen ersetzt. Die genauen Tabellenspalten, Nullbarkeit, Fremdschlüssel und ggf. verschlüsselten Werte müssen vor dem Export mit dem tatsächlichen Schema abgeglichen werden. Unbekannte Tabellen und credential-artige Spalten werden zurückgewiesen. Bestehende Daten sind trotz Bereinigung vertrauliche Finanzdaten.
@@ -74,8 +88,8 @@ Vor jedem späteren Import: Quell-Export über eine konsistente **READ ONLY**-Tr
 
 ## Laufzeitgrenzen
 
-Externe Stocks-Integrationen, Laravel-HTTP, Laravel-AI-Ereignisse, Mail, Redis, entfernte Dateisysteme, fremde Cache-/Queue-Treiber und Broadcasts werden blockiert. Scheduler ist leer. CLI erlaubt zunächst nur `preview:check`, `list`, `help`, `about`; bestehende Migrations-/Update-/Deploy-Befehle bleiben gesperrt. Auch Cache-Löschbefehle bleiben gesperrt, damit fehlerhafte Pfad-Overrides keine Live-Dateien entfernen. Logging wird in dieser Vorbereitungsstufe verworfen, damit keine kopierte Remote-Log-Konfiguration Finanzdaten überträgt.
+Externe Stocks-Integrationen, Laravel-HTTP, Laravel-AI-Ereignisse, Mail, Redis, entfernte Dateisysteme, fremde Cache-/Queue-Treiber und Broadcasts werden blockiert. Scheduler ist leer. CLI erlaubt nur `preview:check`, die streng begrenzten `preview:initialize`/`preview:activate`, `list`, `help`, `about`; bestehende Migrations-/Update-/Deploy-Befehle bleiben gesperrt. Auch Cache-Löschbefehle bleiben gesperrt, damit fehlerhafte Pfad-Overrides keine Live-Dateien entfernen. Logging wird in dieser Vorbereitungsstufe verworfen, damit keine kopierte Remote-Log-Konfiguration Finanzdaten überträgt.
 
 Das ist eine Anwendungsgrenze, keine Sandbox für beliebigen PHP-Code. Direkte PDO-/cURL-/Prozesszugriffe aus neuem Feature-Code benötigen zusätzlich Betriebssystem-/Netzwerkbeschränkungen und Codeprüfung. FPM-`disable_functions` ist kein Beweis für entsprechende CLI-Beschränkungen.
 
-Nach erfolgreicher Zielprüfung folgen erst der dedizierte Installer, Export/Import mit Restore-Test, Smoke-Test und ein an Ziel/Commit gebundener Deploy-Beleg. Erst auf dieser Grundlage werden die Release-/Deploy-/Discard-Kommandos erweitert. Weder eine manuell gesetzte Flag noch ein lokaler Prüfplan darf diese Gates überspringen.
+Nach erfolgreicher Erstinstallation folgen Export/Import mit DB-Restore-Test und ein an Ziel/Commit gebundener Deploy-Beleg. Erst auf dieser Grundlage werden die Release-/Deploy-/Discard-Kommandos erweitert. Weder eine manuell gesetzte Flag noch ein lokaler Prüfplan darf diese Gates überspringen.

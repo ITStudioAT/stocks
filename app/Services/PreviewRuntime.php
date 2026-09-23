@@ -40,7 +40,7 @@ class PreviewRuntime
         Event::listen(MessageSending::class, $deny);
         Event::listen('Laravel\\Ai\\Events\\*', $deny);
         Event::listen(CommandStarting::class, function (CommandStarting $event) use ($deny): void {
-            if (! in_array($event->command, ['preview:check', 'list', 'help', 'about'], true)) {
+            if (! in_array($event->command, ['preview:check', 'preview:initialize', 'preview:activate', 'list', 'help', 'about'], true)) {
                 $deny();
             }
         });

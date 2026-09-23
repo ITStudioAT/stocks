@@ -15,6 +15,7 @@ return [
         'source_key_sha256' => env('PREVIEW_SOURCE_KEY_SHA256'),
         'source_url' => env('PREVIEW_SOURCE_URL'),
         'target_root' => env('PREVIEW_TARGET_ROOT'),
+        'access_password_hash' => env('PREVIEW_ACCESS_PASSWORD_HASH'),
     ],
 
     'trusted_hosts' => array_values(array_unique(array_filter(array_map(

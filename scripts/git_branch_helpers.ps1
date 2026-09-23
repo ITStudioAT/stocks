@@ -224,11 +224,17 @@ function gitcheck {
 }
 
 function gitpreview {
+    param([ValidateSet('prepare', 'bundle')][string]$Mode = 'prepare')
     Assert-StocksRepository
     Assert-StocksClean
     $branch = Invoke-StocksGit branch --show-current
     if ($branch -cne 'main') { $null = Assert-StocksFeature }
     $commit = Invoke-StocksGit rev-parse HEAD
+    if ($Mode -ceq 'bundle') {
+        . (Join-Path $PSScriptRoot 'git_preview_helpers.ps1')
+        New-StocksPreviewBundle -Branch $branch -Commit $commit
+        return
+    }
     $targetPath = Join-Path $PSScriptRoot 'stocks_preview_target.json'
     $target = Get-Content -LiteralPath $targetPath -Raw | ConvertFrom-Json
     if ($target.repository -cne 'ITStudioAT/stocks' -or $target.sourceAppId -eq $target.targetAppId -or

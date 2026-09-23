@@ -56,7 +56,9 @@ class PreviewIsolationTest extends TestCase
         DB::shouldReceive('connection')->never();
         $this->assertSame([], app(PreviewIsolation::class)->problems());
         $this->artisan('preview:check')->assertSuccessful();
-        $this->get('/up')->assertOk()->assertHeader('X-Stocks-Preview', 'true');
+        $this->get('/up')->assertUnauthorized()->assertHeader('X-Stocks-Preview', 'true');
+        $this->withServerVariables(['PHP_AUTH_USER' => 'preview', 'PHP_AUTH_PW' => 'preview-test-access'])
+            ->get('/up')->assertOk()->assertHeader('X-Stocks-Preview', 'true');
     }
 
     #[DataProvider('unsafeConfiguration')]
@@ -172,6 +174,7 @@ class PreviewIsolationTest extends TestCase
                 'source_database' => 'live123', 'source_database_user' => 'liveuser',
                 'source_key_sha256' => hash('sha256', str_repeat('l', 32)),
                 'source_url' => 'https://live.example.test', 'target_root' => base_path(),
+                'access_password_hash' => password_hash('preview-test-access', PASSWORD_BCRYPT, ['cost' => 4]),
             ],
             'app.env' => 'preview', 'app.debug' => false, 'app.key' => 'base64:'.base64_encode(str_repeat('p', 32)),
             'app.previous_keys' => [], 'app.url' => 'https://preview.example.test', 'app.maintenance.driver' => 'file',
