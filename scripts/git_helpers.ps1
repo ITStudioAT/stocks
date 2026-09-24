@@ -180,6 +180,10 @@ function Assert-StocksRemoteReleaseTagIsAvailable {
         [string]$Version
     )
 
+    if ($Version -cnotmatch '^\d+\.\d+\.\d+$') {
+        throw 'Use a version such as 1.0.3, without a v prefix.'
+    }
+
     $tag = "v$Version"
     $remoteTag = @(git ls-remote --tags origin "refs/tags/$tag" 2>$null)
 
@@ -189,6 +193,35 @@ function Assert-StocksRemoteReleaseTagIsAvailable {
 
     if ($remoteTag.Count -gt 0) {
         throw "Version $Version is already published as $tag on origin. Choose an unused version. No release changes were made."
+    }
+}
+
+function Set-StocksReleaseVersion {
+    param([Parameter(Mandatory = $true)][string]$Version)
+    if ($Version -cnotmatch '^\d+\.\d+\.\d+$') {
+        throw 'Use a version such as 1.0.3, without a v prefix.'
+    }
+    $notesPath = Join-Path (Get-Location).Path 'UPDATES.md'
+    $configurationPath = Join-Path (Get-Location).Path 'config/stocks.php'
+    if (-not (Test-Path -LiteralPath $notesPath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $configurationPath -PathType Leaf)) {
+        throw 'The version files are missing. No release changes were made.'
+    }
+    $notes = [IO.File]::ReadAllText($notesPath)
+    if ($notes -cnotmatch "(?m)^##\s+$([regex]::Escape($Version))(?:\s|`$)") {
+        throw "Add the release notes under ## $Version in UPDATES.md before publishing."
+    }
+    $configuration = [IO.File]::ReadAllText($configurationPath)
+    $pattern = "(?m)^(\s*'version'\s*=>\s*')\d+\.\d+\.\d+(',\s*)`$"
+    $matches = [regex]::Matches($configuration, $pattern)
+    if ($matches.Count -ne 1) {
+        throw 'The application version field is missing or ambiguous in config/stocks.php.'
+    }
+    $match = $matches[0]
+    $updated = $configuration.Substring(0, $match.Index) + $match.Groups[1].Value + $Version +
+        $match.Groups[2].Value + $configuration.Substring($match.Index + $match.Length)
+    if ($updated -cne $configuration) {
+        [IO.File]::WriteAllText($configurationPath, $updated, (New-Object System.Text.UTF8Encoding($false)))
     }
 }
 
@@ -267,6 +300,9 @@ function gitpush {
         }
 
         if (-not $resumeTaggedRelease) {
+            if ($version) {
+                Set-StocksReleaseVersion -Version $version
+            }
             Invoke-StocksCommand 'Preparing local dependencies...' {
                 php scripts/update.php --target=local --prepare
             }
@@ -422,8 +458,7 @@ function gitpush {
 
         Write-Host ''
         Write-Host 'READY.' -ForegroundColor Green
-        Write-Host 'Windows PCs may pull main and run: composer deploy' -ForegroundColor Green
-        Write-Host 'Cloudways terminal (including Pull-managed applications): run composer pdeploy' -ForegroundColor Green
+        Write-Host 'Run gitdeploy from a clean main checkout to install this release on live.' -ForegroundColor Green
 
         if (-not $WaitForCI) {
             Write-Host 'GitHub is checking the release in the background.' -ForegroundColor DarkGray

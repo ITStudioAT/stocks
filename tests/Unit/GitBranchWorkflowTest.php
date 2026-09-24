@@ -44,7 +44,7 @@ class GitBranchWorkflowTest extends TestCase
         $this->git($this->directory, 'init', '--bare', '--initial-branch=main', 'origin.git');
         $this->git($this->directory, 'clone', 'origin.git', 'pc');
         mkdir($this->directory.'/pc/scripts');
-        foreach (['git_branch_helpers.ps1', 'git_workflow.ps1', 'git_preview_helpers.ps1', 'install_powershell_helpers.ps1', 'stocks_preview_target.json'] as $script) {
+        foreach (['git_branch_helpers.ps1', 'git_workflow.ps1', 'git_preview_helpers.ps1', 'git_deploy_helpers.ps1', 'install_powershell_helpers.ps1', 'stocks_preview_target.json'] as $script) {
             copy(dirname(__DIR__, 2).'/scripts/'.$script, $this->directory.'/pc/scripts/'.$script);
         }
         file_put_contents($this->directory.'/pc/.gitignore', ".env\n");
@@ -77,19 +77,16 @@ class GitBranchWorkflowTest extends TestCase
         $this->assertSame('', $this->git($this->directory.'/origin.git', 'tag', '--list'));
     }
 
-    public function test_preview_prepare_records_exact_source_without_publishing_or_changing_data(): void
+    public function test_preview_requires_explicit_feature_and_never_starts_a_data_refresh_without_support(): void
     {
         $before = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
-        $this->succeeds('pc', 'gitpreview', 'prepare');
-        $path = $this->directory.'/pc/.git/stocks-preview/plan-'.$before.'.json';
-        $plan = json_decode(file_get_contents($path), true, flags: JSON_THROW_ON_ERROR);
-        $this->assertSame($before, $plan['sourceCommit']);
-        $this->assertSame('6690486', $plan['target']['targetAppId']);
-        $this->assertFalse($plan['canDeploy']);
-        $this->assertContains('backup-and-restore-drill', $plan['pendingGates']);
+        $this->fails('pc', 'requires a codex/', 'gitpreview', 'prepare');
+        $this->succeeds('pc', 'gitstart', 'preview-work', '-NoPrepare');
+        $this->succeeds('pc', 'gitsave', 'Share preview work');
+        $this->fails('pc', 'differs from the checkout', 'gitpreview', '-Feature', 'wrong-work');
+        $this->fails('pc', 'Usage: gitpreview', 'gitpreview', '-Feature', 'preview-work', '-RefreshData');
         $this->assertSame('', $this->git($this->directory.'/pc', 'status', '--porcelain'));
         $this->assertSame($before, $this->git($this->directory.'/pc', 'rev-parse', 'origin/main'));
-        $this->fails('pc', 'Only gitpreview prepare', 'gitpreview', 'deploy');
         file_put_contents($this->directory.'/pc/example.txt', 'unsaved');
         $this->fails('pc', 'Unsaved changes exist', 'gitpreview', 'prepare');
     }
@@ -98,7 +95,7 @@ class GitBranchWorkflowTest extends TestCase
     {
         $commit = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
         $this->environment['STOCKS_TEST_CI'] = json_encode([['status' => 'completed', 'conclusion' => 'failure', 'headSha' => $commit]], JSON_THROW_ON_ERROR);
-        $this->fails('pc', 'requires a successful completed GitHub CI run', 'gitpreview', 'bundle');
+        $this->fails('pc', 'requires a successful completed GitHub CI run', 'gitpreview', 'prepare', '-Main');
         $this->assertDirectoryDoesNotExist($this->directory.'/pc/.git/stocks-preview');
         $this->assertSame('', $this->git($this->directory.'/pc', 'status', '--porcelain'));
     }
@@ -194,23 +191,219 @@ class GitBranchWorkflowTest extends TestCase
 
     public function test_main_detached_head_invalid_arguments_and_wrong_remotes_are_rejected(): void
     {
-        $this->fails('pc', 'requires a codex/', 'gitsave', 'Do not release main');
         $this->fails('pc', 'feature name', 'gitstart', '--force', '-NoPrepare');
-        $this->fails('pc', 'Usage: gitsave', 'gitsave', 'message', '1.2.3');
+        $this->fails('pc', 'Usage: gitsave', 'gitsave', 'message', '1.2.3', 'extra');
         $this->git($this->directory.'/pc', 'switch', '--detach');
         $this->fails('pc', 'Detached HEAD', 'gitmain', '-NoPrepare');
         $this->environment['STOCKS_TEST_PUSH_URL'] = 'https://github.com/ITStudioAT/schooltool.git';
         $this->fails('other', 'only trusts ITStudioAT/stocks', 'gitstart', 'wrong-remote', '-NoPrepare');
     }
 
+    public function test_gitsave_publishes_main_with_optional_version_and_keeps_feature_versions_blocked(): void
+    {
+        file_put_contents($this->directory.'/pc/scripts/git_helpers.ps1', <<<'POWERSHELL'
+function gitpush {
+    param([string]$message, [string]$version, [switch]$Full, [switch]$WaitForCI)
+    Write-Output "RELEASE $message|$version|$Full|$WaitForCI"
+}
+POWERSHELL);
+        $release = $this->workflow('pc', 'gitsave', 'Add dashboard', '1.2.3', '-Full', '-WaitForCI');
+        $this->assertTrue($release->isSuccessful(), $release->getErrorOutput());
+        $this->assertStringContainsString('RELEASE Add dashboard|1.2.3|True|True', $release->getOutput());
+        unlink($this->directory.'/pc/scripts/git_helpers.ps1');
+
+        $this->succeeds('pc', 'gitstart', 'dashboard', '-NoPrepare');
+        $this->fails('pc', 'Feature saves accept only a description', 'gitsave', 'Add dashboard', '1.2.3');
+        $this->fails('pc', 'Switch to the clean main branch', 'gitdeploy');
+    }
+
+    public function test_gitrelease_squashes_only_the_saved_feature_into_main_after_confirmation(): void
+    {
+        file_put_contents($this->directory.'/pc/scripts/git_helpers.ps1', <<<'POWERSHELL'
+function gitpush {
+    param([string]$message, [string]$version, [switch]$Full, [switch]$WaitForCI)
+    if (-not $Full -or -not $WaitForCI) { throw 'Release checks were bypassed.' }
+    git commit -m $message | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Fixture release commit failed.' }
+    git push origin HEAD:main | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Fixture release push failed.' }
+    Write-Output "RELEASED $message|$version"
+}
+POWERSHELL);
+        $this->git($this->directory.'/pc', 'add', 'scripts/git_helpers.ps1');
+        $this->git($this->directory.'/pc', 'commit', '-m', 'Add fixture publisher');
+        $this->git($this->directory.'/pc', 'push', 'origin', 'main');
+        $this->succeeds('pc', 'gitstart', 'only-this-feature', '-NoPrepare');
+        file_put_contents($this->directory.'/pc/feature.txt', 'released');
+        $this->succeeds('pc', 'gitsave', 'Complete feature');
+
+        $this->environment['STOCKS_TEST_PROMPT'] = 'RELEASE';
+        $released = $this->workflow('pc', 'gitrelease', 'Add feature', '1.2.3');
+
+        $this->assertTrue($released->isSuccessful(), $released->getOutput().$released->getErrorOutput());
+        $this->assertStringContainsString('RELEASED Add feature|1.2.3', $released->getOutput());
+        $this->assertSame('main', $this->git($this->directory.'/pc', 'branch', '--show-current'));
+        $this->assertSame('released', $this->git($this->directory.'/origin.git', 'show', 'main:feature.txt'));
+        $this->assertSame('', $this->git($this->directory.'/origin.git', 'branch', '--list', 'codex/only-this-feature'));
+        $this->assertNotEmpty($this->git($this->directory.'/pc', 'for-each-ref', '--format=%(refname)', 'refs/stocks/released'));
+    }
+
+    public function test_gitdiscard_deletes_only_the_confirmed_inactive_feature_and_keeps_a_recovery_ref(): void
+    {
+        file_put_contents($this->directory.'/pc/scripts/git_preview_helpers.ps1', <<<'POWERSHELL'
+function Invoke-StocksPreviewSsh { param([string]$Destination, [string]$Command) $env:STOCKS_TEST_PREVIEW_MARKER }
+POWERSHELL);
+        $this->git($this->directory.'/pc', 'add', 'scripts/git_preview_helpers.ps1');
+        $this->git($this->directory.'/pc', 'commit', '-m', 'Add preview fixture');
+        $this->git($this->directory.'/pc', 'push', 'origin', 'main');
+        $main = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
+        $this->succeeds('pc', 'gitstart', 'discard-this', '-NoPrepare');
+        file_put_contents($this->directory.'/pc/discard.txt', 'temporary');
+        $this->succeeds('pc', 'gitsave', 'Share temporary feature');
+        $this->succeeds('pc', 'gitmain', '-NoPrepare');
+        $this->environment['STOCKS_TEST_PREVIEW_MARKER'] = json_encode([
+            'format' => 'stocks-preview-instance-v1',
+            'state' => 'active',
+            'root' => '/home/1486907.cloudwaysapps.com/hbnucgvzmy/public_html',
+            'target_app_id' => '6690486',
+            'commit' => $main,
+        ], JSON_THROW_ON_ERROR);
+        $this->environment['STOCKS_TEST_PROMPT'] = 'DISCARD codex/discard-this';
+
+        $discarded = $this->workflow('pc', 'gitdiscard', 'discard-this');
+
+        $this->assertTrue($discarded->isSuccessful(), $discarded->getOutput().$discarded->getErrorOutput());
+        $this->assertSame('', $this->git($this->directory.'/origin.git', 'branch', '--list', 'codex/discard-this'));
+        $this->assertSame($main, $this->git($this->directory.'/origin.git', 'rev-parse', 'main'));
+        $this->assertNotEmpty($this->git($this->directory.'/pc', 'for-each-ref', '--format=%(refname)', 'refs/stocks/discarded'));
+    }
+
+    public function test_gitdeploy_checks_the_exact_main_release_and_passes_its_source_to_cloudways(): void
+    {
+        $source = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
+        mkdir($this->directory.'/pc/deployment');
+        file_put_contents($this->directory.'/pc/deployment/source-commit', $source."\n");
+        file_put_contents($this->directory.'/pc/scripts/git_deploy_helpers.ps1', <<<'POWERSHELL'
+function Invoke-StocksLiveSsh { param([string]$Destination, [string]$Command) Write-Output "SSH $Destination $Command" }
+POWERSHELL);
+        $this->git($this->directory.'/pc', 'add', '-A');
+        $this->git($this->directory.'/pc', 'commit', '-m', 'Build fixture release');
+        $this->git($this->directory.'/pc', 'push', 'origin', 'main');
+        $release = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
+        $this->environment['STOCKS_TEST_PREPARE'] = '1';
+        $this->environment['STOCKS_TEST_PROMPT'] = 'LIVE';
+        $this->environment['STOCKS_TEST_CI'] = json_encode([[
+            'status' => 'completed', 'conclusion' => 'success', 'headSha' => $release,
+        ]], JSON_THROW_ON_ERROR);
+
+        $deployed = $this->workflow('pc', 'gitdeploy');
+
+        $this->assertTrue($deployed->isSuccessful(), $deployed->getOutput().$deployed->getErrorOutput());
+        $this->assertStringContainsString('SSH sftp_gkstocks_admin@165.227.156.99', $deployed->getOutput());
+        $this->assertStringContainsString("STOCKS_EXPECTED_SOURCE_COMMIT={$source} composer pdeploy --no-interaction", $deployed->getOutput());
+        $this->assertSame($release, $this->git($this->directory.'/origin.git', 'rev-parse', 'main'));
+    }
+
+    public function test_gitpreview_installs_a_saved_update_of_the_same_feature_without_changing_main(): void
+    {
+        file_put_contents($this->directory.'/pc/scripts/git_preview_helpers.ps1', <<<'POWERSHELL'
+function New-StocksPreviewBundle {
+    param([string]$Branch, [string]$Commit)
+    [pscustomobject]@{ Commit = $Commit; Digest = ('a' * 64); Directory = '.'; BundlePath = 'bundle.zip' }
+}
+function Save-StocksPreviewReceipt { param([object]$Bundle, [string]$Branch, [string]$MainCommit) }
+function Invoke-StocksPreviewSsh { param([string]$Destination, [string]$Command) $env:STOCKS_TEST_PREVIEW_MARKER }
+function Send-StocksPreviewBundle { param([object]$Bundle, [string]$OldCommit) Write-Output "PREVIEW $OldCommit $($Bundle.Commit)" }
+POWERSHELL);
+        $this->git($this->directory.'/pc', 'add', 'scripts/git_preview_helpers.ps1');
+        $this->git($this->directory.'/pc', 'commit', '-m', 'Add preview fixture');
+        $this->git($this->directory.'/pc', 'push', 'origin', 'main');
+        $main = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
+        $this->succeeds('pc', 'gitstart', 'preview-flow', '-NoPrepare');
+        file_put_contents($this->directory.'/pc/feature.txt', 'first preview');
+        $this->succeeds('pc', 'gitsave', 'First preview');
+        $old = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
+        file_put_contents($this->directory.'/pc/feature.txt', 'updated preview');
+        $this->succeeds('pc', 'gitsave', 'Update preview');
+        $new = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
+        $this->environment['STOCKS_TEST_PREVIEW_MARKER'] = json_encode([
+            'format' => 'stocks-preview-instance-v1',
+            'state' => 'active',
+            'root' => '/home/1486907.cloudwaysapps.com/hbnucgvzmy/public_html',
+            'source_app_id' => '6468818',
+            'target_app_id' => '6690486',
+            'commit' => $old,
+        ], JSON_THROW_ON_ERROR);
+
+        $deployed = $this->workflow('pc', 'gitpreview', '-Feature', 'preview-flow');
+
+        $this->assertTrue($deployed->isSuccessful(), $deployed->getOutput().$deployed->getErrorOutput());
+        $this->assertStringContainsString("PREVIEW {$old} {$new}", $deployed->getOutput());
+        $this->assertSame($main, $this->git($this->directory.'/origin.git', 'rev-parse', 'main'));
+    }
+
+    public function test_version_publication_requires_prepared_notes_and_updates_the_application_version(): void
+    {
+        copy(dirname(__DIR__, 2).'/scripts/git_helpers.ps1', $this->directory.'/pc/scripts/git_helpers.ps1');
+        mkdir($this->directory.'/pc/config');
+        file_put_contents($this->directory.'/pc/config/stocks.php', "<?php\nreturn [\n    'version' => '1.0.2',\n];\n");
+        file_put_contents($this->directory.'/pc/UPDATES.md', "## 1.0.2\nOld release\n");
+
+        $missingNotes = $this->powershell($this->directory.'/pc', '. ./scripts/git_helpers.ps1; Set-StocksReleaseVersion -Version 1.0.3');
+        $this->assertFalse($missingNotes->isSuccessful());
+        $this->assertStringContainsString('Add the release notes', $missingNotes->getErrorOutput());
+        $this->assertStringContainsString("'version' => '1.0.2'", file_get_contents($this->directory.'/pc/config/stocks.php'));
+
+        file_put_contents($this->directory.'/pc/UPDATES.md', "## 1.0.3\nNew release\n\n## 1.0.2\nOld release\n");
+        $updated = $this->powershell($this->directory.'/pc', '. ./scripts/git_helpers.ps1; Set-StocksReleaseVersion -Version 1.0.3');
+        $this->assertTrue($updated->isSuccessful(), $updated->getErrorOutput());
+        $this->assertStringContainsString("'version' => '1.0.3'", file_get_contents($this->directory.'/pc/config/stocks.php'));
+    }
+
+    public function test_preview_resume_reuses_only_the_exact_untampered_bundle_and_ci_commit(): void
+    {
+        $commit = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
+        $this->environment['STOCKS_TEST_CI'] = json_encode([[
+            'status' => 'completed', 'conclusion' => 'success', 'headSha' => $commit,
+        ]], JSON_THROW_ON_ERROR);
+        $this->environment['STOCKS_TEST_COMMIT'] = $commit;
+        $prepared = $this->powershell($this->directory.'/pc', <<<'POWERSHELL'
+. ./scripts/git_branch_helpers.ps1
+. ./scripts/git_preview_helpers.ps1
+$id = 'a' * 32
+$directory = git rev-parse --git-path stocks-preview
+$build = Join-Path $directory "build-$id"
+New-Item -ItemType Directory -Path $build -Force | Out-Null
+$names = @("stocks-preview-$env:STOCKS_TEST_COMMIT.zip", 'PreviewReleaseUpdate.php', 'PreviewReleaseBundle.php', 'PreviewFileSwap.php', 'preview-update.php', 'stocks_preview_target.json')
+foreach ($name in $names) { [IO.File]::WriteAllText((Join-Path $build $name), $name) }
+$digest = (Get-FileHash -LiteralPath (Join-Path $build $names[0]) -Algorithm SHA256).Hash.ToLowerInvariant()
+$bundle = [pscustomobject]@{ Id = $id; Directory = $build; BundlePath = (Join-Path $build $names[0]); Digest = $digest; Commit = $env:STOCKS_TEST_COMMIT }
+Save-StocksPreviewReceipt -Bundle $bundle -Branch main -MainCommit $env:STOCKS_TEST_COMMIT
+$resumed = Read-StocksPreviewReceipt -Id $id -Branch main -Commit $env:STOCKS_TEST_COMMIT -MainCommit $env:STOCKS_TEST_COMMIT
+Write-Output "RESUMED $($resumed.Id)"
+POWERSHELL);
+        $this->assertTrue($prepared->isSuccessful(), $prepared->getOutput().$prepared->getErrorOutput());
+        $this->assertStringContainsString('RESUMED '.str_repeat('a', 32), $prepared->getOutput());
+
+        $helper = $this->directory.'/pc/.git/stocks-preview/build-'.str_repeat('a', 32).'/PreviewFileSwap.php';
+        file_put_contents($helper, 'tampered');
+        $tampered = $this->powershell($this->directory.'/pc', <<<'POWERSHELL'
+. ./scripts/git_branch_helpers.ps1
+. ./scripts/git_preview_helpers.ps1
+Read-StocksPreviewReceipt -Id ('a' * 32) -Branch main -Commit $env:STOCKS_TEST_COMMIT -MainCommit $env:STOCKS_TEST_COMMIT
+POWERSHELL);
+        $this->assertFalse($tampered->isSuccessful());
+        $this->assertStringContainsString('Prepared preview file changed', $tampered->getErrorOutput());
+    }
+
     public function test_preparation_requires_local_environment_and_never_runs_database_updates(): void
     {
-        $this->fails('pc', '.env is missing', 'gitprepare');
+        $this->fails('pc', '.env is missing', 'gitmain');
         file_put_contents($this->directory.'/pc/.env', "APP_ENV=production\n");
-        $this->fails('pc', 'APP_ENV=local', 'gitprepare');
+        $this->fails('pc', 'APP_ENV=local', 'gitmain');
         file_put_contents($this->directory.'/pc/.env', "APP_ENV=local\n");
         $this->environment['STOCKS_TEST_PREPARE'] = '1';
-        $result = $this->workflow('pc', 'gitprepare');
+        $result = $this->workflow('pc', 'gitmain');
         $this->assertTrue($result->isSuccessful(), $result->getOutput().$result->getErrorOutput());
         $this->assertStringContainsString('scripts/update.php --target=local --prepare', $result->getOutput());
         $this->assertStringContainsString('artisan config:clear', $result->getOutput());
@@ -292,6 +485,9 @@ POWERSHELL);
 $ErrorActionPreference = 'Stop'
 if ($env:STOCKS_TEST_CI) {
     function gh { $global:LASTEXITCODE = 0; $env:STOCKS_TEST_CI }
+}
+if ($env:STOCKS_TEST_PROMPT) {
+    function Read-Host { param([string]$Prompt) $env:STOCKS_TEST_PROMPT }
 }
 function git {
     if ($args -contains 'get-url') {

@@ -327,6 +327,24 @@ class DeploymentWorkflowTest extends TestCase
         }
     }
 
+    public function test_deployment_refuses_a_different_source_than_the_one_selected_by_gitdeploy(): void
+    {
+        $directory = $this->createCloudwaysShellFixture();
+        $process = new Process([
+            $this->bashExecutable(),
+            '-lc',
+            'export PATH="$1/bin:$PATH"; bash "$1/scripts/deploy_cloudways.sh"',
+            'stocks-deployment-test',
+            $this->bashPath($directory),
+        ], $directory, ['STOCKS_EXPECTED_SOURCE_COMMIT' => str_repeat('b', 40)]);
+        $process->run();
+
+        $this->assertFalse($process->isSuccessful());
+        $this->assertStringContainsString('does not match the source commit selected by gitdeploy', $process->getErrorOutput());
+        $this->assertFileDoesNotExist("{$directory}/storage/framework/down");
+        $this->assertFileDoesNotExist("{$directory}/storage/framework/cloudways-deploy-maintenance");
+    }
+
     public function test_cloudways_deployment_secures_the_environment_file(): void
     {
         $deploymentDirectory = $this->createCloudwaysShellFixture();
@@ -494,10 +512,11 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertStringContainsString('ITStudioAT/(?:schooltool|stocks)', $installer);
         $this->assertStringContainsString('remote get-url --all --push origin', $installer);
         $this->assertStringContainsString('Push-Location -LiteralPath `$repositoryRoot', $installer);
-        $this->assertStringContainsString('Join-Path `$repositoryRoot \'scripts/gitpush.ps1\'', $installer);
+        $this->assertStringContainsString("function gitdeploy { Invoke-ProjectGitWorkflow 'gitdeploy'", $installer);
+        $this->assertStringNotContainsString('function gitpush {', $installer);
         $this->assertStringNotContainsString('C:\\laravel\\schooltool', $installer);
         $this->assertStringContainsString(
-            'Cloudways terminal (including Pull-managed applications): run composer pdeploy',
+            'Run gitdeploy from a clean main checkout',
             file_get_contents($this->projectPath('scripts/git_helpers.ps1')),
         );
     }

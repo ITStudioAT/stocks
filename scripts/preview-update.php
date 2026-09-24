@@ -2,9 +2,11 @@
 
 declare(strict_types=1);
 
+use App\Services\PreviewBackgroundState;
 use App\Services\PreviewFileSwap;
 use App\Services\PreviewReleaseBundle;
 use App\Services\PreviewReleaseUpdate;
+use Illuminate\Contracts\Console\Kernel;
 use Symfony\Component\Process\Process;
 
 try {
@@ -34,11 +36,20 @@ try {
         throw new RuntimeException('Preview target metadata mismatch.');
     }
     require $root.'/vendor/autoload.php';
+    if ($mode !== 'recover') {
+        $application = require $root.'/bootstrap/app.php';
+        $application->make(Kernel::class)->bootstrap();
+    }
     $services = is_file(__DIR__.'/PreviewReleaseUpdate.php') ? __DIR__ : dirname(__DIR__).'/app/Services';
     foreach (['PreviewFileSwap', 'PreviewReleaseBundle', 'PreviewReleaseUpdate'] as $service) {
         require_once $services.'/'.$service.'.php';
     }
-    $update = new PreviewReleaseUpdate($target, new PreviewReleaseBundle, new PreviewFileSwap);
+    $update = new PreviewReleaseUpdate(
+        $target,
+        new PreviewReleaseBundle,
+        new PreviewFileSwap,
+        $mode === 'recover' ? null : fn (): bool => $application->make(PreviewBackgroundState::class)->enabled(),
+    );
     if ($mode === 'recover') {
         $update->recover($root, $owner);
         fwrite(STDOUT, "Preview update recovery completed; database unchanged.\n");

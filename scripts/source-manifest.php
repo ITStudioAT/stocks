@@ -367,7 +367,7 @@ function verifySourceManifest(string $manifestPath): int
     if ($differences !== []) {
         fwrite(STDERR, "The pulled source does not match its deployment release:\n");
         describeManifestMismatch($differences);
-        fwrite(STDERR, "Pull main again after gitpush has completed.\n");
+        fwrite(STDERR, "Pull main again after gitsave on main has completed.\n");
         fwrite(STDERR, "If only unlisted files remain, Cloudways preserved removed source files; delete exactly those listed files before retrying.\n");
 
         return 1;

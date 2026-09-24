@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Closure;
 use RuntimeException;
 use Throwable;
 
@@ -12,11 +13,15 @@ class PreviewReleaseUpdate
         private array $target,
         private PreviewReleaseBundle $bundles = new PreviewReleaseBundle,
         private PreviewFileSwap $files = new PreviewFileSwap,
+        private ?Closure $backgroundEnabled = null,
     ) {}
 
     /** @return array{current_commit: string, next_commit: string, state: string} */
     public function inspect(string $archive, string $digest, string $root, int $owner, string $expectedCommit): array
     {
+        if ($this->backgroundEnabled && ($this->backgroundEnabled)()) {
+            throw new RuntimeException('Turn preview OFF in production Data > Cloudways before updating it.');
+        }
         $private = $this->privateDirectory($root, $owner);
         $this->files->assertNoPendingSwap($root);
         if (file_exists($private.'/update.json') || is_link($private.'/update.json')
@@ -63,6 +68,9 @@ class PreviewReleaseUpdate
             $this->writeNew($private.'/update.json', json_encode($journal, JSON_THROW_ON_ERROR), 0600);
             try {
                 $this->enterMaintenance($root, $private, $journal['nonce']);
+                if ($this->backgroundEnabled && ($this->backgroundEnabled)()) {
+                    throw new RuntimeException('Preview background processing was enabled during the update.');
+                }
                 $this->files->exchange($root, $staging, $journal['backup'], $newManifest['commit'], retainRuntime: true);
                 $marker['commit'] = $newManifest['commit'];
                 $marker['manifest_sha256'] = $journal['new_digest'];

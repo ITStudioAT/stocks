@@ -67,9 +67,17 @@ prepare_cloudways_pull() {
 ensure_release_files() {
     if [ ! -f "$frontend_release_archive" ] || [ ! -f "$frontend_release_archive_hash" ] || [ ! -f "$frontend_release_marker" ] || [ ! -f "$frontend_release_manifest" ]; then
         echo "The deployment release is missing." >&2
-        echo "Run gitpush locally, then use Cloudways Pull from the main branch again." >&2
+        echo "Run gitsave on local main, then use Cloudways Pull from the main branch again." >&2
 
         return 1
+    fi
+
+    if [ -n "${STOCKS_EXPECTED_SOURCE_COMMIT:-}" ]; then
+        if [[ ! "$STOCKS_EXPECTED_SOURCE_COMMIT" =~ ^[0-9a-f]{40,64}$ ]] ||
+            [ "$(tr -d '\r\n' < "$frontend_release_marker")" != "$STOCKS_EXPECTED_SOURCE_COMMIT" ]; then
+            echo 'The pulled release does not match the source commit selected by gitdeploy.' >&2
+            return 1
+        fi
     fi
 }
 
@@ -78,7 +86,7 @@ prepare_frontend_artifact() {
 
     if ! php scripts/frontend-release.php verify; then
         echo "The pulled source and frontend release do not belong together." >&2
-        echo "Run gitpush locally and use Cloudways Pull again." >&2
+        echo "Run gitsave on local main and use Cloudways Pull again." >&2
 
         return 1
     fi

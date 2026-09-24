@@ -54,74 +54,6 @@ function mu {
     Write-Host 'Composer and npm packages are up to date.' -ForegroundColor Green
 }
 
-function gitpush {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory = `$true)]
-        [string]`$message,
-
-        [Parameter(Mandatory = `$false)]
-        [string]`$version,
-
-        [Parameter(Mandatory = `$false)]
-        [switch]`$WaitForCI,
-
-        [Parameter(Mandatory = `$false)]
-        [switch]`$Full
-    )
-
-    `$repositoryRoot = git rev-parse --show-toplevel 2>`$null
-
-    if (`$LASTEXITCODE -ne 0 -or -not `$repositoryRoot) {
-        throw 'gitpush must be run inside a Git repository.'
-    }
-
-    `$repositoryRoot = `$repositoryRoot.Trim()
-    `$remoteUrl = git -C `$repositoryRoot remote get-url origin 2>`$null
-
-    if (`$LASTEXITCODE -ne 0 -or -not `$remoteUrl) {
-        throw 'gitpush requires an origin remote.'
-    }
-
-    `$remoteUrl = `$remoteUrl.Trim()
-    `$trustedRemotePattern = '^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)(?<repository>ITStudioAT/(?:schooltool|stocks))(?:\.git)?/?$'
-    `$remoteMatch = [regex]::Match(`$remoteUrl, `$trustedRemotePattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-
-    if (-not `$remoteMatch.Success) {
-        throw "gitpush does not trust the origin remote: `$remoteUrl"
-    }
-
-    `$pushUrls = @(git -C `$repositoryRoot remote get-url --all --push origin 2>`$null)
-
-    if (`$LASTEXITCODE -ne 0 -or `$pushUrls.Count -eq 0) {
-        throw 'gitpush requires an origin push URL.'
-    }
-
-    foreach (`$pushUrl in `$pushUrls) {
-        `$pushUrl = `$pushUrl.Trim()
-        `$pushMatch = [regex]::Match(`$pushUrl, `$trustedRemotePattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-
-        if (-not `$pushMatch.Success -or `$pushMatch.Groups['repository'].Value -ine `$remoteMatch.Groups['repository'].Value) {
-            throw "gitpush does not trust the origin push URL: `$pushUrl"
-        }
-    }
-
-    `$projectGitPush = Join-Path `$repositoryRoot 'scripts/gitpush.ps1'
-
-    if (-not (Test-Path -LiteralPath `$projectGitPush -PathType Leaf)) {
-        throw "The trusted repository does not provide scripts/gitpush.ps1: `$repositoryRoot"
-    }
-
-    Push-Location -LiteralPath `$repositoryRoot
-
-    try {
-        & `$projectGitPush @PSBoundParameters
-    }
-    finally {
-        Pop-Location
-    }
-}
-
 function gitpull {
     git pull @args
     if (`$LASTEXITCODE -ne 0) {
@@ -168,7 +100,6 @@ function gitwork { Invoke-ProjectGitWorkflow 'gitwork' `$args }
 function gitmain { Invoke-ProjectGitWorkflow 'gitmain' `$args }
 function gitsave { Invoke-ProjectGitWorkflow 'gitsave' `$args }
 function gitupdate { Invoke-ProjectGitWorkflow 'gitupdate' `$args }
-function gitprepare { Invoke-ProjectGitWorkflow 'gitprepare' `$args }
 function gitcheck { Invoke-ProjectGitWorkflow 'gitcheck' `$args }
 function gitrelease { Invoke-ProjectGitWorkflow 'gitrelease' `$args }
 function gitdiscard { Invoke-ProjectGitWorkflow 'gitdiscard' `$args }
@@ -281,4 +212,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host 'Open a new PowerShell terminal or run: . $PROFILE' -ForegroundColor Cyan
-Write-Host 'Stocks: gitstart, gitwork, gitmain, gitsave, gitupdate, gitprepare, gitcheck. gitpush remains the release command.' -ForegroundColor Cyan
+Write-Host 'Stocks Git: gitstart, gitwork, gitmain, gitsave, gitupdate, gitcheck, gitpreview, gitrelease, gitdeploy, gitdiscard.' -ForegroundColor Cyan

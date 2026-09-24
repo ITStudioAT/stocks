@@ -2,6 +2,7 @@
 
 namespace Tests\Unit;
 
+use App\Services\PreviewFileSwap;
 use App\Services\PreviewReleaseBundle;
 use App\Services\PreviewReleaseUpdate;
 use Illuminate\Filesystem\Filesystem;
@@ -86,6 +87,54 @@ class PreviewReleaseUpdateTest extends TestCase
         $this->assertSame('APP_KEY=original', file_get_contents($this->root.'/.env'));
         $this->assertSame('original', file_get_contents($this->root.'/storage/framework/private-state'));
         $this->assertSame($this->newCommit, $this->marker()['commit']);
+        $this->assertFileDoesNotExist($this->root.'/storage/framework/down');
+        $this->assertFileDoesNotExist($this->root.'/.stocks-preview-private/update.json');
+    }
+
+    public function test_active_background_processing_blocks_an_update_before_maintenance_or_file_changes(): void
+    {
+        $update = new PreviewReleaseUpdate(
+            ['canonicalTargetRoot' => $this->root, 'sourceAppId' => 'source', 'targetAppId' => 'target'],
+            new PreviewReleaseBundle,
+            new PreviewFileSwap,
+            fn (): bool => true,
+        );
+
+        try {
+            $update->apply($this->archive, $this->digest, $this->root, fileowner($this->root), $this->oldCommit, fn (): null => null);
+            $this->fail('The update accepted active preview background processing.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('Turn preview OFF', $exception->getMessage());
+        }
+
+        $this->assertSame($this->oldCommit, $this->marker()['commit']);
+        $this->assertFileDoesNotExist($this->root.'/storage/framework/down');
+        $this->assertFileDoesNotExist($this->root.'/.stocks-preview-private/update.json');
+    }
+
+    public function test_background_processing_enabled_after_inspection_restores_maintenance_without_swapping_code(): void
+    {
+        $checks = 0;
+        $update = new PreviewReleaseUpdate(
+            ['canonicalTargetRoot' => $this->root, 'sourceAppId' => 'source', 'targetAppId' => 'target'],
+            new PreviewReleaseBundle,
+            new PreviewFileSwap,
+            function () use (&$checks): bool {
+                $checks++;
+
+                return $checks > 1;
+            },
+        );
+
+        try {
+            $update->apply($this->archive, $this->digest, $this->root, fileowner($this->root), $this->oldCommit, fn () => null);
+            $this->fail('The update ignored background processing enabled after inspection.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('enabled during the update', $exception->getMessage());
+        }
+
+        $this->assertSame('old release', file_get_contents($this->root.'/public/index.php'));
+        $this->assertSame($this->oldCommit, $this->marker()['commit']);
         $this->assertFileDoesNotExist($this->root.'/storage/framework/down');
         $this->assertFileDoesNotExist($this->root.'/.stocks-preview-private/update.json');
     }
