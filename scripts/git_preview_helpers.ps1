@@ -146,16 +146,32 @@ function Read-StocksPreviewReceipt {
 
 function Invoke-StocksPreviewSsh {
     param([string]$Destination, [string]$Command)
-    $ssh = Get-Command ssh.exe -ErrorAction Stop
-    $output = & $ssh.Source -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 $Destination $Command
+    $ssh = Get-StocksPreviewClient -Name ssh
+    $output = & $ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 $Destination $Command
     if ($LASTEXITCODE -ne 0) { throw 'Preview SSH command failed. Inspect the target before retrying.' }
     $output
 }
 
+function Get-StocksPreviewClient {
+    param([ValidateSet('ssh', 'scp')][string]$Name)
+    $command = Get-Command "$Name.exe" -CommandType Application -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+    if ($env:WINDIR) {
+        foreach ($directory in @('Sysnative/OpenSSH', 'System32/OpenSSH', 'Program Files/Git/usr/bin')) {
+            $base = if ($directory -like 'Program Files*') { $env:SystemDrive + '/' + $directory } else { $env:WINDIR + '/' + $directory }
+            $path = Join-Path $base "$Name.exe"
+            if (Test-Path -LiteralPath $path -PathType Leaf) { return $path }
+        }
+    }
+    $command = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+    throw "No $Name client was found. Install Windows OpenSSH Client or Git for Windows."
+}
+
 function Invoke-StocksPreviewScp {
     param([string[]]$Sources, [string]$Destination)
-    $scp = Get-Command scp.exe -ErrorAction Stop
-    & $scp.Source -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -O @Sources $Destination
+    $scp = Get-StocksPreviewClient -Name scp
+    & $scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -O @Sources $Destination
     if ($LASTEXITCODE -ne 0) { throw 'Preview encrypted transfer failed. Inspect the private transfer directories before retrying.' }
 }
 
@@ -265,11 +281,11 @@ function Send-StocksPreviewBundle {
     $private = "$root/.stocks-preview-private"
     $prepare = "umask 077 && test `"`$(id -u)`" = 1013 && test `"`$(realpath '$root')`" = '$root' && test ! -L '$private' && test `"`$(stat -c '%u:%a' '$private')`" = '1013:700' && test ! -e '$root/storage/framework/down' && test ! -L '$private/updates' && mkdir -m 700 -p '$private/updates' && mkdir -m 700 '$transfer'"
     Invoke-StocksPreviewSsh -Destination $destination -Command $prepare | Out-Null
-    $scp = Get-Command scp.exe -ErrorAction Stop
+    $scp = Get-StocksPreviewClient -Name scp
     $files = @([IO.Path]::GetFileName($Bundle.BundlePath), 'PreviewReleaseUpdate.php', 'PreviewReleaseBundle.php', 'PreviewFileSwap.php', 'preview-update.php', 'stocks_preview_target.json')
     Push-Location -LiteralPath $Bundle.Directory
     try {
-        & $scp.Source -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -O @files "${destination}:$transfer/"
+        & $scp -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -O @files "${destination}:$transfer/"
         if ($LASTEXITCODE -ne 0) {
             throw "Preview upload failed. Preserve and inspect private transfer $transfer before retrying."
         }

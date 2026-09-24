@@ -52,6 +52,32 @@ class PreviewDataRefreshWorkflowTest extends TestCase
         $this->assertCount(1, glob($this->directory.'/refresh-*/original.snapshot'));
     }
 
+    public function test_ssh_and_scp_clients_resolve_when_windows_open_ssh_is_outside_path(): void
+    {
+        $shell = (new ExecutableFinder)->find(getenv('STOCKS_TEST_SHELL') ?: 'pwsh');
+        if ($shell === null) {
+            $this->markTestSkipped('PowerShell is required for SSH client resolution tests.');
+        }
+        $script = <<<'POWERSHELL'
+. $env:STOCKS_TEST_PREVIEW_HELPER
+. $env:STOCKS_TEST_DEPLOY_HELPER
+$paths = @((Get-StocksPreviewClient -Name ssh), (Get-StocksPreviewClient -Name scp), (Get-StocksLiveSshExecutable))
+foreach ($path in $paths) {
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing client: $path" }
+}
+Write-Output ($paths.Count)
+POWERSHELL;
+        $process = new Process([$shell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', $script],
+            $this->directory, [
+                'STOCKS_TEST_PREVIEW_HELPER' => dirname(__DIR__, 2).'/scripts/git_preview_helpers.ps1',
+                'STOCKS_TEST_DEPLOY_HELPER' => dirname(__DIR__, 2).'/scripts/git_deploy_helpers.ps1',
+            ], timeout: 30);
+        $process->run();
+
+        $this->assertTrue($process->isSuccessful(), $process->getOutput().$process->getErrorOutput());
+        $this->assertSame('3', trim($process->getOutput()));
+    }
+
     private function runWorkflow(bool $failImport = false): Process
     {
         $shell = (new ExecutableFinder)->find(getenv('STOCKS_TEST_SHELL') ?: 'pwsh');
