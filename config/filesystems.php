@@ -33,7 +33,7 @@ return [
         'local' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
-            'serve' => true,
+            'serve' => ! (bool) env('STOCKS_PREVIEW', false),
             'throw' => false,
             'report' => false,
         ],

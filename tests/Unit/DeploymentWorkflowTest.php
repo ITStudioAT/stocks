@@ -72,7 +72,18 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertSame('8.4.1', $composer['config']['platform']['php']);
         $this->assertSame('^8.0', $composer['require']['symfony/http-client']);
         $this->assertSame('^8.0', $composer['require']['symfony/postmark-mailer']);
-        $this->assertSame(2, substr_count($continuousIntegrationWorkflow, "php-version: '8.4'"));
+        $workflow = Yaml::parse($continuousIntegrationWorkflow);
+        $phpJobs = [];
+        foreach ($workflow['jobs'] as $name => $job) {
+            foreach ($job['steps'] as $step) {
+                if (str_starts_with($step['uses'] ?? '', 'shivammathur/setup-php@')) {
+                    $this->assertSame('8.4', $step['with']['php-version'], "PHP version in {$name}");
+                    $phpJobs[] = $name;
+                }
+            }
+        }
+        $this->assertContains('php', $phpJobs);
+        $this->assertContains('release-integrity', $phpJobs);
         $this->assertStringContainsString(
             'run: composer check-platform-reqs --no-interaction',
             $continuousIntegrationWorkflow,
@@ -87,20 +98,24 @@ class DeploymentWorkflowTest extends TestCase
 
         $this->assertArrayHasKey('jobs', $continuousIntegrationConfiguration);
         $this->assertSame(['contents' => 'read'], $continuousIntegrationConfiguration['permissions']);
-        $this->assertSame(3, substr_count($continuousIntegrationWorkflow, 'persist-credentials: false'));
-        $this->assertSame(3, substr_count(
-            $continuousIntegrationWorkflow,
-            'uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0',
-        ));
-        $this->assertSame(2, substr_count(
-            $continuousIntegrationWorkflow,
-            'uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0',
-        ));
-        $this->assertSame(2, substr_count(
-            $continuousIntegrationWorkflow,
-            'uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2',
-        ));
-        $this->assertSame(7, preg_match_all('/^\s+uses:\s+[^@\s]+@[0-9a-f]{40}\s+#\s+\S+$/m', $continuousIntegrationWorkflow));
+        $approvedActions = [
+            'actions/checkout' => '11d5960a326750d5838078e36cf38b85af677262',
+            'actions/setup-node' => '49933ea5288caeca8642d1e84afbd3f7d6820020',
+            'shivammathur/setup-php' => 'f3e473d116dcccaddc5834248c87452386958240',
+        ];
+        foreach ($continuousIntegrationConfiguration['jobs'] as $name => $job) {
+            foreach ($job['steps'] as $step) {
+                if (! isset($step['uses'])) {
+                    continue;
+                }
+                [$action, $revision] = explode('@', $step['uses'], 2);
+                $this->assertArrayHasKey($action, $approvedActions);
+                $this->assertSame($approvedActions[$action], $revision, "Action revision in {$name}");
+                if ($action === 'actions/checkout') {
+                    $this->assertFalse($step['with']['persist-credentials'] ?? true, "Checkout credentials in {$name}");
+                }
+            }
+        }
         $this->assertStringContainsString('run: composer audit --locked', $continuousIntegrationWorkflow);
         $this->assertStringContainsString('run: npm audit', $continuousIntegrationWorkflow);
         $this->assertStringContainsString('run: npm ci --ignore-scripts --no-fund', $continuousIntegrationWorkflow);

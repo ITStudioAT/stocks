@@ -222,3 +222,44 @@ function gitcheck {
     Write-Host 'Remote features:' -ForegroundColor Cyan
     Invoke-StocksGit for-each-ref '--format=%(refname:strip=3)' refs/remotes/origin/codex/
 }
+
+function gitpreview {
+    param([ValidateSet('prepare', 'bundle')][string]$Mode = 'prepare')
+    Assert-StocksRepository
+    Assert-StocksClean
+    $branch = Invoke-StocksGit branch --show-current
+    if ($branch -cne 'main') { $null = Assert-StocksFeature }
+    $commit = Invoke-StocksGit rev-parse HEAD
+    if ($Mode -ceq 'bundle') {
+        . (Join-Path $PSScriptRoot 'git_preview_helpers.ps1')
+        New-StocksPreviewBundle -Branch $branch -Commit $commit
+        return
+    }
+    $targetPath = Join-Path $PSScriptRoot 'stocks_preview_target.json'
+    $target = Get-Content -LiteralPath $targetPath -Raw | ConvertFrom-Json
+    if ($target.repository -cne 'ITStudioAT/stocks' -or $target.sourceAppId -eq $target.targetAppId -or
+        $target.sourceDatabase -ceq $target.targetDatabase -or $target.sourceDatabaseUser -ceq $target.targetDatabaseUser) {
+        throw 'The preview target identity is invalid. No plan was created.'
+    }
+    $pending = @('app-ssh-access', 'canonical-target-root', 'unix-owner', 'web-php-patch', 'cli-php-version',
+        'schema-only-database-grants', 'independent-app-key', 'private-preview-access', 'snapshot-export',
+        'backup-and-restore-drill', 'initial-installation', 'exact-commit-ci', 'preview-smoke-test')
+    $plan = [ordered]@{
+        format = 'stocks-preview-plan-v1'
+        branch = $branch
+        sourceCommit = $commit
+        target = $target
+        pendingGates = $pending
+        canDeploy = $false
+    }
+    $planDirectory = Invoke-StocksGit rev-parse --git-path stocks-preview
+    $null = New-Item -ItemType Directory -Path $planDirectory -Force
+    $planPath = Join-Path $planDirectory ("plan-$commit.json")
+    $json = $plan | ConvertTo-Json -Depth 5
+    [IO.File]::WriteAllText([IO.Path]::GetFullPath($planPath), $json, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "Prepared review plan: $planPath" -ForegroundColor Green
+    Write-Host "Source: $branch at $commit"
+    Write-Host "Target: $($target.targetAppId) at $($target.targetUrl)"
+    Write-Host "Pending gates: $($pending -join ', ')" -ForegroundColor Yellow
+    Write-Host 'No archive, database copy, GitHub push or deployment was performed. See docs/preview-cloudways.md.'
+}

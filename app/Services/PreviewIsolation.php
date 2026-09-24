@@ -1,0 +1,179 @@
+<?php
+
+namespace App\Services;
+
+use RuntimeException;
+
+class PreviewIsolation
+{
+    public function active(): bool
+    {
+        return config('security.preview.enabled', false)
+            || config('app.env') === 'preview'
+            || file_exists(base_path('storage/framework/stocks-preview-instance'))
+            || file_exists(base_path('.stocks-preview-private/swap.json'));
+    }
+
+    public function assertIntegrationAllowed(): void
+    {
+        if ($this->active()) {
+            throw new RuntimeException('External integrations are disabled in the Stocks preview.');
+        }
+    }
+
+    public function assertEodhdAllowed(): void
+    {
+        if ($this->active() && (config('security.preview.control_enabled') !== true
+            || $this->problems() !== [] || ! app(PreviewBackgroundState::class)->enabled())) {
+            throw new RuntimeException('EODHD synchronization is stopped in the Stocks preview.');
+        }
+    }
+
+    /** @return list<string> */
+    public function problems(): array
+    {
+        $problems = [];
+        $require = function (bool $valid, string $field) use (&$problems): void {
+            if (! $valid) {
+                $problems[] = $field;
+            }
+        };
+        $preview = config('security.preview', []);
+        $require(! file_exists(base_path('.stocks-preview-private/swap.json')), 'preview.pending_file_exchange');
+        foreach (['source_app_id', 'target_app_id', 'server_id', 'source_database', 'source_database_user', 'source_url', 'target_root'] as $field) {
+            $require(is_string($preview[$field] ?? null) && trim($preview[$field]) !== '', 'security.preview.'.$field);
+        }
+        $require($this->active() && config('security.preview.enabled') === true && config('app.env') === 'preview', 'preview.role');
+        $require(! config('app.debug'), 'app.debug');
+        $require((password_get_info((string) ($preview['access_password_hash'] ?? ''))['algo'] ?? null) !== null, 'preview.access_password_hash');
+        $require(($preview['source_app_id'] ?? null) !== ($preview['target_app_id'] ?? null), 'preview.distinct_application');
+        $require(realpath((string) ($preview['target_root'] ?? '')) === realpath(base_path()), 'preview.target_root');
+        $require($this->ownsStoragePath(storage_path()), 'preview.storage');
+        $sourceHost = parse_url((string) ($preview['source_url'] ?? ''), PHP_URL_HOST);
+        $targetHost = parse_url((string) config('app.url'), PHP_URL_HOST);
+        $require(is_string($targetHost) && $targetHost !== '' && is_string($sourceHost)
+            && strtolower($sourceHost) !== strtolower($targetHost)
+            && parse_url((string) config('app.url'), PHP_URL_SCHEME) === 'https', 'preview.https_host');
+        $key = (string) config('app.key');
+        $decodedKey = str_starts_with($key, 'base64:') ? base64_decode(substr($key, 7), true) : $key;
+        $fingerprint = (string) ($preview['source_key_sha256'] ?? '');
+        $require(is_string($decodedKey) && strlen($decodedKey) === 32
+            && (($this->installationMarker()['key_sha256'] ?? null) === hash('sha256', $decodedKey)
+                || (preg_match('/^[a-f0-9]{64}$/D', $fingerprint) === 1
+                    && ! hash_equals($fingerprint, hash('sha256', $decodedKey)))), 'preview.independent_key');
+        $require(config('app.previous_keys', []) === [], 'app.previous_keys');
+
+        $database = config('database.connections.'.config('database.default'), []);
+        $require(in_array($database['driver'] ?? '', ['mysql', 'mariadb'], true), 'preview.mysql');
+        $require(! empty($database['database']) && $database['database'] !== ($preview['source_database'] ?? null), 'preview.distinct_database');
+        $require(! empty($database['username']) && $database['username'] !== ($preview['source_database_user'] ?? null), 'preview.distinct_database_user');
+        foreach (['url', 'read', 'write', 'unix_socket', 'prefix'] as $field) {
+            $require(empty($database[$field]), 'preview.database.'.$field);
+        }
+        $controlEnabled = ($preview['control_enabled'] ?? false) === true;
+        foreach (['cache.default' => 'file', 'session.driver' => 'file', 'queue.default' => $controlEnabled ? 'redis' : 'sync', 'mail.default' => 'array', 'filesystems.default' => 'local', 'app.maintenance.driver' => 'file'] as $field => $value) {
+            $require(config($field) === $value, $field);
+        }
+        if ($controlEnabled) {
+            $appId = (string) ($preview['target_app_id'] ?? '');
+            $require(preg_match('/^[a-f0-9]{64}$/D', (string) ($preview['control_key'] ?? '')) === 1, 'preview.control_key');
+            $require(is_string(config('services.eodhd.key')) && trim(config('services.eodhd.key')) !== '', 'services.eodhd.key');
+            $require(config('services.eodhd.base_url') === 'https://eodhd.com/api', 'services.eodhd.base_url');
+            $require(config('queue.connections.redis.queue') === 'stocks-preview-'.$appId, 'preview.redis_queue');
+            $require(config('database.redis.options.prefix') === 'stocks-preview-'.$appId.'-database-', 'preview.redis_prefix');
+            $require(empty(config('database.redis.default.url'))
+                && in_array(config('database.redis.default.host'), ['127.0.0.1', 'localhost'], true), 'preview.redis_host');
+        }
+        $require(config('filesystems.disks.local.serve') === false, 'preview.private_storage_not_served');
+        foreach (['session.files', 'view.compiled', 'cache.stores.file.path', 'cache.stores.file.lock_path'] as $field) {
+            $require($this->ownsStoragePath(config($field)), $field);
+        }
+        $require(config('session.domain') === null && config('session.path') === '/', 'session.host_only');
+        $require(config('session.secure') === true && config('session.http_only') === true && config('session.encrypt') === true, 'session.security');
+        $require(in_array(config('session.same_site'), ['lax', 'strict'], true), 'session.same_site');
+        $require(str_starts_with((string) config('session.cookie'), '__Host-stocks-preview-'), 'session.cookie');
+        foreach (['services.cloudways.deployment.access_token', 'database.connections.cloudways.password', 'filesystems.disks.s3.key', 'filesystems.disks.s3.secret'] as $field) {
+            $require(empty(config($field)), $field);
+        }
+        if (! $controlEnabled) {
+            $require(empty(config('services.eodhd.key')), 'services.eodhd.key');
+        }
+        foreach (config('ai.providers', []) as $provider => $configuration) {
+            foreach (['key', 'secret', 'token', 'access_key_id', 'secret_access_key', 'session_token', 'use_default_credential_provider'] as $field) {
+                $require(empty($configuration[$field]), 'ai.providers.'.$provider.'.'.$field);
+            }
+        }
+
+        return array_values(array_unique($problems));
+    }
+
+    /** @return array<string, mixed> */
+    public function installationMarker(): array
+    {
+        $path = base_path('storage/framework/stocks-preview-instance');
+        if (! is_file($path) || is_link($path) || filesize($path) > 4096) {
+            return [];
+        }
+        $marker = json_decode((string) file_get_contents($path), true);
+        if (! is_array($marker) || ($marker['format'] ?? null) !== 'stocks-preview-instance-v1'
+            || ($marker['root'] ?? null) !== realpath(base_path())
+            || ($marker['source_app_id'] ?? null) !== config('security.preview.source_app_id')
+            || ($marker['target_app_id'] ?? null) !== config('security.preview.target_app_id')) {
+            return [];
+        }
+
+        return $marker;
+    }
+
+    /** @return resource */
+    public function lockInstallation(): mixed
+    {
+        $root = realpath(base_path());
+        $private = $root.DIRECTORY_SEPARATOR.'.stocks-preview-private';
+        if (! is_dir($private) || realpath($private) !== $private || fileowner($private) !== fileowner($root)
+            || is_link($private.'/installation.lock')) {
+            throw new RuntimeException('Preview installation lock directory is invalid.');
+        }
+        $lock = fopen($private.'/installation.lock', 'c');
+        if ($lock === false || ! flock($lock, LOCK_EX | LOCK_NB)) {
+            throw new RuntimeException('Another preview installation operation is running.');
+        }
+        try {
+            app(PreviewFileSwap::class)->assertNoPendingSwap($root);
+        } catch (RuntimeException $exception) {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+            throw $exception;
+        }
+
+        return $lock;
+    }
+
+    public function ownsStoragePath(mixed $path): bool
+    {
+        if (! is_string($path) || $path === '' || preg_match('~(?:^|[\\\\/])\.\.?([\\\\/]|$)~', $path)) {
+            return false;
+        }
+        $application = realpath(base_path());
+        $storage = realpath(storage_path());
+        if ($application === false || $storage === false || is_file($path)) {
+            return false;
+        }
+        $candidate = $path;
+        while (! file_exists($candidate) && ! is_link($candidate)) {
+            $parent = dirname($candidate);
+            if ($parent === $candidate || $parent === '.') {
+                return false;
+            }
+            $candidate = $parent;
+        }
+        $resolved = realpath($candidate);
+        if ($resolved === false) {
+            return false;
+        }
+        $normalize = fn (string $value): string => (PHP_OS_FAMILY === 'Windows' ? strtolower(str_replace('\\', '/', $value)) : $value).'/';
+
+        return str_starts_with($normalize($storage), $normalize($application))
+            && str_starts_with($normalize($resolved), $normalize($storage));
+    }
+}

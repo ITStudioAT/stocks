@@ -333,7 +333,9 @@ class AdminDepotHoldingTest extends TestCase
         $firstHolding = StockHolding::factory()->create([
             'name' => 'Alpha ETF',
         ]);
-        StockHolding::factory()->count(10)->create();
+        StockHolding::factory()->count(10)->sequence(
+            fn ($sequence): array => ['name' => sprintf('Middle ETF %02d', $sequence->index)],
+        )->create();
         $lastHolding = StockHolding::factory()->create([
             'name' => 'Zulu ETF',
         ]);

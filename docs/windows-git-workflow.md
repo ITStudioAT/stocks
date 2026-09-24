@@ -168,5 +168,7 @@ Dann `composer setup:powershell`, ein neues Terminal und `gitprepare`. Die tägl
 | `gitsave "Describe changes"` erfolgreich abwarten | `gitwork depot-filter` |
 | Einen fertigen main-Release veröffentlichen | `gitmain` |
 
-Die Cloudways-Vorschau ist ebenfalls eine eigene spätere Phase. Aus Schooltool
-werden keine Preview-Server, Datenbanken oder LIVE-Einstellungen übernommen.
+Für die getrennte Cloudways-Vorschau erstellt `gitpreview prepare` bereits einen
+lokalen Prüfplan. Der aktuelle Stand und die noch offenen Erstinstallations-Gates
+stehen in [preview-cloudways.md](preview-cloudways.md). Aus Schooltool werden keine
+Preview-Server, Datenbanken oder LIVE-Einstellungen übernommen.

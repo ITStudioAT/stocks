@@ -7747,6 +7747,7 @@ describe('App', () => {
         localStorage.removeItem('data_intraday_refresh_info_dismissed');
         let mockedIndexPriceRefreshSettings = indexPriceRefreshSettings();
         let mockedIndexDataUpdateSettings = indexDataUpdateSettings();
+        let previewEnabled = false;
         let resolveStockTradingTimeHealthCheck;
         const stockTradingTimeHealthCheckRequest = new Promise((resolve) => {
             resolveStockTradingTimeHealthCheck = resolve;
@@ -8444,6 +8445,16 @@ describe('App', () => {
                 }));
             }
 
+            if (path === '/admin/preview/status') {
+                return Promise.resolve(jsonResponse({ configured: true, enabled: previewEnabled }));
+            }
+
+            if (path === '/admin/preview/control' && options?.method === 'POST') {
+                previewEnabled = JSON.parse(options.body).enabled;
+
+                return Promise.resolve(jsonResponse({ configured: true, enabled: previewEnabled }));
+            }
+
             if (path === '/admin/cloudways/sync' && options?.method === 'POST') {
                 return Promise.resolve(ndjsonResponse([
                     {
@@ -8665,6 +8676,19 @@ describe('App', () => {
 
         expect(window.location.pathname).toBe('/admin/menu/data/cloudways');
         expect(fetchMock).toHaveBeenCalledWith('/admin/cloudways/status', expect.anything());
+        expect(fetchMock).toHaveBeenCalledWith('/admin/preview/status', expect.anything());
+        const previewControl = wrapper.get('[aria-label="Preview control"]');
+        expect(previewControl.text()).toContain('Stopped');
+        await previewControl.findAll('button').find((button) => button.text().trim() === 'Start preview').trigger('click');
+        await flushPromises();
+        expect(fetchMock).toHaveBeenCalledWith('/admin/preview/control', expect.objectContaining({
+            method: 'POST',
+            body: JSON.stringify({ enabled: true }),
+        }));
+        expect(previewControl.text()).toContain('Running');
+        await previewControl.findAll('button').find((button) => button.text().trim() === 'Stop preview').trigger('click');
+        await flushPromises();
+        expect(previewControl.text()).toContain('Stopped');
         expect(fetchMock).not.toHaveBeenCalledWith('/admin/cloudways/check', expect.anything());
         expect(wrapper.find('[aria-label="Cloudways comparison result"]').exists()).toBe(false);
         expect(wrapper.findAll('button').some((button) => button.text().trim() === 'Sync differences')).toBe(false);

@@ -44,7 +44,7 @@ class GitBranchWorkflowTest extends TestCase
         $this->git($this->directory, 'init', '--bare', '--initial-branch=main', 'origin.git');
         $this->git($this->directory, 'clone', 'origin.git', 'pc');
         mkdir($this->directory.'/pc/scripts');
-        foreach (['git_branch_helpers.ps1', 'git_workflow.ps1', 'install_powershell_helpers.ps1'] as $script) {
+        foreach (['git_branch_helpers.ps1', 'git_workflow.ps1', 'git_preview_helpers.ps1', 'install_powershell_helpers.ps1', 'stocks_preview_target.json'] as $script) {
             copy(dirname(__DIR__, 2).'/scripts/'.$script, $this->directory.'/pc/scripts/'.$script);
         }
         file_put_contents($this->directory.'/pc/.gitignore', ".env\n");
@@ -75,6 +75,32 @@ class GitBranchWorkflowTest extends TestCase
         $this->succeeds('pc', 'gitmain', '-NoPrepare');
         $this->assertSame($main, $this->git($this->directory.'/pc', 'rev-parse', 'HEAD'));
         $this->assertSame('', $this->git($this->directory.'/origin.git', 'tag', '--list'));
+    }
+
+    public function test_preview_prepare_records_exact_source_without_publishing_or_changing_data(): void
+    {
+        $before = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
+        $this->succeeds('pc', 'gitpreview', 'prepare');
+        $path = $this->directory.'/pc/.git/stocks-preview/plan-'.$before.'.json';
+        $plan = json_decode(file_get_contents($path), true, flags: JSON_THROW_ON_ERROR);
+        $this->assertSame($before, $plan['sourceCommit']);
+        $this->assertSame('6690486', $plan['target']['targetAppId']);
+        $this->assertFalse($plan['canDeploy']);
+        $this->assertContains('backup-and-restore-drill', $plan['pendingGates']);
+        $this->assertSame('', $this->git($this->directory.'/pc', 'status', '--porcelain'));
+        $this->assertSame($before, $this->git($this->directory.'/pc', 'rev-parse', 'origin/main'));
+        $this->fails('pc', 'Only gitpreview prepare', 'gitpreview', 'deploy');
+        file_put_contents($this->directory.'/pc/example.txt', 'unsaved');
+        $this->fails('pc', 'Unsaved changes exist', 'gitpreview', 'prepare');
+    }
+
+    public function test_preview_bundle_refuses_failed_ci_before_installing_dependencies(): void
+    {
+        $commit = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
+        $this->environment['STOCKS_TEST_CI'] = json_encode([['status' => 'completed', 'conclusion' => 'failure', 'headSha' => $commit]], JSON_THROW_ON_ERROR);
+        $this->fails('pc', 'requires a successful completed GitHub CI run', 'gitpreview', 'bundle');
+        $this->assertDirectoryDoesNotExist($this->directory.'/pc/.git/stocks-preview');
+        $this->assertSame('', $this->git($this->directory.'/pc', 'status', '--porcelain'));
     }
 
     public function test_parallel_features_require_an_explicit_choice(): void
@@ -264,6 +290,9 @@ POWERSHELL);
     {
         $bootstrap = <<<'POWERSHELL'
 $ErrorActionPreference = 'Stop'
+if ($env:STOCKS_TEST_CI) {
+    function gh { $global:LASTEXITCODE = 0; $env:STOCKS_TEST_CI }
+}
 function git {
     if ($args -contains 'get-url') {
         $global:LASTEXITCODE = 0

@@ -3,6 +3,7 @@
 namespace App\Providers;
 
 use App\Jobs\AnalyzeStockResearch;
+use App\Services\PreviewRuntime;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -25,6 +26,7 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        app(PreviewRuntime::class)->install();
         DB::prohibitDestructiveCommands($this->usesProtectedDatabase());
         $this->configureRateLimiters();
     }

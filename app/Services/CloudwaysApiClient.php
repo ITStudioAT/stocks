@@ -38,6 +38,7 @@ class CloudwaysApiClient
 
     public function startGitPull(): void
     {
+        app(PreviewIsolation::class)->assertIntegrationAllowed();
         $serverId = $this->configuredId('server_id');
         $appId = $this->configuredId('app_id');
         $branch = $this->configuredString('branch');
@@ -66,6 +67,7 @@ class CloudwaysApiClient
     /** @return array<int, array<string, mixed>> */
     public function gitDeploymentHistory(): array
     {
+        app(PreviewIsolation::class)->assertIntegrationAllowed();
         $serverId = $this->configuredId('server_id');
         $appId = $this->configuredId('app_id');
 

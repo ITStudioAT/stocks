@@ -13,6 +13,7 @@ use App\Http\Controllers\AdminDepotTransactionController;
 use App\Http\Controllers\AdminHistoricalPriceRowsController;
 use App\Http\Controllers\AdminIndexWatchItemController;
 use App\Http\Controllers\AdminInfoController;
+use App\Http\Controllers\AdminPreviewControlController;
 use App\Http\Controllers\AdminPriceRefreshSettingsController;
 use App\Http\Controllers\AdminProfileController;
 use App\Http\Controllers\AdminQueueStatusController;
@@ -30,7 +31,9 @@ use App\Http\Controllers\AdminV2IndexEodhdSyncController;
 use App\Http\Controllers\AdminV2IndexEodhdSyncSettingsController;
 use App\Http\Controllers\AdminV2IndexRealtimeSyncController;
 use App\Http\Controllers\AdminV2StockEodhdSyncController;
+use App\Http\Controllers\PreviewControlController;
 use App\Http\Controllers\PublicMarketDataController;
+use App\Services\PreviewIsolation;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
@@ -45,18 +48,27 @@ $statelessPublicMiddleware = [
     ShareErrorsFromSession::class,
     PreventRequestForgery::class,
 ];
+$previewPublicMiddleware = app(PreviewIsolation::class)->active()
+    ? ['auth', 'auth.session', 'role:admin|super_admin']
+    : [];
+if ($previewPublicMiddleware !== []) {
+    $statelessPublicMiddleware = [];
+}
 
 Route::view('/', 'homepage')
     ->withoutMiddleware($statelessPublicMiddleware)
+    ->middleware($previewPublicMiddleware)
     ->name('homepage');
 
 Route::get('/indices', [PublicMarketDataController::class, 'indices'])
     ->withoutMiddleware($statelessPublicMiddleware)
+    ->middleware($previewPublicMiddleware)
     ->name('indices');
 
 // Retain the public URL for frontend compatibility, but derive its sign only from public market data.
 Route::get('/depot-sum-sign', [PublicMarketDataController::class, 'marketSign'])
     ->withoutMiddleware($statelessPublicMiddleware)
+    ->middleware($previewPublicMiddleware)
     ->name('depot-sum-sign');
 
 Route::view('/admin/login', 'app')->name('admin.login');
@@ -72,6 +84,14 @@ Route::post('/admin/verify-code', [AdminAuthController::class, 'verifyCode'])
 Route::post('/admin/password-login', [AdminAuthController::class, 'passwordLogin'])
     ->middleware(['guest', 'throttle:admin.password-login'])
     ->name('admin.password-login');
+
+Route::get('/preview/control', [PreviewControlController::class, 'show'])
+    ->middleware('throttle:6,1')
+    ->name('preview.control.show');
+Route::post('/preview/control', [PreviewControlController::class, 'update'])
+    ->withoutMiddleware(PreventRequestForgery::class)
+    ->middleware('throttle:6,1')
+    ->name('preview.control.update');
 
 Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(function (): void {
     Route::view('/admin', 'app')->name('admin.dashboard');
@@ -266,6 +286,10 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
     Route::post('/admin/logout', [AdminAuthController::class, 'logout'])->name('admin.logout');
 
     Route::middleware('role:super_admin')->group(function (): void {
+        Route::get('/admin/preview/status', [AdminPreviewControlController::class, 'show'])->name('admin.preview.status');
+        Route::post('/admin/preview/control', [AdminPreviewControlController::class, 'update'])
+            ->middleware('throttle:6,1')
+            ->name('admin.preview.control');
         Route::get('/admin/cloudways/status', [AdminCloudwaysController::class, 'status'])->name('admin.cloudways.status');
         Route::post('/admin/cloudways/check', [AdminCloudwaysController::class, 'show'])
             ->middleware('throttle:admin.costly-operation')
