@@ -1,11 +1,15 @@
+## 1.1.0
+
+### System
+
+- Implementierung einer Vorschau-Option vorschau.gkstocks.at
+
 ## 1.0.2
 
 ### Depot
 
 - Actual months value for 1.xx fixed
 - Speed up
-
-
 
 ## 1.0.0 - 1.0.1
 
