@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use InvalidArgumentException;
+use JsonException;
 use stdClass;
 
 class PreviewOriginalPolicy
@@ -56,16 +57,33 @@ class PreviewOriginalPolicy
 
     private function redact(string $value): string
     {
-        foreach ($this->sourceSecrets as $secret) {
-            if ($secret !== '') {
-                $value = str_replace([$secret, rawurlencode($secret), urlencode($secret)], '[preview-redacted]', $value);
-            }
+        try {
+            $decoded = json_decode($value, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            return $this->redactPlainText($value);
         }
-        $decoded = json_decode($value);
+
         if (is_array($decoded) || $decoded instanceof stdClass) {
             $redacted = $this->redactJson($decoded);
 
             return $redacted == $decoded ? $value : json_encode($redacted, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
+        }
+
+        if (is_string($decoded)) {
+            $redacted = $this->redactPlainText($decoded);
+
+            return $redacted === $decoded ? $value : json_encode($redacted, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+        }
+
+        return $value;
+    }
+
+    private function redactPlainText(string $value): string
+    {
+        foreach ($this->sourceSecrets as $secret) {
+            if ($secret !== '') {
+                $value = str_replace([$secret, rawurlencode($secret), urlencode($secret)], '[preview-redacted]', $value);
+            }
         }
 
         return preg_replace('/((?:api[_-]?(?:key|token)|access[_-]?token|password|secret)(?:=|%3d))[^&\s"\'<>]+/i', '$1[preview-redacted]', $value) ?? $value;
@@ -83,7 +101,10 @@ class PreviewOriginalPolicy
             } elseif (is_array($value) || $value instanceof stdClass) {
                 $value = $this->redactJson($value);
             } elseif (is_string($value)) {
-                $value = $this->redact($value);
+                $decoded = json_decode($value);
+                $value = is_array($decoded) || $decoded instanceof stdClass
+                    ? $this->redact($value)
+                    : $this->redactPlainText($value);
             }
             if ($copy instanceof stdClass) {
                 $copy->{$key} = $value;

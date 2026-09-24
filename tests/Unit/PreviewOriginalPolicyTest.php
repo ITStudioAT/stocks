@@ -36,6 +36,32 @@ class PreviewOriginalPolicyTest extends TestCase
         $this->assertStringContainsString('symbol=ABC', $encoded);
     }
 
+    public function test_redacting_json_preserves_its_structure_and_scalar_values(): void
+    {
+        $value = json_encode([
+            'enabled' => true,
+            'limit' => 12345,
+            'label' => 'true',
+            'api_key' => 'live-secret',
+            'callback' => 'https://example.test/?token=live-secret&active=true',
+            'nested' => ['active' => false, 'count' => 42],
+        ], JSON_THROW_ON_ERROR);
+
+        $result = (new PreviewOriginalPolicy(['true', 'live-secret']))->prepare([
+            'app_configs' => [['id' => 1, 'key' => 'example', 'value' => $value]],
+        ]);
+
+        $redacted = json_decode($result['app_configs'][0]['value'], true, flags: JSON_THROW_ON_ERROR);
+        $this->assertTrue($redacted['enabled']);
+        $this->assertSame(12345, $redacted['limit']);
+        $this->assertSame(false, $redacted['nested']['active']);
+        $this->assertSame(42, $redacted['nested']['count']);
+        $this->assertSame('[preview-redacted]', $redacted['label']);
+        $this->assertSame('[preview-redacted]', $redacted['api_key']);
+        $this->assertStringNotContainsString('live-secret', $result['app_configs'][0]['value']);
+        $this->assertSame($result, (new PreviewOriginalPolicy(['true', 'live-secret']))->prepare($result));
+    }
+
     public function test_original_archive_is_explicitly_separated_from_anonymized_format(): void
     {
         $keys = sodium_crypto_box_keypair();
