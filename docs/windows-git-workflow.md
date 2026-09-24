@@ -9,9 +9,8 @@ gitcheck
 ```
 
 `main` enthält bei Stocks vollständige Releases einschließlich Frontend-Paket.
-Neue Arbeit liegt auf mehreren unabhängigen Feature-Branches. `gitstart depot-filter`
-legt `codex/depot-filter` an. Dieser Präfix ist die Stocks-Konvention; Schooltool
-behält seine eigenen Branch-Namen und seinen eigenen Release-Ablauf.
+Neue Arbeit liegt auf Feature-Branches. `gitstart depot-filter` legt
+`codex/depot-filter` an. Die zehn Alltagsbefehle heißen wie bei Schooltool.
 
 ## Einmal auf dem Hauptgerät
 
@@ -27,8 +26,8 @@ Ausführen erzeugt keine doppelten Helfer. Er aktiviert den vorhandenen
 `.githooks/pre-push`-Schutz für dieses Repository. Git-Benutzername und E-Mail müssen
 bereits gesetzt sein (`git config user.name`, `git config user.email`).
 
-Der gemeinsame Dispatcher unterstützt Stocks und Schooltool. Schooltools zusätzliche
-Befehle wie `gitpreview` bleiben dort erreichbar; Stocks bietet diese derzeit nicht.
+Der gemeinsame Dispatcher unterstützt Stocks und Schooltool, einschließlich
+`gitpreview`, `gitrelease` und `gitdeploy`.
 Ein älterer Schooltool-Installer kann den gemeinsamen Dispatcher wieder auf seinen
 älteren Stand setzen. Dann zuletzt in Stocks erneut `composer setup:powershell`
 ausführen und ein neues Terminal öffnen. Schooltools Repository wird durch den
@@ -52,8 +51,8 @@ keine Version, keinen Release und kein Deployment. Tags werden nicht mitgeschick
 
 Die Sicherung ist erst abgeschlossen, wenn `gitsave` Erfolg meldet. Bei einem
 Netzwerkfehler bleiben die Commits lokal; nach Behebung erneut `gitsave` ausführen.
-Feature-Sicherungen sind keine Testbestätigung. Die vorhandene GitHub-CI läuft bei
-Pull Requests und auf `main`, nicht automatisch bei jedem Feature-Push.
+Feature-Sicherungen sind keine Testbestätigung. GitHub-CI läuft im Hintergrund;
+mit `-WaitForCI` wartet nur ein main-Release ausdrücklich auf sein Ergebnis.
 
 ## Zwischen parallelen Aufgaben wechseln
 
@@ -127,29 +126,33 @@ für einen laufenden Feature-Branch ist `gitprepare` der passende Befehl.
 Schlägt die Vorbereitung fehl, ist der Git-Wechsel möglicherweise bereits erfolgt.
 `git status` prüfen, die gemeldete Ursache beheben und `gitprepare` wiederholen.
 
-## Feature später in main veröffentlichen
+## Feature in main veröffentlichen und live stellen
 
-Stocks behält seinen bisherigen `gitpush`-Ablauf. `gitsave` ist auf `main` gesperrt,
-damit eine alltägliche Sicherung nicht versehentlich einen Release startet.
-Ein geprüftes Feature kann bewusst so übernommen werden:
+Ein geprüftes und mit `gitsave` auf GitHub gesichertes Feature wird so veröffentlicht:
 
 ```powershell
 gitwork depot-filter
 # Passende Tests ausführen
 gitsave "Complete depot filter"
+gitrelease "Add depot filter" 1.1.1
 gitmain
-git merge --squash codex/depot-filter
-# Ergebnis prüfen; bei Konflikten erst diese lösen
-gitpush "Add depot filter" -WaitForCI
+gitdeploy
 ```
 
-`gitpush` erstellt wie bisher Source- und Release-Commit, baut/verifiziert das
-Frontend-Paket und veröffentlicht `main`. Optional bleibt eine Versionsnummer als
-zweites Argument möglich; `-Full` schaltet die vollständigen lokalen Tests ein.
+`gitrelease` übernimmt das Feature als Squash-Commit, baut/verifiziert das
+Frontend-Paket, veröffentlicht `main` und wartet auf CI. Die Versionsnummer ist
+optional und muss zu den vorbereiteten Notizen in `UPDATES.md` passen. Bei
+Änderungen direkt auf `main` veröffentlicht `gitsave "Beschreibung" VERSION`
+einen vollständigen Release; `-Full` startet alle lokalen Tests und `-WaitForCI`
+wartet zusätzlich auf GitHub-CI.
+
+`gitdeploy` verlangt einen sauberen `main` auf genau dem GitHub-Release-Commit,
+prüft das Paket und zeigt das Live-Ziel vor der Eingabe `LIVE`. Wie bei Schooltool
+läuft GitHub-CI im Hintergrund: `gitdeploy` wartet nicht auf ihren Abschluss.
+Bei einem fehlgeschlagenen CI-Lauf ist der Fehler gesondert zu beheben.
 Ein normaler Git-Push von Quellcode allein auf `main` erfüllt den Release-Vertrag
 nicht. Auch ein GitHub-PR darf nicht ohne diesen Release-Schritt nach `main` gemergt
 werden. GitHub-Veröffentlichung und Cloudways-Deployment sind getrennte Schritte.
-Die Einrichtung dieser Anleitung führt kein Cloudways-Deployment aus.
 
 ## Spätere Phase: weiterer PC und Laptop
 
@@ -168,7 +171,8 @@ Dann `composer setup:powershell`, ein neues Terminal und `gitprepare`. Die tägl
 | `gitsave "Describe changes"` erfolgreich abwarten | `gitwork depot-filter` |
 | Einen fertigen main-Release veröffentlichen | `gitmain` |
 
-Für die getrennte Cloudways-Vorschau erstellt `gitpreview prepare` bereits einen
-lokalen Prüfplan. Der aktuelle Stand und die noch offenen Erstinstallations-Gates
-stehen in [preview-cloudways.md](preview-cloudways.md). Aus Schooltool werden keine
-Preview-Server, Datenbanken oder LIVE-Einstellungen übernommen.
+Die getrennte Cloudways-Vorschau wird mit `gitpreview -Feature NAME` oder
+`gitpreview -Main` aktualisiert. `gitpreview prepare` erstellt nur das geprüfte
+Paket; `gitpreview resume BUNDLE_ID` setzt einen vorbereiteten Vorgang fort.
+`-RefreshData` ist ein eigener Datenwechsel und verlangt die passende
+Wiederherstellung. Details stehen in [preview-cloudways.md](preview-cloudways.md).

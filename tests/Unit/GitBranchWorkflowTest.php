@@ -278,7 +278,7 @@ POWERSHELL);
         $this->assertNotEmpty($this->git($this->directory.'/pc', 'for-each-ref', '--format=%(refname)', 'refs/stocks/discarded'));
     }
 
-    public function test_gitdeploy_checks_the_exact_main_release_and_passes_its_source_to_cloudways(): void
+    public function test_gitdeploy_passes_the_exact_main_release_to_cloudways_while_ci_is_running(): void
     {
         $source = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
         mkdir($this->directory.'/pc/deployment');
@@ -293,13 +293,14 @@ POWERSHELL);
         $this->environment['STOCKS_TEST_PREPARE'] = '1';
         $this->environment['STOCKS_TEST_PROMPT'] = 'LIVE';
         $this->environment['STOCKS_TEST_CI'] = json_encode([[
-            'status' => 'completed', 'conclusion' => 'success', 'headSha' => $release,
+            'status' => 'in_progress', 'conclusion' => null, 'headSha' => $release,
         ]], JSON_THROW_ON_ERROR);
 
         $deployed = $this->workflow('pc', 'gitdeploy');
 
         $this->assertTrue($deployed->isSuccessful(), $deployed->getOutput().$deployed->getErrorOutput());
         $this->assertStringContainsString('SSH sftp_gkstocks_admin@165.227.156.99', $deployed->getOutput());
+        $this->assertStringContainsString('GitHub tests run in the background', $deployed->getOutput());
         $this->assertStringContainsString("STOCKS_EXPECTED_SOURCE_COMMIT={$source} composer pdeploy --no-interaction", $deployed->getOutput());
         $this->assertSame($release, $this->git($this->directory.'/origin.git', 'rev-parse', 'main'));
     }

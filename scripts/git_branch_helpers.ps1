@@ -367,19 +367,11 @@ function gitdeploy {
     }
     & php scripts/frontend-release.php verify $sourceCommit
     if ($LASTEXITCODE -ne 0) { throw 'The local release package did not verify.' }
-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        throw 'GitHub CLI is required to verify CI for the exact release commit.'
-    }
-    $runs = & gh run list --repo ITStudioAT/stocks --workflow CI --branch main --commit $releaseCommit --event push --limit 1 --json status,conclusion,headSha
-    if ($LASTEXITCODE -ne 0) { throw 'Could not verify GitHub CI for this release.' }
-    $run = @($runs | ConvertFrom-Json) | Select-Object -First 1
-    if (-not $run -or $run.headSha -cne $releaseCommit -or $run.status -cne 'completed' -or $run.conclusion -cne 'success') {
-        throw 'The exact main release requires successful completed GitHub CI.'
-    }
     $target = 'sftp_gkstocks_admin@165.227.156.99'
     $root = '/home/1486907.cloudwaysapps.com/cfbckymfgk/public_html'
     Write-Host "Live target: $target $root" -ForegroundColor Yellow
     Write-Host "GitHub main: $releaseCommit; source: $sourceCommit" -ForegroundColor Yellow
+    Write-Host 'Package integrity verified. GitHub tests run in the background; deployment does not wait for their result.' -ForegroundColor Cyan
     if ((Read-Host 'Install this release on live? Type LIVE') -cne 'LIVE') {
         throw 'Live deployment cancelled.'
     }

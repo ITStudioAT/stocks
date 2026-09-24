@@ -1,3 +1,10 @@
+## 1.1.1
+
+### System
+
+- `gitdeploy` prüft weiterhin den exakten Release und das Paket; GitHub-CI läuft wie bei Schooltool im Hintergrund und blockiert den Live-Deploy nicht.
+- Git-Ablauf für Entwicklung, Vorschau und Veröffentlichung aktualisiert.
+
 ## 1.1.0
 
 ### System
