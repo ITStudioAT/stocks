@@ -21,6 +21,14 @@ class PreviewIsolation
         }
     }
 
+    public function assertEodhdAllowed(): void
+    {
+        if ($this->active() && (config('security.preview.control_enabled') !== true
+            || $this->problems() !== [] || ! app(PreviewBackgroundState::class)->enabled())) {
+            throw new RuntimeException('EODHD synchronization is stopped in the Stocks preview.');
+        }
+    }
+
     /** @return list<string> */
     public function problems(): array
     {
@@ -62,8 +70,19 @@ class PreviewIsolation
         foreach (['url', 'read', 'write', 'unix_socket', 'prefix'] as $field) {
             $require(empty($database[$field]), 'preview.database.'.$field);
         }
-        foreach (['cache.default' => 'file', 'session.driver' => 'file', 'queue.default' => 'sync', 'mail.default' => 'array', 'filesystems.default' => 'local', 'app.maintenance.driver' => 'file'] as $field => $value) {
+        $controlEnabled = ($preview['control_enabled'] ?? false) === true;
+        foreach (['cache.default' => 'file', 'session.driver' => 'file', 'queue.default' => $controlEnabled ? 'redis' : 'sync', 'mail.default' => 'array', 'filesystems.default' => 'local', 'app.maintenance.driver' => 'file'] as $field => $value) {
             $require(config($field) === $value, $field);
+        }
+        if ($controlEnabled) {
+            $appId = (string) ($preview['target_app_id'] ?? '');
+            $require(preg_match('/^[a-f0-9]{64}$/D', (string) ($preview['control_key'] ?? '')) === 1, 'preview.control_key');
+            $require(is_string(config('services.eodhd.key')) && trim(config('services.eodhd.key')) !== '', 'services.eodhd.key');
+            $require(config('services.eodhd.base_url') === 'https://eodhd.com/api', 'services.eodhd.base_url');
+            $require(config('queue.connections.redis.queue') === 'stocks-preview-'.$appId, 'preview.redis_queue');
+            $require(config('database.redis.options.prefix') === 'stocks-preview-'.$appId.'-database-', 'preview.redis_prefix');
+            $require(empty(config('database.redis.default.url'))
+                && in_array(config('database.redis.default.host'), ['127.0.0.1', 'localhost'], true), 'preview.redis_host');
         }
         $require(config('filesystems.disks.local.serve') === false, 'preview.private_storage_not_served');
         foreach (['session.files', 'view.compiled', 'cache.stores.file.path', 'cache.stores.file.lock_path'] as $field) {
@@ -73,8 +92,11 @@ class PreviewIsolation
         $require(config('session.secure') === true && config('session.http_only') === true && config('session.encrypt') === true, 'session.security');
         $require(in_array(config('session.same_site'), ['lax', 'strict'], true), 'session.same_site');
         $require(str_starts_with((string) config('session.cookie'), '__Host-stocks-preview-'), 'session.cookie');
-        foreach (['services.eodhd.key', 'services.cloudways.deployment.access_token', 'database.connections.cloudways.password', 'filesystems.disks.s3.key', 'filesystems.disks.s3.secret'] as $field) {
+        foreach (['services.cloudways.deployment.access_token', 'database.connections.cloudways.password', 'filesystems.disks.s3.key', 'filesystems.disks.s3.secret'] as $field) {
             $require(empty(config($field)), $field);
+        }
+        if (! $controlEnabled) {
+            $require(empty(config('services.eodhd.key')), 'services.eodhd.key');
         }
         foreach (config('ai.providers', []) as $provider => $configuration) {
             foreach (['key', 'secret', 'token', 'access_key_id', 'secret_access_key', 'session_token', 'use_default_credential_provider'] as $field) {

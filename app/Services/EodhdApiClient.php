@@ -18,7 +18,7 @@ class EodhdApiClient
 
     public function get(string $path, array $query = [], int $usageUnits = 1): Response
     {
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
+        app(PreviewIsolation::class)->assertEodhdAllowed();
         $apiToken = config('services.eodhd.key');
 
         if (! is_string($apiToken) || trim($apiToken) === '') {
@@ -51,6 +51,12 @@ class EodhdApiClient
     {
         $apiToken = config('services.eodhd.key');
 
-        return ! app(PreviewIsolation::class)->active() && is_string($apiToken) && trim($apiToken) !== '';
+        if (app(PreviewIsolation::class)->active()) {
+            return config('security.preview.control_enabled') === true
+                && app(PreviewBackgroundState::class)->enabled()
+                && is_string($apiToken) && trim($apiToken) !== '';
+        }
+
+        return is_string($apiToken) && trim($apiToken) !== '';
     }
 }

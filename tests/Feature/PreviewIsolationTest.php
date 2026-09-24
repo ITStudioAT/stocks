@@ -7,12 +7,15 @@ use App\Models\User;
 use App\Services\CloudwaysApiClient;
 use App\Services\CloudwaysDatabaseSync;
 use App\Services\EodhdApiClient;
+use App\Services\PreviewBackgroundState;
+use App\Services\PreviewControlSignature;
 use App\Services\PreviewIsolation;
 use App\Services\PreviewRuntime;
 use App\Services\StockAiResearchService;
 use Illuminate\Cache\FileStore;
 use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Mail\Events\MessageSending;
+use Illuminate\Queue\Events\Looping;
 use Illuminate\Routing\RouteCollection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +25,7 @@ use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
+use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Symfony\Component\Console\Input\ArrayInput;
@@ -85,6 +89,76 @@ class PreviewIsolationTest extends TestCase
         }
     }
 
+    public function test_background_control_requires_a_scoped_redis_queue_and_eodhd_key(): void
+    {
+        $this->configureControlledPreview();
+
+        $this->assertSame([], app(PreviewIsolation::class)->problems());
+        config(['database.redis.options.prefix' => 'live-database-']);
+        $this->assertContains('preview.redis_prefix', app(PreviewIsolation::class)->problems());
+    }
+
+    public function test_stopped_preview_blocks_web_requests_but_accepts_signed_control_status(): void
+    {
+        $this->configureControlledPreview();
+        $state = Mockery::mock(PreviewBackgroundState::class);
+        $state->shouldReceive('enabled')->twice()->andReturn(false);
+        app()->instance(PreviewBackgroundState::class, $state);
+
+        $this->get('/up')->assertStatus(503)->assertHeader('X-Stocks-Preview', 'true');
+        $headers = app(PreviewControlSignature::class)->headers('GET', 'preview/control', '');
+        $this->withHeaders($headers)->get('/preview/control')->assertOk()->assertJsonPath('enabled', false);
+    }
+
+    public function test_signed_control_update_rejects_replay_and_unsigned_requests(): void
+    {
+        $this->configureControlledPreview();
+        $state = Mockery::mock(PreviewBackgroundState::class);
+        $state->shouldReceive('setEnabled')->once()->with(true);
+        $state->shouldReceive('enabled')->once()->andReturn(true);
+        app()->instance(PreviewBackgroundState::class, $state);
+        $body = json_encode(['enabled' => true], JSON_THROW_ON_ERROR);
+        $headers = app(PreviewControlSignature::class)->headers('POST', 'preview/control', $body);
+
+        $this->postJson('/preview/control', ['enabled' => true])->assertUnauthorized();
+        $this->withHeaders($headers)->postJson('/preview/control', ['enabled' => true])->assertOk()->assertJsonPath('enabled', true);
+        $this->withHeaders($headers)->postJson('/preview/control', ['enabled' => true])->assertUnauthorized();
+    }
+
+    public function test_controlled_runtime_pauses_queue_and_limits_outbound_http_to_eodhd(): void
+    {
+        $this->configureControlledPreview();
+        $running = false;
+        $state = Mockery::mock(PreviewBackgroundState::class);
+        $state->shouldReceive('enabled')->andReturnUsing(function () use (&$running): bool {
+            return $running;
+        });
+        app()->instance(PreviewBackgroundState::class, $state);
+        app(PreviewRuntime::class)->install();
+        Http::fake(['*' => Http::response(['ok' => true])]);
+
+        $this->assertFalse(Event::until(new Looping('redis', 'stocks-preview-200')));
+        try {
+            Http::get('https://eodhd.com/api/test');
+            $this->fail('Stopped preview made an outbound HTTP request.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('disabled in the Stocks preview', $exception->getMessage());
+        }
+        try {
+            Event::dispatch(new CommandStarting('price-refresh:dispatch-due', new ArrayInput([]), new NullOutput));
+            $this->fail('Stopped preview started a market data command.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('disabled in the Stocks preview', $exception->getMessage());
+        }
+
+        $running = true;
+        $this->assertNotSame(false, Event::until(new Looping('redis', 'stocks-preview-200')));
+        Event::dispatch(new CommandStarting('price-refresh:dispatch-due', new ArrayInput([]), new NullOutput));
+        $this->assertTrue(Http::get('https://eodhd.com/api/test')->successful());
+        $this->expectException(RuntimeException::class);
+        Http::get('https://example.test/api/test');
+    }
+
     #[DataProvider('unsafeConfiguration')]
     public function test_unsafe_configuration_is_rejected(string $key, mixed $value, string $problem): void
     {
@@ -120,7 +194,9 @@ class PreviewIsolationTest extends TestCase
         Http::preventStrayRequests();
         DB::shouldReceive('connection')->never();
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('External integrations are disabled');
+        $this->expectExceptionMessage($service === EodhdApiClient::class
+            ? 'EODHD synchronization is stopped'
+            : 'External integrations are disabled');
         app($service)->{$method}(...$arguments);
     }
 
@@ -214,6 +290,22 @@ class PreviewIsolationTest extends TestCase
             'filesystems.disks.s3.key' => null, 'filesystems.disks.s3.secret' => null,
             'services.eodhd.key' => null, 'services.cloudways.deployment.access_token' => null,
             'ai.providers' => [],
+        ]);
+    }
+
+    private function configureControlledPreview(): void
+    {
+        $this->configurePreview();
+        config([
+            'security.preview.control_enabled' => true,
+            'security.preview.control_key' => str_repeat('a', 64),
+            'queue.default' => 'redis',
+            'queue.connections.redis.queue' => 'stocks-preview-200',
+            'database.redis.options.prefix' => 'stocks-preview-200-database-',
+            'database.redis.default.url' => null,
+            'database.redis.default.host' => '127.0.0.1',
+            'services.eodhd.key' => 'preview-test-token',
+            'services.eodhd.base_url' => 'https://eodhd.com/api',
         ]);
     }
 }

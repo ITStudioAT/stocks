@@ -10,6 +10,7 @@ use Illuminate\Contracts\Filesystem\Filesystem;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Connectors\ConnectorInterface;
 use Illuminate\Mail\Events\MessageSending;
+use Illuminate\Queue\Events\Looping;
 use Illuminate\Support\ConfigurationUrlParser;
 use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Cache;
@@ -23,6 +24,7 @@ use Illuminate\Support\Facades\Storage;
 use Monolog\Handler\NullHandler;
 use Monolog\Logger;
 use PDO;
+use Psr\Http\Message\RequestInterface;
 use RuntimeException;
 
 class PreviewRuntime
@@ -36,11 +38,38 @@ class PreviewRuntime
         $deny = static function (): never {
             throw new RuntimeException('This operation is disabled in the Stocks preview.');
         };
-        Http::globalMiddleware(fn (): Closure => $deny);
+        $controlEnabled = config('security.preview.control_enabled') === true;
+        if ($controlEnabled) {
+            Http::globalRequestMiddleware(function (RequestInterface $request) use ($deny): RequestInterface {
+                $url = $request->getUri();
+                if (! app(PreviewBackgroundState::class)->enabled()
+                    || $url->getScheme() !== 'https'
+                    || $url->getHost() !== 'eodhd.com'
+                    || $url->getPort() !== null || ! str_starts_with($url->getPath(), '/api/')) {
+                    $deny();
+                }
+
+                return $request;
+            });
+            Event::listen(Looping::class, fn (): bool => app(PreviewBackgroundState::class)->enabled());
+        } else {
+            Http::globalMiddleware(fn (): Closure => $deny);
+        }
         Event::listen(MessageSending::class, $deny);
         Event::listen('Laravel\\Ai\\Events\\*', $deny);
-        Event::listen(CommandStarting::class, function (CommandStarting $event) use ($deny): void {
-            if (! in_array($event->command, ['preview:check', 'preview:initialize', 'preview:activate', 'list', 'help', 'about'], true)) {
+        Event::listen(CommandStarting::class, function (CommandStarting $event) use ($controlEnabled, $deny): void {
+            $allowed = ['preview:check', 'preview:initialize', 'preview:activate', 'list', 'help', 'about'];
+            $background = [
+                'price-refresh:dispatch-due', 'intraday-candles:dispatch-due',
+                'end-of-day-data:dispatch-due', 'indices-data:dispatch-due',
+                'indices:eodhd-sync:dispatch-due', 'indices:v2-realtime:dispatch-due', 'model:prune',
+            ];
+            if ($controlEnabled) {
+                $allowed = [...$allowed, 'schedule:run', 'queue:work', 'queue:restart', 'queue:pause', 'queue:continue', ...$background];
+            }
+            if (! in_array($event->command, $allowed, true)
+                || ($controlEnabled && in_array($event->command, $background, true)
+                    && ! app(PreviewBackgroundState::class)->enabled())) {
                 $deny();
             }
         });
@@ -49,8 +78,10 @@ class PreviewRuntime
         foreach (array_keys(Redis::connections() ?? []) as $name) {
             Redis::purge($name);
         }
-        foreach (array_unique(['predis', 'phpredis', config('database.redis.client', 'phpredis')]) as $driver) {
-            Redis::extend($driver, $deny);
+        if (! $controlEnabled) {
+            foreach (array_unique(['predis', 'phpredis', config('database.redis.client', 'phpredis')]) as $driver) {
+                Redis::extend($driver, $deny);
+            }
         }
         Cache::forgetDriver(array_keys(config('cache.stores', [])));
         foreach (array_unique(['database', 'redis', 'memcached', 'dynamodb', 'failover', ...array_column(config('cache.stores', []), 'driver')]) as $driver) {
@@ -68,7 +99,7 @@ class PreviewRuntime
                 ->setLockDirectory($configuration['lock_path']), $configuration);
         });
         foreach (array_unique(['database', 'redis', 'sqs', 'beanstalkd', 'failover', 'background', 'deferred', ...array_column(config('queue.connections', []), 'driver')]) as $driver) {
-            if (! in_array($driver, ['sync', 'null'], true)) {
+            if (! in_array($driver, $controlEnabled ? ['sync', 'null', 'redis'] : ['sync', 'null'], true)) {
                 Queue::extend($driver, $deny);
             }
         }

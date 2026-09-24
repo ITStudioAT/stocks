@@ -450,6 +450,9 @@ const cloudwaysCheckError = ref('');
 const cloudwaysCheckResult = ref(null);
 const cloudwaysExecutionStatus = ref(null);
 const cloudwaysExecutionStatusLoading = ref(false);
+const previewControlStatus = ref(null);
+const previewControlLoading = ref(false);
+const previewControlError = ref('');
 const cloudwaysCheckProgress = ref(emptyCloudwaysProgress());
 const cloudwaysCheckProgressMessage = ref('');
 const cloudwaysSyncLoading = ref(false);
@@ -2294,8 +2297,11 @@ watch(
             loadStockTradingTimeHealthCheck().catch(() => {});
         }
 
-        if (section === 'data' && dataSubsection === 'cloudways' && cloudwaysExecutionStatus.value === null) {
-            loadCloudwaysExecutionStatus().catch(() => {});
+        if (section === 'data' && dataSubsection === 'cloudways') {
+            if (cloudwaysExecutionStatus.value === null) {
+                loadCloudwaysExecutionStatus().catch(() => {});
+            }
+            loadPreviewControlStatus().catch(() => {});
         }
 
         if (section === 'stocks') {
@@ -3188,6 +3194,41 @@ function loadSelectedAnalyzeChartData() {
     }
 
     loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page, { silent: true }).catch(() => {});
+}
+
+async function loadPreviewControlStatus() {
+    previewControlLoading.value = true;
+    previewControlError.value = '';
+
+    try {
+        previewControlStatus.value = await request('/admin/preview/status');
+    } catch (error) {
+        previewControlStatus.value = null;
+        previewControlError.value = error.message;
+    } finally {
+        previewControlLoading.value = false;
+    }
+}
+
+async function setPreviewEnabled(enabled) {
+    if (previewControlLoading.value || !previewControlStatus.value?.configured) {
+        return;
+    }
+
+    previewControlLoading.value = true;
+    previewControlError.value = '';
+
+    try {
+        previewControlStatus.value = await request('/admin/preview/control', {
+            method: 'POST',
+            body: JSON.stringify({ enabled }),
+        });
+    } catch (error) {
+        await loadPreviewControlStatus();
+        previewControlError.value = error.message;
+    } finally {
+        previewControlLoading.value = false;
+    }
 }
 
 async function loadCloudwaysExecutionStatus() {
@@ -18653,6 +18694,39 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <h2 class="text-h4">Cloudways</h2>
                                 </div>
                             </div>
+
+                            <v-card class="mb-6" variant="outlined" aria-label="Preview control">
+                                <v-card-text>
+                                    <div class="d-flex flex-wrap align-center justify-space-between ga-3">
+                                        <div>
+                                            <div class="text-body-2 font-weight-bold">Preview</div>
+                                            <div class="text-body-2">
+                                                Controls preview access, scheduled updates, and background jobs.
+                                            </div>
+                                        </div>
+                                        <v-chip v-if="previewControlStatus?.configured" :color="previewControlStatus.enabled ? 'success' : 'warning'" variant="tonal">
+                                            {{ previewControlStatus.enabled ? 'Running' : 'Stopped' }}
+                                        </v-chip>
+                                    </div>
+                                    <v-alert v-if="previewControlError" type="error" variant="tonal" density="compact" class="mt-3">
+                                        {{ previewControlError }}
+                                    </v-alert>
+                                    <div v-if="previewControlStatus?.configured" class="mt-3">
+                                        <v-btn
+                                            :color="previewControlStatus.enabled ? 'warning' : 'success'"
+                                            :loading="previewControlLoading"
+                                            :disabled="previewControlLoading"
+                                            @click="setPreviewEnabled(!previewControlStatus.enabled)"
+                                        >
+                                            {{ previewControlStatus.enabled ? 'Stop preview' : 'Start preview' }}
+                                        </v-btn>
+                                    </div>
+                                    <div v-else-if="!previewControlLoading && !previewControlError" class="text-body-2 text-medium-emphasis mt-3">
+                                        Preview control is not configured yet.
+                                    </div>
+                                    <v-progress-linear v-if="previewControlLoading" indeterminate color="primary" class="mt-3" />
+                                </v-card-text>
+                            </v-card>
 
                             <v-card class="mb-6" variant="outlined" aria-label="Cloudways check">
                                 <v-card-text>

@@ -16,6 +16,9 @@ return [
         'source_url' => env('PREVIEW_SOURCE_URL'),
         'target_root' => env('PREVIEW_TARGET_ROOT'),
         'access_password_hash' => env('PREVIEW_ACCESS_PASSWORD_HASH'),
+        'control_enabled' => (bool) env('PREVIEW_CONTROL_ENABLED', false),
+        'control_key' => env('PREVIEW_CONTROL_KEY'),
+        'control_url' => env('PREVIEW_CONTROL_URL'),
     ],
 
     'trusted_hosts' => array_values(array_unique(array_filter(array_map(
