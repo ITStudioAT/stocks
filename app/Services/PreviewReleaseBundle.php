@@ -7,6 +7,7 @@ use RecursiveCallbackFilterIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use RuntimeException;
+use Symfony\Component\Process\Process;
 use ZipArchive;
 
 class PreviewReleaseBundle
@@ -202,6 +203,26 @@ class PreviewReleaseBundle
                 throw new RuntimeException('Unlisted installed preview source file.');
             }
         }
+    }
+
+    public function verifiedProductionSourceCommit(string $directory): string
+    {
+        $root = realpath($directory);
+        $marker = $root === false ? '' : $root.'/deployment/source-commit';
+        if ($root === false || ! is_file($marker) || is_link($marker) || filesize($marker) > 128) {
+            throw new RuntimeException('Production release source marker is missing or invalid.');
+        }
+        $commit = trim((string) file_get_contents($marker));
+        if (! preg_match('/^[a-f0-9]{40}$/D', $commit)) {
+            throw new RuntimeException('Production release source commit is invalid.');
+        }
+        $verification = new Process([PHP_BINARY, $root.'/scripts/frontend-release.php', 'verify', $commit], $root);
+        $verification->run();
+        if (! $verification->isSuccessful()) {
+            throw new RuntimeException('Production release source manifest verification failed.');
+        }
+
+        return $commit;
     }
 
     private function assertPath(string $path): void

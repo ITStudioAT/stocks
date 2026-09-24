@@ -77,6 +77,30 @@ class PreviewReleaseBundleTest extends TestCase
         (new PreviewReleaseBundle)->create($this->directory.'/source', $this->directory.'/release.zip', str_repeat('a', 40));
     }
 
+    public function test_production_source_commit_requires_a_verified_release_without_a_git_worktree(): void
+    {
+        $root = $this->directory.'/production';
+        mkdir($root.'/deployment', 0700, true);
+        mkdir($root.'/scripts');
+        file_put_contents($root.'/deployment/source-commit', str_repeat('a', 40)."\n");
+        file_put_contents($root.'/scripts/frontend-release.php', '<?php exit(($argv[1] ?? null) === "verify" && ($argv[2] ?? null) === str_repeat("a", 40) ? 0 : 1);');
+
+        $this->assertSame(str_repeat('a', 40), (new PreviewReleaseBundle)->verifiedProductionSourceCommit($root));
+    }
+
+    public function test_production_source_commit_refuses_a_release_that_fails_verification(): void
+    {
+        $root = $this->directory.'/production';
+        mkdir($root.'/deployment', 0700, true);
+        mkdir($root.'/scripts');
+        file_put_contents($root.'/deployment/source-commit', str_repeat('a', 40)."\n");
+        file_put_contents($root.'/scripts/frontend-release.php', '<?php exit(1);');
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('manifest verification failed');
+        (new PreviewReleaseBundle)->verifiedProductionSourceCommit($root);
+    }
+
     protected function tearDown(): void
     {
         (new Filesystem)->deleteDirectory($this->directory);

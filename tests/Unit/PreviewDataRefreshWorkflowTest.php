@@ -90,7 +90,7 @@ $ErrorActionPreference = 'Stop'
 function Add-Operation { param([string]$Name) [IO.File]::AppendAllText($env:STOCKS_TEST_DIRECTORY + '/operations', $Name + "`n") }
 function Invoke-StocksPreviewSsh {
     param([string]$Destination, [string]$Command)
-    if ($Command -match 'rev-parse HEAD') { Add-Operation 'source-commit'; return ('b' * 40) }
+    if ($Command -match 'frontend-release.php verify' -and $Command -match 'cat deployment/source-commit') { Add-Operation 'source-commit'; return ('b' * 40) }
     if ($Command -match 'mkdir -m 700' -and $Destination -like 'sftp_for*') { Add-Operation 'preview-directory'; return }
     if ($Command -match " prepare '[^']+' '(?<directory>[^']+)' ") {
         Add-Operation 'prepare'

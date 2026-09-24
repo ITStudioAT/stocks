@@ -186,7 +186,7 @@ function Invoke-StocksPreviewDataRefresh {
     $sourceDirectory = "/tmp/stocks-snapshot-$attemptId"
     $localDirectory = Join-Path $Bundle.Directory "refresh-$attemptId"
     $null = New-Item -ItemType Directory -Path $localDirectory
-    $sourceCommit = @(Invoke-StocksPreviewSsh -Destination $sourceDestination -Command "test `"`$(realpath '$sourceRoot')`" = '$sourceRoot' && git -C '$sourceRoot' rev-parse HEAD") -join ''
+    $sourceCommit = @(Invoke-StocksPreviewSsh -Destination $sourceDestination -Command "test `"`$(realpath '$sourceRoot')`" = '$sourceRoot' && cd '$sourceRoot' && test -f deployment/source-commit && test ! -L deployment/source-commit && php scripts/frontend-release.php verify >/dev/null && cat deployment/source-commit") -join ''
     if ($sourceCommit -cnotmatch '^[a-f0-9]{40}$') { throw 'The production source commit could not be verified.' }
     $private = "$previewRoot/.stocks-preview-private"
     $prepare = "umask 077 && test `"`$(id -u)`" = $($Target.targetOwnerUid) && test `"`$(realpath '$previewRoot')`" = '$previewRoot' && test ! -L '$private' && test `"`$(stat -c '%u:%a' '$private')`" = '$($Target.targetOwnerUid):700' && test ! -e '$previewRoot/storage/framework/down' && test ! -L '$previewRoot/storage/framework/down' && mkdir -m 700 '$previewDirectory'"

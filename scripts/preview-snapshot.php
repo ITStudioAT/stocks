@@ -14,7 +14,6 @@ use App\Services\PreviewSnapshotStream;
 use App\Services\PreviewSnapshotTransfer;
 use Dotenv\Dotenv;
 use Illuminate\Contracts\Console\Kernel;
-use Symfony\Component\Process\Process;
 
 function stocksSnapshotRead(string $path, int $limit = 67_108_864): string
 {
@@ -63,11 +62,10 @@ try {
         throw new RuntimeException('Snapshot work directory must be private, owned and outside the public web directory.');
     }
     $services = is_file(__DIR__.'/PreviewOriginalSchema.php') ? __DIR__ : dirname(__DIR__).'/app/Services';
-    foreach (['PreviewOriginalSchema', 'PreviewOriginalPolicy', 'PreviewSnapshotPolicy', 'PreviewSnapshotArchive', 'PreviewSnapshotStream', 'PreviewSnapshotDatabase', 'PreviewSnapshotTransfer'] as $service) {
+    foreach (['PreviewOriginalSchema', 'PreviewOriginalPolicy', 'PreviewSnapshotPolicy', 'PreviewSnapshotArchive', 'PreviewSnapshotStream', 'PreviewSnapshotDatabase', 'PreviewSnapshotTransfer', 'PreviewReleaseBundle'] as $service) {
         require_once $services.'/'.$service.'.php';
     }
     if (! $source) {
-        require_once $services.'/PreviewReleaseBundle.php';
         $unbootedMarker = json_decode(stocksSnapshotRead($root.'/storage/framework/stocks-preview-instance', 65_536), true, 16, JSON_THROW_ON_ERROR);
         if (($unbootedMarker['source_app_id'] ?? '') !== '6468818' || ($unbootedMarker['target_app_id'] ?? '') !== '6690486'
             || ($unbootedMarker['root'] ?? '') !== $root || ($unbootedMarker['state'] ?? '') !== 'active') {
@@ -88,12 +86,7 @@ try {
         if ($connection->query('SELECT DATABASE()')->fetchColumn() !== 'cfbckymfgk') {
             throw new RuntimeException('Source database mismatch.');
         }
-        $process = new Process(['git', '-C', $root, 'rev-parse', 'HEAD']);
-        $process->mustRun();
-        $sourceCommit = trim($process->getOutput());
-        if (! preg_match('/^[a-f0-9]{40}$/D', $sourceCommit)) {
-            throw new RuntimeException('Source commit cannot be verified.');
-        }
+        $sourceCommit = (new PreviewReleaseBundle)->verifiedProductionSourceCommit($root);
         $database = new PreviewSnapshotDatabase($connection, new PreviewOriginalSchema);
         $database->assertSchema();
         if ($mode === 'inventory') {
