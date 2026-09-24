@@ -9,6 +9,7 @@ use App\Services\PreviewOriginalSchema;
 use App\Services\PreviewReleaseBundle;
 use App\Services\PreviewSnapshotArchive;
 use App\Services\PreviewSnapshotDatabase;
+use App\Services\PreviewSnapshotStream;
 use App\Services\PreviewSnapshotTransfer;
 use Dotenv\Dotenv;
 use Illuminate\Contracts\Console\Kernel;
@@ -44,7 +45,7 @@ try {
         throw new RuntimeException('Snapshot requires Linux CLI PHP >= 8.4.1 with sodium, PDO MySQL and POSIX.');
     }
     umask(0077);
-    if (count($argv) < 4 || ! in_array($argv[1], ['inventory', 'export', 'prepare', 'inspect', 'import', 'restore', 'finish'], true)) {
+    if (count($argv) < 4 || ! in_array($argv[1], ['inventory', 'export', 'prepare', 'adopt', 'inspect', 'import', 'restore', 'finish'], true)) {
         throw new RuntimeException('Usage: preview-snapshot.php MODE CANONICAL_APP_ROOT PRIVATE_WORK_DIRECTORY [SOURCE_COMMIT | INPUT_FILE TRUSTED_SHA256]');
     }
     [, $mode, $root, $directory] = $argv;
@@ -61,8 +62,17 @@ try {
         throw new RuntimeException('Snapshot work directory must be private, owned and outside the public web directory.');
     }
     $services = is_file(__DIR__.'/PreviewOriginalSchema.php') ? __DIR__ : dirname(__DIR__).'/app/Services';
-    foreach (['PreviewOriginalSchema', 'PreviewOriginalPolicy', 'PreviewSnapshotPolicy', 'PreviewSnapshotArchive', 'PreviewSnapshotDatabase', 'PreviewSnapshotTransfer'] as $service) {
+    foreach (['PreviewOriginalSchema', 'PreviewOriginalPolicy', 'PreviewSnapshotPolicy', 'PreviewSnapshotArchive', 'PreviewSnapshotStream', 'PreviewSnapshotDatabase', 'PreviewSnapshotTransfer'] as $service) {
         require_once $services.'/'.$service.'.php';
+    }
+    if (! $source) {
+        require_once $services.'/PreviewReleaseBundle.php';
+        $unbootedMarker = json_decode(stocksSnapshotRead($root.'/storage/framework/stocks-preview-instance', 65_536), true, 16, JSON_THROW_ON_ERROR);
+        if (($unbootedMarker['source_app_id'] ?? '') !== '6468818' || ($unbootedMarker['target_app_id'] ?? '') !== '6690486'
+            || ($unbootedMarker['root'] ?? '') !== $root || ($unbootedMarker['state'] ?? '') !== 'active') {
+            throw new RuntimeException('Unbooted preview installation identity mismatch.');
+        }
+        (new PreviewReleaseBundle)->verifyInstalled($root, $unbootedMarker['commit'], $unbootedMarker['manifest_sha256']);
     }
     require $root.'/vendor/autoload.php';
     if ($source) {
@@ -111,11 +121,15 @@ try {
                 $secrets[] = $value;
             }
         }
-        $archive = new PreviewSnapshotArchive(new PreviewOriginalPolicy($secrets));
-        $tables = $database->export();
-        $ciphertext = $archive->seal($tables, $request['context'], hex2bin($request['recipient']));
-        stocksSnapshotWrite($directory.'/original.snapshot', $ciphertext);
-        fwrite(STDOUT, json_encode(['file' => $directory.'/original.snapshot', 'sha256' => hash('sha256', $ciphertext), 'counts' => array_map(count(...), $tables)], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT)."\n");
+        $policy = new PreviewOriginalPolicy($secrets);
+        $records = (function () use ($database, $policy): iterable {
+            foreach ($database->exportRecords() as $record) {
+                $record['row'] = $policy->prepare([$record['table'] => [$record['row']]])[$record['table']][0];
+                yield $record;
+            }
+        })();
+        $result = (new PreviewSnapshotStream)->seal($records, $request['context'], hex2bin($request['recipient']), $directory.'/original.snapshot');
+        fwrite(STDOUT, json_encode(['file' => $directory.'/original.snapshot', ...$result], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT)."\n");
         exit(0);
     }
     if (posix_geteuid() !== 1013) {
@@ -140,11 +154,23 @@ try {
         }
         $request = $transfer->prepare(['source_app_id' => '6468818', 'target_app_id' => '6690486', 'source_commit' => $argv[4], 'target_commit' => $marker['commit'], 'nonce' => bin2hex(random_bytes(32))]);
         $result = ['request' => $directory.'/request.json', 'request_sha256' => hash_file('sha256', $directory.'/request.json'), 'context' => $request['context']];
+    } elseif ($mode === 'adopt') {
+        $request = json_decode(stocksSnapshotRead($directory.'/incoming-request.json', 65_536), true, 16, JSON_THROW_ON_ERROR);
+        if (($request['context']['source_app_id'] ?? '') !== '6468818' || ($request['context']['target_app_id'] ?? '') !== '6690486'
+            || ($request['context']['target_commit'] ?? '') !== $marker['commit']) {
+            throw new RuntimeException('Incoming recipient context does not match this preview release.');
+        }
+        $keyPair = stocksSnapshotRead($directory.'/incoming-recipient.key', 1024);
+        if (strlen($keyPair) !== SODIUM_CRYPTO_BOX_KEYPAIRBYTES || bin2hex(sodium_crypto_box_publickey($keyPair)) !== ($request['recipient'] ?? '')) {
+            throw new RuntimeException('Incoming recipient key mismatch.');
+        }
+        $result = $transfer->prepare($request['context'], $keyPair);
     } elseif (in_array($mode, ['inspect', 'import'], true)) {
         if (count($argv) !== 6) {
             throw new RuntimeException('Inspect/import requires the encrypted snapshot and its separately verified SHA256.');
         }
-        $result = $transfer->{$mode}(stocksSnapshotRead($argv[4]), $argv[5]);
+        $method = $mode.'Stream';
+        $result = $transfer->{$method}($argv[4], $argv[5]);
     } else {
         $transfer->{$mode}();
         $result = ['state' => $mode === 'restore' ? 'restored-maintenance' : 'released'];

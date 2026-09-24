@@ -16,12 +16,15 @@ class PreviewSnapshotTransfer
     ) {}
 
     /** @param array{source_app_id: string, target_app_id: string, source_commit: string, target_commit: string, nonce: string} $context */
-    public function prepare(array $context): array
+    public function prepare(array $context, ?string $keyPair = null): array
     {
         $this->assertDirectory();
         $this->database->assertSchema();
         $this->database->assertEmpty();
-        $keyPair = sodium_crypto_box_keypair();
+        $keyPair ??= sodium_crypto_box_keypair();
+        if (strlen($keyPair) !== SODIUM_CRYPTO_BOX_KEYPAIRBYTES) {
+            throw new RuntimeException('Invalid snapshot recipient key pair.');
+        }
         $publicKey = sodium_crypto_box_publickey($keyPair);
         $this->archive->seal([], $context, $publicKey);
         $this->writeNew('recipient.key', $keyPair);
@@ -30,6 +33,7 @@ class PreviewSnapshotTransfer
         $this->writeNew('prepared.json', json_encode([
             'protected_digest' => $this->database->protectedDigest(),
             'before_digest' => $this->database->digest($this->database->read()),
+            'before_stream_digest' => $this->database->summarize($this->database->records())['sha256'],
         ], JSON_THROW_ON_ERROR));
 
         return $request;
@@ -56,7 +60,8 @@ class PreviewSnapshotTransfer
         $this->database->assertEmpty();
         $dataDigest = $this->database->digest($tables);
         $request = $this->readJson('request.json');
-        $this->writeNew('consumed.json', json_encode(['ciphertext_sha256' => $trustedDigest, 'data_sha256' => $dataDigest], JSON_THROW_ON_ERROR));
+        $streamDigest = $this->database->summarize($this->database->recordsFromTables($tables))['sha256'];
+        $this->writeNew('consumed.json', json_encode(['ciphertext_sha256' => $trustedDigest, 'data_sha256' => $dataDigest, 'stream_sha256' => $streamDigest], JSON_THROW_ON_ERROR));
         $this->enterMaintenance($request['context']['nonce']);
         $backup = [
             'format' => 'stocks-preview-original-checkpoint-v1',
@@ -74,21 +79,71 @@ class PreviewSnapshotTransfer
         $this->database->import($tables, $beforeDigest, rehearsal: true);
         $this->writeNew('rehearsal.json', json_encode(['restored_original' => true], JSON_THROW_ON_ERROR));
         $actualDigest = $this->database->import($tables, $beforeDigest);
-        $result = ['counts' => array_map(count(...), $tables), 'data_sha256' => $actualDigest, 'state' => 'imported-maintenance'];
+        $result = ['counts' => array_map(count(...), $tables), 'data_sha256' => $actualDigest, 'stream_sha256' => $streamDigest, 'state' => 'imported-maintenance'];
         $this->writeNew('imported.json', json_encode($result, JSON_THROW_ON_ERROR));
 
         return $result;
+    }
+
+    /** @return array{sha256: string, counts: array<string, int>} */
+    public function inspectStream(string $path, string $trustedDigest): array
+    {
+        $this->assertDirectory();
+        if (file_exists($this->directory.'/consumed.json')) {
+            throw new RuntimeException('This snapshot request was already consumed.');
+        }
+        $this->database->assertSchema();
+        $this->database->assertEmpty();
+
+        return $this->database->summarize($this->streamRecords($path, $trustedDigest));
+    }
+
+    /** @return array<string, mixed> */
+    public function importStream(string $path, string $trustedDigest): array
+    {
+        $summary = $this->inspectStream($path, $trustedDigest);
+        $prepared = $this->readJson('prepared.json');
+        if ($this->database->protectedDigest() !== $prepared['protected_digest']
+            || $this->database->summarize($this->database->records())['sha256'] !== $prepared['before_stream_digest']) {
+            throw new RuntimeException('Preview changed since its snapshot preparation.');
+        }
+        $request = $this->readJson('request.json');
+        $this->writeNew('consumed.json', json_encode(['ciphertext_sha256' => $trustedDigest, 'stream_sha256' => $summary['sha256']], JSON_THROW_ON_ERROR));
+        $this->enterMaintenance($request['context']['nonce']);
+        $backup = ['context' => $request['context'], 'tables' => $this->database->read(), 'protected_digest' => $prepared['protected_digest']];
+        if ($this->database->digest($backup['tables']) !== $prepared['before_digest']) {
+            throw new RuntimeException('Preview changed before its backup.');
+        }
+        $encrypted = sodium_crypto_box_seal(json_encode($backup, JSON_THROW_ON_ERROR), sodium_crypto_box_publickey($this->readFile('recipient.key')));
+        $this->writeNew('before.bin', $encrypted);
+        $this->writeNew('before.sha256', hash('sha256', $encrypted));
+        $records = fn (): iterable => $this->streamRecords($path, $trustedDigest);
+        $this->database->importRecords($records, $prepared['before_stream_digest'], rehearsal: true);
+        $this->writeNew('rehearsal.json', json_encode(['restored_original' => true], JSON_THROW_ON_ERROR));
+        $result = $this->database->importRecords($records, $prepared['before_stream_digest']);
+        $result = ['counts' => $result['counts'], 'data_sha256' => $result['sha256'], 'stream_sha256' => $result['sha256'], 'state' => 'imported-maintenance'];
+        $this->writeNew('imported.json', json_encode($result, JSON_THROW_ON_ERROR));
+
+        return $result;
+    }
+
+    /** @return iterable<array{table: string, row: array<string, scalar|null>}> */
+    private function streamRecords(string $path, string $digest): iterable
+    {
+        return (new PreviewSnapshotStream)->open($path, $this->readJson('request.json')['context'], $this->readFile('recipient.key'), $digest);
     }
 
     /** Recover both an interrupted transaction and a completed but unreleased first-fill. */
     public function restore(): void
     {
         $this->assertUnreleased();
+        $this->database->assertSchema();
         $request = $this->readJson('request.json');
         $this->assertMaintenance($request['context']['nonce']);
         $prepared = $this->readJson('prepared.json');
         $consumed = $this->readJson('consumed.json');
-        if ($this->database->digest($this->database->read()) === $prepared['before_digest']
+        $current = $this->database->summarize($this->database->records())['sha256'];
+        if ($current === $prepared['before_stream_digest']
             && $this->database->protectedDigest() === $prepared['protected_digest']) {
             if (! is_file($this->directory.'/restored.json')) {
                 $this->writeNew('restored.json', json_encode(['restored_original' => true], JSON_THROW_ON_ERROR));
@@ -109,10 +164,9 @@ class PreviewSnapshotTransfer
             || $this->database->digest($decoded['tables']) !== $prepared['before_digest']) {
             throw new RuntimeException('Preview checkpoint identity mismatch.');
         }
-        $current = $this->database->digest($this->database->read());
-        if ($current === $consumed['data_sha256']) {
-            $this->database->restore($decoded['tables'], $current, $prepared['protected_digest']);
-        } elseif ($current !== $prepared['before_digest'] || $this->database->protectedDigest() !== $prepared['protected_digest']) {
+        if ($current === $consumed['stream_sha256'] && $this->database->protectedDigest() === $prepared['protected_digest']) {
+            $this->database->importRecords(fn (): iterable => $this->database->recordsFromTables($decoded['tables']), $current);
+        } else {
             throw new RuntimeException('Preview recovery refuses changed or partial data.');
         }
         $this->database->assertEmpty();
@@ -130,11 +184,12 @@ class PreviewSnapshotTransfer
 
             return;
         }
+        $this->database->assertSchema();
         $request = $this->readJson('request.json');
         $this->assertMaintenance($request['context']['nonce']);
         $prepared = $this->readJson('prepared.json');
-        $expected = is_file($this->directory.'/restored.json') ? $prepared['before_digest'] : $this->readJson('imported.json')['data_sha256'];
-        if ($this->database->digest($this->database->read()) !== $expected || $this->database->protectedDigest() !== $prepared['protected_digest']) {
+        $expected = is_file($this->directory.'/restored.json') ? $prepared['before_stream_digest'] : $this->readJson('imported.json')['stream_sha256'];
+        if ($this->database->summarize($this->database->records())['sha256'] !== $expected || $this->database->protectedDigest() !== $prepared['protected_digest']) {
             throw new RuntimeException('Preview data changed before release.');
         }
         $this->quarantineRuntimeDirectory($this->sessionDirectory, 'sessions-before');
@@ -163,17 +218,10 @@ class PreviewSnapshotTransfer
         if (is_link($this->maintenancePath) || file_exists($this->maintenancePath)) {
             throw new RuntimeException('Refusing unrelated preview maintenance state.');
         }
-        $stream = fopen($this->maintenancePath, 'xb');
-        if ($stream === false) {
-            throw new RuntimeException('Could not create preview maintenance state.');
-        }
-        try {
-            $contents = json_encode(['time' => time(), 'retry' => 60, 'refresh' => 60, 'status' => 503, 'stocks_preview_snapshot' => $nonce], JSON_THROW_ON_ERROR);
-            if (fwrite($stream, $contents) !== strlen($contents) || ! fflush($stream) || ! fsync($stream)) {
-                throw new RuntimeException('Could not persist preview maintenance state.');
-            }
-        } finally {
-            fclose($stream);
+        $contents = json_encode(['time' => time(), 'retry' => 60, 'refresh' => 60, 'status' => 503, 'stocks_preview_snapshot' => $nonce], JSON_THROW_ON_ERROR);
+        $this->writeNew('maintenance.json', $contents);
+        if (! link($this->directory.'/maintenance.json', $this->maintenancePath)) {
+            throw new RuntimeException('Could not atomically publish preview maintenance state.');
         }
     }
 

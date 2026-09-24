@@ -9,8 +9,14 @@ use App\Models\User;
 use App\Services\AdminPasswordAuthenticator;
 use App\Services\PreviewOriginalPolicy;
 use App\Services\PreviewOriginalSchema;
+use App\Services\PreviewSnapshotArchive;
 use App\Services\PreviewSnapshotDatabase;
+use App\Services\PreviewSnapshotStream;
+use App\Services\PreviewSnapshotTransfer;
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\DB;
+use PDO;
+use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Spatie\Permission\Models\Role;
 use Spatie\Permission\PermissionRegistrar;
@@ -93,6 +99,142 @@ class PreviewSnapshotDatabaseTest extends TestCase
         } finally {
             DB::getPdo()->exec($mysql ? 'SET SESSION foreign_key_checks = 1' : 'PRAGMA foreign_keys = ON');
         }
+    }
+
+    public function test_streamed_original_data_preserves_json_objects_and_restores_backup(): void
+    {
+        [$database, $original, $before] = $this->fixtures();
+        $original['app_configs'][] = ['id' => 99, 'key' => 'test.original', 'value' => '{"api_token":"old-token","metadata":{},"rows":[],"amount":12.5}', 'created_at' => null, 'updated_at' => null];
+        $original = (new PreviewOriginalPolicy)->prepare($original);
+        $beforeSummary = $database->summarize($database->records());
+        $records = fn (): iterable => $database->recordsFromTables($original);
+        $expected = $database->summarize($records());
+        $this->assertSame($expected, $database->importRecords($records, $beforeSummary['sha256'], rehearsal: true));
+        $this->assertSame($beforeSummary, $database->summarize($database->records()));
+        $this->assertSame($expected, $database->importRecords($records, $beforeSummary['sha256']));
+        $json = json_decode(DB::table('app_configs')->where('key', 'test.original')->value('value'));
+        $this->assertInstanceOf(\stdClass::class, $json->metadata);
+        $this->assertSame([], $json->rows);
+        $this->assertSame('[preview-redacted]', $json->api_token);
+        $database->importRecords(fn (): iterable => $database->recordsFromTables($before), $expected['sha256']);
+        $this->assertSame($beforeSummary, $database->summarize($database->records()));
+    }
+
+    public function test_streamed_cross_user_research_reference_rolls_back(): void
+    {
+        [$database, $original] = $this->fixtures();
+        $original['stock_ai_researches'][1]['previous_research_id'] = $original['stock_ai_researches'][0]['id'];
+        $before = $database->summarize($database->records());
+        try {
+            $database->importRecords(fn (): iterable => $database->recordsFromTables($original), $before['sha256']);
+            $this->fail('Cross-user history should be rejected.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('ownership', $exception->getMessage());
+            $this->assertSame($before, $database->summarize($database->records()));
+        }
+    }
+
+    public function test_stream_failure_after_inserts_rolls_back_before_commit(): void
+    {
+        [$database, $original] = $this->fixtures();
+        $before = $database->summarize($database->records());
+        $passes = 0;
+        $records = function () use ($database, $original, &$passes): iterable {
+            $passes++;
+            foreach ($database->recordsFromTables($original) as $record) {
+                yield $record;
+                if ($passes === 2) {
+                    throw new RuntimeException('Injected stream authentication failure.');
+                }
+            }
+        };
+        try {
+            $database->importRecords($records, $before['sha256']);
+            $this->fail('Stream failure should roll back.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('Injected', $exception->getMessage());
+            $this->assertSame($before, $database->summarize($database->records()));
+        }
+    }
+
+    #[DataProvider('freshTransferActions')]
+    public function test_fresh_transfer_instances_can_restore_and_finish_json_snapshots(bool $restore): void
+    {
+        [$database, $original] = $this->fixtures();
+        $original['app_configs'][] = ['id' => 99, 'key' => 'original.json', 'value' => '{"z":{"nested":true},"a":{},"rows":[]}', 'created_at' => null, 'updated_at' => null];
+        DB::table('app_configs')->insert(['id' => 1, 'key' => 'preview.json', 'value' => '{"z":1,"a":{},"rows":[]}']);
+        $before = $database->summarize($database->records());
+        $directory = sys_get_temp_dir().'/stocks-fresh-transfer-'.bin2hex(random_bytes(10));
+        mkdir($directory.'/private', 0700, true);
+        mkdir($directory.'/framework/sessions', 0700, true);
+        mkdir($directory.'/framework/cache/data', 0700, true);
+        $directory = realpath($directory);
+
+        try {
+            $makeTransfer = fn (): PreviewSnapshotTransfer => new PreviewSnapshotTransfer(
+                new PreviewSnapshotDatabase(DB::getPdo(), new PreviewOriginalSchema),
+                new PreviewSnapshotArchive(new PreviewOriginalPolicy),
+                realpath($directory.'/private'),
+                $directory.'/framework/down',
+                $directory.'/framework/sessions',
+                $directory.'/framework/cache/data',
+            );
+            $context = ['source_app_id' => '100', 'target_app_id' => '200', 'source_commit' => str_repeat('a', 40), 'target_commit' => str_repeat('b', 40), 'nonce' => str_repeat('c', 64)];
+            $request = $makeTransfer()->prepare($context);
+            $snapshot = $directory.'/original.snapshot';
+            $receipt = (new PreviewSnapshotStream)->seal($database->recordsFromTables($original), $context, hex2bin($request['recipient']), $snapshot);
+            $imported = $makeTransfer()->importStream($snapshot, $receipt['sha256']);
+            $this->assertFileExists($directory.'/framework/down');
+
+            if ($restore) {
+                $makeTransfer()->restore();
+                $this->assertSame($before, $database->summarize($database->records()));
+                $this->assertSame('preview-admin@stocks.invalid', User::findOrFail(1)->email);
+            } else {
+                $this->assertSame($imported['stream_sha256'], $database->summarize($database->records())['sha256']);
+                $this->assertSame('first@original.test', User::findOrFail(1)->email);
+            }
+
+            $makeTransfer()->finish();
+            $this->assertFileDoesNotExist($directory.'/framework/down');
+            $this->assertFileExists($directory.'/private/released.json');
+            $expectedKey = $restore ? 'preview.json' : 'original.json';
+            $value = json_decode(DB::table('app_configs')->where('key', $expectedKey)->value('value'));
+            $this->assertInstanceOf(\stdClass::class, $value->a);
+            $this->assertSame([], $value->rows);
+        } finally {
+            (new Filesystem)->deleteDirectory($directory);
+        }
+    }
+
+    public static function freshTransferActions(): array
+    {
+        return ['release original data' => [false], 'restore preview backup' => [true]];
+    }
+
+    public function test_mysql_large_existing_rows_can_be_locked_for_rehearsal_without_buffering_payloads(): void
+    {
+        if (DB::getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Requires the dedicated isolated MySQL CI service.');
+        }
+
+        $database = new PreviewSnapshotDatabase(DB::getPdo(), new PreviewOriginalSchema);
+        $database->assertSchema();
+        $payload = json_encode(['payload' => str_repeat('x', 1_000_000)], JSON_THROW_ON_ERROR);
+        for ($index = 1; $index <= 24; $index++) {
+            DB::table('app_configs')->insert(['id' => $index, 'key' => 'large.fixture.'.$index, 'value' => $payload]);
+        }
+        unset($payload);
+        $before = $database->summarize($database->records());
+        $baseline = memory_get_usage();
+        memory_reset_peak_usage();
+        $database->importRecords(fn (): iterable => [], $before['sha256'], rehearsal: true);
+        $additionalPeak = memory_get_peak_usage() - $baseline;
+
+        $this->assertLessThan(16 * 1024 * 1024, $additionalPeak);
+        $this->assertTrue(DB::getPdo()->getAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY));
+        $this->assertSame(24, DB::table('app_configs')->count());
+        $this->assertSame($before, $database->summarize($database->records()));
     }
 
     /** @return array{PreviewSnapshotDatabase, array, array} */

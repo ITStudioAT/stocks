@@ -8,6 +8,7 @@ use App\Services\PreviewOriginalPolicy;
 use App\Services\PreviewOriginalSchema;
 use App\Services\PreviewSnapshotArchive;
 use App\Services\PreviewSnapshotDatabase;
+use App\Services\PreviewSnapshotStream;
 use App\Services\PreviewSnapshotTransfer;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\DB;
@@ -123,6 +124,24 @@ class PreviewSnapshotTransferTest extends TestCase
         $process->run();
         $this->assertSame(1, $process->getExitCode());
         $this->assertStringContainsString('Snapshot stopped:', $process->getErrorOutput());
+        $this->assertFileDoesNotExist($this->directory.'/framework/down');
+    }
+
+    public function test_streamed_file_import_and_restore_preserve_original_backup(): void
+    {
+        [$transfer, $database, $ciphertext, $before] = $this->fixtures();
+        $request = json_decode(file_get_contents($this->directory.'/private/request.json'), true);
+        $keys = file_get_contents($this->directory.'/private/recipient.key');
+        $tables = (new PreviewSnapshotArchive(new PreviewOriginalPolicy))->open($ciphertext, $request['context'], $keys, hash('sha256', $ciphertext));
+        $path = $this->directory.'/original.snapshot';
+        $sealed = (new PreviewSnapshotStream)->seal($database->recordsFromTables($tables), $request['context'], sodium_crypto_box_publickey($keys), $path);
+        $this->assertSame(1, $transfer->inspectStream($path, $sealed['sha256'])['counts']['depots']);
+        $result = $transfer->importStream($path, $sealed['sha256']);
+        $this->assertSame('imported-maintenance', $result['state']);
+        $this->assertSame('Original Depot', Depot::firstOrFail()->name);
+        $transfer->restore();
+        $this->assertSame($before, $database->digest($database->read()));
+        $transfer->finish();
         $this->assertFileDoesNotExist($this->directory.'/framework/down');
     }
 

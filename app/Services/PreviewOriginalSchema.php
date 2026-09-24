@@ -6,6 +6,9 @@ use InvalidArgumentException;
 
 class PreviewOriginalSchema
 {
+    /** @var array<string, list<string>>|null */
+    private ?array $columnCache = null;
+
     /** @var array<string, array{required: list<string>, nullable: list<string>}> */
     private const Definitions = [
         'agent_conversation_messages' => [
@@ -319,13 +322,16 @@ class PreviewOriginalSchema
     /** @return array<string, list<string>> */
     public function columns(): array
     {
+        if ($this->columnCache !== null) {
+            return $this->columnCache;
+        }
         $columns = [];
 
         foreach (self::Definitions as $table => $definition) {
             $columns[$table] = [...$definition['required'], ...$definition['nullable']];
         }
 
-        return $columns;
+        return $this->columnCache = $columns;
     }
 
     /** @return array<string, list<string>> */
@@ -352,6 +358,16 @@ class PreviewOriginalSchema
         $indexed = $this->indexRows($tables, $columns);
         $this->validateReferences($tables, $indexed);
         $this->validateOwnership($tables, $indexed);
+    }
+
+    /** @param array<string, scalar|null> $row */
+    public function validateRow(string $table, array $row): void
+    {
+        $columns = $this->columns();
+        if (! isset($columns[$table])) {
+            throw new InvalidArgumentException('Original snapshot contains an unknown table.');
+        }
+        $this->indexRows([$table => [$row]], [$table => $columns[$table]]);
     }
 
     /**

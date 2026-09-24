@@ -3,9 +3,13 @@
 namespace App\Services;
 
 use InvalidArgumentException;
+use stdClass;
 
 class PreviewOriginalPolicy
 {
+    /** @var array<string, list<string>>|null */
+    private ?array $columnCache = null;
+
     /** @param list<string> $sourceSecrets */
     public function __construct(private array $sourceSecrets = []) {}
 
@@ -18,7 +22,7 @@ class PreviewOriginalPolicy
      */
     public function prepare(array $tables): array
     {
-        $columns = (new PreviewOriginalSchema)->columns();
+        $columns = $this->columnCache ??= (new PreviewOriginalSchema)->columns();
         foreach ($tables as $table => &$rows) {
             if (! isset($columns[$table]) || ! array_is_list($rows)) {
                 throw new InvalidArgumentException('Original snapshot contains an unapproved table.');
@@ -57,32 +61,37 @@ class PreviewOriginalPolicy
                 $value = str_replace([$secret, rawurlencode($secret), urlencode($secret)], '[preview-redacted]', $value);
             }
         }
-        $decoded = json_decode($value, true);
-        if (is_array($decoded)) {
+        $decoded = json_decode($value);
+        if (is_array($decoded) || $decoded instanceof stdClass) {
             $redacted = $this->redactJson($decoded);
 
-            return $redacted === $decoded ? $value : json_encode($redacted, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            return $redacted == $decoded ? $value : json_encode($redacted, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
         }
 
         return preg_replace('/((?:api[_-]?(?:key|token)|access[_-]?token|password|secret)(?:=|%3d))[^&\s"\'<>]+/i', '$1[preview-redacted]', $value) ?? $value;
     }
 
-    /** @param array<array-key, mixed> $values
-     * @return array<array-key, mixed>
+    /** @param array<array-key, mixed>|stdClass $values
+     * @return array<array-key, mixed>|stdClass
      */
-    private function redactJson(array $values): array
+    private function redactJson(array|stdClass $values): array|stdClass
     {
-        foreach ($values as $key => &$value) {
+        $copy = $values instanceof stdClass ? clone $values : $values;
+        foreach ($values as $key => $value) {
             if (is_string($key) && preg_match('/^(?:password|secret|(?:api|access|refresh)[_-]?token|credentials?|api[_-]?key|client[_-]?secret|authorization)$/i', $key)) {
                 $value = '[preview-redacted]';
-            } elseif (is_array($value)) {
+            } elseif (is_array($value) || $value instanceof stdClass) {
                 $value = $this->redactJson($value);
             } elseif (is_string($value)) {
                 $value = $this->redact($value);
             }
+            if ($copy instanceof stdClass) {
+                $copy->{$key} = $value;
+            } else {
+                $copy[$key] = $value;
+            }
         }
-        unset($value);
 
-        return $values;
+        return $copy;
     }
 }
