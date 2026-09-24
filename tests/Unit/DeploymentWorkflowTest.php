@@ -327,6 +327,20 @@ class DeploymentWorkflowTest extends TestCase
         }
     }
 
+    public function test_cloudways_deployment_secures_the_environment_file(): void
+    {
+        $deploymentDirectory = $this->createCloudwaysShellFixture();
+        $environmentPath = "{$deploymentDirectory}/.env";
+        chmod($environmentPath, 0664);
+
+        $deployed = $this->runCloudwaysShellFixture($deploymentDirectory);
+
+        $this->assertTrue($deployed->isSuccessful(), $deployed->getErrorOutput());
+        if (PHP_OS_FAMILY !== 'Windows') {
+            $this->assertSame(0640, fileperms($environmentPath) & 0777);
+        }
+    }
+
     public function test_cloudways_terminal_pull_deploys_main_with_one_command(): void
     {
         $deploymentDirectory = $this->createCloudwaysPullShellFixture();
@@ -1175,6 +1189,7 @@ class DeploymentWorkflowTest extends TestCase
         }
 
         copy($this->projectPath('scripts/deploy_cloudways.sh'), "{$directory}/scripts/deploy_cloudways.sh");
+        file_put_contents("{$directory}/.env", "APP_ENV=production\n");
         file_put_contents("{$directory}/artisan", "fixture\n");
         file_put_contents("{$directory}/deployment/source-commit", str_repeat('a', 40)."\n");
         file_put_contents("{$directory}/deployment/source-manifest.sha256", "fixture\n");

@@ -6,6 +6,13 @@ cd "$project_directory"
 
 php scripts/preview-guard.php
 
+if [ ! -f .env ] || [ -L .env ]; then
+    echo 'The deployment environment file is missing or is a symbolic link.' >&2
+    exit 1
+fi
+
+chmod 0640 .env
+
 prepare_only=false
 
 if [ "${1:-}" = "--prepare" ]; then
