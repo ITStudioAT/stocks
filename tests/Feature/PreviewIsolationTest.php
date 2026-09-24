@@ -94,6 +94,9 @@ class PreviewIsolationTest extends TestCase
         $this->configureControlledPreview();
 
         $this->assertSame([], app(PreviewIsolation::class)->problems());
+        config(['queue.connections.redis.queue' => 'stocks-preview-200']);
+        $this->assertContains('preview.redis_queue', app(PreviewIsolation::class)->problems());
+        config(['queue.connections.redis.queue' => 'stockspreview200']);
         config(['database.redis.options.prefix' => 'live-database-']);
         $this->assertContains('preview.redis_prefix', app(PreviewIsolation::class)->problems());
     }
@@ -137,7 +140,7 @@ class PreviewIsolationTest extends TestCase
         app(PreviewRuntime::class)->install();
         Http::fake(['*' => Http::response(['ok' => true])]);
 
-        $this->assertFalse(Event::until(new Looping('redis', 'stocks-preview-200')));
+        $this->assertFalse(Event::until(new Looping('redis', 'stockspreview200')));
         try {
             Http::get('https://eodhd.com/api/test');
             $this->fail('Stopped preview made an outbound HTTP request.');
@@ -152,7 +155,7 @@ class PreviewIsolationTest extends TestCase
         }
 
         $running = true;
-        $this->assertNotSame(false, Event::until(new Looping('redis', 'stocks-preview-200')));
+        $this->assertNotSame(false, Event::until(new Looping('redis', 'stockspreview200')));
         Event::dispatch(new CommandStarting('price-refresh:dispatch-due', new ArrayInput([]), new NullOutput));
         $this->assertTrue(Http::get('https://eodhd.com/api/test')->successful());
         $this->expectException(RuntimeException::class);
@@ -300,7 +303,7 @@ class PreviewIsolationTest extends TestCase
             'security.preview.control_enabled' => true,
             'security.preview.control_key' => str_repeat('a', 64),
             'queue.default' => 'redis',
-            'queue.connections.redis.queue' => 'stocks-preview-200',
+            'queue.connections.redis.queue' => 'stockspreview200',
             'database.redis.options.prefix' => 'stocks-preview-200-database-',
             'database.redis.default.url' => null,
             'database.redis.default.host' => '127.0.0.1',
