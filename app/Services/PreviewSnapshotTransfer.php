@@ -101,6 +101,7 @@ class PreviewSnapshotTransfer
     /** @return array<string, mixed> */
     public function importStream(string $path, string $trustedDigest): array
     {
+        $this->database->prepareLongRunningImport();
         $summary = $this->inspectStream($path, $trustedDigest);
         $prepared = $this->readJson('prepared.json');
         if ($this->database->protectedDigest() !== $prepared['protected_digest']

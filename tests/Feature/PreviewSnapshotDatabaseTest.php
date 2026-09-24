@@ -157,6 +157,23 @@ class PreviewSnapshotDatabaseTest extends TestCase
         }
     }
 
+    public function test_streamed_database_failure_reports_location_without_exposing_row_values(): void
+    {
+        [$database, $original] = $this->fixtures();
+        $before = $database->summarize($database->records());
+        $original['users'][1]['email'] = $original['users'][0]['email'];
+
+        try {
+            $database->importRecords(fn (): iterable => $database->recordsFromTables($original), $before['sha256']);
+            $this->fail('Duplicate original emails should be rejected.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('inserting users row 2', $exception->getMessage());
+            $this->assertMatchesRegularExpression('/SQLSTATE [A-Z0-9]{5}, driver [0-9]+/', $exception->getMessage());
+            $this->assertStringNotContainsString('first@original.test', $exception->getMessage());
+            $this->assertSame($before, $database->summarize($database->records()));
+        }
+    }
+
     #[DataProvider('freshTransferActions')]
     public function test_fresh_transfer_instances_can_restore_and_finish_json_snapshots(bool $restore): void
     {

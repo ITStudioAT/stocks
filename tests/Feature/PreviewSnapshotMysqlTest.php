@@ -38,4 +38,23 @@ class PreviewSnapshotMysqlTest extends PreviewSnapshotDatabaseTest
             $connection->exec('SET SESSION TRANSACTION READ WRITE');
         }
     }
+
+    public function test_stream_import_survives_the_servers_short_idle_timeout(): void
+    {
+        $connection = DB::getPdo();
+        $database = new PreviewSnapshotDatabase($connection, new PreviewOriginalSchema);
+        $before = $database->summarize($database->records());
+        $records = static function (): iterable {
+            sleep(2);
+            yield from [];
+        };
+
+        $connection->exec('SET SESSION wait_timeout = 1');
+        try {
+            $this->assertSame($before, $database->importRecords($records, $before['sha256'], rehearsal: true));
+            $this->assertGreaterThanOrEqual(600, (int) $connection->query('SELECT @@SESSION.wait_timeout')->fetchColumn());
+        } finally {
+            $connection->exec('SET SESSION wait_timeout = DEFAULT');
+        }
+    }
 }

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use PDO;
+use PDOException;
 use RuntimeException;
 use stdClass;
 use Throwable;
@@ -312,6 +313,7 @@ class PreviewSnapshotDatabase
      */
     public function importRecords(callable $records, string $expectedBefore, bool $rehearsal = false): array
     {
+        $this->prepareLongRunningImport();
         $this->assertSchema();
         $this->assertConstraints();
         $expected = $this->summarize($records());
@@ -320,14 +322,25 @@ class PreviewSnapshotDatabase
             $this->connection->exec('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
         }
         $this->connection->beginTransaction();
+        $phase = 'locking tables';
+        $failedTable = null;
+        $rowNumber = 0;
         try {
             $this->lockTables();
+            $phase = 'checking the initial data';
             if ($this->summarize($this->records())['sha256'] !== $expectedBefore) {
                 throw new RuntimeException('Preview changed since its backup.');
             }
+            $phase = 'clearing the preview';
             $this->clear();
             $statements = [];
+            $phase = 'inserting';
             foreach ($records() as ['table' => $table, 'row' => $row]) {
+                if ($failedTable !== $table) {
+                    $failedTable = $table;
+                    $rowNumber = 0;
+                }
+                $rowNumber++;
                 $this->schema->validateRow($table, $row);
                 $columns = $this->schema->columns()[$table];
                 if (! isset($statements[$table])) {
@@ -341,7 +354,15 @@ class PreviewSnapshotDatabase
                 $statements[$table]->execute(array_map(fn (string $column) => $row[$column], $columns));
             }
             $statements = [];
+            $phase = 'restoring nullable references';
+            $failedTable = null;
+            $rowNumber = 0;
             foreach ($records() as ['table' => $table, 'row' => $row]) {
+                if ($failedTable !== $table) {
+                    $failedTable = $table;
+                    $rowNumber = 0;
+                }
+                $rowNumber++;
                 $columns = $this->nullableColumns($table);
                 if ($columns === []) {
                     continue;
@@ -354,7 +375,10 @@ class PreviewSnapshotDatabase
                 }
                 $statements[$table]->execute(array_map(fn (string $column) => $row[$column], [...$columns, ...$keys]));
             }
+            $phase = 'checking references';
+            $failedTable = null;
             $this->assertDatabaseReferences();
+            $phase = 'verifying imported data';
             $actual = $this->summarize($this->records());
             if ($actual !== $expected || $this->protectedDigest() !== $protected) {
                 throw new RuntimeException('Original snapshot read-back verification failed.');
@@ -370,7 +394,28 @@ class PreviewSnapshotDatabase
             if ($this->connection->inTransaction()) {
                 $this->connection->rollBack();
             }
+            if ($exception instanceof PDOException) {
+                $sqlState = (string) ($exception->errorInfo[0] ?? $exception->getCode());
+                $sqlState = preg_match('/^[A-Z0-9]{5}$/D', $sqlState) ? $sqlState : 'unknown';
+                $driverCode = $exception->errorInfo[1] ?? null;
+                $driverCode = is_int($driverCode) || ctype_digit((string) $driverCode) ? (int) $driverCode : 0;
+                $location = $failedTable === null ? $phase : "{$phase} {$failedTable} row {$rowNumber}";
+
+                throw new RuntimeException("Preview import {$location} failed (SQLSTATE {$sqlState}, driver {$driverCode}).", previous: $exception);
+            }
             throw $exception;
+        }
+    }
+
+    public function prepareLongRunningImport(): void
+    {
+        if ($this->driver() !== 'mysql') {
+            return;
+        }
+
+        $this->connection->exec('SET SESSION wait_timeout = 600');
+        if ((int) $this->connection->query('SELECT @@SESSION.wait_timeout')->fetchColumn() < 600) {
+            throw new RuntimeException('Preview database did not retain the import connection timeout.');
         }
     }
 

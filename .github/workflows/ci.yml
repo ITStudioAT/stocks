@@ -44,18 +44,18 @@ jobs:
         run: php artisan test --compact
 
   preview-mysql:
-    name: Preview snapshot MySQL isolation
+    name: Preview snapshot MariaDB isolation
     runs-on: ubuntu-latest
     services:
       mysql:
-        image: mysql:8.4
+        image: mariadb:10.11
         env:
-          MYSQL_ROOT_PASSWORD: snapshot-test-only
-          MYSQL_DATABASE: stocks_preview_snapshot_test
+          MARIADB_ROOT_PASSWORD: snapshot-test-only
+          MARIADB_DATABASE: stocks_preview_snapshot_test
         ports:
           - 3306:3306
         options: >-
-          --health-cmd="mysqladmin ping -h localhost -psnapshot-test-only"
+          --health-cmd="mariadb-admin ping -h localhost -psnapshot-test-only"
           --health-interval=10s --health-timeout=5s --health-retries=10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
