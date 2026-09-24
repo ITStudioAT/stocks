@@ -236,10 +236,12 @@ function gitpreview {
         [ValidateSet('deploy', 'prepare', 'resume')][string]$Mode = 'deploy',
         [string]$BundleId,
         [string]$FeatureName,
-        [switch]$Main
+        [switch]$Main,
+        [switch]$RefreshData
     )
     Assert-StocksRepository
     Assert-StocksClean
+    if ($Mode -ceq 'prepare' -and $RefreshData) { throw 'RefreshData requires an online preview deployment.' }
     $branch = Invoke-StocksGit branch --show-current
     if ($Main -and $FeatureName) { throw 'Choose either -Main or -Feature NAME.' }
     if ($Main) {
@@ -286,11 +288,13 @@ function gitpreview {
         $marker.target_app_id -cne $target.targetAppId -or $oldCommit -cnotmatch '^[a-f0-9]{40}$') {
         throw 'The installed preview marker does not match the trusted target.'
     }
-    if (-not (Test-StocksAncestor $oldCommit HEAD) -or
+    if (-not $RefreshData -and (-not (Test-StocksAncestor $oldCommit HEAD) -or
         ($Main -and -not (Test-StocksAncestor $oldCommit refs/remotes/origin/main)) -or
-        (-not $Main -and (Test-StocksAncestor $oldCommit refs/remotes/origin/main))) {
+        (-not $Main -and (Test-StocksAncestor $oldCommit refs/remotes/origin/main)))) {
         throw 'The selected preview would change its feature identity. A fresh data snapshot is required before switching.'
     }
+    & git cat-file -e "$oldCommit^{commit}"
+    if ($LASTEXITCODE -ne 0) { throw 'The installed preview commit is not available locally for a migration comparison.' }
     if (Invoke-StocksGit diff --name-only "$oldCommit..HEAD" '--' database/migrations) {
         throw 'The preview update contains database migrations. A migration-aware preview deploy is required.'
     }
@@ -298,7 +302,7 @@ function gitpreview {
     if ((Invoke-StocksGit rev-parse "refs/remotes/origin/$branch") -cne $commit) {
         throw 'The preview branch changed during preparation. Review and retry.'
     }
-    Send-StocksPreviewBundle -Bundle $bundle -OldCommit $oldCommit
+    Send-StocksPreviewBundle -Bundle $bundle -OldCommit $oldCommit -RefreshData:$RefreshData
 }
 
 function gitrelease {

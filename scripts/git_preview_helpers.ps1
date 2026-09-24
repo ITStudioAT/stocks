@@ -11,6 +11,14 @@ function Assert-StocksPreviewCi {
     }
 }
 
+function Get-StocksSnapshotToolkitFiles {
+    @(
+        'PreviewOriginalSchema.php', 'PreviewOriginalPolicy.php', 'PreviewSnapshotPolicy.php',
+        'PreviewSnapshotArchive.php', 'PreviewSnapshotStream.php', 'PreviewSnapshotDatabase.php',
+        'PreviewSnapshotTransfer.php', 'preview-snapshot.php'
+    )
+}
+
 function New-StocksPreviewBundle {
     param([string]$Branch, [string]$Commit)
     if (-not (Test-StocksRef "refs/remotes/origin/$Branch") -or
@@ -63,9 +71,13 @@ function New-StocksPreviewBundle {
         foreach ($service in @('PreviewInstallation.php', 'PreviewReleaseBundle.php', 'PreviewReleaseUpdate.php', 'PreviewDatabaseGuard.php', 'PreviewFileSwap.php')) {
             Copy-Item -LiteralPath (Join-Path $sourceDirectory "app/Services/$service") -Destination (Join-Path $buildRoot $service)
         }
+        foreach ($service in @(Get-StocksSnapshotToolkitFiles | Where-Object { $_ -cne 'preview-snapshot.php' })) {
+            Copy-Item -LiteralPath (Join-Path $sourceDirectory "app/Services/$service") -Destination (Join-Path $buildRoot $service)
+        }
         foreach ($script in @('preview-install.php', 'preview-update.php', 'stocks_preview_target.json')) {
             Copy-Item -LiteralPath (Join-Path $sourceDirectory "scripts/$script") -Destination (Join-Path $buildRoot $script)
         }
+        Copy-Item -LiteralPath (Join-Path $sourceDirectory 'scripts/preview-snapshot.php') -Destination (Join-Path $buildRoot 'preview-snapshot.php')
         Write-Host "Verified preview bundle: $bundlePath" -ForegroundColor Green
         Write-Host "SHA-256: $digest"
         Write-Host 'Installer helpers are alongside the bundle. No upload, server mutation or database operation was performed.'
@@ -77,7 +89,7 @@ function New-StocksPreviewBundle {
 function Save-StocksPreviewReceipt {
     param([object]$Bundle, [string]$Branch, [string]$MainCommit)
     $directory = Invoke-StocksGit rev-parse --git-path stocks-preview
-    $files = @([IO.Path]::GetFileName($Bundle.BundlePath), 'PreviewReleaseUpdate.php', 'PreviewReleaseBundle.php', 'PreviewFileSwap.php', 'preview-update.php', 'stocks_preview_target.json')
+    $files = @([IO.Path]::GetFileName($Bundle.BundlePath), 'PreviewReleaseUpdate.php', 'PreviewReleaseBundle.php', 'PreviewFileSwap.php', 'preview-update.php', 'stocks_preview_target.json') + @(Get-StocksSnapshotToolkitFiles)
     $hashes = [ordered]@{}
     foreach ($name in $files) {
         $hashes[$name] = (Get-FileHash -LiteralPath (Join-Path $Bundle.Directory $name) -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -115,7 +127,7 @@ function Read-StocksPreviewReceipt {
         throw 'The prepared preview bundle directory is missing or invalid.'
     }
     $bundleName = "stocks-preview-$Commit.zip"
-    $files = @($bundleName, 'PreviewReleaseUpdate.php', 'PreviewReleaseBundle.php', 'PreviewFileSwap.php', 'preview-update.php', 'stocks_preview_target.json')
+    $files = @($bundleName, 'PreviewReleaseUpdate.php', 'PreviewReleaseBundle.php', 'PreviewFileSwap.php', 'preview-update.php', 'stocks_preview_target.json') + @(Get-StocksSnapshotToolkitFiles)
     if (@($receipt.files.PSObject.Properties.Name).Count -ne $files.Count) {
         throw 'The prepared preview receipt has an unexpected file list.'
     }
@@ -135,13 +147,92 @@ function Read-StocksPreviewReceipt {
 function Invoke-StocksPreviewSsh {
     param([string]$Destination, [string]$Command)
     $ssh = Get-Command ssh.exe -ErrorAction Stop
-    $output = & $ssh.Source -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 $Destination $Command
+    $output = & $ssh.Source -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 $Destination $Command
     if ($LASTEXITCODE -ne 0) { throw 'Preview SSH command failed. Inspect the target before retrying.' }
     $output
 }
 
+function Invoke-StocksPreviewScp {
+    param([string[]]$Sources, [string]$Destination)
+    $scp = Get-Command scp.exe -ErrorAction Stop
+    & $scp.Source -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -O @Sources $Destination
+    if ($LASTEXITCODE -ne 0) { throw 'Preview encrypted transfer failed. Inspect the private transfer directories before retrying.' }
+}
+
+function Invoke-StocksPreviewDataRefresh {
+    param([object]$Bundle, [object]$Target)
+    $sourceRoot = '/home/1486907.cloudwaysapps.com/cfbckymfgk/public_html'
+    $sourceDestination = "sftp_gkstocks_admin@$($Target.serverAddress)"
+    $previewDestination = "$($Target.sshUser)@$($Target.serverAddress)"
+    $previewRoot = $Target.canonicalTargetRoot
+    $attemptId = [guid]::NewGuid().ToString('N')
+    $previewDirectory = "$previewRoot/.stocks-preview-private/original-$attemptId"
+    $sourceDirectory = "/tmp/stocks-snapshot-$attemptId"
+    $localDirectory = Join-Path $Bundle.Directory "refresh-$attemptId"
+    $null = New-Item -ItemType Directory -Path $localDirectory
+    $sourceCommit = @(Invoke-StocksPreviewSsh -Destination $sourceDestination -Command "test `"`$(realpath '$sourceRoot')`" = '$sourceRoot' && git -C '$sourceRoot' rev-parse HEAD") -join ''
+    if ($sourceCommit -cnotmatch '^[a-f0-9]{40}$') { throw 'The production source commit could not be verified.' }
+    $private = "$previewRoot/.stocks-preview-private"
+    $prepare = "umask 077 && test `"`$(id -u)`" = $($Target.targetOwnerUid) && test `"`$(realpath '$previewRoot')`" = '$previewRoot' && test ! -L '$private' && test `"`$(stat -c '%u:%a' '$private')`" = '$($Target.targetOwnerUid):700' && test ! -e '$previewRoot/storage/framework/down' && test ! -L '$previewRoot/storage/framework/down' && mkdir -m 700 '$previewDirectory'"
+    Invoke-StocksPreviewSsh -Destination $previewDestination -Command $prepare | Out-Null
+    $toolkit = @(Get-StocksSnapshotToolkitFiles) + @('PreviewReleaseBundle.php')
+    Push-Location -LiteralPath $Bundle.Directory
+    try {
+        Invoke-StocksPreviewScp -Sources $toolkit -Destination "${previewDestination}:$previewDirectory/"
+    }
+    finally { Pop-Location }
+    $previewScript = "$previewDirectory/preview-snapshot.php"
+    $previewArguments = "'$previewRoot' '$previewDirectory'"
+    $preparedJson = @(Invoke-StocksPreviewSsh -Destination $previewDestination -Command "php '$previewScript' prepare $previewArguments '$sourceCommit' --refresh-data") -join "`n"
+    $prepared = $preparedJson | ConvertFrom-Json
+    if ($prepared.request -cne "$previewDirectory/request.json" -or $prepared.request_sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+        $prepared.context.source_commit -cne $sourceCommit -or $prepared.context.target_commit -cne $Bundle.Commit) {
+        throw 'Preview snapshot request identity mismatch.'
+    }
+    $localRequest = Join-Path $localDirectory 'request.json'
+    Invoke-StocksPreviewScp -Sources @("${previewDestination}:$previewDirectory/request.json") -Destination $localRequest
+    if ((Get-FileHash -LiteralPath $localRequest -Algorithm SHA256).Hash.ToLowerInvariant() -cne $prepared.request_sha256) {
+        throw 'Preview snapshot request transfer authentication failed.'
+    }
+    Invoke-StocksPreviewSsh -Destination $sourceDestination -Command "umask 077 && mkdir -m 700 '$sourceDirectory'" | Out-Null
+    Push-Location -LiteralPath $Bundle.Directory
+    try {
+        Invoke-StocksPreviewScp -Sources $toolkit -Destination "${sourceDestination}:$sourceDirectory/"
+    }
+    finally { Pop-Location }
+    Invoke-StocksPreviewScp -Sources @($localRequest) -Destination "${sourceDestination}:$sourceDirectory/request.json"
+    $exportJson = @(Invoke-StocksPreviewSsh -Destination $sourceDestination -Command "php '$sourceDirectory/preview-snapshot.php' export '$sourceRoot' '$sourceDirectory' '$sourceDirectory/request.json' '$($prepared.request_sha256)'") -join "`n"
+    $export = $exportJson | ConvertFrom-Json
+    if ($export.file -cne "$sourceDirectory/original.snapshot" -or $export.sha256 -cnotmatch '^[a-f0-9]{64}$') {
+        throw 'Production export receipt identity mismatch.'
+    }
+    $localSnapshot = Join-Path $localDirectory 'original.snapshot'
+    Invoke-StocksPreviewScp -Sources @("${sourceDestination}:$sourceDirectory/original.snapshot") -Destination $localSnapshot
+    if ((Get-FileHash -LiteralPath $localSnapshot -Algorithm SHA256).Hash.ToLowerInvariant() -cne $export.sha256) {
+        throw 'Encrypted production snapshot transfer authentication failed.'
+    }
+    Invoke-StocksPreviewScp -Sources @($localSnapshot) -Destination "${previewDestination}:$previewDirectory/original.snapshot"
+    $snapshotArguments = "$previewArguments '$previewDirectory/original.snapshot' '$($export.sha256)'"
+    Invoke-StocksPreviewSsh -Destination $previewDestination -Command "php '$previewScript' inspect $snapshotArguments" | Out-Host
+    try {
+        Invoke-StocksPreviewSsh -Destination $previewDestination -Command "php '$previewScript' import $snapshotArguments" | Out-Host
+        Invoke-StocksPreviewSsh -Destination $previewDestination -Command "php '$previewScript' finish $previewArguments" | Out-Host
+    }
+    catch {
+        throw "Preview data refresh did not finish. Preserve $previewDirectory. Recovery: php '$previewScript' restore $previewArguments && php '$previewScript' finish $previewArguments. $($_.Exception.Message)"
+    }
+    try {
+        $ownedFiles = @('original.snapshot', 'request.json') + $toolkit
+        $sourceFiles = ($ownedFiles | ForEach-Object { "'$sourceDirectory/$_'" }) -join ' '
+        Invoke-StocksPreviewSsh -Destination $sourceDestination -Command "rm -f -- $sourceFiles && rmdir '$sourceDirectory'" | Out-Null
+        Remove-Item -LiteralPath $localSnapshot, $localRequest -Force
+    }
+    catch { Write-Warning 'Data refresh completed, but encrypted transfer cleanup needs inspection.' }
+    Write-Host "Preview data refreshed from read-only production source $sourceCommit. Previous preview data is in encrypted private checkpoint $previewDirectory/before.stream." -ForegroundColor Green
+}
+
 function Send-StocksPreviewBundle {
-    param([object]$Bundle, [string]$OldCommit)
+    param([object]$Bundle, [string]$OldCommit, [switch]$RefreshData)
     $target = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'stocks_preview_target.json') -Raw | ConvertFrom-Json
     if ($target.repository -cne 'ITStudioAT/stocks' -or $target.serverId -cne '1486907' -or
         $target.sourceAppId -cne '6468818' -or $target.targetAppId -cne '6690486' -or
@@ -156,6 +247,20 @@ function Send-StocksPreviewBundle {
     }
     $destination = "$($target.sshUser)@$($target.serverAddress)"
     $root = $target.canonicalTargetRoot
+    if ($RefreshData) {
+        Write-Host 'The current preview test data will be replaced with a fresh read-only production snapshot. The old preview data will remain in an encrypted private checkpoint.' -ForegroundColor Yellow
+        if ((Read-Host 'Replace current preview test data? Type REFRESH') -cne 'REFRESH') {
+            throw 'Preview data refresh cancelled before deployment.'
+        }
+    }
+    if ($OldCommit -ceq $Bundle.Commit) {
+        if (-not $RefreshData) { throw 'The selected preview commit is already installed.' }
+        if ((Read-Host 'Deploy this verified preview data refresh? Type PREVIEW') -cne 'PREVIEW') {
+            throw 'Preview data refresh cancelled before transfer.'
+        }
+        Invoke-StocksPreviewDataRefresh -Bundle $Bundle -Target $target
+        return
+    }
     $transfer = "$root/.stocks-preview-private/updates/$([guid]::NewGuid().ToString('N'))"
     $private = "$root/.stocks-preview-private"
     $prepare = "umask 077 && test `"`$(id -u)`" = 1013 && test `"`$(realpath '$root')`" = '$root' && test ! -L '$private' && test `"`$(stat -c '%u:%a' '$private')`" = '1013:700' && test ! -e '$root/storage/framework/down' && test ! -L '$private/updates' && mkdir -m 700 -p '$private/updates' && mkdir -m 700 '$transfer'"
@@ -182,4 +287,7 @@ function Send-StocksPreviewBundle {
     }
     Invoke-StocksPreviewSsh -Destination $destination -Command "php '$script' apply $arguments" | Out-Host
     Write-Host "Preview release $($Bundle.Commit) installed. Private transfer retained at $transfer." -ForegroundColor Green
+    if ($RefreshData) {
+        Invoke-StocksPreviewDataRefresh -Bundle $Bundle -Target $target
+    }
 }

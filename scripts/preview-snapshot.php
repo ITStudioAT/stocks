@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use App\Services\PreviewBackgroundState;
 use App\Services\PreviewDatabaseGuard;
 use App\Services\PreviewIsolation;
 use App\Services\PreviewOriginalPolicy;
@@ -147,12 +148,13 @@ try {
     $connection = $app['db']->connection()->getPdo();
     (new PreviewDatabaseGuard)->assertScopedGrants($connection, 'hbnucgvzmy');
     $database = new PreviewSnapshotDatabase($connection, new PreviewOriginalSchema);
-    $transfer = new PreviewSnapshotTransfer($database, new PreviewSnapshotArchive(new PreviewOriginalPolicy), $directory, $root.'/storage/framework/down', $root.'/storage/framework/sessions', $root.'/storage/framework/cache/data');
+    $transfer = new PreviewSnapshotTransfer($database, new PreviewSnapshotArchive(new PreviewOriginalPolicy), $directory, $root.'/storage/framework/down', $root.'/storage/framework/sessions', $root.'/storage/framework/cache/data', fn (): bool => $app->make(PreviewBackgroundState::class)->enabled());
     if ($mode === 'prepare') {
-        if (count($argv) !== 5 || ! preg_match('/^[a-f0-9]{40}$/D', $argv[4])) {
-            throw new RuntimeException('Prepare requires the verified source commit.');
+        $refreshData = count($argv) === 6 && $argv[5] === '--refresh-data';
+        if ((! $refreshData && count($argv) !== 5) || ! preg_match('/^[a-f0-9]{40}$/D', $argv[4] ?? '')) {
+            throw new RuntimeException('Prepare requires the verified source commit and optional --refresh-data.');
         }
-        $request = $transfer->prepare(['source_app_id' => '6468818', 'target_app_id' => '6690486', 'source_commit' => $argv[4], 'target_commit' => $marker['commit'], 'nonce' => bin2hex(random_bytes(32))]);
+        $request = $transfer->prepare(['source_app_id' => '6468818', 'target_app_id' => '6690486', 'source_commit' => $argv[4], 'target_commit' => $marker['commit'], 'nonce' => bin2hex(random_bytes(32))], refreshData: $refreshData);
         $result = ['request' => $directory.'/request.json', 'request_sha256' => hash_file('sha256', $directory.'/request.json'), 'context' => $request['context']];
     } elseif ($mode === 'adopt') {
         $request = json_decode(stocksSnapshotRead($directory.'/incoming-request.json', 65_536), true, 16, JSON_THROW_ON_ERROR);

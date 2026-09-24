@@ -184,10 +184,103 @@ class PreviewSnapshotTransferTest extends TestCase
         $this->assertSame(1, $transfer->inspectStream($path, $sealed['sha256'])['counts']['depots']);
         $result = $transfer->importStream($path, $sealed['sha256']);
         $this->assertSame('imported-maintenance', $result['state']);
+        $this->assertFileExists($this->directory.'/private/before.stream');
+        $this->assertFileDoesNotExist($this->directory.'/private/before.bin');
         $this->assertSame('Original Depot', Depot::firstOrFail()->name);
         $transfer->restore();
         $this->assertSame($before, $database->digest($database->read()));
         $transfer->finish();
+        $this->assertFileDoesNotExist($this->directory.'/framework/down');
+    }
+
+    public function test_populated_preview_can_refresh_and_restore_from_streamed_checkpoint(): void
+    {
+        User::factory()->create(['id' => 1, 'email' => 'preview-admin@stocks.invalid', 'remember_token' => null]);
+        Depot::factory()->create(['name' => 'Preview test data', 'account_number' => 'AT123456']);
+        $database = new PreviewSnapshotDatabase(DB::getPdo(), new PreviewOriginalSchema);
+        $before = $database->summarize($database->records())['sha256'];
+        $tables = $database->export();
+        $tables['depots'][0]['name'] = 'Original Depot';
+        $framework = realpath($this->directory.'/framework');
+        $transfer = new PreviewSnapshotTransfer($database, new PreviewSnapshotArchive(new PreviewOriginalPolicy),
+            realpath($this->directory.'/private'), $framework.'/down', $framework.'/sessions', $framework.'/cache/data');
+        $request = $transfer->prepare([
+            'source_app_id' => '100', 'target_app_id' => '200', 'source_commit' => str_repeat('a', 40),
+            'target_commit' => str_repeat('b', 40), 'nonce' => str_repeat('c', 64),
+        ], refreshData: true);
+        $keys = file_get_contents($this->directory.'/private/recipient.key');
+        $path = $this->directory.'/refresh.snapshot';
+        $sealed = (new PreviewSnapshotStream)->seal($database->recordsFromTables($tables), $request['context'], hex2bin($request['recipient']), $path);
+
+        $result = $transfer->importStream($path, $sealed['sha256']);
+
+        $this->assertSame('imported-maintenance', $result['state']);
+        $this->assertSame('Original Depot', Depot::firstOrFail()->name);
+        $this->assertFileExists($this->directory.'/private/before.stream');
+        $this->assertFileDoesNotExist($this->directory.'/private/before.bin');
+        $checkpoint = new PreviewSnapshotStream;
+        $checkpointDigest = trim(file_get_contents($this->directory.'/private/before.sha256'));
+        $this->assertSame($before, $database->summarize($checkpoint->open($this->directory.'/private/before.stream', $request['context'], $keys, $checkpointDigest))['sha256']);
+
+        $transfer->restore();
+
+        $this->assertSame('Preview test data', Depot::firstOrFail()->name);
+        $this->assertSame($before, $database->summarize($database->records())['sha256']);
+        $transfer->finish();
+        $this->assertFileDoesNotExist($this->directory.'/framework/down');
+    }
+
+    public function test_tampered_streamed_checkpoint_blocks_recovery_without_erasing_imported_data(): void
+    {
+        [$transfer, $database, $ciphertext] = $this->fixtures();
+        $request = json_decode(file_get_contents($this->directory.'/private/request.json'), true);
+        $keys = file_get_contents($this->directory.'/private/recipient.key');
+        $tables = (new PreviewSnapshotArchive(new PreviewOriginalPolicy))->open($ciphertext, $request['context'], $keys, hash('sha256', $ciphertext));
+        $path = $this->directory.'/original.snapshot';
+        $sealed = (new PreviewSnapshotStream)->seal($database->recordsFromTables($tables), $request['context'], sodium_crypto_box_publickey($keys), $path);
+        $transfer->importStream($path, $sealed['sha256']);
+        file_put_contents($this->directory.'/private/before.stream', 'tampered', FILE_APPEND);
+
+        try {
+            $transfer->restore();
+            $this->fail('A changed checkpoint must block restoration.');
+        } catch (\InvalidArgumentException) {
+            $this->assertSame('Original Depot', Depot::firstOrFail()->name);
+            $this->assertFileExists($this->directory.'/framework/down');
+        }
+    }
+
+    public function test_background_reenable_after_maintenance_blocks_refresh_before_data_change(): void
+    {
+        [, $database, $ciphertext, $before] = $this->fixtures();
+        $request = json_decode(file_get_contents($this->directory.'/private/request.json'), true);
+        $keys = file_get_contents($this->directory.'/private/recipient.key');
+        $tables = (new PreviewSnapshotArchive(new PreviewOriginalPolicy))->open($ciphertext, $request['context'], $keys, hash('sha256', $ciphertext));
+        $path = $this->directory.'/original.snapshot';
+        $sealed = (new PreviewSnapshotStream)->seal($database->recordsFromTables($tables), $request['context'], sodium_crypto_box_publickey($keys), $path);
+        $calls = 0;
+        $enabled = true;
+        $framework = realpath($this->directory.'/framework');
+        $guarded = new PreviewSnapshotTransfer($database, new PreviewSnapshotArchive(new PreviewOriginalPolicy),
+            realpath($this->directory.'/private'), $framework.'/down', $framework.'/sessions', $framework.'/cache/data',
+            function () use (&$calls, &$enabled): bool {
+                $calls++;
+
+                return $enabled && $calls >= 2;
+            });
+
+        try {
+            $guarded->importStream($path, $sealed['sha256']);
+            $this->fail('Background processing must stay off through maintenance entry.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('Turn preview OFF', $exception->getMessage());
+            $this->assertFileExists($this->directory.'/framework/down');
+            $this->assertSame($before, $database->digest($database->read()));
+        }
+
+        $enabled = false;
+        $guarded->restore();
+        $guarded->finish();
         $this->assertFileDoesNotExist($this->directory.'/framework/down');
     }
 

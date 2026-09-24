@@ -63,13 +63,16 @@ switch ($Command) {
             elseif ($argument -ceq '-Main' -and -not $parameters.ContainsKey('Main')) {
                 $parameters.Main = $true
             }
+            elseif ($argument -ceq '-RefreshData' -and -not $parameters.ContainsKey('RefreshData')) {
+                $parameters.RefreshData = $true
+            }
             elseif ($argument -cin @('deploy', 'prepare', 'resume') -and -not $parameters.ContainsKey('Mode')) {
                 $parameters.Mode = $argument
                 if ($argument -ceq 'resume') { $expectBundle = $true }
             }
-            else { throw 'Usage: gitpreview [deploy|prepare|resume BUNDLE_ID] [-Feature NAME | -Main]' }
+            else { throw 'Usage: gitpreview [deploy|prepare|resume BUNDLE_ID] [-Feature NAME | -Main] [-RefreshData]' }
         }
-        if ($expectFeature -or $expectBundle) { throw 'Usage: gitpreview [deploy|prepare|resume BUNDLE_ID] [-Feature NAME | -Main]' }
+        if ($expectFeature -or $expectBundle) { throw 'Usage: gitpreview [deploy|prepare|resume BUNDLE_ID] [-Feature NAME | -Main] [-RefreshData]' }
     }
     default {
         if ($arguments.Count -gt 0) { throw "Unexpected arguments for $Command." }

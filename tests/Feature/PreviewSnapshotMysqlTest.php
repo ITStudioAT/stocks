@@ -2,8 +2,15 @@
 
 namespace Tests\Feature;
 
+use App\Models\Depot;
+use App\Models\User;
+use App\Services\PreviewOriginalPolicy;
 use App\Services\PreviewOriginalSchema;
+use App\Services\PreviewSnapshotArchive;
 use App\Services\PreviewSnapshotDatabase;
+use App\Services\PreviewSnapshotStream;
+use App\Services\PreviewSnapshotTransfer;
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\DB;
 
 class PreviewSnapshotMysqlTest extends PreviewSnapshotDatabaseTest
@@ -55,6 +62,45 @@ class PreviewSnapshotMysqlTest extends PreviewSnapshotDatabaseTest
             $this->assertGreaterThanOrEqual(600, (int) $connection->query('SELECT @@SESSION.wait_timeout')->fetchColumn());
         } finally {
             $connection->exec('SET SESSION wait_timeout = DEFAULT');
+        }
+    }
+
+    public function test_populated_mysql_preview_refresh_restores_its_streamed_checkpoint(): void
+    {
+        User::factory()->create(['id' => 1, 'email' => 'preview-admin@stocks.invalid', 'remember_token' => null]);
+        Depot::factory()->create(['name' => 'Preview before refresh', 'account_number' => 'AT123456']);
+        $database = new PreviewSnapshotDatabase(DB::getPdo(), new PreviewOriginalSchema);
+        $before = $database->summarize($database->records())['sha256'];
+        $tables = $database->export();
+        $tables['depots'][0]['name'] = 'Fresh original data';
+        $directory = sys_get_temp_dir().'/stocks-mysql-refresh-'.bin2hex(random_bytes(8));
+        mkdir($directory.'/private', 0700, true);
+        mkdir($directory.'/framework/sessions', 0700, true);
+        mkdir($directory.'/framework/cache/data', 0700, true);
+        $directory = realpath($directory);
+
+        try {
+            $transfer = new PreviewSnapshotTransfer($database, new PreviewSnapshotArchive(new PreviewOriginalPolicy),
+                $directory.'/private', $directory.'/framework/down', $directory.'/framework/sessions', $directory.'/framework/cache/data');
+            $request = $transfer->prepare([
+                'source_app_id' => '100', 'target_app_id' => '200', 'source_commit' => str_repeat('a', 40),
+                'target_commit' => str_repeat('b', 40), 'nonce' => str_repeat('c', 64),
+            ], refreshData: true);
+            $streamPath = $directory.'/original.snapshot';
+            $snapshot = (new PreviewSnapshotStream)->seal($database->recordsFromTables($tables), $request['context'], hex2bin($request['recipient']), $streamPath);
+
+            $transfer->importStream($streamPath, $snapshot['sha256']);
+
+            $this->assertSame('Fresh original data', Depot::firstOrFail()->name);
+            $this->assertFileExists($directory.'/private/before.stream');
+            $this->assertFileDoesNotExist($directory.'/private/before.bin');
+            $transfer->restore();
+            $this->assertSame($before, $database->summarize($database->records())['sha256']);
+            $this->assertSame('Preview before refresh', Depot::firstOrFail()->name);
+            $transfer->finish();
+            $this->assertFileDoesNotExist($directory.'/framework/down');
+        } finally {
+            (new Filesystem)->deleteDirectory($directory);
         }
     }
 }
