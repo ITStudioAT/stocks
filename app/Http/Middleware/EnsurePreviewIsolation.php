@@ -24,12 +24,6 @@ class EnsurePreviewIsolation
                     ->header('X-Robots-Tag', 'noindex, nofollow');
             }
 
-            if ($request->getUser() !== 'preview'
-                || ! password_verify((string) $request->getPassword(), (string) config('security.preview.access_password_hash'))) {
-                return $this->markPreview(response('Private Stocks preview.', 401)
-                    ->header('WWW-Authenticate', 'Basic realm="Stocks Preview", charset="UTF-8"'));
-            }
-
             return $this->markPreview($next($request));
         }
 

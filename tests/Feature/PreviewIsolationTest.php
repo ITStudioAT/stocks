@@ -13,12 +13,14 @@ use App\Services\StockAiResearchService;
 use Illuminate\Cache\FileStore;
 use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Mail\Events\MessageSending;
+use Illuminate\Routing\RouteCollection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Redis;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
@@ -56,9 +58,31 @@ class PreviewIsolationTest extends TestCase
         DB::shouldReceive('connection')->never();
         $this->assertSame([], app(PreviewIsolation::class)->problems());
         $this->artisan('preview:check')->assertSuccessful();
-        $this->get('/up')->assertUnauthorized()->assertHeader('X-Stocks-Preview', 'true');
-        $this->withServerVariables(['PHP_AUTH_USER' => 'preview', 'PHP_AUTH_PW' => 'preview-test-access'])
-            ->get('/up')->assertOk()->assertHeader('X-Stocks-Preview', 'true');
+        $this->get('/up')->assertOk()->assertHeader('X-Stocks-Preview', 'true')->assertHeaderMissing('WWW-Authenticate');
+        $this->get('/admin/login')->assertOk()->assertHeader('X-Stocks-Preview', 'true')->assertHeaderMissing('WWW-Authenticate');
+        $this->getJson('/admin/depots')->assertUnauthorized()->assertHeader('X-Stocks-Preview', 'true');
+    }
+
+    public function test_preview_market_routes_require_the_application_login(): void
+    {
+        $this->configurePreview();
+        $originalRoutes = Route::getRoutes();
+        Route::setRoutes(new RouteCollection);
+
+        try {
+            require base_path('routes/web.php');
+            Route::getRoutes()->refreshNameLookups();
+            foreach (['homepage', 'indices', 'depot-sum-sign'] as $name) {
+                $route = Route::getRoutes()->getByName($name);
+                $this->assertContains('auth', $route->gatherMiddleware());
+                $this->assertContains('auth.session', $route->gatherMiddleware());
+                $this->assertContains('role:admin|super_admin', $route->gatherMiddleware());
+                $this->assertSame([], $route->excludedMiddleware());
+            }
+            $this->getJson('/indices')->assertUnauthorized();
+        } finally {
+            Route::setRoutes($originalRoutes);
+        }
     }
 
     #[DataProvider('unsafeConfiguration')]
@@ -82,6 +106,7 @@ class PreviewIsolationTest extends TestCase
             ['view.compiled', sys_get_temp_dir(), 'view.compiled'],
             ['app.url', 'https://live.example.test', 'preview.https_host'],
             ['app.previous_keys', ['old-live-key'], 'app.previous_keys'],
+            ['filesystems.disks.local.serve', true, 'preview.private_storage_not_served'],
             ['app.key', 'base64:'.base64_encode(str_repeat('l', 32)), 'preview.independent_key'],
             ['queue.default', 'redis', 'queue.default'],
             ['ai.providers.bedrock.use_default_credential_provider', true, 'ai.providers.bedrock.use_default_credential_provider'],
@@ -185,7 +210,8 @@ class PreviewIsolationTest extends TestCase
             'session.driver' => 'file', 'session.domain' => null, 'session.path' => '/',
             'session.secure' => true, 'session.http_only' => true, 'session.encrypt' => true,
             'session.same_site' => 'strict', 'session.cookie' => '__Host-stocks-preview-200',
-            'filesystems.default' => 'local', 'filesystems.disks.s3.key' => null, 'filesystems.disks.s3.secret' => null,
+            'filesystems.default' => 'local', 'filesystems.disks.local.serve' => false,
+            'filesystems.disks.s3.key' => null, 'filesystems.disks.s3.secret' => null,
             'services.eodhd.key' => null, 'services.cloudways.deployment.access_token' => null,
             'ai.providers' => [],
         ]);

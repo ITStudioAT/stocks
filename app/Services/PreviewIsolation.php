@@ -65,6 +65,7 @@ class PreviewIsolation
         foreach (['cache.default' => 'file', 'session.driver' => 'file', 'queue.default' => 'sync', 'mail.default' => 'array', 'filesystems.default' => 'local', 'app.maintenance.driver' => 'file'] as $field => $value) {
             $require(config($field) === $value, $field);
         }
+        $require(config('filesystems.disks.local.serve') === false, 'preview.private_storage_not_served');
         foreach (['session.files', 'view.compiled', 'cache.stores.file.path', 'cache.stores.file.lock_path'] as $field) {
             $require($this->ownsStoragePath(config($field)), $field);
         }

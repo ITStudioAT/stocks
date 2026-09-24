@@ -31,6 +31,7 @@ use App\Http\Controllers\AdminV2IndexEodhdSyncSettingsController;
 use App\Http\Controllers\AdminV2IndexRealtimeSyncController;
 use App\Http\Controllers\AdminV2StockEodhdSyncController;
 use App\Http\Controllers\PublicMarketDataController;
+use App\Services\PreviewIsolation;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
@@ -45,18 +46,27 @@ $statelessPublicMiddleware = [
     ShareErrorsFromSession::class,
     PreventRequestForgery::class,
 ];
+$previewPublicMiddleware = app(PreviewIsolation::class)->active()
+    ? ['auth', 'auth.session', 'role:admin|super_admin']
+    : [];
+if ($previewPublicMiddleware !== []) {
+    $statelessPublicMiddleware = [];
+}
 
 Route::view('/', 'homepage')
     ->withoutMiddleware($statelessPublicMiddleware)
+    ->middleware($previewPublicMiddleware)
     ->name('homepage');
 
 Route::get('/indices', [PublicMarketDataController::class, 'indices'])
     ->withoutMiddleware($statelessPublicMiddleware)
+    ->middleware($previewPublicMiddleware)
     ->name('indices');
 
 // Retain the public URL for frontend compatibility, but derive its sign only from public market data.
 Route::get('/depot-sum-sign', [PublicMarketDataController::class, 'marketSign'])
     ->withoutMiddleware($statelessPublicMiddleware)
+    ->middleware($previewPublicMiddleware)
     ->name('depot-sum-sign');
 
 Route::view('/admin/login', 'app')->name('admin.login');

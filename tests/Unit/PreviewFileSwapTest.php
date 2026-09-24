@@ -61,6 +61,21 @@ class PreviewFileSwapTest extends TestCase
         $this->assertSame($inode, fileinode($this->root));
     }
 
+    public function test_update_swap_keeps_the_existing_environment_and_storage(): void
+    {
+        $files = new PreviewFileSwap;
+        $files->exchange($this->root, $this->candidate, $this->backup, str_repeat('c', 40), retainRuntime: true);
+
+        $this->assertSame('new', file_get_contents($this->root.'/public/index.php'));
+        $this->assertSame('old', file_get_contents($this->root.'/.env'));
+        $this->assertSame('old', file_get_contents($this->root.'/storage/state'));
+        $this->assertFileDoesNotExist($this->backup.'/storage/state');
+
+        $failed = $this->root.DIRECTORY_SEPARATOR.'.stocks-preview-private'.DIRECTORY_SEPARATOR.'failed-'.str_repeat('d', 32);
+        $files->exchange($this->root, $this->backup, $failed, str_repeat('c', 40), retainRuntime: true);
+        $this->assertOriginalFiles();
+    }
+
     #[DataProvider('interruptionPoints')]
     public function test_interrupted_moves_recover_without_overwriting_or_losing_any_files(int $at, bool $after): void
     {

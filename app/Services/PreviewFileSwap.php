@@ -7,11 +7,16 @@ use Throwable;
 
 class PreviewFileSwap
 {
-    public function exchange(string $root, string $candidate, string $preserved, string $commit): void
+    public function exchange(string $root, string $candidate, string $preserved, string $commit, bool $retainRuntime = false): void
     {
         $private = $this->privateDirectory($root);
         $this->assertNoPendingSwap($root);
         $this->assertDirectory($candidate, $private);
+        if ($retainRuntime && (is_link($root.'/.env') || ! is_file($root.'/.env')
+            || is_link($root.'/storage') || ! is_dir($root.'/storage')
+            || is_link($candidate.'/storage') || (file_exists($candidate.'/storage') && ! is_dir($candidate.'/storage')))) {
+            throw new RuntimeException('Preview update requires intact runtime state.');
+        }
         if (dirname($preserved) !== $private || ! preg_match('/^(template|failed)-[a-f0-9]{32}$/D', basename($preserved))
             || file_exists($preserved) || is_link($preserved) || ! mkdir($preserved, 0700)) {
             throw new RuntimeException('Invalid preview preservation directory.');
@@ -19,7 +24,8 @@ class PreviewFileSwap
         $journal = [
             'format' => 'stocks-preview-swap-v1', 'root' => $root, 'commit' => $commit,
             'candidate' => $candidate, 'preserved' => $preserved, 'phase' => 'backing_up',
-            'old_entries' => $this->entries($root), 'new_entries' => $this->entries($candidate),
+            'old_entries' => array_values(array_diff($this->entries($root), $retainRuntime ? ['.env', 'storage'] : [])),
+            'new_entries' => array_values(array_diff($this->entries($candidate), $retainRuntime ? ['.env', 'storage'] : [])),
         ];
         $this->saveJournal($private, $journal);
         try {
