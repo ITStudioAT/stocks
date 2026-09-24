@@ -6,6 +6,7 @@ use App\Models\Depot;
 use App\Models\User;
 use App\Services\PreviewOriginalPolicy;
 use App\Services\PreviewOriginalSchema;
+use App\Services\PreviewReleaseBundle;
 use App\Services\PreviewSnapshotArchive;
 use App\Services\PreviewSnapshotDatabase;
 use App\Services\PreviewSnapshotStream;
@@ -42,6 +43,8 @@ class PreviewSnapshotTransferTest extends TestCase
     {
         [$transfer, $database, $ciphertext, $before] = $this->fixtures();
         file_put_contents($this->directory.'/framework/sessions/old-session', 'old-preview-admin');
+        file_put_contents($this->directory.'/framework/sessions/.gitignore', "*\n!.gitignore\n");
+        file_put_contents($this->directory.'/framework/cache/data/.gitignore', "*\n!.gitignore\n");
         $this->assertSame(1, $transfer->inspect($ciphertext, hash('sha256', $ciphertext))['depots']);
         $result = $transfer->import($ciphertext, hash('sha256', $ciphertext));
         $this->assertSame('imported-maintenance', $result['state']);
@@ -54,6 +57,9 @@ class PreviewSnapshotTransferTest extends TestCase
         $this->assertFileDoesNotExist($this->directory.'/framework/down');
         $this->assertFileDoesNotExist($this->directory.'/framework/sessions/old-session');
         $this->assertFileExists($this->directory.'/private/sessions-before/old-session');
+        foreach (['sessions', 'cache/data'] as $runtimeDirectory) {
+            $this->assertSame("*\n!.gitignore\n", file_get_contents($this->directory.'/framework/'.$runtimeDirectory.'/.gitignore'));
+        }
     }
 
     public function test_successful_release_preserves_data_and_refuses_replay(): void
@@ -64,6 +70,44 @@ class PreviewSnapshotTransferTest extends TestCase
         $this->assertSame($result['data_sha256'], $database->digest($database->read()));
         $this->expectException(RuntimeException::class);
         $transfer->import($ciphertext, hash('sha256', $ciphertext));
+    }
+
+    public function test_release_keeps_tracked_runtime_placeholders_verifiable(): void
+    {
+        [, $database, $ciphertext] = $this->fixtures();
+        $root = $this->directory.'/release';
+        foreach (['public', 'vendor', 'storage/framework/sessions', 'storage/framework/cache/data', '.stocks-preview-private/attempt'] as $folder) {
+            mkdir($root.'/'.$folder, 0700, true);
+        }
+        $files = [
+            'artisan' => '<?php',
+            'public/index.php' => '<?php',
+            'vendor/autoload.php' => '<?php',
+            'storage/framework/sessions/.gitignore' => "*\n!.gitignore\n",
+            'storage/framework/cache/data/.gitignore' => "*\n!.gitignore\n",
+        ];
+        foreach ($files as $path => $contents) {
+            file_put_contents($root.'/'.$path, $contents);
+            $files[$path] = hash('sha256', $contents);
+        }
+        file_put_contents($root.'/preview-release.json', json_encode([
+            'format' => 'stocks-preview-release-v1',
+            'commit' => str_repeat('b', 40),
+            'files' => $files,
+        ], JSON_THROW_ON_ERROR));
+        $private = $root.'/.stocks-preview-private/attempt';
+        foreach (glob($this->directory.'/private/*') as $source) {
+            copy($source, $private.'/'.basename($source));
+        }
+        $transfer = new PreviewSnapshotTransfer($database, new PreviewSnapshotArchive(new PreviewOriginalPolicy), realpath($private),
+            $root.'/storage/framework/down', $root.'/storage/framework/sessions', $root.'/storage/framework/cache/data');
+
+        $transfer->import($ciphertext, hash('sha256', $ciphertext));
+        $transfer->finish();
+
+        (new PreviewReleaseBundle)->verifyInstalled($root, str_repeat('b', 40), hash_file('sha256', $root.'/preview-release.json'));
+        $this->assertFileExists($private.'/sessions-before/.gitignore');
+        $this->assertFileExists($private.'/cache-before/.gitignore');
     }
 
     public function test_tampered_archive_does_not_modify_preview(): void

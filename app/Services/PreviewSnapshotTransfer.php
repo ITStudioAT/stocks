@@ -257,6 +257,14 @@ class PreviewSnapshotTransfer
         if (! is_dir($path) && ! mkdir($path, 0700)) {
             throw new RuntimeException('Could not recreate preview sessions/cache.');
         }
+        $trackedPlaceholder = $destination.'/.gitignore';
+        if (file_exists($trackedPlaceholder) && (is_link($trackedPlaceholder) || ! is_file($trackedPlaceholder))) {
+            throw new RuntimeException('Invalid preview runtime placeholder.');
+        }
+        if (is_file($trackedPlaceholder) && ! file_exists($path.'/.gitignore')
+            && ! copy($trackedPlaceholder, $path.'/.gitignore')) {
+            throw new RuntimeException('Could not restore preview runtime placeholder.');
+        }
     }
 
     private function assertDirectory(): void
