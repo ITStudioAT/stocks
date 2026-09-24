@@ -54,6 +54,13 @@ foreach ($field in @('source_app_id', 'target_app_id', 'source_commit', 'target_
     if ($context.$field -cne $receipt.context.$field) { throw 'Export receipt context mismatch.' }
 }
 Write-Output 'All 13 transfer files and the original-data context are verified.'
+$remote = 'sftp_for_gkstocks_feature@165.227.156.99'
+$root = '/home/1486907.cloudwaysapps.com/hbnucgvzmy/public_html'
+$private = "$root/.stocks-preview-private"
+# A snapshot can have several interrupted uploads. Never reuse or remove their directories.
+$attempt = [Guid]::NewGuid().ToString('N')
+$destination = "$private/original-$($context.nonce)-$attempt"
+Write-Output "Planned private upload directory: $destination"
 if ($VerifyOnly) { return }
 
 $sshDirectory = Join-Path $env:WINDIR 'Sysnative/OpenSSH'
@@ -65,14 +72,10 @@ $scp = Join-Path $sshDirectory 'scp.exe'
 if (-not (Test-Path -LiteralPath $ssh) -or -not (Test-Path -LiteralPath $scp)) {
     throw 'Windows OpenSSH client is unavailable.'
 }
-$remote = 'sftp_for_gkstocks_feature@165.227.156.99'
-$root = '/home/1486907.cloudwaysapps.com/hbnucgvzmy/public_html'
-$private = "$root/.stocks-preview-private"
-$destination = "$private/original-$($context.nonce)"
 $options = @('-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=15', '-o', 'ServerAliveInterval=30')
-$prepare = "umask 077 && test `"`$(id -u)`" = 1013 && test `"`$(realpath '$root')`" = '$root' && test ! -L '$private' && test `"`$(stat -c '%u:%a' '$private')`" = '1013:700' && mkdir -m 700 '$destination'"
+$prepare = "umask 077 && test `"`$(id -u)`" = 1013 && test `"`$(realpath '$root')`" = '$root' && test ! -L '$private' && test `"`$(stat -c '%u:%a' '$private')`" = '1013:700' && if test -e '$root/storage/framework/down' || test -L '$root/storage/framework/down' || test -e '$private/swap.json' || test -L '$private/swap.json'; then echo 'Preview maintenance or deployment is already pending. Preserve the earlier transfer directory and inspect its recovery state before retrying.' >&2; exit 20; else mkdir -m 700 '$destination'; fi"
 & $ssh @options $remote $prepare
-if ($LASTEXITCODE -ne 0) { throw 'Preview private upload preparation failed; nothing was imported.' }
+if ($LASTEXITCODE -ne 0) { throw 'Preview private upload preparation failed; this attempt did not upload or import anything. Earlier attempts remain untouched.' }
 Push-Location -LiteralPath $bundle
 try {
     # Relative sources avoid Windows-drive parsing differences in SCP.

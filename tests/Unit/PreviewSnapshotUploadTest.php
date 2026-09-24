@@ -61,6 +61,18 @@ class PreviewSnapshotUploadTest extends TestCase
         $this->assertStringContainsString('manifest authentication failed', $process->getErrorOutput());
     }
 
+    public function test_retries_of_the_same_snapshot_choose_distinct_private_directories(): void
+    {
+        $destinations = [];
+        for ($attempt = 0; $attempt < 2; $attempt++) {
+            $process = $this->verify();
+            $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+            $this->assertSame(1, preg_match('~Planned private upload directory: (/home/1486907\\.cloudwaysapps\\.com/hbnucgvzmy/public_html/\\.stocks-preview-private/original-'.str_repeat('b', 64).'-[a-f0-9]{32})~', $process->getOutput(), $matches));
+            $destinations[] = $matches[1];
+        }
+        $this->assertNotSame($destinations[0], $destinations[1]);
+    }
+
     public function test_even_authenticated_manifest_cannot_include_extra_or_traversal_files(): void
     {
         foreach (['../outside.php', 'unapproved.php', 'original.snapshot'] as $name) {
@@ -80,6 +92,52 @@ class PreviewSnapshotUploadTest extends TestCase
         $process = $this->verify();
         $this->assertNotSame(0, $process->getExitCode());
         $this->assertStringContainsString('identity mismatch', $process->getErrorOutput());
+    }
+
+    public function test_remote_preparation_stops_before_mkdir_for_pending_maintenance_or_deployment(): void
+    {
+        $bash = PHP_OS_FAMILY === 'Windows' ? 'C:/Program Files/Git/bin/bash.exe' : (new ExecutableFinder)->find('bash');
+        if ($bash === null || ! is_file($bash)) {
+            $this->markTestSkipped('Bash is required to exercise the remote preparation command.');
+        }
+        $plan = new Process([$this->shell, '-NoProfile', '-Command', <<<'POWERSHELL'
+            . $env:UPLOAD_HELPER -BundleDirectory $env:UPLOAD_FIXTURE -ExpectedManifestSha256 $env:UPLOAD_MANIFEST -VerifyOnly | Out-Null
+            $tree = [Management.Automation.Language.Parser]::ParseFile($env:UPLOAD_HELPER, [ref]$null, [ref]$null)
+            $assignment = $tree.Find({ param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$prepare' }, $true)
+            . ([scriptblock]::Create($assignment.Extent.Text))
+            Write-Output $prepare
+            POWERSHELL,
+        ], env: [
+            'UPLOAD_HELPER' => dirname(__DIR__, 2).'/scripts/preview-snapshot-upload.ps1',
+            'UPLOAD_FIXTURE' => $this->directory,
+            'UPLOAD_MANIFEST' => hash_file('sha256', $this->directory.'/transfer-files.sha256'),
+        ]);
+        $plan->mustRun();
+        $mocks = <<<'BASH'
+            id() { echo 1013; }
+            realpath() { echo /home/1486907.cloudwaysapps.com/hbnucgvzmy/public_html; }
+            stat() { echo 1013:700; }
+            mkdir() { echo 'CREATED_NEW_DIRECTORY'; }
+            test() {
+                if { [ "$1" = '-e' ] || [ "$1" = '-L' ]; } && [ -n "$PENDING_PATH" ] && [ "$2" = "$PENDING_PATH" ]; then
+                    return 0
+                fi
+                builtin test "$@"
+            }
+            BASH;
+        $root = '/home/1486907.cloudwaysapps.com/hbnucgvzmy/public_html';
+        foreach (['', $root.'/storage/framework/down', $root.'/.stocks-preview-private/swap.json'] as $pending) {
+            $process = new Process([$bash, '-c', $mocks."\n".trim($plan->getOutput())], env: ['PENDING_PATH' => $pending]);
+            $process->run();
+            if ($pending === '') {
+                $this->assertSame(0, $process->getExitCode(), $process->getErrorOutput());
+                $this->assertStringContainsString('CREATED_NEW_DIRECTORY', $process->getOutput());
+            } else {
+                $this->assertSame(20, $process->getExitCode(), $process->getErrorOutput());
+                $this->assertStringNotContainsString('CREATED_NEW_DIRECTORY', $process->getOutput());
+                $this->assertStringContainsString('Preserve the earlier transfer directory', $process->getErrorOutput());
+            }
+        }
     }
 
     private function manifest(): void
