@@ -32,6 +32,14 @@ function New-StocksPreviewBundle {
         if ($LASTEXITCODE -ne 0) { throw 'Preview frontend dependency installation failed.' }
         & $npm run build
         if ($LASTEXITCODE -ne 0) { throw 'Preview frontend build failed.' }
+        $viteHot = Join-Path $sourceDirectory 'public/hot'
+        if (Test-Path -LiteralPath $viteHot) {
+            $hotItem = Get-Item -LiteralPath $viteHot
+            if ($hotItem.PSIsContainer -or ($hotItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw 'Invalid Vite hot marker in preview build.'
+            }
+            Remove-Item -LiteralPath $viteHot -Force
+        }
         $nodeModules = [IO.Path]::GetFullPath((Join-Path $sourceDirectory 'node_modules'))
         if (-not $nodeModules.StartsWith($buildRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
             throw 'Refusing cleanup outside the owned preview build directory.'

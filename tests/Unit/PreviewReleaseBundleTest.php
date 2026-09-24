@@ -70,6 +70,13 @@ class PreviewReleaseBundleTest extends TestCase
         (new PreviewReleaseBundle)->create($this->directory.'/source', $this->directory.'/release.zip', str_repeat('a', 40));
     }
 
+    public function test_builder_refuses_a_vite_development_server_marker(): void
+    {
+        file_put_contents($this->directory.'/source/public/hot', 'http://localhost:5173');
+        $this->expectException(RuntimeException::class);
+        (new PreviewReleaseBundle)->create($this->directory.'/source', $this->directory.'/release.zip', str_repeat('a', 40));
+    }
+
     protected function tearDown(): void
     {
         (new Filesystem)->deleteDirectory($this->directory);
