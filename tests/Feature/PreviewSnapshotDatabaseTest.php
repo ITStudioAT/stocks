@@ -174,6 +174,14 @@ class PreviewSnapshotDatabaseTest extends TestCase
         }
     }
 
+    public function test_database_failure_description_excludes_driver_text_and_private_values(): void
+    {
+        $exception = new \PDOException('Private original email and SQL bindings');
+        $exception->errorInfo = ['HY000', 2006, 'Private original email and SQL bindings'];
+
+        $this->assertSame('SQLSTATE HY000, driver 2006', PreviewSnapshotDatabase::describePdoFailure($exception));
+    }
+
     #[DataProvider('freshTransferActions')]
     public function test_fresh_transfer_instances_can_restore_and_finish_json_snapshots(bool $restore): void
     {

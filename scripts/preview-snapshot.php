@@ -180,6 +180,9 @@ try {
     fwrite(STDOUT, json_encode($result, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT)."\n");
 } catch (Throwable $exception) {
     $reason = $exception::class === RuntimeException::class ? $exception->getMessage() : $exception::class;
+    if ($exception instanceof PDOException) {
+        $reason .= ' ('.PreviewSnapshotDatabase::describePdoFailure($exception).')';
+    }
     fwrite(STDERR, 'Snapshot stopped: '.$reason.'. Preview maintenance is retained after an interrupted import; use restore before finish. No source writes are performed.'."\n");
     exit(1);
 }

@@ -395,16 +395,22 @@ class PreviewSnapshotDatabase
                 $this->connection->rollBack();
             }
             if ($exception instanceof PDOException) {
-                $sqlState = (string) ($exception->errorInfo[0] ?? $exception->getCode());
-                $sqlState = preg_match('/^[A-Z0-9]{5}$/D', $sqlState) ? $sqlState : 'unknown';
-                $driverCode = $exception->errorInfo[1] ?? null;
-                $driverCode = is_int($driverCode) || ctype_digit((string) $driverCode) ? (int) $driverCode : 0;
                 $location = $failedTable === null ? $phase : "{$phase} {$failedTable} row {$rowNumber}";
 
-                throw new RuntimeException("Preview import {$location} failed (SQLSTATE {$sqlState}, driver {$driverCode}).", previous: $exception);
+                throw new RuntimeException('Preview import '.$location.' failed ('.self::describePdoFailure($exception).').', previous: $exception);
             }
             throw $exception;
         }
+    }
+
+    public static function describePdoFailure(PDOException $exception): string
+    {
+        $sqlState = (string) ($exception->errorInfo[0] ?? $exception->getCode());
+        $sqlState = preg_match('/^[A-Z0-9]{5}$/D', $sqlState) ? $sqlState : 'unknown';
+        $driverCode = $exception->errorInfo[1] ?? null;
+        $driverCode = is_int($driverCode) || ctype_digit((string) $driverCode) ? (int) $driverCode : 0;
+
+        return "SQLSTATE {$sqlState}, driver {$driverCode}";
     }
 
     public function prepareLongRunningImport(): void
