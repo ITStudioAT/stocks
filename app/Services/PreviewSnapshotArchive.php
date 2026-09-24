@@ -9,6 +9,8 @@ class PreviewSnapshotArchive
 {
     private const MaximumBytes = 67_108_864;
 
+    public function __construct(private ?PreviewOriginalPolicy $originalPolicy = null) {}
+
     /**
      * Pure in-memory format; does not read, write or import a database or file.
      * The caller must transfer the ciphertext digest over an authenticated channel.
@@ -23,9 +25,9 @@ class PreviewSnapshotArchive
             throw new InvalidArgumentException('Invalid snapshot recipient.');
         }
         $payload = json_encode([
-            'format' => 'stocks-preview-v1',
+            'format' => $this->originalPolicy ? 'stocks-preview-original-v1' : 'stocks-preview-v1',
             'context' => $context,
-            'tables' => (new PreviewSnapshotPolicy)->sanitize($tables),
+            'tables' => $this->originalPolicy?->prepare($tables) ?? (new PreviewSnapshotPolicy)->sanitize($tables),
         ], JSON_THROW_ON_ERROR);
         if (strlen($payload) > self::MaximumBytes - SODIUM_CRYPTO_BOX_SEALBYTES) {
             throw new InvalidArgumentException('Snapshot exceeds the supported size.');
@@ -56,12 +58,12 @@ class PreviewSnapshotArchive
         } catch (JsonException) {
             throw new InvalidArgumentException('Snapshot format is invalid.');
         }
-        if (! is_array($decoded) || ($decoded['format'] ?? null) !== 'stocks-preview-v1'
+        if (! is_array($decoded) || ($decoded['format'] ?? null) !== ($this->originalPolicy ? 'stocks-preview-original-v1' : 'stocks-preview-v1')
             || ($decoded['context'] ?? null) !== $expectedContext || ! is_array($decoded['tables'] ?? null)) {
             throw new InvalidArgumentException('Snapshot context mismatch.');
         }
 
-        return (new PreviewSnapshotPolicy)->sanitize($decoded['tables']);
+        return $this->originalPolicy?->prepare($decoded['tables']) ?? (new PreviewSnapshotPolicy)->sanitize($decoded['tables']);
     }
 
     /** @param array<string, string> $context */

@@ -43,6 +43,33 @@ jobs:
       - name: Run PHPUnit
         run: php artisan test --compact
 
+  preview-mysql:
+    name: Preview snapshot MySQL isolation
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: snapshot-test-only
+          MYSQL_DATABASE: stocks_preview_snapshot_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost -psnapshot-test-only"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240
+        with:
+          php-version: '8.4'
+          extensions: pdo_mysql, sodium
+          coverage: none
+      - run: composer install --prefer-dist --no-interaction --no-progress
+      - name: Verify snapshot transactions and original-user isolation on MySQL
+        env:
+          PREVIEW_MYSQL_TEST_DATABASE: stocks_preview_snapshot_test
+        run: php artisan test --compact tests/Feature/PreviewSnapshotMysqlTest.php
+
   frontend:
     name: Frontend tests and release build
     runs-on: ubuntu-latest
