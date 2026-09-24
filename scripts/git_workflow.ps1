@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('gitstart', 'gitwork', 'gitmain', 'gitsave', 'gitupdate', 'gitcheck', 'gitpreview', 'gitrelease', 'gitdeploy', 'gitdiscard')]
+    [ValidateSet('gitstart', 'gitwork', 'gitmain', 'gitsave', 'gitpush', 'gitupdate', 'gitcheck', 'gitpreview', 'gitrelease', 'gitdeploy', 'gitdiscard')]
     [string]$Command,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$CommandArguments
@@ -9,6 +9,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'git_branch_helpers.ps1')
+if ($Command -ceq 'gitpush') { . (Join-Path $PSScriptRoot 'git_helpers.ps1') }
 $parameters = @{}
 $arguments = @($CommandArguments | Where-Object { $null -ne $_ })
 if ($Command -in @('gitstart', 'gitwork', 'gitmain', 'gitupdate')) {
@@ -30,11 +31,11 @@ switch ($Command) {
         if ($arguments.Count -gt 1) { throw 'Usage: gitwork [NAME] [-NoPrepare]' }
         if ($arguments.Count -eq 1) { $parameters.Name = $arguments[0] }
     }
-    'gitsave' {
+    { $_ -in @('gitsave', 'gitpush') } {
         $flags = @($arguments | Where-Object { $_ -cin @('-Full', '-WaitForCI') })
         if (@($flags | Select-Object -Unique).Count -ne $flags.Count) { throw 'Specify each gitsave flag only once.' }
         $positionals = @($arguments | Where-Object { $_ -cnotin @('-Full', '-WaitForCI') })
-        if ($positionals.Count -lt 1 -or $positionals.Count -gt 2) { throw 'Usage: gitsave "DESCRIPTION" [VERSION] [-Full] [-WaitForCI]' }
+        if ($positionals.Count -lt 1 -or $positionals.Count -gt 2) { throw "Usage: $Command DESCRIPTION [VERSION] [-Full] [-WaitForCI]" }
         $parameters.Message = $positionals[0]
         if ($positionals.Count -eq 2) { $parameters.Version = $positionals[1] }
         if ($flags -ccontains '-Full') { $parameters.Full = $true }

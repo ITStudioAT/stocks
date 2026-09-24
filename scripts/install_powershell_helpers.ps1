@@ -95,6 +95,25 @@ function Invoke-ProjectGitWorkflow {
     try { & `$workflow -Command `$Command -CommandArguments `$CommandArguments }
     finally { Pop-Location }
 }
+if (-not (Get-Variable -Name ProjectLegacyGitPush -Scope Global -ErrorAction SilentlyContinue)) {
+    `$existingGitPush = Get-Item Function:\gitpush -ErrorAction SilentlyContinue
+    `$global:ProjectLegacyGitPush = if (`$existingGitPush) { `$existingGitPush.ScriptBlock } else { `$null }
+}
+function gitpush {
+    `$repositoryRoot = git rev-parse --show-toplevel 2>`$null
+    if (`$LASTEXITCODE -eq 0 -and `$repositoryRoot) {
+        `$remoteUrl = git -C `$repositoryRoot.Trim() remote get-url origin 2>`$null
+        if (`$LASTEXITCODE -eq 0 -and `$remoteUrl -match '^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)ITStudioAT/stocks(?:\.git)?/?`$') {
+            Invoke-ProjectGitWorkflow 'gitpush' `$args
+            return
+        }
+    }
+    if (`$global:ProjectLegacyGitPush) {
+        & `$global:ProjectLegacyGitPush @args
+        return
+    }
+    throw 'No gitpush helper was defined for this repository.'
+}
 function gitstart { Invoke-ProjectGitWorkflow 'gitstart' `$args }
 function gitwork { Invoke-ProjectGitWorkflow 'gitwork' `$args }
 function gitmain { Invoke-ProjectGitWorkflow 'gitmain' `$args }
@@ -212,4 +231,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host 'Open a new PowerShell terminal or run: . $PROFILE' -ForegroundColor Cyan
-Write-Host 'Stocks Git: gitstart, gitwork, gitmain, gitsave, gitupdate, gitcheck, gitpreview, gitrelease, gitdeploy, gitdiscard.' -ForegroundColor Cyan
+Write-Host 'Stocks Git: gitstart, gitwork, gitmain, gitsave, gitpush, gitupdate, gitcheck, gitpreview, gitrelease, gitdeploy, gitdiscard.' -ForegroundColor Cyan

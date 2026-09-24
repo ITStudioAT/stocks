@@ -513,7 +513,9 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertStringContainsString('remote get-url --all --push origin', $installer);
         $this->assertStringContainsString('Push-Location -LiteralPath `$repositoryRoot', $installer);
         $this->assertStringContainsString("function gitdeploy { Invoke-ProjectGitWorkflow 'gitdeploy'", $installer);
-        $this->assertStringNotContainsString('function gitpush {', $installer);
+        $this->assertStringContainsString('function gitpush {', $installer);
+        $this->assertStringContainsString("Invoke-ProjectGitWorkflow 'gitpush'", $installer);
+        $this->assertStringContainsString('ProjectLegacyGitPush', $installer);
         $this->assertStringNotContainsString('C:\\laravel\\schooltool', $installer);
         $this->assertStringContainsString(
             'Run gitdeploy from a clean main checkout',
@@ -533,7 +535,7 @@ class DeploymentWorkflowTest extends TestCase
             'Assert-StocksRemoteReleaseTagIsAvailable -Version $version',
             $gitPushPosition,
         );
-        $synchronizePosition = strpos($gitHelpers, "Invoke-StocksCommand 'Synchronizing main before the release...'", $gitPushPosition);
+        $remoteRefreshPosition = strpos($gitHelpers, 'Update-StocksRemote', $gitPushPosition);
         $localTagCheckPosition = strpos(
             $gitHelpers,
             'Test-StocksLocalReleaseTagCanResume -Version $version',
@@ -544,13 +546,13 @@ class DeploymentWorkflowTest extends TestCase
         $sourceCommitPosition = strpos($gitHelpers, 'git commit -m $message', $gitPushPosition);
 
         $this->assertIsInt($remoteTagCheckPosition);
-        $this->assertIsInt($synchronizePosition);
+        $this->assertIsInt($remoteRefreshPosition);
         $this->assertIsInt($localTagCheckPosition);
         $this->assertIsInt($preparePosition);
         $this->assertIsInt($releaseChecksPosition);
         $this->assertIsInt($sourceCommitPosition);
-        $this->assertLessThan($synchronizePosition, $remoteTagCheckPosition);
-        $this->assertLessThan($localTagCheckPosition, $synchronizePosition);
+        $this->assertLessThan($remoteRefreshPosition, $remoteTagCheckPosition);
+        $this->assertLessThan($localTagCheckPosition, $remoteRefreshPosition);
         $this->assertLessThan($preparePosition, $localTagCheckPosition);
         $this->assertLessThan($releaseChecksPosition, $remoteTagCheckPosition);
         $this->assertLessThan($sourceCommitPosition, $remoteTagCheckPosition);

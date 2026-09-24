@@ -69,6 +69,76 @@ function Get-StocksFeatureBranch {
     "codex/$shortName"
 }
 
+function Get-StocksOpenFeatures {
+    @(Invoke-StocksGit for-each-ref '--format=%(refname:strip=3)' refs/remotes/origin/codex/) |
+        Where-Object { $_ -cmatch '^codex/[a-z0-9]+(?:-[a-z0-9]+)*$' }
+}
+
+function Get-StocksFeatureReservationRef {
+    param([string]$Branch)
+    $name = (Get-StocksFeatureBranch $Branch).Substring('codex/'.Length)
+    "refs/heads/codex/features/$name"
+}
+
+function New-StocksFeatureReservation {
+    param([string]$Branch)
+    $id = [guid]::NewGuid().ToString('N')
+    $metadata = @{ branch = $Branch; id = $id } | ConvertTo-Json -Compress
+    $metadataPath = Join-Path ([IO.Path]::GetTempPath()) "stocks-feature-$id.json"
+    $indexPath = Join-Path ([IO.Path]::GetTempPath()) "stocks-feature-$id.index"
+    $previousIndex = $env:GIT_INDEX_FILE
+    try {
+        [IO.File]::WriteAllText($metadataPath, "$metadata`n", (New-Object System.Text.UTF8Encoding($false)))
+        $blob = Invoke-StocksGit hash-object -w -- $metadataPath
+        $env:GIT_INDEX_FILE = $indexPath
+        Invoke-StocksGit read-tree --empty
+        Invoke-StocksGit update-index --add --cacheinfo "100644,$blob,feature.json"
+        $tree = Invoke-StocksGit write-tree
+        $commit = Invoke-StocksGit commit-tree $tree -m "Reserve $Branch ($id)"
+    }
+    finally {
+        $env:GIT_INDEX_FILE = $previousIndex
+        foreach ($path in @($metadataPath, $indexPath)) {
+            if (Test-Path -LiteralPath $path) { [IO.File]::Delete($path) }
+        }
+    }
+    [pscustomobject]@{ Branch = $Branch; Id = $id; Commit = $commit; Ref = (Get-StocksFeatureReservationRef $Branch) }
+}
+
+function Get-StocksActiveFeature {
+    param([string]$Branch, [switch]$AllowMissing)
+    if (-not $Branch) { $Branch = Assert-StocksFeature }
+    $Branch = Get-StocksFeatureBranch $Branch
+    $ref = Get-StocksFeatureReservationRef $Branch
+    $tracking = $ref.Replace('refs/heads/', 'refs/remotes/origin/')
+    if (-not (Test-StocksRef $tracking)) {
+        if ($AllowMissing) { return $null }
+        throw "Feature $Branch has no workflow reservation. Use gitwork NAME to register it."
+    }
+    $commit = Invoke-StocksGit rev-parse $tracking
+    $parents = (Invoke-StocksGit rev-list --parents -n 1 $commit) -split ' '
+    if ($parents.Count -ne 1) { throw 'The feature reservation is invalid.' }
+    try { $metadata = (Invoke-StocksGit show "${commit}:feature.json") | ConvertFrom-Json -ErrorAction Stop }
+    catch { throw 'The feature reservation cannot be read.' }
+    if ($metadata.branch -isnot [string] -or $metadata.id -isnot [string] -or
+        $metadata.branch -cne $Branch -or $metadata.id -cnotmatch '^[a-f0-9]{32}$' -or $metadata.id -ceq ('0' * 32) -or
+        -not (Test-StocksRef "refs/remotes/origin/$Branch")) {
+        throw 'The feature reservation and remote branch disagree.'
+    }
+    [pscustomobject]@{ Branch = $Branch; Id = [string]$metadata.id; Commit = $commit; Ref = $ref }
+}
+
+function Assert-StocksFeatureSnapshot {
+    param($Feature, [string]$FeatureCommit, [string]$MainCommit)
+    Update-StocksRemote
+    $current = Get-StocksActiveFeature -Branch $Feature.Branch
+    if ($current.Commit -cne $Feature.Commit -or $current.Id -cne $Feature.Id -or $current.Ref -cne $Feature.Ref -or
+        (Invoke-StocksGit rev-parse "refs/remotes/origin/$($Feature.Branch)") -cne $FeatureCommit -or
+        ($MainCommit -and (Invoke-StocksGit rev-parse refs/remotes/origin/main) -cne $MainCommit)) {
+        throw 'The feature, its reservation, or main changed during preparation. Nothing was published.'
+    }
+}
+
 function Assert-StocksFeature {
     $branch = Invoke-StocksGit branch --show-current
     if ($branch -cnotmatch '^codex/[a-z0-9]+(?:-[a-z0-9]+)*$') {
@@ -137,12 +207,17 @@ function gitstart {
     Assert-StocksClean
     Update-StocksRemote
     Assert-StocksSaved
-    if ((Test-StocksRef "refs/heads/$branch") -or (Test-StocksRef "refs/remotes/origin/$branch")) {
+    if ((Test-StocksRef "refs/heads/$branch") -or (Test-StocksRef "refs/remotes/origin/$branch") -or
+        (Test-StocksRef (Get-StocksFeatureReservationRef $branch).Replace('refs/heads/', 'refs/remotes/origin/'))) {
         throw "$branch already exists. Use gitwork NAME."
     }
-    Invoke-StocksGit switch --no-track -c $branch refs/remotes/origin/main
-    if (-not $NoPrepare) { Invoke-StocksLocalPreparation }
-    Write-Host 'Feature created locally. Use gitsave DESCRIPTION to share it with the other devices.' -ForegroundColor Green
+    $main = Invoke-StocksGit rev-parse refs/remotes/origin/main
+    $reservation = New-StocksFeatureReservation $branch
+    Invoke-StocksGit push --atomic "--force-with-lease=$($reservation.Ref):" "--force-with-lease=refs/heads/${branch}:" origin `
+        "$($reservation.Commit):$($reservation.Ref)" "${main}:refs/heads/$branch"
+    Update-StocksRemote
+    Switch-StocksBranch -Branch $branch -NoPrepare:$NoPrepare
+    Write-Host "Feature $branch reserved on origin. Use gitsave DESCRIPTION to share work." -ForegroundColor Green
 }
 
 function gitwork {
@@ -150,14 +225,26 @@ function gitwork {
     Assert-StocksRepository
     Assert-StocksClean
     Update-StocksRemote
+    $features = @(Get-StocksOpenFeatures)
     if (-not $Name) {
-        $features = @(Invoke-StocksGit for-each-ref '--format=%(refname:strip=3)' refs/remotes/origin/codex/)
         if ($features.Count -ne 1) {
             throw "Choose a feature with gitwork NAME. Available: $($features -join ', '). Use gitstart NAME for new work."
         }
         $Name = $features[0]
     }
-    Switch-StocksBranch -Branch (Get-StocksFeatureBranch $Name) -NoPrepare:$NoPrepare
+    $branch = Get-StocksFeatureBranch $Name
+    if ($branch -cnotin $features) { throw "Feature $branch does not exist on origin. Use gitstart NAME." }
+    $active = Get-StocksActiveFeature -Branch $branch -AllowMissing
+    if (-not $active) {
+        $head = Invoke-StocksGit rev-parse "refs/remotes/origin/$branch"
+        $reservation = New-StocksFeatureReservation $branch
+        Invoke-StocksGit push --atomic "--force-with-lease=$($reservation.Ref):" "--force-with-lease=refs/heads/${branch}:$head" origin `
+            "$($reservation.Commit):$($reservation.Ref)" "${head}:refs/heads/$branch"
+        Update-StocksRemote
+        $active = Get-StocksActiveFeature -Branch $branch
+        Write-Host "Existing feature $branch registered for this workflow." -ForegroundColor Cyan
+    }
+    Switch-StocksBranch -Branch $branch -NoPrepare:$NoPrepare
 }
 
 function gitmain {
@@ -187,17 +274,42 @@ function gitsave {
         throw 'Feature saves accept only a description. Use gitrelease DESCRIPTION [VERSION] to publish a feature.'
     }
     Update-StocksRemote
-    if ((Test-StocksRef "refs/remotes/origin/$branch") -and
-        -not (Test-StocksAncestor "refs/remotes/origin/$branch" HEAD)) {
+    $remoteExists = Test-StocksRef "refs/remotes/origin/$branch"
+    if ($remoteExists -and -not (Test-StocksAncestor "refs/remotes/origin/$branch" HEAD)) {
         throw 'The remote feature contains changes missing locally. Nothing was committed. Synchronize this feature before saving.'
     }
+    $active = Get-StocksActiveFeature -Branch $branch -AllowMissing
     if (Invoke-StocksGit status --porcelain --untracked-files=all) {
+        & php scripts/check-encoding.php
+        if ($LASTEXITCODE -ne 0) { throw 'Source encoding check failed. Nothing was committed.' }
         Invoke-StocksGit add -A
         Invoke-StocksGit commit -m $Message
     }
     Assert-StocksClean
+    $savedHead = Invoke-StocksGit rev-parse HEAD
+    $remoteHead = if ($remoteExists) { Invoke-StocksGit rev-parse "refs/remotes/origin/$branch" } else { '' }
     try {
-        Invoke-StocksGit -c push.followTags=false -c remote.origin.mirror=false push --set-upstream origin "HEAD:refs/heads/$branch"
+        if ($active) {
+            Assert-StocksFeatureSnapshot -Feature $active -FeatureCommit $remoteHead
+            $reservation = $active
+        }
+        else {
+            $reservation = New-StocksFeatureReservation $branch
+            Update-StocksRemote
+            $actualRemote = if (Test-StocksRef "refs/remotes/origin/$branch") { Invoke-StocksGit rev-parse "refs/remotes/origin/$branch" } else { '' }
+            if ($actualRemote -cne $remoteHead -or
+                (Test-StocksRef $reservation.Ref.Replace('refs/heads/', 'refs/remotes/origin/'))) {
+                throw 'The feature changed while registering its reservation. Nothing was pushed.'
+            }
+        }
+        $push = @('-c', 'push.followTags=false', '-c', 'remote.origin.mirror=false', 'push', '--atomic',
+            "--force-with-lease=refs/heads/${branch}:$remoteHead", 'origin', "${savedHead}:refs/heads/$branch")
+        if (-not $active) {
+            $push = @('-c', 'push.followTags=false', '-c', 'remote.origin.mirror=false', 'push', '--atomic',
+                "--force-with-lease=refs/heads/${branch}:$remoteHead", "--force-with-lease=$($reservation.Ref):", 'origin',
+                "${savedHead}:refs/heads/$branch", "$($reservation.Commit):$($reservation.Ref)")
+        }
+        Invoke-StocksGit @push
     }
     catch {
         Write-Host 'Changes remain committed locally; the GitHub save failed. Do not change devices yet.' -ForegroundColor Yellow
@@ -225,10 +337,27 @@ function gitupdate {
 function gitcheck {
     Assert-StocksRepository
     Update-StocksRemote
-    Invoke-StocksGit status --short --branch
-    Invoke-StocksGit branch -vv
-    Write-Host 'Remote features:' -ForegroundColor Cyan
-    Invoke-StocksGit for-each-ref '--format=%(refname:strip=3)' refs/remotes/origin/codex/
+    $branch = Invoke-StocksGit branch --show-current
+    $features = @(Get-StocksOpenFeatures)
+    Write-Host "Branch: $branch" -ForegroundColor Cyan
+    Write-Host "Open features: $($features -join ', '). Select with gitwork NAME; preview with gitpreview -Feature NAME." -ForegroundColor Cyan
+    Invoke-StocksGit status --short
+    if (Test-StocksRef "refs/remotes/origin/$branch") {
+        $counts = (Invoke-StocksGit rev-list --left-right --count "HEAD...refs/remotes/origin/$branch") -split '\s+'
+        Write-Host "Only local / not yet available on other devices: $($counts[0]) commits"
+        Write-Host "Only on origin / not yet downloaded: $($counts[1]) commits"
+    }
+    else { Write-Host 'This branch is not saved on origin.' -ForegroundColor Yellow }
+    if ($branch -cmatch '^codex/[a-z0-9]+(?:-[a-z0-9]+)*$') {
+        $missing = Invoke-StocksGit rev-list --count HEAD..refs/remotes/origin/main
+        Write-Host "Commits missing from main: $missing (gitupdate incorporates them)"
+        $schemaChanges = Invoke-StocksGit diff --name-only refs/remotes/origin/main...HEAD -- database/migrations config/database.php
+        if ($schemaChanges) {
+            Write-Host 'Database changes: use a separate local feature database before running migrations.' -ForegroundColor Yellow
+            $schemaChanges
+        }
+    }
+    Write-Host 'Live deploys main; the isolated preview deploys the feature. gitcheck does not inspect either server.' -ForegroundColor Cyan
 }
 
 function gitpreview {
@@ -249,11 +378,12 @@ function gitpreview {
     }
     else {
         $null = Assert-StocksFeature
+        Update-StocksRemote
+        $null = Get-StocksActiveFeature -Branch $branch
         if ($FeatureName -and (Get-StocksFeatureBranch $FeatureName) -cne $branch) {
             throw 'The selected preview feature differs from the checkout. Use gitwork NAME first.'
         }
-        Update-StocksRemote
-        $features = @(Invoke-StocksGit for-each-ref '--format=%(refname:strip=3)' refs/remotes/origin/codex/)
+        $features = @(Get-StocksOpenFeatures)
         if (-not $FeatureName -and $features.Count -gt 1) {
             throw 'Choose the shared preview explicitly with gitpreview -Feature NAME.'
         }
@@ -311,6 +441,7 @@ function gitrelease {
     Assert-StocksClean
     $branch = Assert-StocksFeature
     Update-StocksRemote
+    $active = Get-StocksActiveFeature -Branch $branch
     $featureCommit = Invoke-StocksGit rev-parse HEAD
     $remoteFeature = Invoke-StocksGit rev-parse "refs/remotes/origin/$branch"
     if ($featureCommit -cne $remoteFeature) {
@@ -322,10 +453,7 @@ function gitrelease {
         throw 'Release cancelled; no branch was switched.'
     }
     Update-StocksRemote
-    if ((Invoke-StocksGit rev-parse "refs/remotes/origin/$branch") -cne $featureCommit -or
-        (Invoke-StocksGit rev-parse refs/remotes/origin/main) -cne $mainCommit) {
-        throw 'The feature or main changed during confirmation. Review and retry gitrelease.'
-    }
+    Assert-StocksFeatureSnapshot -Feature $active -FeatureCommit $featureCommit -MainCommit $mainCommit
     gitmain -NoPrepare
     Invoke-StocksGit merge --squash $branch
     & git diff --cached --quiet
@@ -334,17 +462,15 @@ function gitrelease {
     }
     if ($LASTEXITCODE -ne 1) { throw 'Could not inspect the squashed release candidate.' }
     . (Join-Path $PSScriptRoot 'git_helpers.ps1')
-    gitpush -message $Message -version $Version -Full -WaitForCI
-    $remoteFeature = @(& git ls-remote origin "refs/heads/$branch")
-    if ($LASTEXITCODE -ne 0 -or $remoteFeature.Count -ne 1 -or
-        ($remoteFeature[0] -split "`t")[0] -cne $featureCommit) {
-        throw "The release is published, but $branch changed before cleanup. Keep its branch and review it."
-    }
-    $rescue = "refs/stocks/released/$([guid]::NewGuid().ToString('N'))"
-    Invoke-StocksGit update-ref $rescue $featureCommit
-    Invoke-StocksGit push "--force-with-lease=refs/heads/${branch}:$featureCommit" origin ":refs/heads/$branch"
+    gitpush -message $Message -version $Version
+    Assert-StocksFeatureSnapshot -Feature $active -FeatureCommit $featureCommit
+    $rescue = "refs/stocks/released/$($active.Id)/$([guid]::NewGuid().ToString('N'))"
+    Invoke-StocksGit update-ref "$rescue/feature" $featureCommit
+    Invoke-StocksGit update-ref "$rescue/reservation" $active.Commit
+    Invoke-StocksGit push --atomic "--force-with-lease=refs/heads/${branch}:$featureCommit" `
+        "--force-with-lease=$($active.Ref):$($active.Commit)" origin ":refs/heads/$branch" ":$($active.Ref)"
     if (Test-StocksRef "refs/heads/$branch") { Invoke-StocksGit branch -D $branch }
-    Write-Host "Released and closed $branch. Local recovery ref: $rescue" -ForegroundColor Green
+    Write-Host "Released and closed $branch. Local recovery refs: $rescue/feature and $rescue/reservation" -ForegroundColor Green
 }
 
 function gitdeploy {
@@ -402,6 +528,11 @@ function gitdiscard {
         throw "Feature $branch does not exist on GitHub."
     }
     $featureCommit = Invoke-StocksGit rev-parse "refs/remotes/origin/$branch"
+    $active = Get-StocksActiveFeature -Branch $branch
+    if ((Test-StocksRef "refs/heads/$branch") -and
+        (Invoke-StocksGit rev-parse "refs/heads/$branch") -cne $featureCommit) {
+        throw 'Local and remote feature commits differ. Save or reconcile the feature before discarding it.'
+    }
     $worktrees = @(Invoke-StocksGit worktree list --porcelain)
     if ($worktrees -ccontains "branch refs/heads/$branch") {
         throw "Feature $branch is checked out in a worktree. Switch it away before discarding."
@@ -424,16 +555,14 @@ function gitdiscard {
     if ((Read-Host "Type DISCARD $branch") -cne "DISCARD $branch") {
         throw 'Feature discard cancelled.'
     }
-    $remoteCommit = @(& git ls-remote origin "refs/heads/$branch")
-    if ($LASTEXITCODE -ne 0 -or $remoteCommit.Count -ne 1 -or
-        ($remoteCommit[0] -split "`t")[0] -cne $featureCommit) {
-        throw 'The feature changed during confirmation. Nothing was deleted.'
-    }
-    $rescue = "refs/stocks/discarded/$([guid]::NewGuid().ToString('N'))"
-    Invoke-StocksGit update-ref $rescue $featureCommit
-    Invoke-StocksGit push "--force-with-lease=refs/heads/${branch}:$featureCommit" origin ":refs/heads/$branch"
+    Assert-StocksFeatureSnapshot -Feature $active -FeatureCommit $featureCommit -MainCommit (Invoke-StocksGit rev-parse HEAD)
+    $rescue = "refs/stocks/discarded/$($active.Id)/$([guid]::NewGuid().ToString('N'))"
+    Invoke-StocksGit update-ref "$rescue/feature" $featureCommit
+    Invoke-StocksGit update-ref "$rescue/reservation" $active.Commit
+    Invoke-StocksGit push --atomic "--force-with-lease=refs/heads/${branch}:$featureCommit" `
+        "--force-with-lease=$($active.Ref):$($active.Commit)" origin ":refs/heads/$branch" ":$($active.Ref)"
     if (Test-StocksRef "refs/heads/$branch") {
         Invoke-StocksGit branch -D $branch
     }
-    Write-Host "Discarded $branch. Local recovery ref: $rescue" -ForegroundColor Green
+    Write-Host "Discarded $branch. Local recovery refs: $rescue/feature and $rescue/reservation" -ForegroundColor Green
 }

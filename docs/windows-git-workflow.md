@@ -10,7 +10,7 @@ gitcheck
 
 `main` enthält bei Stocks vollständige Releases einschließlich Frontend-Paket.
 Neue Arbeit liegt auf Feature-Branches. `gitstart depot-filter` legt
-`codex/depot-filter` an. Die zehn Alltagsbefehle heißen wie bei Schooltool.
+`codex/depot-filter` an. Die elf Git-Workflow-Befehle heißen wie bei Schooltool.
 
 ## Einmal auf dem Hauptgerät
 
@@ -27,7 +27,9 @@ Ausführen erzeugt keine doppelten Helfer. Er aktiviert den vorhandenen
 bereits gesetzt sein (`git config user.name`, `git config user.email`).
 
 Der gemeinsame Dispatcher unterstützt Stocks und Schooltool, einschließlich
-`gitpreview`, `gitrelease` und `gitdeploy`.
+`gitpush`, `gitpreview`, `gitrelease` und `gitdeploy`. Innerhalb von Stocks
+verwendet `gitpush` den geprüften Projekt-Release; in anderen Repositories bleibt
+ein zuvor vorhandener persönlicher `gitpush`-Helfer unverändert.
 Ein älterer Schooltool-Installer kann den gemeinsamen Dispatcher wieder auf seinen
 älteren Stand setzen. Dann zuletzt in Stocks erneut `composer setup:powershell`
 ausführen und ein neues Terminal öffnen. Schooltools Repository wird durch den
@@ -42,11 +44,13 @@ git status
 gitsave "Add depot filter"
 ```
 
-`gitstart` beginnt lokal am frisch abgefragten `origin/main`. Erst `gitsave` legt den
-Feature-Branch auf GitHub an. `gitsave` übernimmt alle nicht ignorierten Änderungen
+`gitstart` reserviert den Namen und legt den leeren Feature-Branch sofort atomar auf
+GitHub an. Damit kann ein anderes Gerät ihn mit `gitwork NAME` auswählen. `gitsave`
+übernimmt alle nicht ignorierten Änderungen
 einschließlich neuer Dateien und Löschungen in einen Commit und überträgt genau
 diesen Branch. Prüfe deshalb vorher `git status`. Auch ohne neue Änderungen sichert
-`gitsave` vorhandene lokale Commits oder einen gerade angelegten Branch. Es erzeugt
+`gitsave` vorhandene lokale Commits. Der Push prüft den exakten vorherigen Stand
+von Branch und Reservierung, damit parallele Geräte keine Arbeit überschreiben. Es erzeugt
 keine Version, keinen Release und kein Deployment. Tags werden nicht mitgeschickt.
 
 Die Sicherung ist erst abgeschlossen, wenn `gitsave` Erfolg meldet. Bei einem
@@ -66,8 +70,10 @@ gitwork kursanzeige
 ```
 
 `gitwork NAME` holt einen auf GitHub vorhandenen Feature-Branch und setzt die Arbeit
-dort fort. Ohne Namen funktioniert `gitwork` nur, wenn genau ein Feature vorhanden
-ist. `gitcheck` zeigt den lokalen Zustand und die verfügbaren Remote-Features.
+dort fort. Ältere Branches ohne Reservierung werden dabei für den Workflow
+registriert. Ohne Namen funktioniert `gitwork` nur, wenn genau ein Feature vorhanden
+ist. `gitcheck` zeigt lokale und entfernte Commits, offene Features sowie Hinweise
+auf Schemaänderungen.
 
 `gitmain` wechselt zu `main` und aktualisiert nur per Fast-forward. Es übernimmt keine
 Feature-Arbeit in `main`. Ungespeicherte Dateien und nicht veröffentlichte Commits
@@ -134,17 +140,25 @@ Ein geprüftes und mit `gitsave` auf GitHub gesichertes Feature wird so veröffe
 gitwork depot-filter
 # Passende Tests ausführen
 gitsave "Complete depot filter"
-gitrelease "Add depot filter" 1.1.1
+gitrelease "Add depot filter" 1.1.2
 gitmain
 gitdeploy
 ```
 
 `gitrelease` übernimmt das Feature als Squash-Commit, baut/verifiziert das
-Frontend-Paket, veröffentlicht `main` und wartet auf CI. Die Versionsnummer ist
+Frontend-Paket, veröffentlicht `main` und startet CI im Hintergrund. Der Feature-Branch
+und seine Reservierung werden danach gemeinsam mit exakten Git-Leases geschlossen.
+Die Versionsnummer ist
 optional und muss zu den vorbereiteten Notizen in `UPDATES.md` passen. Bei
-Änderungen direkt auf `main` veröffentlicht `gitsave "Beschreibung" VERSION`
-einen vollständigen Release; `-Full` startet alle lokalen Tests und `-WaitForCI`
-wartet zusätzlich auf GitHub-CI.
+Änderungen direkt auf `main` veröffentlicht `gitpush "Beschreibung" VERSION`
+einen vollständigen Release; `gitsave` auf `main` nutzt denselben Projekt-Helfer.
+`-Full` startet alle lokalen Tests und `-WaitForCI` wartet ausdrücklich auf GitHub-CI.
+Bei einem Feature-Release passende Tests vor `gitrelease` ausführen.
+Stocks bereitet den Squash dabei im lokalen `main` vor. Falls ein Schritt vor dem
+Push scheitert, bleiben Feature-Branch und gestagte Änderungen erhalten; zuerst
+`git status` prüfen und den vorbereiteten Release nach Behebung der Ursache mit
+`gitpush "Beschreibung" VERSION` abschließen. Schooltool verwendet hierfür einen
+separaten Kandidaten-Worktree; dieser Unterschied ist noch nicht angeglichen.
 
 `gitdeploy` verlangt einen sauberen `main` auf genau dem GitHub-Release-Commit,
 prüft das Paket und zeigt das Live-Ziel vor der Eingabe `LIVE`. Wie bei Schooltool

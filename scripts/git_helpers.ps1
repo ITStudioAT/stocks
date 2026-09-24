@@ -279,6 +279,8 @@ function gitpush {
     )
 
     try {
+        . (Join-Path $PSScriptRoot 'git_branch_helpers.ps1')
+        Assert-StocksRepository
         $branch = git branch --show-current
 
         if ($LASTEXITCODE -ne 0 -or $branch -ne 'main') {
@@ -289,8 +291,10 @@ function gitpush {
             Assert-StocksRemoteReleaseTagIsAvailable -Version $version
         }
 
-        Invoke-StocksCommand 'Synchronizing main before the release...' {
-            git pull --rebase --autostash origin main
+        Update-StocksRemote
+        & git merge-base --is-ancestor refs/remotes/origin/main HEAD
+        if ($LASTEXITCODE -ne 0) {
+            throw 'main contains remote changes missing locally. Use gitmain before editing, or resolve divergent commits explicitly.'
         }
 
         $resumeTaggedRelease = $false

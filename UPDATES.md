@@ -1,3 +1,11 @@
+## 1.1.2
+
+### System
+
+- Der abgesicherte `gitpush`-Befehl veröffentlicht Stocks-Releases; andere Repositories behalten ihren bisherigen persönlichen Helfer.
+- Feature-Namen werden beim Start auf GitHub reserviert. Speichern, Freigeben und Verwerfen schützen Branch und Reservierung gegen parallele Änderungen.
+- `gitrelease` startet GitHub-CI wie bei Schooltool im Hintergrund; `gitcheck` zeigt offene Features und den Stand je Gerät genauer an.
+
 ## 1.1.1
 
 ### System

@@ -44,7 +44,7 @@ class GitBranchWorkflowTest extends TestCase
         $this->git($this->directory, 'init', '--bare', '--initial-branch=main', 'origin.git');
         $this->git($this->directory, 'clone', 'origin.git', 'pc');
         mkdir($this->directory.'/pc/scripts');
-        foreach (['git_branch_helpers.ps1', 'git_workflow.ps1', 'git_preview_helpers.ps1', 'git_deploy_helpers.ps1', 'install_powershell_helpers.ps1', 'stocks_preview_target.json'] as $script) {
+        foreach (['git_branch_helpers.ps1', 'git_workflow.ps1', 'git_preview_helpers.ps1', 'git_deploy_helpers.ps1', 'install_powershell_helpers.ps1', 'stocks_preview_target.json', 'check-encoding.php'] as $script) {
             copy(dirname(__DIR__, 2).'/scripts/'.$script, $this->directory.'/pc/scripts/'.$script);
         }
         file_put_contents($this->directory.'/pc/.gitignore', ".env\n");
@@ -61,6 +61,11 @@ class GitBranchWorkflowTest extends TestCase
     {
         $main = $this->git($this->directory.'/pc', 'rev-parse', 'main');
         $this->succeeds('pc', 'gitstart', 'depot-filter', '-NoPrepare');
+        $this->assertSame($main, $this->git($this->directory.'/origin.git', 'rev-parse', 'codex/depot-filter'));
+        $reservation = $this->git($this->directory.'/origin.git', 'rev-parse', 'codex/features/depot-filter');
+        $metadata = json_decode($this->git($this->directory.'/origin.git', 'show', $reservation.':feature.json'), true, 512, JSON_THROW_ON_ERROR);
+        $this->assertSame('codex/depot-filter', $metadata['branch']);
+        $this->assertMatchesRegularExpression('/^[a-f0-9]{32}$/', $metadata['id']);
         file_put_contents($this->directory.'/pc/filter.txt', 'new filter');
         $this->git($this->directory.'/pc', 'tag', '-a', 'local-only', '-m', 'Local only');
         $this->git($this->directory.'/pc', 'config', 'push.followTags', 'true');
@@ -199,6 +204,38 @@ class GitBranchWorkflowTest extends TestCase
         $this->fails('other', 'only trusts ITStudioAT/stocks', 'gitstart', 'wrong-remote', '-NoPrepare');
     }
 
+    public function test_existing_feature_is_registered_and_invalid_reservation_blocks_a_save(): void
+    {
+        $this->git($this->directory.'/pc', 'branch', 'codex/legacy-feature');
+        $this->git($this->directory.'/pc', 'push', 'origin', 'codex/legacy-feature');
+        $this->succeeds('other', 'gitwork', 'legacy-feature', '-NoPrepare');
+        $this->assertNotEmpty($this->git($this->directory.'/origin.git', 'branch', '--list', 'codex/features/legacy-feature'));
+
+        $this->git($this->directory.'/origin.git', 'update-ref', 'refs/heads/codex/features/legacy-feature', $this->git($this->directory.'/origin.git', 'rev-parse', 'main'));
+        file_put_contents($this->directory.'/other/unsaved.txt', 'preserve this work');
+        $this->fails('other', 'reservation cannot be read', 'gitsave', 'Do not save');
+        $this->assertSame('preserve this work', file_get_contents($this->directory.'/other/unsaved.txt'));
+    }
+
+    public function test_gitpush_dispatches_safely_and_requires_main(): void
+    {
+        file_put_contents($this->directory.'/pc/scripts/git_helpers.ps1', <<<'POWERSHELL'
+function gitpush {
+    param([string]$message, [string]$version, [switch]$Full, [switch]$WaitForCI)
+    Write-Output "SAFE $message|$version|$Full|$WaitForCI"
+}
+POWERSHELL);
+        $result = $this->workflow('pc', 'gitpush', 'Publish checked source', '1.2.3', '-Full');
+        $this->assertTrue($result->isSuccessful(), $result->getOutput().$result->getErrorOutput());
+        $this->assertStringContainsString('SAFE Publish checked source|1.2.3|True|False', $result->getOutput());
+        $this->fails('pc', 'Usage: gitpush', 'gitpush', 'message', '1.2.3', 'extra');
+
+        unlink($this->directory.'/pc/scripts/git_helpers.ps1');
+        $this->succeeds('pc', 'gitstart', 'guarded-push', '-NoPrepare');
+        copy(dirname(__DIR__, 2).'/scripts/git_helpers.ps1', $this->directory.'/pc/scripts/git_helpers.ps1');
+        $this->fails('pc', 'only publishes the main branch', 'gitpush', 'Do not publish');
+    }
+
     public function test_gitsave_publishes_main_with_optional_version_and_keeps_feature_versions_blocked(): void
     {
         file_put_contents($this->directory.'/pc/scripts/git_helpers.ps1', <<<'POWERSHELL'
@@ -222,7 +259,7 @@ POWERSHELL);
         file_put_contents($this->directory.'/pc/scripts/git_helpers.ps1', <<<'POWERSHELL'
 function gitpush {
     param([string]$message, [string]$version, [switch]$Full, [switch]$WaitForCI)
-    if (-not $Full -or -not $WaitForCI) { throw 'Release checks were bypassed.' }
+    if ($Full -or $WaitForCI) { throw 'The release waited for full checks or CI.' }
     git commit -m $message | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Fixture release commit failed.' }
     git push origin HEAD:main | Out-Null
@@ -455,7 +492,8 @@ POWERSHELL);
         $this->environment['STOCKS_TEST_PREPARE'] = 'fail';
         $this->fails('pc', 'Dependency preparation failed', 'gitstart', 'prepare-failure');
         $this->assertSame('codex/prepare-failure', $this->git($this->directory.'/pc', 'branch', '--show-current'));
-        $this->assertSame('', $this->git($this->directory.'/origin.git', 'branch', '--list', 'codex/*'));
+        $this->assertStringContainsString('codex/prepare-failure', $this->git($this->directory.'/origin.git', 'branch', '--list', 'codex/*'));
+        $this->assertStringContainsString('codex/features/prepare-failure', $this->git($this->directory.'/origin.git', 'branch', '--list', 'codex/*'));
     }
 
     public function test_installer_preserves_profiles_and_dispatches_both_projects(): void
@@ -471,6 +509,7 @@ POWERSHELL);
         $this->assertTrue($second->isSuccessful(), $second->getErrorOutput());
         $this->assertSame($contents, file_get_contents($profile));
         $this->assertStringContainsString('function PersonalHelper', $contents);
+        $this->assertStringContainsString('function gitpush', $contents);
         $this->assertCount(1, glob($profile.'.stocks-backup-*'));
         file_put_contents($this->directory.'/pc/scripts/git_workflow.ps1', <<<'POWERSHELL'
 param([string]$Command, [string[]]$CommandArguments)
@@ -490,6 +529,13 @@ POWERSHELL);
             $this->assertStringContainsString('DISPATCH gitsave Message with spaces', $result->getOutput());
             $this->assertStringContainsString('DISPATCH gitwork depot-filter', $result->getOutput());
             $this->assertStringContainsString('RETURN '.realpath($this->directory.'/pc/scripts'), $result->getOutput());
+            $result = $this->powershell($this->directory.'/pc', <<<'POWERSHELL'
+function gitpush { param([string]$message) Write-Output "LEGACY $message" }
+. $env:STOCKS_TEST_PROFILE
+gitpush 'Safe main release'
+POWERSHELL);
+            $this->assertTrue($result->isSuccessful(), $result->getOutput().$result->getErrorOutput());
+            $this->assertStringContainsString($project === 'stocks' ? 'DISPATCH gitpush Safe main release' : 'LEGACY Safe main release', $result->getOutput());
         }
         $this->environment['STOCKS_TEST_PUSH_URL'] = 'https://github.com/ITStudioAT/stocks.git';
         $result = $this->powershell($this->directory.'/pc', '. $env:STOCKS_TEST_PROFILE; gitmain');
