@@ -97,7 +97,9 @@ class PreviewSnapshotTransferTest extends TestCase
         ], JSON_THROW_ON_ERROR));
         $private = $root.'/.stocks-preview-private/attempt';
         foreach (glob($this->directory.'/private/*') as $source) {
-            copy($source, $private.'/'.basename($source));
+            $destination = $private.'/'.basename($source);
+            copy($source, $destination);
+            chmod($destination, 0600);
         }
         $transfer = new PreviewSnapshotTransfer($database, new PreviewSnapshotArchive(new PreviewOriginalPolicy), realpath($private),
             $root.'/storage/framework/down', $root.'/storage/framework/sessions', $root.'/storage/framework/cache/data');
