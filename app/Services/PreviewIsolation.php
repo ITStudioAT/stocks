@@ -80,7 +80,9 @@ class PreviewIsolation
             $require(is_string(config('services.eodhd.key')) && trim(config('services.eodhd.key')) !== '', 'services.eodhd.key');
             $require(config('services.eodhd.base_url') === 'https://eodhd.com/api', 'services.eodhd.base_url');
             $require(config('queue.connections.redis.queue') === 'stockspreview'.$appId, 'preview.redis_queue');
-            $require(config('database.redis.options.prefix') === 'stocks-preview-'.$appId.'-database-', 'preview.redis_prefix');
+            $redisUser = (string) config('database.redis.default.username');
+            $require(preg_match('/^[a-z0-9]+$/D', $redisUser) === 1
+                && config('database.redis.options.prefix') === $redisUser.':stocks-preview-'.$appId.'-database-', 'preview.redis_prefix');
             $require(empty(config('database.redis.default.url'))
                 && in_array(config('database.redis.default.host'), ['127.0.0.1', 'localhost'], true), 'preview.redis_host');
         }

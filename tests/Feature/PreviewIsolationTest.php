@@ -99,6 +99,10 @@ class PreviewIsolationTest extends TestCase
         config(['queue.connections.redis.queue' => 'stockspreview200']);
         config(['database.redis.options.prefix' => 'live-database-']);
         $this->assertContains('preview.redis_prefix', app(PreviewIsolation::class)->problems());
+        config(['database.redis.options.prefix' => 'previewuser:stocks-preview-200-database-']);
+        $this->assertSame([], app(PreviewIsolation::class)->problems());
+        config(['database.redis.default.username' => 'otheruser']);
+        $this->assertContains('preview.redis_prefix', app(PreviewIsolation::class)->problems());
     }
 
     public function test_stopped_preview_blocks_web_requests_but_accepts_signed_control_status(): void
@@ -304,7 +308,8 @@ class PreviewIsolationTest extends TestCase
             'security.preview.control_key' => str_repeat('a', 64),
             'queue.default' => 'redis',
             'queue.connections.redis.queue' => 'stockspreview200',
-            'database.redis.options.prefix' => 'stocks-preview-200-database-',
+            'database.redis.options.prefix' => 'previewuser:stocks-preview-200-database-',
+            'database.redis.default.username' => 'previewuser',
             'database.redis.default.url' => null,
             'database.redis.default.host' => '127.0.0.1',
             'services.eodhd.key' => 'preview-test-token',
