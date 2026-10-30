@@ -453,6 +453,7 @@ describe('App', () => {
     it('renders the admin login screen without loading authenticated data', () => {
         window.history.pushState({}, '', '/admin/login');
         const fetchMock = vi.fn();
+        const warnings = vi.spyOn(console, 'warn');
         vi.stubGlobal('fetch', fetchMock);
 
         const wrapper = mountApp();
@@ -461,6 +462,9 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Sign in to manage your workspace.');
         expect(wrapper.text()).toContain('Password');
         expect(wrapper.text()).toContain('Code');
+        expect(wrapper.findAllComponents({ name: 'VTextField' })).toHaveLength(2);
+        expect(wrapper.findComponent({ name: 'VBtn' }).exists()).toBe(true);
+        expect(warnings.mock.calls.flat().join(' ')).not.toContain('Failed to resolve component');
         expect(fetchMock).not.toHaveBeenCalled();
     });
 

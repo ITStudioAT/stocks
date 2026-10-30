@@ -15,6 +15,21 @@ export default defineConfig({
         vuetify({ autoImport: true }),
         tailwindcss(),
     ],
+    build: {
+        rolldownOptions: {
+            output: {
+                codeSplitting: {
+                    groups: [
+                        {
+                            name: 'vuetify',
+                            test: /node_modules[\\/]vuetify[\\/]/,
+                            includeDependenciesRecursively: false,
+                        },
+                    ],
+                },
+            },
+        },
+    },
     server: {
         host: 'localhost',
         port: 5173,
