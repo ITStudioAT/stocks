@@ -40,6 +40,8 @@ class GitBranchWorkflowTest extends TestCase
             'STOCKS_TEST_FETCH_URL' => 'https://github.com/ITStudioAT/stocks.git',
             'STOCKS_TEST_PUSH_URL' => 'git@github.com:ITStudioAT/stocks.git',
             'APP_ENV' => 'local',
+            'TEMP' => $this->directory,
+            'TMP' => $this->directory,
         ];
         $this->git($this->directory, 'init', '--bare', '--initial-branch=main', 'origin.git');
         $this->git($this->directory, 'clone', 'origin.git', 'pc');
@@ -256,33 +258,135 @@ POWERSHELL);
 
     public function test_gitrelease_squashes_only_the_saved_feature_into_main_after_confirmation(): void
     {
-        file_put_contents($this->directory.'/pc/scripts/git_helpers.ps1', <<<'POWERSHELL'
-function gitpush {
-    param([string]$message, [string]$version, [switch]$Full, [switch]$WaitForCI)
-    if ($Full -or $WaitForCI) { throw 'The release waited for full checks or CI.' }
-    git commit -m $message | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Fixture release commit failed.' }
-    git push origin HEAD:main | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Fixture release push failed.' }
-    Write-Output "RELEASED $message|$version"
-}
-POWERSHELL);
-        $this->git($this->directory.'/pc', 'add', 'scripts/git_helpers.ps1');
-        $this->git($this->directory.'/pc', 'commit', '-m', 'Add fixture publisher');
-        $this->git($this->directory.'/pc', 'push', 'origin', 'main');
+        $this->installReleasePublisher();
+        $main = $this->git($this->directory.'/pc', 'rev-parse', 'main');
         $this->succeeds('pc', 'gitstart', 'only-this-feature', '-NoPrepare');
         file_put_contents($this->directory.'/pc/feature.txt', 'released');
         $this->succeeds('pc', 'gitsave', 'Complete feature');
 
         $this->environment['STOCKS_TEST_PROMPT'] = 'RELEASE';
-        $released = $this->workflow('pc', 'gitrelease', 'Add feature', '1.2.3');
+        $released = $this->workflow('pc', 'gitrelease', 'Add feature');
 
         $this->assertTrue($released->isSuccessful(), $released->getOutput().$released->getErrorOutput());
-        $this->assertStringContainsString('RELEASED Add feature|1.2.3', $released->getOutput());
-        $this->assertSame('main', $this->git($this->directory.'/pc', 'branch', '--show-current'));
+        $this->assertStringContainsString('Candidate retained at', $released->getOutput());
+        $this->assertSame('main', $this->git($this->directory.'/pc', 'branch', '--show-current'), $released->getOutput().$released->getErrorOutput());
         $this->assertSame('released', $this->git($this->directory.'/origin.git', 'show', 'main:feature.txt'));
         $this->assertSame('', $this->git($this->directory.'/origin.git', 'branch', '--list', 'codex/only-this-feature'));
         $this->assertNotEmpty($this->git($this->directory.'/pc', 'for-each-ref', '--format=%(refname)', 'refs/stocks/released'));
+        $this->assertSame($main, $this->git($this->directory.'/origin.git', 'rev-parse', 'main~2'));
+        $this->assertNotEmpty($this->git($this->directory.'/pc', 'for-each-ref', '--format=%(refname)', 'refs/stocks/candidates/release'));
+    }
+
+    public function test_failed_candidate_release_preserves_feature_main_and_remote(): void
+    {
+        $this->installReleasePublisher();
+        $main = $this->git($this->directory.'/pc', 'rev-parse', 'main');
+        $this->succeeds('pc', 'gitstart', 'failed-release', '-NoPrepare');
+        file_put_contents($this->directory.'/pc/feature.txt', 'feature work');
+        $this->succeeds('pc', 'gitsave', 'Save feature');
+        $feature = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
+        $this->environment['STOCKS_TEST_PROMPT'] = 'RELEASE';
+        $this->environment['STOCKS_TEST_RELEASE_MODE'] = 'fail';
+
+        $failed = $this->workflow('pc', 'gitrelease', 'Release feature');
+
+        $this->assertFalse($failed->isSuccessful());
+        $this->assertStringContainsString('SIMULATED_RELEASE_FAILURE', $failed->getErrorOutput());
+        $this->assertStringContainsString('Candidate retained at', $failed->getOutput());
+        $this->assertSame('codex/failed-release', $this->git($this->directory.'/pc', 'branch', '--show-current'));
+        $this->assertSame($feature, $this->git($this->directory.'/pc', 'rev-parse', 'HEAD'));
+        $this->assertSame($main, $this->git($this->directory.'/pc', 'rev-parse', 'main'));
+        $this->assertSame($main, $this->git($this->directory.'/origin.git', 'rev-parse', 'main'));
+        $this->assertSame($feature, $this->git($this->directory.'/origin.git', 'rev-parse', 'codex/failed-release'));
+        $this->assertSame('', $this->git($this->directory.'/pc', 'status', '--porcelain'));
+    }
+
+    public function test_versioned_candidate_publishes_its_version_and_tag(): void
+    {
+        mkdir($this->directory.'/pc/config');
+        file_put_contents($this->directory.'/pc/config/stocks.php', "<?php\nreturn [\n    'version' => '1.0.0',\n];\n");
+        file_put_contents($this->directory.'/pc/UPDATES.md', "## 1.2.3\n\nRelease notes\n");
+        $this->git($this->directory.'/pc', 'add', 'config/stocks.php', 'UPDATES.md');
+        $this->git($this->directory.'/pc', 'commit', '-m', 'Prepare release notes');
+        $this->git($this->directory.'/pc', 'push', 'origin', 'main');
+        $this->installReleasePublisher();
+        $this->succeeds('pc', 'gitstart', 'versioned-release', '-NoPrepare');
+        file_put_contents($this->directory.'/pc/feature.txt', 'versioned work');
+        $this->succeeds('pc', 'gitsave', 'Save feature');
+        $this->environment['STOCKS_TEST_PROMPT'] = 'RELEASE';
+
+        $released = $this->workflow('pc', 'gitrelease', 'Release feature', '1.2.3');
+
+        $this->assertTrue($released->isSuccessful(), $released->getOutput().$released->getErrorOutput());
+        $this->assertStringContainsString("'version' => '1.2.3'", $this->git($this->directory.'/origin.git', 'show', 'main:config/stocks.php'));
+        $this->assertSame($this->git($this->directory.'/origin.git', 'rev-parse', 'main'), $this->git($this->directory.'/origin.git', 'rev-parse', 'v1.2.3^{}'));
+    }
+
+    public function test_candidate_source_change_during_checks_blocks_publication(): void
+    {
+        $this->installReleasePublisher();
+        $main = $this->git($this->directory.'/pc', 'rev-parse', 'main');
+        $this->succeeds('pc', 'gitstart', 'changed-candidate', '-NoPrepare');
+        file_put_contents($this->directory.'/pc/feature.txt', 'original');
+        $this->succeeds('pc', 'gitsave', 'Save feature');
+        $this->environment['STOCKS_TEST_PROMPT'] = 'RELEASE';
+        $this->environment['STOCKS_TEST_RELEASE_MODE'] = 'change-candidate';
+
+        $failed = $this->workflow('pc', 'gitrelease', 'Release feature');
+
+        $this->assertFalse($failed->isSuccessful());
+        $this->assertStringContainsString('Candidate source changed during release checks', $failed->getErrorOutput());
+        $this->assertSame($main, $this->git($this->directory.'/origin.git', 'rev-parse', 'main'));
+        $this->assertSame('codex/changed-candidate', $this->git($this->directory.'/pc', 'branch', '--show-current'));
+    }
+
+    public function test_changes_to_the_original_checkout_during_release_are_preserved(): void
+    {
+        $this->installReleasePublisher();
+        $main = $this->git($this->directory.'/pc', 'rev-parse', 'main');
+        $this->succeeds('pc', 'gitstart', 'concurrent-edit', '-NoPrepare');
+        file_put_contents($this->directory.'/pc/feature.txt', 'original');
+        $this->succeeds('pc', 'gitsave', 'Save feature');
+        $this->environment['STOCKS_TEST_PROMPT'] = 'RELEASE';
+        $this->environment['STOCKS_TEST_RELEASE_MODE'] = 'change-source';
+
+        $failed = $this->workflow('pc', 'gitrelease', 'Release feature');
+
+        $this->assertFalse($failed->isSuccessful());
+        $this->assertStringContainsString('original feature checkout changed', $failed->getErrorOutput());
+        $this->assertSame('concurrent work', file_get_contents($this->directory.'/pc/concurrent.txt'));
+        $this->assertSame($main, $this->git($this->directory.'/origin.git', 'rev-parse', 'main'));
+        $this->assertSame('codex/concurrent-edit', $this->git($this->directory.'/pc', 'branch', '--show-current'));
+    }
+
+    public function test_remote_main_change_during_push_does_not_close_feature(): void
+    {
+        mkdir($this->directory.'/pc/config');
+        file_put_contents($this->directory.'/pc/config/stocks.php', "<?php\nreturn [\n    'version' => '1.0.0',\n];\n");
+        file_put_contents($this->directory.'/pc/UPDATES.md', "## 1.2.3\n\nRelease notes\n");
+        $this->git($this->directory.'/pc', 'add', 'config/stocks.php', 'UPDATES.md');
+        $this->git($this->directory.'/pc', 'commit', '-m', 'Prepare release notes');
+        $this->git($this->directory.'/pc', 'push', 'origin', 'main');
+        $this->installReleasePublisher();
+        $this->succeeds('pc', 'gitstart', 'racing-main', '-NoPrepare');
+        file_put_contents($this->directory.'/pc/feature.txt', 'feature work');
+        $this->succeeds('pc', 'gitsave', 'Save feature');
+        $feature = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
+        $this->environment['STOCKS_TEST_PROMPT'] = 'RELEASE';
+        $this->environment['STOCKS_TEST_RELEASE_MODE'] = 'race-main';
+        $this->environment['STOCKS_TEST_ORIGIN'] = $this->directory.'/origin.git';
+        $this->environment['STOCKS_TEST_RACE_HEAD'] = $feature;
+
+        $failed = $this->workflow('pc', 'gitrelease', 'Release feature', '1.2.3');
+
+        $this->assertFalse($failed->isSuccessful());
+        $this->assertStringContainsString('atomic release push failed', $failed->getErrorOutput());
+        $this->assertSame($feature, $this->git($this->directory.'/origin.git', 'rev-parse', 'main'));
+        $this->assertSame($feature, $this->git($this->directory.'/origin.git', 'rev-parse', 'codex/racing-main'));
+        $this->assertNotEmpty($this->git($this->directory.'/origin.git', 'rev-parse', 'codex/features/racing-main'));
+        $this->assertSame('', $this->git($this->directory.'/pc', 'tag', '--list', 'v1.2.3'));
+        $this->assertSame('', $this->git($this->directory.'/origin.git', 'tag', '--list', 'v1.2.3'));
+        $this->assertSame('codex/racing-main', $this->git($this->directory.'/pc', 'branch', '--show-current'));
     }
 
     public function test_gitdiscard_deletes_only_the_confirmed_inactive_feature_and_keeps_a_recovery_ref(): void
@@ -543,6 +647,38 @@ POWERSHELL);
         $this->assertStringContainsString('matching trusted', $result->getErrorOutput());
     }
 
+    private function installReleasePublisher(): void
+    {
+        $helpers = file_get_contents(dirname(__DIR__, 2).'/scripts/git_helpers.ps1');
+        file_put_contents($this->directory.'/pc/scripts/git_helpers.ps1', $helpers."\n".<<<'POWERSHELL'
+function Invoke-StocksCommand {
+    param([string]$Description, [scriptblock]$Command)
+    if ($Description -like 'Creating the commit-bound*') {
+        New-Item -ItemType Directory -Force -Path deployment | Out-Null
+        foreach ($file in @('frontend-build.tar.gz', 'frontend-build.sha256', 'source-commit', 'source-manifest.sha256')) {
+            [IO.File]::WriteAllText((Join-Path (Get-Location).Path "deployment/$file"), 'fixture')
+        }
+    }
+}
+function Invoke-StocksReleaseChecks {
+    param([switch]$Full)
+    if ($env:APP_ENV -cne 'testing' -or $env:DB_CONNECTION -cne 'sqlite' -or $env:DB_DATABASE -cne ':memory:') {
+        throw 'The release candidate does not have isolated application settings.'
+    }
+    if ($env:STOCKS_TEST_RELEASE_MODE -ceq 'fail') { throw 'SIMULATED_RELEASE_FAILURE' }
+    if ($env:STOCKS_TEST_RELEASE_MODE -ceq 'change-candidate') {
+        [IO.File]::WriteAllText((Join-Path (Get-Location).Path 'feature.txt'), 'changed during checks')
+    }
+    if ($env:STOCKS_TEST_RELEASE_MODE -ceq 'change-source') {
+        [IO.File]::WriteAllText((Join-Path $Candidate.SourcePath 'concurrent.txt'), 'concurrent work')
+    }
+}
+POWERSHELL);
+        $this->git($this->directory.'/pc', 'add', 'scripts/git_helpers.ps1');
+        $this->git($this->directory.'/pc', 'commit', '-m', 'Add fixture publisher');
+        $this->git($this->directory.'/pc', 'push', 'origin', 'main');
+    }
+
     private function succeeds(string $device, string ...$arguments): void
     {
         $result = $this->workflow($device, ...$arguments);
@@ -583,6 +719,10 @@ function git {
         if ($args -contains '--push') { $env:STOCKS_TEST_PUSH_URL }
         else { $env:STOCKS_TEST_FETCH_URL }
         return
+    }
+    if ($env:STOCKS_TEST_RELEASE_MODE -ceq 'race-main' -and $args -contains 'push' -and $args -contains '--atomic') {
+        & $env:STOCKS_TEST_GIT -C $env:STOCKS_TEST_ORIGIN update-ref refs/heads/main $env:STOCKS_TEST_RACE_HEAD
+        if ($LASTEXITCODE -ne 0) { throw 'Fixture could not advance remote main.' }
     }
     & $env:STOCKS_TEST_GIT @args
 }

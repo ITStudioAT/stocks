@@ -147,18 +147,22 @@ gitdeploy
 
 `gitrelease` übernimmt das Feature als Squash-Commit, baut/verifiziert das
 Frontend-Paket, veröffentlicht `main` und startet CI im Hintergrund. Der Feature-Branch
-und seine Reservierung werden danach gemeinsam mit exakten Git-Leases geschlossen.
+und seine Reservierung werden dabei gemeinsam mit exakten Git-Leases geschlossen.
 Die Versionsnummer ist
 optional und muss zu den vorbereiteten Notizen in `UPDATES.md` passen. Bei
 Änderungen direkt auf `main` veröffentlicht `gitpush "Beschreibung" VERSION`
 einen vollständigen Release; `gitsave` auf `main` nutzt denselben Projekt-Helfer.
 `-Full` startet alle lokalen Tests und `-WaitForCI` wartet ausdrücklich auf GitHub-CI.
 Bei einem Feature-Release passende Tests vor `gitrelease` ausführen.
-Stocks bereitet den Squash dabei im lokalen `main` vor. Falls ein Schritt vor dem
-Push scheitert, bleiben Feature-Branch und gestagte Änderungen erhalten; zuerst
-`git status` prüfen und den vorbereiteten Release nach Behebung der Ursache mit
-`gitpush "Beschreibung" VERSION` abschließen. Schooltool verwendet hierfür einen
-separaten Kandidaten-Worktree; dieser Unterschied ist noch nicht angeglichen.
+Stocks bereitet den Squash in einem separaten Kandidaten-Worktree vor. Bei einem
+Fehler bleiben der Feature-Branch und das lokale `main` erhalten; der angezeigte
+Kandidatenpfad und seine Wiederherstellungsreferenz bleiben zur Prüfung bestehen.
+Nach Behebung der Ursache `gitrelease` erneut vom gespeicherten Feature starten.
+Bei einem Netzwerkfehler während des Pushs zuerst GitHub-`main` und das Feature
+prüfen, da das Ergebnis des Pushs unbekannt sein kann.
+Die Veröffentlichung von `main` und das Schließen des Features erfolgen atomar
+und nur, wenn sich die geprüften GitHub-Stände nicht verändert haben. Nach einem
+erfolgreichen Release aktualisiert `gitmain` die lokale Umgebung.
 
 `gitdeploy` verlangt einen sauberen `main` auf genau dem GitHub-Release-Commit,
 prüft das Paket und zeigt das Live-Ziel vor der Eingabe `LIVE`. Wie bei Schooltool

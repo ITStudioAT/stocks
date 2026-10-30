@@ -232,11 +232,10 @@ function Test-StocksLocalReleaseTagCanResume {
     )
 
     $tag = "v$Version"
-    $existingTagCommit = git rev-list -n 1 $tag 2>$null
-
-    if (-not $existingTagCommit) {
+    if (-not (Test-StocksRef "refs/tags/$tag")) {
         return $false
     }
+    $existingTagCommit = Invoke-StocksGit rev-list -n 1 $tag
 
     $localHead = git rev-parse HEAD
     $worktreeChanges = git status --porcelain --untracked-files=all
@@ -275,15 +274,23 @@ function gitpush {
         [switch]$WaitForCI,
 
         [Parameter(Mandatory = $false)]
-        [switch]$Full
+        [switch]$Full,
+
+        [object]$Candidate,
+        [object]$Feature,
+        [string]$ExpectedFeatureCommit,
+        [string]$ExpectedMainCommit
     )
 
     try {
         . (Join-Path $PSScriptRoot 'git_branch_helpers.ps1')
-        Assert-StocksRepository
+        Assert-StocksRepository -Candidate $Candidate
         $branch = git branch --show-current
 
-        if ($LASTEXITCODE -ne 0 -or $branch -ne 'main') {
+        if ($Candidate -and (-not $Feature -or -not $ExpectedFeatureCommit -or -not $ExpectedMainCommit)) {
+            throw 'A candidate release requires the exact feature and main commits.'
+        }
+        if ($LASTEXITCODE -ne 0 -or (-not $Candidate -and $branch -ne 'main')) {
             throw "gitpush only publishes the main branch. Current branch: $branch"
         }
 
@@ -292,6 +299,7 @@ function gitpush {
         }
 
         Update-StocksRemote
+        if ($Candidate) { Assert-StocksFeatureSnapshot -Feature $Feature -FeatureCommit $ExpectedFeatureCommit -MainCommit $ExpectedMainCommit }
         & git merge-base --is-ancestor refs/remotes/origin/main HEAD
         if ($LASTEXITCODE -ne 0) {
             throw 'main contains remote changes missing locally. Use gitmain before editing, or resolve divergent commits explicitly.'
@@ -318,6 +326,12 @@ function gitpush {
             Invoke-StocksCommand 'Checking UTF-8 source files...' {
                 php scripts/check-encoding.php
             }
+        }
+
+        $checkedTree = $null
+        if ($Candidate) {
+            Invoke-StocksGit add -A | Out-Host
+            $checkedTree = Invoke-StocksGit write-tree
         }
 
         $sourceChanges = git status --porcelain --untracked-files=all | Where-Object {
@@ -363,6 +377,14 @@ function gitpush {
 
         if (-not $releaseCommit) {
             Invoke-StocksReleaseChecks -Full:$Full
+
+            if ($Candidate) {
+                Assert-StocksCandidate $Candidate
+                Invoke-StocksGit add -A | Out-Host
+                if ((Invoke-StocksGit write-tree) -cne $checkedTree) {
+                    throw 'Candidate source changed during release checks. Nothing was published.'
+                }
+            }
 
             $sourceChanges = git status --porcelain --untracked-files=all | Where-Object {
                 $_ -notmatch '^.. deployment/(frontend-build\.(?:tar\.gz|sha256)|source-commit|source-manifest\.sha256)$'
@@ -427,11 +449,34 @@ function gitpush {
             $releaseCommit = git rev-parse HEAD
         }
 
-        $pushArguments = @('--atomic', 'origin', 'HEAD:main')
+        if ($Candidate) {
+            Save-StocksCandidate $Candidate
+            Assert-StocksClean
+            Assert-StocksFeatureSnapshot -Feature $Feature -FeatureCommit $ExpectedFeatureCommit -MainCommit $ExpectedMainCommit
+            if ((Invoke-StocksGit -C $Candidate.SourcePath status --porcelain --untracked-files=all) -or
+                (Invoke-StocksGit -C $Candidate.SourcePath branch --show-current) -cne $Feature.Branch -or
+                (Invoke-StocksGit -C $Candidate.SourcePath rev-parse HEAD) -cne $ExpectedFeatureCommit) {
+                throw 'The original feature checkout changed during release preparation. Nothing was published.'
+            }
+            Assert-StocksCandidate $Candidate
+            if (-not (Test-StocksAncestor $ExpectedMainCommit $releaseCommit)) { throw 'A release cannot rewrite main history.' }
+            $rescue = "refs/stocks/released/$($Feature.Id)/$([guid]::NewGuid().ToString('N'))"
+            Invoke-StocksGit update-ref "$rescue/feature" $ExpectedFeatureCommit
+            Invoke-StocksGit update-ref "$rescue/reservation" $Feature.Commit
+            $pushArguments = @('--atomic', "--force-with-lease=refs/heads/main:$ExpectedMainCommit", `
+                "--force-with-lease=refs/heads/$($Feature.Branch):$ExpectedFeatureCommit", `
+                "--force-with-lease=$($Feature.Ref):$($Feature.Commit)", 'origin', "${releaseCommit}:refs/heads/main", `
+                ":refs/heads/$($Feature.Branch)", ":$($Feature.Ref)")
+        }
+        else { $pushArguments = @('--atomic', 'origin', 'HEAD:main') }
 
+        $createdTagObject = $null
         if ($version) {
             $tag = "v$version"
-            $existingTagCommit = git rev-list -n 1 $tag 2>$null
+            $existingTagCommit = $null
+            if (Test-StocksRef "refs/tags/$tag") {
+                $existingTagCommit = Invoke-StocksGit rev-list -n 1 $tag
+            }
 
             if ($existingTagCommit) {
                 if ($existingTagCommit -ne $releaseCommit) {
@@ -445,6 +490,7 @@ function gitpush {
                 if ($LASTEXITCODE -ne 0) {
                     throw "Could not create tag $tag."
                 }
+                $createdTagObject = Invoke-StocksGit rev-parse "refs/tags/$tag"
             }
 
             $pushArguments += "refs/tags/$tag"
@@ -453,7 +499,11 @@ function gitpush {
         Write-Host 'Pushing the complete release to main...' -ForegroundColor Cyan
         git push @pushArguments
         if ($LASTEXITCODE -ne 0) {
-            throw 'The atomic release push failed. Nothing changed on GitHub.'
+            if ($createdTagObject) {
+                & git update-ref --no-deref -d "refs/tags/$tag" $createdTagObject
+                if ($LASTEXITCODE -ne 0) { Write-Warning "The new local tag $tag changed or could not be removed. Inspect it before retrying." }
+            }
+            throw 'The atomic release push failed. Check GitHub main and the feature before retrying; the remote result may be uncertain.'
         }
 
         if ($WaitForCI) {

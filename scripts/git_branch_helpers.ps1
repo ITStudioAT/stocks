@@ -20,6 +20,7 @@ function Assert-StocksRemote {
 }
 
 function Assert-StocksRepository {
+    param([object]$Candidate)
     $root = Invoke-StocksGit rev-parse --show-toplevel
     if ([IO.Path]::GetFullPath((Get-Location).Path) -ne [IO.Path]::GetFullPath($root)) {
         throw 'Run the workflow from the project root or use the installed profile commands.'
@@ -31,7 +32,10 @@ function Assert-StocksRepository {
             throw 'A Git operation is unfinished. Resolve or abort it before continuing.'
         }
     }
-    if (-not (Invoke-StocksGit branch --show-current)) {
+    if ($Candidate) {
+        Assert-StocksCandidate $Candidate
+    }
+    elseif (-not (Invoke-StocksGit branch --show-current)) {
         throw 'Detached HEAD: switch to a named branch first.'
     }
 }
@@ -137,6 +141,97 @@ function Assert-StocksFeatureSnapshot {
         ($MainCommit -and (Invoke-StocksGit rev-parse refs/remotes/origin/main) -cne $MainCommit)) {
         throw 'The feature, its reservation, or main changed during preparation. Nothing was published.'
     }
+}
+
+function New-StocksReleaseCandidate {
+    param([string]$SourceCommit)
+    $id = [guid]::NewGuid().ToString('N')
+    $commit = Invoke-StocksGit rev-parse "$SourceCommit^{commit}"
+    $repository = [IO.Path]::GetFullPath((Invoke-StocksGit rev-parse --git-common-dir))
+    $path = Join-Path ([IO.Path]::GetFullPath([IO.Path]::GetTempPath())) "stocks-worktrees/$id"
+    if ($path -match '(^|[\\/])\.git([\\/]|$)' -or (Test-Path -LiteralPath $path)) {
+        throw 'The candidate path is unsafe or already exists. Nothing was replaced.'
+    }
+    $ref = "refs/stocks/candidates/release/$id"
+    Invoke-StocksGit update-ref --no-deref $ref $commit ('0' * 40)
+    Invoke-StocksGit worktree add --detach $path $commit | Out-Host
+    [pscustomobject]@{ Id = $id; Path = $path; Repository = $repository; RecoveryRef = $ref; Commit = $commit; SourcePath = (Get-Location).Path }
+}
+
+function Assert-StocksCandidate {
+    param([object]$Candidate, [switch]$AllowAdvancedHead)
+    if ($Candidate.Id -cnotmatch '^[a-f0-9]{32}$' -or $Candidate.Commit -cnotmatch '^[a-f0-9]{40}$' -or
+        $Candidate.RecoveryRef -cne "refs/stocks/candidates/release/$($Candidate.Id)" -or
+        [IO.Path]::GetFullPath($Candidate.Path) -cne (Get-Location).Path -or
+        -not (Test-Path -LiteralPath (Join-Path $Candidate.Path '.git') -PathType Leaf) -or
+        [IO.Path]::GetFullPath((Invoke-StocksGit rev-parse --git-common-dir)) -cne $Candidate.Repository -or
+        (Invoke-StocksGit branch --show-current)) {
+        throw 'The isolated release candidate identity or checkout changed.'
+    }
+    & git symbolic-ref --quiet $Candidate.RecoveryRef | Out-Null
+    if ($LASTEXITCODE -ne 1 -or (Invoke-StocksGit rev-parse --verify $Candidate.RecoveryRef) -cne $Candidate.Commit) {
+        throw 'The release candidate recovery reference changed.'
+    }
+    $head = Invoke-StocksGit rev-parse HEAD
+    if ($AllowAdvancedHead) {
+        if (-not (Test-StocksAncestor $Candidate.Commit $head)) { throw 'The candidate history changed unexpectedly.' }
+    }
+    elseif ($head -cne $Candidate.Commit) { throw 'The candidate commit changed unexpectedly.' }
+}
+
+function Save-StocksCandidate {
+    param([object]$Candidate)
+    Push-Location -LiteralPath $Candidate.Path
+    try {
+        Assert-StocksCandidate -Candidate $Candidate -AllowAdvancedHead
+        $head = Invoke-StocksGit rev-parse HEAD
+        Invoke-StocksGit update-ref --no-deref $Candidate.RecoveryRef $head $Candidate.Commit
+        $Candidate.Commit = $head
+    }
+    finally { Pop-Location }
+}
+
+function Enter-StocksCandidateEnvironment {
+    param([object]$Candidate)
+    $previous = @{}
+    $random = [Security.Cryptography.RandomNumberGenerator]::Create()
+    $keyBytes = New-Object byte[] 32
+    try { $random.GetBytes($keyBytes) } finally { $random.Dispose() }
+    $settings = [ordered]@{
+        APP_ENV = 'testing'; APP_KEY = 'base64:' + [Convert]::ToBase64String($keyBytes); APP_URL = 'http://localhost'
+        APP_DEBUG = 'false'; DB_CONNECTION = 'sqlite'; DB_DATABASE = ':memory:'; DB_URL = '(null)'
+        CACHE_STORE = 'array'; SESSION_DRIVER = 'array'; QUEUE_CONNECTION = 'sync'; MAIL_MAILER = 'array'
+        BROADCAST_CONNECTION = 'log'; FILESYSTEM_DISK = 'local'; STOCKS_PREVIEW = 'false'
+    }
+    $keys = @([Environment]::GetEnvironmentVariables('Process').Keys | Where-Object {
+        $_ -match '^(APP_|DB_|DATABASE_|LARAVEL_|CACHE_|SESSION_|QUEUE_|REDIS_|MAIL_|BROADCAST_|REVERB_|PUSHER_|CLOUDWAYS_|AWS_|LOG_|OPENAI_|ANTHROPIC_|GEMINI_|GROQ_|COHERE_|DEEPSEEK_|MISTRAL_|OPENROUTER_|JINA_|XAI_|ELEVENLABS_|EODHD_|POSTMARK_|RESEND_|SLACK_|PREVIEW_|SUPER_ADMIN_|STOCKS_)' -and $_ -notmatch '^STOCKS_TEST_'
+    })
+    try {
+        foreach ($name in @($keys + @($settings.Keys)) | Select-Object -Unique) {
+            $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+            [Environment]::SetEnvironmentVariable($name, $null, 'Process')
+        }
+        foreach ($entry in $settings.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process') }
+        & git -C $Candidate.Path check-ignore --quiet .env
+        if ($LASTEXITCODE -ne 0) { throw 'The candidate must ignore its private .env file.' }
+        $contents = @($settings.GetEnumerator() | ForEach-Object { $_.Key + '="' + $_.Value + '"' }) -join "`n"
+        $file = [IO.File]::Open((Join-Path $Candidate.Path '.env'), [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try {
+            $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($contents + "`n")
+            $file.Write($bytes, 0, $bytes.Length)
+        }
+        finally { $file.Dispose() }
+        $previous
+    }
+    catch {
+        Restore-StocksCandidateEnvironment $previous
+        throw
+    }
+}
+
+function Restore-StocksCandidateEnvironment {
+    param([hashtable]$Previous)
+    foreach ($entry in $Previous.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process') }
 }
 
 function Assert-StocksFeature {
@@ -398,6 +493,9 @@ function gitpreview {
     }
     . (Join-Path $PSScriptRoot 'git_preview_helpers.ps1')
     $mainCommit = Invoke-StocksGit rev-parse refs/remotes/origin/main
+    if ((Test-StocksRef refs/heads/main) -and -not (Test-StocksAncestor refs/heads/main $mainCommit)) {
+        throw 'Local main has unpublished or divergent commits. Resolve them before releasing.'
+    }
     $bundle = if ($Mode -ceq 'resume') {
         Read-StocksPreviewReceipt -Id $BundleId -Branch $branch -Commit $commit -MainCommit $mainCommit
     }
@@ -452,25 +550,53 @@ function gitrelease {
     if ((Read-Host 'Publish this feature to main? Type RELEASE') -cne 'RELEASE') {
         throw 'Release cancelled; no branch was switched.'
     }
-    Update-StocksRemote
     Assert-StocksFeatureSnapshot -Feature $active -FeatureCommit $featureCommit -MainCommit $mainCommit
-    gitmain -NoPrepare
-    Invoke-StocksGit merge --squash $branch
-    & git diff --cached --quiet
-    if ($LASTEXITCODE -eq 0) {
-        throw 'The feature has no changes to release. The feature branch remains available.'
+    $candidate = New-StocksReleaseCandidate -SourceCommit $mainCommit
+    $environment = $null
+    try {
+        $environment = Enter-StocksCandidateEnvironment $candidate
+        Push-Location -LiteralPath $candidate.Path
+        try {
+            Invoke-StocksGit merge --squash $featureCommit | Out-Host
+            & git diff --cached --quiet
+            if ($LASTEXITCODE -eq 0) { throw 'The feature has no changes to release. The feature branch remains available.' }
+            if ($LASTEXITCODE -ne 1) { throw 'Could not inspect the squashed release candidate.' }
+            . (Join-Path $PSScriptRoot 'git_helpers.ps1')
+            gitpush -message $Message -version $Version -Candidate $candidate -Feature $active -ExpectedFeatureCommit $featureCommit -ExpectedMainCommit $mainCommit
+        }
+        finally { Pop-Location }
     }
-    if ($LASTEXITCODE -ne 1) { throw 'Could not inspect the squashed release candidate.' }
-    . (Join-Path $PSScriptRoot 'git_helpers.ps1')
-    gitpush -message $Message -version $Version
-    Assert-StocksFeatureSnapshot -Feature $active -FeatureCommit $featureCommit
-    $rescue = "refs/stocks/released/$($active.Id)/$([guid]::NewGuid().ToString('N'))"
-    Invoke-StocksGit update-ref "$rescue/feature" $featureCommit
-    Invoke-StocksGit update-ref "$rescue/reservation" $active.Commit
-    Invoke-StocksGit push --atomic "--force-with-lease=refs/heads/${branch}:$featureCommit" `
-        "--force-with-lease=$($active.Ref):$($active.Commit)" origin ":refs/heads/$branch" ":$($active.Ref)"
-    if (Test-StocksRef "refs/heads/$branch") { Invoke-StocksGit branch -D $branch }
-    Write-Host "Released and closed $branch. Local recovery refs: $rescue/feature and $rescue/reservation" -ForegroundColor Green
+    catch {
+        Write-Host "Release did not finish. Your working branch is unchanged. Candidate retained at $($candidate.Path) ($($candidate.RecoveryRef))." -ForegroundColor Yellow
+        throw
+    }
+    finally {
+        try { Save-StocksCandidate $candidate }
+        finally { if ($environment) { Restore-StocksCandidateEnvironment $environment } }
+    }
+    Write-Host "Release published. Candidate retained at $($candidate.Path)." -ForegroundColor Green
+    try {
+        Assert-StocksClean
+        if ((Invoke-StocksGit branch --show-current) -cne $branch -or (Invoke-StocksGit rev-parse HEAD) -cne $featureCommit) {
+            throw 'Your working feature changed during publication; it was preserved.'
+        }
+        Update-StocksRemote
+        $publishedMain = Invoke-StocksGit rev-parse refs/remotes/origin/main
+        if (-not (Test-StocksAncestor $candidate.Commit $publishedMain)) { throw 'Could not verify the published release on main.' }
+        if ((Test-StocksRef refs/heads/main) -and -not (Test-StocksAncestor refs/heads/main $publishedMain)) {
+            throw 'Local main changed during publication and was preserved.'
+        }
+        if (Test-StocksRef refs/heads/main) { Invoke-StocksGit switch main | Out-Host }
+        else { Invoke-StocksGit switch --track -c main refs/remotes/origin/main | Out-Host }
+        Invoke-StocksGit -c merge.autostash=false merge --ff-only refs/remotes/origin/main | Out-Host
+        if (Test-StocksRef "refs/heads/$branch") {
+            Invoke-StocksGit update-ref --no-deref -d "refs/heads/$branch" $featureCommit
+        }
+        Write-Host "Released and closed $branch. Run gitmain to prepare local dependencies." -ForegroundColor Green
+    }
+    catch {
+        Write-Warning "The release was published, but local cleanup stopped: $($_.Exception.Message) Review git status before continuing; do not publish it again."
+    }
 }
 
 function gitdeploy {
