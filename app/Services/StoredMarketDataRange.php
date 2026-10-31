@@ -13,9 +13,12 @@ use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockRealtimePrice;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 
 class StoredMarketDataRange
 {
+    private const GlobalStatisticsCacheSeconds = 5;
+
     /**
      * @return array{date_from: ?string, date_to: ?string, row_count: int}
      */
@@ -25,6 +28,7 @@ class StoredMarketDataRange
             MarketDataType::LiveData => $this->summarize(
                 IndexWatchItemRealtimePrice::query()->whereNotNull('price'),
                 'trading_date',
+                cacheGlobally: true,
             ),
             MarketDataType::IntradayData => $this->summarize(
                 IndexWatchItemIntradayCandle::query()
@@ -32,10 +36,12 @@ class StoredMarketDataRange
                     ->where('source_key', 'eodhd_intraday')
                     ->whereNotNull('close'),
                 'trading_date',
+                cacheGlobally: true,
             ),
             MarketDataType::EndOfDayData => $this->summarize(
                 IndexWatchItemPrice::query()->whereNotNull('actual_price'),
                 'trading_date',
+                cacheGlobally: true,
             ),
         };
     }
@@ -104,17 +110,20 @@ class StoredMarketDataRange
                     ->whereNotNull('price'),
                 'as_of',
                 true,
+                cacheGlobally: true,
             ),
             MarketDataType::IntradayData => $this->summarize(
                 StockHoldingIntradayCandle::query()
-                    ->where('interval', '5m')
-                    ->where('source_key', 'eodhd_intraday')
+                    ->whereIn('interval', FreeIntradayMarketData::Intervals)
+                    ->whereIn('source_key', FreeIntradayMarketData::CandleSources)
                     ->whereNotNull('close'),
                 'trading_date',
+                cacheGlobally: true,
             ),
             MarketDataType::EndOfDayData => $this->summarize(
                 StockHoldingDailyPrice::query()->whereNotNull('close'),
                 'trading_date',
+                cacheGlobally: true,
             ),
         };
     }
@@ -122,8 +131,18 @@ class StoredMarketDataRange
     /**
      * @return array{date_from: ?string, date_to: ?string, row_count: int}
      */
-    private function summarize(Builder $prices, string $dateColumn, bool $storedAsUtcTimestamp = false): array
+    private function summarize(Builder $prices, string $dateColumn, bool $storedAsUtcTimestamp = false, bool $cacheGlobally = false): array
     {
+        if ($cacheGlobally) {
+            $connection = $prices->getConnection();
+            $key = 'market-data-range:'.hash('sha256', serialize([
+                $connection->getName(), $connection->getDatabaseName(), config('app.timezone'),
+                $prices->toSql(), $prices->getBindings(), $dateColumn, $storedAsUtcTimestamp,
+            ]));
+
+            return Cache::remember($key, now()->addSeconds(self::GlobalStatisticsCacheSeconds), fn (): array => $this->summarize($prices, $dateColumn, $storedAsUtcTimestamp));
+        }
+
         $range = $prices
             ->toBase()
             ->selectRaw("MIN({$dateColumn}) AS date_from")

@@ -11,9 +11,9 @@ use App\Models\StockRealtimePrice;
 use App\Services\CompletedTradingDay;
 use App\Services\EndOfDayDataUpdateScheduler;
 use App\Services\EodhdApiUsage;
-use App\Services\EodhdBatchRealtimePriceService;
 use App\Services\EodhdEndOfDayDataService;
 use App\Services\EodhdExchangeDataImporter;
+use App\Services\FreeIntradayMarketData;
 use App\Services\IndexDataUpdateScheduler;
 use App\Services\IndexPriceRefreshSettings;
 use App\Services\IndexWatchItemPriceRefresher;
@@ -196,7 +196,7 @@ class AdminDataController extends Controller
     }
 
     public function syncRealtime(
-        EodhdBatchRealtimePriceService $realtimePriceService,
+        FreeIntradayMarketData $realtimePriceService,
         PriceRefreshScheduler $priceRefreshScheduler,
         EodhdApiUsage $eodhdApiUsage,
     ): JsonResponse {
@@ -237,7 +237,7 @@ class AdminDataController extends Controller
         $run->refresh();
 
         return response()->json([
-            'message' => "EODHD historical intraday sync: {$run->stored_count} candle(s) loaded/updated.",
+            'message' => "Free intraday sync: {$run->stored_count} observation(s)/OHLC loaded/updated. ".FreeIntradayMarketData::Notice,
             'requested_count' => $run->total_count,
             'stored_count' => $run->stored_count,
             'skipped_count' => max($run->total_count - $run->success_count - $run->failed_count, 0),

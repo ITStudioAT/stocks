@@ -18,6 +18,11 @@ class IndexPriceRefreshSettings
      */
     public function settings(): array
     {
+        return app(RequestReadCache::class)->remember(self::class.'.settings', fn (): array => $this->readSettings());
+    }
+
+    private function readSettings(): array
+    {
         $config = AppConfig::query()->firstOrCreate(
             ['key' => self::ConfigKey],
             ['value' => $this->defaultSettings()],
@@ -37,6 +42,11 @@ class IndexPriceRefreshSettings
      * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string, status: string, status_label: string, is_trading_time: bool, current_interval_minutes: int, table_name: string, table_row_count: int, latest_table_update_at: ?string}
      */
     public function payload(): array
+    {
+        return app(RequestReadCache::class)->remember(self::class.'.payload', fn (): array => $this->buildPayload());
+    }
+
+    private function buildPayload(): array
     {
         $settings = $this->settings();
         $isTradingTime = $this->isAnyIndexWithinTradingTimes(settings: $settings);

@@ -15,6 +15,43 @@ describe('request', () => {
         document.head.innerHTML = '<meta name="csrf-token" content="test-token">';
     });
 
+    it('shares identical pending reads but fetches fresh data after completion', async () => {
+        let resolveResponse;
+        const fetchMock = vi.fn().mockImplementationOnce(() => new Promise(resolve => { resolveResponse = resolve; }))
+            .mockResolvedValue(jsonResponse({ version: 2 }));
+        vi.stubGlobal('fetch', fetchMock);
+        const first = request('/admin/prices');
+        const second = request('/admin/prices');
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        resolveResponse(jsonResponse({ version: 1 }));
+        expect(await Promise.all([first, second])).toEqual([{ version: 1 }, { version: 1 }]);
+        expect(await request('/admin/prices')).toEqual({ version: 2 });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('deduplicates opted-in chart reads without merging writes or different chart parameters', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({}));
+        vi.stubGlobal('fetch', fetchMock);
+        await Promise.all([
+            request('/admin/charts?id=1', { method: 'POST', deduplicate: true }),
+            request('/admin/charts?id=1', { method: 'POST', deduplicate: true }),
+            request('/admin/charts?id=2', { method: 'POST', deduplicate: true }),
+            request('/admin/save', { method: 'POST', body: '{}' }),
+            request('/admin/save', { method: 'POST', body: '{}' }),
+        ]);
+        expect(fetchMock).toHaveBeenCalledTimes(4);
+        expect(fetchMock.mock.calls[0][1]).not.toHaveProperty('deduplicate');
+    });
+
+    it('releases failed pending reads so a retry can succeed', async () => {
+        const fetchMock = vi.fn().mockRejectedValueOnce(new Error('Offline')).mockResolvedValue(jsonResponse({ recovered: true }));
+        vi.stubGlobal('fetch', fetchMock);
+        const responses = await Promise.allSettled([request('/admin/retry'), request('/admin/retry')]);
+        expect(responses.every(response => response.status === 'rejected')).toBe(true);
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(await request('/admin/retry')).toEqual({ recovered: true });
+    });
+
     it('sends JSON headers, credentials, and the csrf token', async () => {
         const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ saved: true }));
         vi.stubGlobal('fetch', fetchMock);

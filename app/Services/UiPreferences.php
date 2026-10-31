@@ -57,6 +57,11 @@ class UiPreferences
      */
     public function settings(?User $user = null): array
     {
+        return app(RequestReadCache::class)->remember(self::class.'.settings.'.($user?->id ?? 'guest'), fn (): array => $this->readSettings($user));
+    }
+
+    private function readSettings(?User $user): array
+    {
         $config = AppConfig::query()->firstOrCreate(
             ['key' => self::ConfigKey],
             ['value' => $this->defaultGlobalSettings()],

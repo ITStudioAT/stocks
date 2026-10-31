@@ -21,6 +21,11 @@ class EndOfDayDataUpdateScheduler
      */
     public function settings(): array
     {
+        return app(RequestReadCache::class)->remember(self::class.'.settings', fn (): array => $this->readSettings());
+    }
+
+    private function readSettings(): array
+    {
         $config = AppConfig::query()->firstOrCreate(
             ['key' => self::ConfigKey],
             ['value' => $this->defaultSettings()],
@@ -39,6 +44,11 @@ class EndOfDayDataUpdateScheduler
      * @return array{daily_time: string, interval_minutes: int, timezone: string, last_dispatched_at: ?string, last_dispatched_on: ?string, next_refresh_at: ?string, status: string, status_label: string}
      */
     public function payload(): array
+    {
+        return app(RequestReadCache::class)->remember(self::class.'.payload', fn (): array => $this->buildPayload());
+    }
+
+    private function buildPayload(): array
     {
         return [
             ...$this->settings(),
@@ -176,7 +186,7 @@ class EndOfDayDataUpdateScheduler
      */
     private function nextRefreshAt(Carbon $from, array $settings): string
     {
-        if ($this->hasMissingEndOfDayData() && $settings['last_dispatched_at'] !== null) {
+        if ($settings['last_dispatched_at'] !== null && $this->hasMissingEndOfDayData()) {
             return Carbon::parse($settings['last_dispatched_at'], self::Timezone)
                 ->addMinutes($settings['interval_minutes'])
                 ->toIso8601String();
@@ -213,7 +223,7 @@ class EndOfDayDataUpdateScheduler
 
     private function hasMissingEndOfDayData(): bool
     {
-        return $this->historicalPriceService->coverage()['end_of_day_outdated_stocks'] !== [];
+        return app(RequestReadCache::class)->remember(self::class.'.missing-end-of-day', fn (): bool => $this->historicalPriceService->hasOutdatedEndOfDayStocks());
     }
 
     private function scheduledAt(Carbon $day, string $dailyTime): Carbon

@@ -2,13 +2,18 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\LoadIndexChartPrices;
 use App\Models\IndexWatchItem;
 use App\Models\IndexWatchItemPrice;
 use App\Models\IndexWatchItemRealtimePrice;
 use App\Models\User;
+use Illuminate\Bus\UniqueLock;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Testing\TestResponse;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -123,8 +128,8 @@ class AdminIndexWatchItemTest extends TestCase
                 'currency' => 'EUR',
             ]);
 
-            $this->actingAs($admin)
-                ->postJson("/admin/index-watch-items/{$index->id}/prices/ensure")
+            $this->actingAs($admin);
+            $this->completeIndexChartRefresh($index)
                 ->assertOk()
                 ->assertJsonPath('message', 'Index prices loaded.')
                 ->assertJsonPath('index.latest_price', '6116.529800')
@@ -165,8 +170,8 @@ class AdminIndexWatchItemTest extends TestCase
             'last_price' => 6005 + $daysAgo,
         ]));
 
-        $this->actingAs($admin)
-            ->postJson("/admin/index-watch-items/{$index->id}/prices/ensure?range=1y")
+        $this->actingAs($admin);
+        $this->completeIndexChartRefresh($index, '1y')
             ->assertOk()
             ->assertJsonPath('range', '1y')
             ->assertJsonCount(264, 'index.recent_prices')
@@ -203,8 +208,8 @@ class AdminIndexWatchItemTest extends TestCase
                 'actual_price' => '6386.81010000',
             ]);
 
-            $this->actingAs($this->adminUser())
-                ->postJson("/admin/index-watch-items/{$index->id}/prices/ensure?range=intraday")
+            $this->actingAs($this->adminUser());
+            $this->completeIndexChartRefresh($index, 'intraday')
                 ->assertOk()
                 ->assertJsonPath('range', 'intraday')
                 ->assertJsonCount(1, 'index.recent_prices')
@@ -280,10 +285,12 @@ class AdminIndexWatchItemTest extends TestCase
             ]);
             $admin = $this->adminUser();
 
-            $this->actingAs($admin)->postJson("/admin/index-watch-items/{$index->id}/prices/ensure?range=intraday")->assertOk();
-            $this->actingAs($admin)->postJson("/admin/index-watch-items/{$index->id}/prices/ensure?range=intraday")->assertOk();
-            $response = $this->actingAs($admin)
-                ->postJson("/admin/index-watch-items/{$index->id}/prices/ensure?range=intraday")
+            $this->actingAs($admin);
+            $this->completeIndexChartRefresh($index, 'intraday')->assertOk();
+            $this->actingAs($admin);
+            $this->completeIndexChartRefresh($index, 'intraday')->assertOk();
+            $this->actingAs($admin);
+            $response = $this->completeIndexChartRefresh($index, 'intraday')
                 ->assertOk()
                 ->assertJsonCount(2, 'index.realtime_prices')
                 ->assertJsonPath('index.realtime_prices.0.price', '6746.000000')
@@ -344,8 +351,8 @@ class AdminIndexWatchItemTest extends TestCase
                 'currency' => 'EUR',
             ]);
 
-            $this->actingAs($admin)
-                ->postJson("/admin/index-watch-items/{$index->id}/prices/ensure")
+            $this->actingAs($admin);
+            $this->completeIndexChartRefresh($index)
                 ->assertOk()
                 ->assertJsonPath('index.latest_price', '6497.140100')
                 ->assertJsonPath('index.latest_price_source', 'EODHD real-time');
@@ -385,8 +392,8 @@ class AdminIndexWatchItemTest extends TestCase
                 'currency' => 'EUR',
             ]);
 
-            $this->actingAs($admin)
-                ->postJson("/admin/index-watch-items/{$index->id}/prices/ensure")
+            $this->actingAs($admin);
+            $this->completeIndexChartRefresh($index)
                 ->assertOk()
                 ->assertJsonPath('index.latest_price', '2481.330000')
                 ->assertJsonPath('index.last_price', '2481.330000');
@@ -577,6 +584,23 @@ class AdminIndexWatchItemTest extends TestCase
         $this->postJson('/admin/index-watch-items', [
             'symbol' => 'SPX',
         ])->assertUnauthorized();
+    }
+
+    private function completeIndexChartRefresh(IndexWatchItem $index, ?string $range = null): TestResponse
+    {
+        Queue::fake();
+        $query = $range === null ? '' : '?range='.$range;
+        $requestCount = Http::recorded()->count();
+        $response = $this->postJson("/admin/index-watch-items/{$index->id}/prices/ensure{$query}")->assertOk();
+        Http::assertSentCount($requestCount);
+        if ($response->json('refresh.status') === 'queued') {
+            Queue::assertPushed(LoadIndexChartPrices::class, 1);
+            $job = Queue::pushed(LoadIndexChartPrices::class)->first();
+            app()->call([$job, 'handle']);
+            (new UniqueLock(Cache::store()))->release($job);
+        }
+
+        return $this->getJson("/admin/index-watch-items/{$index->id}/prices/refresh{$query}");
     }
 
     private function adminUser(): User

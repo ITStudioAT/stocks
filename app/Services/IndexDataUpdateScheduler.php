@@ -23,6 +23,11 @@ class IndexDataUpdateScheduler
      */
     public function settings(): array
     {
+        return app(RequestReadCache::class)->remember(self::class.'.settings', fn (): array => $this->readSettings());
+    }
+
+    private function readSettings(): array
+    {
         $config = AppConfig::query()->firstOrCreate(
             ['key' => self::ConfigKey],
             ['value' => $this->defaultSettings()],
@@ -41,6 +46,11 @@ class IndexDataUpdateScheduler
      * @return array{weekday: int, weekday_label: string, daily_time: string, timezone: string, last_dispatched_at: ?string, last_dispatched_on: ?string, next_refresh_at: ?string, status: string, status_label: string, table_name: string, table_row_count: int, latest_table_update_at: ?string}
      */
     public function payload(): array
+    {
+        return app(RequestReadCache::class)->remember(self::class.'.payload', fn (): array => $this->buildPayload());
+    }
+
+    private function buildPayload(): array
     {
         $settings = $this->settings();
         $latestTableUpdateAt = $this->latestTableUpdateAt();

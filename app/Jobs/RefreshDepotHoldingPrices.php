@@ -4,8 +4,8 @@ namespace App\Jobs;
 
 use App\Models\StockPriceRefreshRun;
 use App\Services\DepotHoldingPriceRefreshProgress;
-use App\Services\EodhdBatchRealtimePriceService;
 use App\Services\EodhdErrorSanitizer;
+use App\Services\FreeIntradayMarketData;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
@@ -27,7 +27,7 @@ class RefreshDepotHoldingPrices implements ShouldQueue
     ) {}
 
     public function handle(
-        EodhdBatchRealtimePriceService $realtimePriceService,
+        FreeIntradayMarketData $realtimePriceService,
         EodhdErrorSanitizer $errorSanitizer,
         DepotHoldingPriceRefreshProgress $progress,
     ): void {

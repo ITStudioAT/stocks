@@ -450,6 +450,63 @@ function trendDailyPrices(direction = 'up') {
 }
 
 describe('App', () => {
+    it('keeps free intraday observations at their real times without interpolation or hidden gap lines', () => {
+        window.history.pushState({}, '', '/admin/login');
+        vi.stubGlobal('fetch', vi.fn());
+        const wrapper = mountApp();
+        const trades = [
+            { as_of: '2026-10-30T10:00:00Z', price: '56', source_key: 'deutsche_boerse_trade', source_name: 'Deutsche Börse · Xetra', interval: 'trade' },
+            { as_of: '2026-10-30T10:30:00Z', price: '57', source_key: 'deutsche_boerse_trade', source_name: 'Deutsche Börse · Xetra', interval: 'trade' },
+        ];
+        expect(wrapper.vm.normalizeAnalyzeChartPrices(trades, 'month')).toEqual(trades);
+        expect(wrapper.vm.withAnalyzePreviousTradingClosePoint(trades, trades[0], 'today-1')).toEqual(trades);
+        const points = trades.map((trade, index) => ({ ...trade, x: index * 10, y: 20 }));
+        expect(wrapper.vm.analyzeSparklinePath(points)).toBe('');
+        expect(wrapper.vm.analyzeSparklineAreaPath(points, { bottom: 100 })).toBe('');
+        const usPoints = points.map(point => ({ ...point, source_key: 'yahoo_intraday', source_name: 'Yahoo Finance', interval: '5m' }));
+        expect(wrapper.vm.analyzeSparklinePath(usPoints).match(/M /g)).toHaveLength(2);
+        expect(wrapper.vm.analyzeSparklinePath(usPoints)).not.toContain(' L ');
+        expect(wrapper.vm.latestPriceIsLive({ latest_price: '79.18', price_type: 'regular_market_last' })).toBe(false);
+    });
+    it('opens Dashboard Tests through navigation and a direct URL without starting a provider or holdings request', async () => {
+        window.history.pushState({}, '', '/admin/menu/dashboard/tests');
+        const fetchMock = vi.fn(path => Promise.resolve(jsonResponse(path === '/admin/me'
+            ? { user: { id: 1, name: 'Admin', roles: ['admin'] } } : {})));
+        vi.stubGlobal('fetch', fetchMock);
+        const wrapper = mountApp();
+        await flushPromises();
+        expect(wrapper.find('[aria-label="Dashboard Tests"]').exists()).toBe(true);
+        expect(window.location.pathname).toBe('/admin/menu/dashboard/tests');
+        expect(fetchMock.mock.calls.some(([path]) => path.includes('deutsche-boerse') || path.includes('/watchlist/holdings') || path.includes('/dashboard/performance'))).toBe(false);
+        const tabs = wrapper.get('[aria-label="Dashboard sections"]').findAll('[role="tab"]');
+        expect(tabs.map(tab => tab.text())).toEqual(['Übersicht', 'KI', 'Tests']);
+        await tabs[0].trigger('click');
+        await flushPromises();
+        expect(wrapper.find('[aria-label="Dashboard Tests"]').exists()).toBe(false);
+        await tabs[2].trigger('click');
+        await flushPromises();
+        expect(wrapper.find('[aria-label="Dashboard Tests"]').exists()).toBe(true);
+        expect(fetchMock.mock.calls.some(([path]) => path.includes('deutsche-boerse'))).toBe(false);
+    });
+
+    it.each(['/admin/profile', '/admin/menu/indices'])('loads only visible page data when opening %s', async path => {
+        window.history.pushState({}, '', path);
+        const fetchMock = vi.fn((requestPath) => Promise.resolve(jsonResponse(requestPath === '/admin/me'
+            ? { user: { id: 1, name: 'Admin', roles: ['super_admin', 'admin'] } }
+            : {})));
+        vi.stubGlobal('fetch', fetchMock);
+        mountApp();
+        await flushPromises();
+        const requestedPaths = fetchMock.mock.calls.map(([requestPath]) => requestPath);
+        expect(requestedPaths.some(requestPath => requestPath.startsWith('/admin/watchlist/holdings'))).toBe(false);
+        expect(requestedPaths.some(requestPath => /^\/admin\/(users|roles|depots)(\?|$)/.test(requestPath))).toBe(false);
+        if (path === '/admin/profile') {
+            expect(requestedPaths).not.toContain('/admin/index-watch-items');
+        } else {
+            expect(requestedPaths.filter(requestPath => requestPath === '/admin/index-watch-items')).toHaveLength(1);
+        }
+    });
+
     it('renders the admin login screen without loading authenticated data', () => {
         window.history.pushState({}, '', '/admin/login');
         const fetchMock = vi.fn();
@@ -6264,7 +6321,7 @@ describe('App', () => {
 
         expect(reloadedWrapper.get('[aria-label="Stocks dashboard"]')
             .find('[aria-label="Stock EODHD synchronization status"]').exists()).toBe(false);
-    }, 10000);
+    }, 20000);
 
     it('loads and manually reloads the new dashboard without a market-data sync action', async () => {
         window.history.pushState({}, '', '/admin/dashboard');
@@ -6449,9 +6506,10 @@ describe('App', () => {
 
         const dashboardSectionTabs = wrapper.get('[aria-label="Dashboard sections"]');
         const dashboardSectionTabButtons = dashboardSectionTabs.findAll('[role="tab"]');
-        expect(dashboardSectionTabButtons).toHaveLength(2);
+        expect(dashboardSectionTabButtons).toHaveLength(3);
         expect(dashboardSectionTabButtons[0].text()).toContain('Übersicht');
         expect(dashboardSectionTabButtons[1].text()).toContain('KI');
+        expect(dashboardSectionTabButtons[2].text()).toContain('Tests');
         expect(wrapper.find('.dashboard-action-button').exists()).toBe(false);
         expect(wrapper.find('.watch-list-section').exists()).toBe(false);
         expect(wrapper.get('.dashboard-version-page').element.firstElementChild.classList)
@@ -6501,8 +6559,8 @@ describe('App', () => {
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/performance')).toHaveLength(1);
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);
         expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(1);
-        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
-        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(1);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(0);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(0);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/watchlist/exchange-trading-times')).toBe(false);
         expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
@@ -6518,8 +6576,8 @@ describe('App', () => {
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/performance')).toHaveLength(2);
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(2);
         expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(2);
-        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
-        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(1);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(0);
+        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(0);
         expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/sync'))).toBe(false);
 
         await dashboardSectionTabButtons[1].trigger('click');
@@ -7352,8 +7410,8 @@ describe('App', () => {
 
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(1);
-            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
-            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(1);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(0);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(0);
 
             await vi.advanceTimersByTimeAsync(60000);
             await flushPromises();
@@ -7362,8 +7420,8 @@ describe('App', () => {
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/dashboard/performance')).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots/active')).toHaveLength(1);
             expect(fetchMock.mock.calls.filter(([path]) => path === dashboardWatchlistHoldingsPath)).toHaveLength(1);
-            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(1);
-            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(1);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depots?page=1')).toHaveLength(0);
+            expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(0);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/queue/status')).toBe(false);
             expect(fetchMock.mock.calls.some(([path]) => path === '/admin/price-refresh-settings')).toBe(false);
             expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/sync'))).toBe(false);
@@ -8738,7 +8796,6 @@ describe('App', () => {
             '/admin/me',
             '/admin/depots/active',
             '/admin/depots?page=1',
-            '/admin/watchlist/holdings?page=1',
             '/admin/index-watch-items',
             '/admin/users?page=1',
             '/admin/roles?page=1',

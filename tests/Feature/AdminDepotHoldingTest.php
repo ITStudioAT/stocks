@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\LoadStockChartIntradayData;
 use App\Jobs\RefreshDepotHoldingPrices;
 use App\Models\Depot;
 use App\Models\DepotTransaction;
@@ -15,9 +16,10 @@ use App\Models\StockPrice;
 use App\Models\StockPriceRefreshRun;
 use App\Models\StockRealtimePrice;
 use App\Models\User;
+use App\Services\ChartDataRefresh;
 use App\Services\DepotHoldingPriceRefreshProgress;
-use App\Services\EodhdBatchRealtimePriceService;
 use App\Services\EodhdErrorSanitizer;
+use App\Services\FreeIntradayMarketData;
 use App\Services\StockPriceCatalog;
 use Illuminate\Contracts\Queue\Factory as QueueFactory;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -1589,79 +1591,20 @@ class AdminDepotHoldingTest extends TestCase
 
     public function test_admin_can_fetch_and_store_last_trading_day_five_minute_intraday_candles(): void
     {
-        config(['services.eodhd.key' => 'test-token']);
-        $admin = $this->adminUser();
+        $this->travelTo(Carbon::parse('2026-06-05 18:10:00', 'Europe/Berlin'));
+        $holding = StockHolding::factory()->create(['symbol' => 'AMES', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin']);
+        $this->actingAs($this->adminUser());
         $this->travelTo(Carbon::parse('2026-06-06 12:00:00', 'UTC'));
-        Http::fake([
-            'eodhd.com/api/intraday/AMES.XETRA*' => Http::response([
-                [
-                    'timestamp' => Carbon::parse('2026-06-05 07:00:00', 'UTC')->timestamp,
-                    'gmtoffset' => 0,
-                    'datetime' => '2026-06-05 07:00:00',
-                    'open' => 470.10,
-                    'high' => 471.50,
-                    'low' => 469.90,
-                    'close' => 470.15,
-                    'volume' => 12345,
-                ],
-                [
-                    'timestamp' => Carbon::parse('2026-06-05 07:05:00', 'UTC')->timestamp,
-                    'gmtoffset' => 0,
-                    'datetime' => '2026-06-05 07:05:00',
-                    'open' => 470.15,
-                    'high' => 472.00,
-                    'low' => 470.00,
-                    'close' => 471.75,
-                    'volume' => 23456,
-                ],
-            ]),
-        ]);
-        $holding = StockHolding::factory()->create([
-            'symbol' => 'AMES',
-            'exchange' => 'Xetra',
-            'mic_code' => 'XETR',
-            'country' => 'Germany',
-            'currency' => 'EUR',
-            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
-        ]);
-
-        $this->actingAs($admin)
-            ->postJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")
-            ->assertOk()
-            ->assertJsonPath('holding.id', $holding->id)
-            ->assertJsonPath('intraday.title', 'Intraday 05.06.2026')
-            ->assertJsonPath('intraday.trading_date', '2026-06-05')
-            ->assertJsonPath('intraday.interval', '5m')
-            ->assertJsonCount(7, 'intraday_days')
-            ->assertJsonPath('intraday_days.0.trading_date', '2026-06-05')
-            ->assertJsonPath('intraday_days.1.trading_date', '2026-06-04')
-            ->assertJsonPath('intraday_days.2.trading_date', '2026-06-03')
-            ->assertJsonPath('intraday_days.3.trading_date', '2026-06-02')
-            ->assertJsonPath('intraday_days.4.trading_date', '2026-06-01')
-            ->assertJsonPath('intraday_days.5.trading_date', '2026-05-29')
-            ->assertJsonPath('intraday_days.6.trading_date', '2026-05-28')
-            ->assertJsonCount(2, 'intraday.rows')
-            ->assertJsonPath('intraday.rows.0.timestamp', Carbon::parse('2026-06-05 07:00:00', 'UTC')->timestamp)
-            ->assertJsonPath('intraday.rows.0.gmtoffset', 0)
-            ->assertJsonPath('intraday.rows.0.datetime', '2026-06-05 07:00:00')
-            ->assertJsonPath('intraday.rows.0.open', '470.10000000')
-            ->assertJsonPath('intraday.rows.0.high', '471.50000000')
-            ->assertJsonPath('intraday.rows.0.low', '469.90000000')
-            ->assertJsonPath('intraday.rows.0.close', '470.15000000')
-            ->assertJsonPath('intraday.rows.0.volume', 12345)
-            ->assertJsonMissingPath('intraday.rows.0.currency');
-
-        $this->assertDatabaseHas('stock_holding_intraday_candles', [
-            'stock_holding_id' => $holding->id,
-            'trading_date' => '2026-06-05',
-            'interval' => '5m',
-            'datetime' => '2026-06-05 07:05:00',
-            'close' => '471.75000000',
-            'volume' => 23456,
-        ]);
-        Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/intraday/AMES.XETRA')
-            && str_contains($request->url(), 'interval=5m'));
-        Http::assertSentCount(7);
+        $this->fakeEuropeanTrades([['holding' => $holding, 'price' => 471.75, 'at' => '2026-06-05 15:30:00']]);
+        $this->completeQueuedChartRefresh($holding, 'detail');
+        $this->postJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")->assertOk()
+            ->assertJsonPath('intraday.trading_date', '2026-06-05')->assertJsonPath('intraday.interval', 'trade')
+            ->assertJsonCount(7, 'intraday_days')->assertJsonCount(1, 'intraday.rows')
+            ->assertJsonPath('intraday.rows.0.interval', 'trade')->assertJsonPath('intraday.rows.0.open', null)
+            ->assertJsonPath('intraday.rows.0.close', '471.75000000')->assertJsonPath('intraday.rows.0.coverage_complete', false);
+        $this->assertDatabaseCount('stock_holding_intraday_candles', 1);
+        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
 
     public function test_admin_intraday_candle_detail_uses_stored_last_trading_day_rows(): void
@@ -1860,90 +1803,36 @@ class AdminDepotHoldingTest extends TestCase
 
     public function test_chart_loading_post_fetches_missing_intraday_candles_while_listing_get_remains_read_only(): void
     {
-        config(['services.eodhd.key' => 'test-token']);
-        $admin = $this->adminUser();
         $this->travelTo(Carbon::parse('2026-06-05 18:10:00', 'Europe/Berlin'));
-        Http::fake([
-            'eodhd.com/api/intraday/AMES.XETRA*' => Http::response(
-                collect(range(0, 300))
-                    ->map(fn (int $index): array => [
-                        'timestamp' => Carbon::parse('2026-06-05 07:00:00', 'UTC')->addMinutes($index)->timestamp,
-                        'close' => 470.15 + $index,
-                    ])
-                    ->all(),
-            ),
-        ]);
-        $holding = StockHolding::factory()->create([
-            'symbol' => 'AMES',
-            'exchange' => 'Xetra',
-            'mic_code' => 'XETR',
-            'country' => 'Germany',
-            'currency' => 'EUR',
-            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
-        ]);
-
-        $this->actingAs($admin)
-            ->getJson('/admin/watchlist/holdings?include_charts=1')
-            ->assertOk()
-            ->assertJsonCount(0, 'holdings.0.intraday_prices');
-
-        $this->assertSame(0, StockHoldingIntradayCandle::query()->where('stock_holding_id', $holding->id)->count());
+        $holding = StockHolding::factory()->create(['symbol' => 'AMES', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin']);
+        $this->actingAs($this->adminUser());
+        $this->fakeEuropeanTrades([['holding' => $holding, 'price' => 470.15, 'at' => '2026-06-05 15:30:00']]);
+        $this->getJson('/admin/watchlist/holdings?include_charts=1')->assertOk();
         Http::assertNothingSent();
-
-        $this->actingAs($admin)
-            ->postJson('/admin/watchlist/holdings/charts?include_charts=1')
-            ->assertOk()
-            ->assertJsonCount(301, 'holdings.0.intraday_prices')
-            ->assertJsonPath('holdings.0.intraday_prices.0.price', '470.15000000')
-            ->assertJsonPath('holdings.0.intraday_prices.300.price', '770.15000000');
-
-        $this->assertSame(301, StockHoldingIntradayCandle::query()->where('stock_holding_id', $holding->id)->count());
-        $this->assertDatabaseHas('stock_holding_intraday_candles', [
-            'stock_holding_id' => $holding->id,
-            'trading_date' => '2026-06-05',
-            'interval' => '5m',
-            'close' => '770.15000000',
-            'source_name' => 'EODHD intraday',
-        ]);
-        Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/intraday/AMES.XETRA'));
+        $this->assertDatabaseCount('stock_holding_intraday_candles', 0);
+        $this->completeQueuedChartRefresh($holding, 'samples');
+        $this->postJson('/admin/watchlist/holdings/charts?include_charts=1')->assertOk()
+            ->assertJsonCount(1, 'holdings.0.intraday_prices')->assertJsonPath('holdings.0.intraday_prices.0.price', '470.15000000');
+        $this->assertDatabaseHas('stock_holding_intraday_candles', ['stock_holding_id' => $holding->id, 'interval' => 'trade', 'source_key' => 'deutsche_boerse_trade']);
+        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
 
     public function test_chart_loading_post_fetches_five_minute_eodhd_intraday_candles(): void
     {
-        config(['services.eodhd.key' => 'test-token']);
-        $admin = $this->adminUser();
         $this->travelTo(Carbon::parse('2026-06-05 18:10:00', 'Europe/Berlin'));
-        Http::fake(fn (Request $request) => str_contains($request->url(), 'interval=1m')
-            ? Http::response([])
-            : Http::response(
-                collect(range(0, 102))
-                    ->map(fn (int $index): array => [
-                        'timestamp' => Carbon::parse('2026-06-05 07:00:00', 'UTC')->addMinutes($index * 5)->timestamp,
-                        'datetime' => Carbon::parse('2026-06-05 07:00:00', 'UTC')->addMinutes($index * 5)->toDateTimeString(),
-                        'close' => 42.60 + ($index / 100),
-                    ])
-                    ->all(),
-            ));
-        $holding = StockHolding::factory()->create([
-            'symbol' => 'LEER',
-            'exchange' => 'Xetra',
-            'mic_code' => 'XETR',
-            'country' => 'Germany',
-            'currency' => 'EUR',
-            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
-        ]);
-
-        $this->actingAs($admin)
-            ->postJson('/admin/watchlist/holdings/charts?include_charts=1')
-            ->assertOk()
-            ->assertJsonCount(103, 'holdings.0.intraday_prices')
-            ->assertJsonPath('holdings.0.intraday_prices.0.price', '42.60000000')
-            ->assertJsonPath('holdings.0.intraday_prices.0.as_of', '2026-06-05T09:00:00+02:00')
-            ->assertJsonPath('holdings.0.intraday_prices.102.price', '43.62000000');
-
-        $this->assertSame(103, StockHoldingIntradayCandle::query()->where('stock_holding_id', $holding->id)->count());
-        Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/intraday/LEER.XETRA')
-            && str_contains($request->url(), 'interval=5m'));
+        $holding = StockHolding::factory()->create(['isin' => 'US37950E2596', 'symbol' => 'ARGT', 'exchange' => 'US', 'currency' => 'USD', 'mic_code' => null,
+            'trading_times' => 'Monday-Friday 09:30-16:00 America/New_York']);
+        $this->fakeYahooMarketData(['ARGT' => ['price' => 79.18, 'at' => '2026-06-05 15:30:00']]);
+        $this->actingAs($this->adminUser());
+        $this->completeQueuedChartRefresh($holding, 'samples');
+        $state = app(ChartDataRefresh::class)->status($holding, 'samples');
+        $this->assertSame('finished', $state['status'], json_encode($state));
+        $this->postJson('/admin/watchlist/holdings/charts?include_charts=1')->assertOk()
+            ->assertJsonCount(1, 'holdings.0.intraday_prices')->assertJsonPath('holdings.0.intraday_prices.0.price', '79.18000000');
+        $this->assertDatabaseHas('stock_holding_intraday_candles', ['stock_holding_id' => $holding->id, 'interval' => '5m', 'source_key' => 'yahoo_intraday', 'currency' => 'USD']);
+        Http::assertSentCount(1);
+        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
 
     public function test_admin_listing_does_not_fetch_eodhd_intraday_prices_when_session_already_has_stored_intraday_rows(): void
@@ -1985,69 +1874,32 @@ class AdminDepotHoldingTest extends TestCase
 
     public function test_admin_listing_does_not_fabricate_intraday_samples_when_eodhd_intraday_is_sparse(): void
     {
-        config(['services.eodhd.key' => 'test-token']);
-        $admin = $this->adminUser();
         $this->travelTo(Carbon::parse('2026-06-05 18:10:00', 'Europe/Berlin'));
-        Http::fake([
-            'eodhd.com/api/intraday/AMES.XETRA*' => Http::response([]),
-        ]);
-        $holding = StockHolding::factory()->create([
-            'symbol' => 'AMES',
-            'exchange' => 'Xetra',
-            'mic_code' => 'XETR',
-            'country' => 'Germany',
-            'currency' => 'EUR',
-            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
-        ]);
-
-        $this->actingAs($admin)
-            ->postJson('/admin/watchlist/holdings/charts?include_charts=1')
-            ->assertOk()
-            ->assertJsonCount(0, 'holdings.0.intraday_prices');
-
-        $this->actingAs($admin)
-            ->postJson('/admin/watchlist/holdings/charts?include_charts=1')
-            ->assertOk()
-            ->assertJsonCount(0, 'holdings.0.intraday_prices');
-
-        $this->assertSame(0, StockHoldingIntradayCandle::query()->where('stock_holding_id', $holding->id)->count());
-        Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/intraday/AMES.XETRA'));
-        Http::assertSentCount(1);
+        $holding = StockHolding::factory()->create(['symbol' => 'AMES', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin']);
+        $this->actingAs($this->adminUser());
+        $this->fakeEuropeanTrades([]);
+        $this->completeQueuedChartRefresh($holding, 'samples');
+        $this->postJson('/admin/watchlist/holdings/charts?include_charts=1')->assertOk()->assertJsonCount(0, 'holdings.0.intraday_prices');
+        $this->assertSame('failed', app(ChartDataRefresh::class)->status($holding, 'samples')['status']);
+        $this->assertDatabaseCount('stock_holding_intraday_candles', 0);
+        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
 
     public function test_admin_listing_uses_realtime_prices_when_eodhd_intraday_has_no_valid_rows(): void
     {
-        config(['services.eodhd.key' => 'test-token']);
-        $admin = $this->adminUser();
         $this->travelTo(Carbon::parse('2026-06-05 18:10:00', 'Europe/Berlin'));
-        Http::fake([
-            'eodhd.com/api/intraday/SEC0.XETRA*' => Http::response([]),
-        ]);
-        $holding = StockHolding::factory()->create([
-            'symbol' => 'SEC0',
-            'exchange' => 'Xetra',
-            'mic_code' => 'XETR',
-            'country' => 'Germany',
-            'currency' => 'EUR',
-            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin',
-        ]);
-
-        $this->createRealtimeQuote($holding, '2026-06-04 15:30:00', '17.12');
+        $holding = StockHolding::factory()->create(['symbol' => 'AMES', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR',
+            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin']);
+        $this->actingAs($this->adminUser());
+        $this->fakeEuropeanTrades([]);
         $this->createRealtimeQuote($holding, '2026-06-05 07:00:00', '17.50');
-        $this->createRealtimeQuote($holding, '2026-06-05 12:20:00', '17.75');
         $this->createRealtimeQuote($holding, '2026-06-05 15:30:00', '17.87');
-
-        $this->actingAs($admin)
-            ->postJson('/admin/watchlist/holdings/charts?include_charts=1')
-            ->assertOk()
-            ->assertJsonCount(4, 'holdings.0.intraday_prices')
-            ->assertJsonPath('holdings.0.intraday_prices.0.price', '17.12000000')
-            ->assertJsonPath('holdings.0.intraday_prices.1.price', '17.50000000')
-            ->assertJsonPath('holdings.0.intraday_prices.2.price', '17.75000000')
-            ->assertJsonPath('holdings.0.intraday_prices.3.price', '17.87000000');
-
-        $this->assertSame(0, StockHoldingIntradayPrice::query()->where('stock_holding_id', $holding->id)->count());
-        Http::assertSentCount(1);
+        $this->completeQueuedChartRefresh($holding, 'samples');
+        $this->postJson('/admin/watchlist/holdings/charts?include_charts=1')->assertOk()
+            ->assertJsonCount(2, 'holdings.0.intraday_prices')->assertJsonPath('holdings.0.intraday_prices.1.price', '17.87000000');
+        $this->assertDatabaseCount('stock_holding_intraday_candles', 0);
+        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
 
     public function test_admin_listing_does_not_fetch_eodhd_intraday_prices_when_samples_are_complete(): void
@@ -2533,76 +2385,17 @@ class AdminDepotHoldingTest extends TestCase
 
     public function test_legacy_queued_job_uses_the_batch_realtime_sync_and_tracks_progress(): void
     {
-        config(['services.eodhd.key' => 'test-token']);
+        $this->travelTo(Carbon::parse('2026-06-02 17:00:00', 'UTC'));
         Mail::fake();
-        $apple = StockHolding::factory()->create([
-            'symbol' => 'AAPL',
-            'name' => 'Apple Inc.',
-            'isin' => 'US0378331005',
-            'wkn' => '865985',
-            'exchange' => 'NASDAQ',
-            'mic_code' => 'XNAS',
-            'instrument_type' => 'Common Stock',
-            'country' => 'United States',
-            'currency' => 'USD',
-            'latest_price' => '100.000000',
-        ]);
-        $microsoft = StockHolding::factory()->create([
-            'symbol' => 'MSFT',
-            'name' => 'Microsoft Corporation',
-            'isin' => 'US5949181045',
-            'wkn' => '870747',
-            'exchange' => 'NASDAQ',
-            'mic_code' => 'XNAS',
-            'instrument_type' => 'Common Stock',
-            'country' => 'United States',
-            'currency' => 'USD',
-            'latest_price' => '200.000000',
-            'latest_price_fetched_at' => '2026-06-02 14:30:00',
-            'latest_price_source' => 'Previous verified source',
-            'latest_price_source_url' => 'https://example.com/msft',
-            'latest_price_as_of' => '2026-06-02 14:29 UTC',
-            'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna',
-        ]);
-        Http::fake([
-            'eodhd.com/api/real-time/*' => Http::response([
-                [
-                    'code' => 'AAPL.US',
-                    'timestamp' => Carbon::parse('2026-06-02 15:00:00', 'UTC')->timestamp,
-                    'close' => 306.320010,
-                ],
-                [
-                    'code' => 'MSFT.US',
-                    'timestamp' => Carbon::parse('2026-06-02 15:00:00', 'UTC')->timestamp,
-                    'close' => 406.120000,
-                ],
-            ]),
-        ]);
+        $apple = StockHolding::factory()->create(['symbol' => 'AAPL', 'isin' => 'US0378331005', 'exchange' => 'US', 'currency' => 'USD']);
+        $this->fakeYahooMarketData(['AAPL' => ['price' => 306.32, 'at' => '2026-06-02 15:00:00']]);
         $progress = app(DepotHoldingPriceRefreshProgress::class);
-        $progress->start('refresh-test', 2);
-
-        (new RefreshDepotHoldingPrices('refresh-test'))->handle(
-            app(EodhdBatchRealtimePriceService::class),
-            app(EodhdErrorSanitizer::class),
-            $progress,
-        );
-
-        $this->assertDatabaseHas('stock_realtime_prices', [
-            'stock_holding_id' => $apple->id,
-            'source_key' => 'eodhd_realtime',
-            'price' => '306.32001000',
-        ]);
-        $this->assertDatabaseHas('stock_holdings', [
-            'id' => $microsoft->id,
-            'currency' => 'USD',
-            'latest_price' => '200.000000',
-            'latest_price_fetched_at' => '2026-06-02 14:30:00',
-            'latest_price_source' => 'Previous verified source',
-            'latest_price_source_url' => 'https://example.com/msft',
-            'latest_price_as_of' => '2026-06-02 14:29 UTC',
-        ]);
+        $progress->start('refresh-test', 1);
+        (new RefreshDepotHoldingPrices('refresh-test'))->handle(app(FreeIntradayMarketData::class), app(EodhdErrorSanitizer::class), $progress);
+        $this->assertDatabaseHas('stock_realtime_prices', ['stock_holding_id' => $apple->id, 'source_key' => 'yahoo_intraday', 'price' => '306.32000000']);
         $this->assertSame('finished', $progress->get('refresh-test')['status']);
-        $this->assertSame('2/2', $progress->get('refresh-test')['step']);
+        $this->assertSame('1/1', $progress->get('refresh-test')['step']);
+        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
 
     public function test_legacy_queued_job_does_not_refresh_index_prices(): void
@@ -2623,7 +2416,7 @@ class AdminDepotHoldingTest extends TestCase
         $progress->start('refresh-index-test', 1);
 
         (new RefreshDepotHoldingPrices('refresh-index-test'))->handle(
-            app(EodhdBatchRealtimePriceService::class),
+            app(FreeIntradayMarketData::class),
             app(EodhdErrorSanitizer::class),
             $progress,
         );
@@ -2662,7 +2455,7 @@ class AdminDepotHoldingTest extends TestCase
         $progress->start('refresh-mail-test', 1);
 
         (new RefreshDepotHoldingPrices('refresh-mail-test', $admin->id))->handle(
-            app(EodhdBatchRealtimePriceService::class),
+            app(FreeIntradayMarketData::class),
             app(EodhdErrorSanitizer::class),
             $progress,
         );
@@ -2672,30 +2465,13 @@ class AdminDepotHoldingTest extends TestCase
 
     public function test_refresh_still_finishes_without_report_email_recipient(): void
     {
-        config(['services.eodhd.key' => 'test-token']);
-        $admin = $this->adminUser();
-        StockHolding::factory()->create([
-            'symbol' => 'MAILFAIL',
-            'currency' => 'EUR',
-            'price_status' => 'fresh',
-        ]);
-        Http::fake([
-            'eodhd.com/api/real-time/*' => Http::response([
-                'code' => 'MAILFAIL.US',
-                'timestamp' => Carbon::parse('2026-06-05 10:00:00', 'UTC')->timestamp,
-                'close' => 101.12,
-            ]),
-        ]);
+        $this->travelTo(Carbon::parse('2026-06-05 12:00:00', 'UTC'));
+        $holding = StockHolding::factory()->create(['symbol' => 'MAILFAIL', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
+        $this->fakeEuropeanTrades([['holding' => $holding, 'price' => 101.12, 'at' => '2026-06-05 09:45:00']]);
         Mail::fake();
         $progress = app(DepotHoldingPriceRefreshProgress::class);
         $progress->start('refresh-mail-fail-test', 1);
-
-        (new RefreshDepotHoldingPrices('refresh-mail-fail-test', $admin->id))->handle(
-            app(EodhdBatchRealtimePriceService::class),
-            app(EodhdErrorSanitizer::class),
-            $progress,
-        );
-
+        (new RefreshDepotHoldingPrices('refresh-mail-fail-test'))->handle(app(FreeIntradayMarketData::class), app(EodhdErrorSanitizer::class), $progress);
         $this->assertSame('finished', $progress->get('refresh-mail-fail-test')['status']);
         $this->assertSame('1/1', $progress->get('refresh-mail-fail-test')['step']);
         Mail::assertNothingOutgoing();
@@ -3002,6 +2778,25 @@ class AdminDepotHoldingTest extends TestCase
             'freshness_status' => 'historical',
             'validation_status' => 'valid',
         ]);
+    }
+
+    private function completeQueuedChartRefresh(StockHolding $holding, string $kind): void
+    {
+        Queue::fake();
+        $path = $kind === 'detail'
+            ? "/admin/watchlist/holdings/{$holding->id}/intraday-candles"
+            : "/admin/watchlist/holdings/charts?include_charts=1&chart_stock_id={$holding->id}";
+        $this->postJson($path)->assertOk();
+        Http::assertNothingSent();
+        Queue::assertPushed(LoadStockChartIntradayData::class, 1);
+        $job = Queue::pushed(LoadStockChartIntradayData::class)->first();
+        $this->assertSame($holding->id, $job->holdingId);
+        $this->assertSame($kind, $job->kind);
+        try {
+            app()->call([$job, 'handle']);
+        } catch (\Throwable $exception) {
+            $job->failed($exception);
+        }
     }
 
     private function adminUser(): User

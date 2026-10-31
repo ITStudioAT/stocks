@@ -3,6 +3,7 @@
 use App\Http\Controllers\AdminAnalyzeResearchSettingsController;
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminCloudwaysController;
+use App\Http\Controllers\AdminDashboardMarketDataTestController;
 use App\Http\Controllers\AdminDashboardVersionController;
 use App\Http\Controllers\AdminDataController;
 use App\Http\Controllers\AdminDataRangeController;
@@ -94,6 +95,9 @@ Route::post('/preview/control', [PreviewControlController::class, 'update'])
     ->name('preview.control.update');
 
 Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(function (): void {
+    Route::post('/admin/dashboard/tests/deutsche-boerse', [AdminDashboardMarketDataTestController::class, 'store'])
+        ->middleware(['throttle:admin.costly-operation', 'throttle:10,1'])
+        ->name('admin.dashboard.tests.deutscheBoerse');
     Route::view('/admin', 'app')->name('admin.dashboard');
     Route::view('/admin/dashboard', 'app')->name('admin.dashboard.view');
     Route::view('/admin/profile', 'app')->name('admin.profile.view');
@@ -159,6 +163,9 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.watchlist.holdings.charts');
     Route::get('/admin/watchlist/holdings/{holding}/intraday-candles/coverage', [AdminStockHistoricalPriceController::class, 'intradayCoverage'])->name('admin.watchlist.holdings.intraday-candles.coverage');
+    Route::get('/admin/watchlist/holdings/{holding}/intraday-refresh/{kind}', [AdminDepotHoldingController::class, 'intradayRefreshStatus'])
+        ->whereIn('kind', ['samples', 'detail'])
+        ->name('admin.watchlist.holdings.intraday-refresh');
     Route::get('/admin/watchlist/holdings/{holding}/realtime-prices/latest', [AdminDepotHoldingController::class, 'latestRealtimePrices'])->name('admin.watchlist.holdings.realtime-prices.latest');
     Route::get('/admin/watchlist/holdings/{holding}/intraday-candles/latest-days', [AdminDepotHoldingController::class, 'latestIntradayCandles'])->name('admin.watchlist.holdings.intraday-candles.latest-days');
     Route::get('/admin/watchlist/holdings/{holding}/end-of-day-prices/latest-days', [AdminDepotHoldingController::class, 'latestEndOfDayPrices'])->name('admin.watchlist.holdings.end-of-day-prices.latest-days');
@@ -171,6 +178,8 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
     Route::post('/admin/index-watch-items/{indexWatchItem}/prices/ensure', [AdminIndexWatchItemController::class, 'ensurePrices'])
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.index-watch-items.prices.ensure');
+    Route::get('/admin/index-watch-items/{indexWatchItem}/prices/refresh', [AdminIndexWatchItemController::class, 'ensurePrices'])
+        ->name('admin.index-watch-items.prices.refresh');
     Route::post('/admin/watchlist/holdings', [AdminDepotHoldingController::class, 'store'])->name('admin.watchlist.holdings.store');
     Route::post('/admin/index-watch-items', [AdminIndexWatchItemController::class, 'store'])
         ->middleware('throttle:admin.costly-operation')

@@ -7,6 +7,7 @@ import { useDepotStore } from './stores/depots';
 import { useRoleStore } from './stores/roles';
 import { useUserStore } from './stores/users';
 import { formatAdaptiveNumber, formatPriceValue } from './utils/numberFormatters';
+import DashboardMarketDataTests from './DashboardMarketDataTests.vue';
 import {
     calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio,
     calculateAnalyzeTrendV2BuyOncePortfolio,
@@ -1263,7 +1264,8 @@ const analyzeResearchCombinationCount = computed(() => calculateAnalyzeResearchC
 const analyzeResearchCombinationCountLabel = computed(() => formatAnalyzeResearchCombinationCount(
     analyzeResearchCombinationCount.value,
 ));
-const showAnalyzeSparklineDots = computed(() => isAnalyzeTodayRange(selectedAnalyzeHistoryRange.value));
+const showAnalyzeSparklineDots = computed(() => isAnalyzeTodayRange(selectedAnalyzeHistoryRange.value)
+    || selectedAnalyzeSparkline.value.points.some(isFreeIntradayPoint));
 const analyzeIntradayDetail = computed(() => analyzeIntradayCandles.value?.intraday ?? null);
 const analyzeIntradayDetailDays = computed(() => {
     const days = analyzeIntradayCandles.value?.intraday_days;
@@ -1848,6 +1850,11 @@ const dashboardSubmenuItems = [
         label: 'KI',
         icon: 'mdi-robot-outline',
     },
+    {
+        key: 'tests',
+        label: 'Tests',
+        icon: 'mdi-flask-outline',
+    },
 ];
 const analyzeSubmenuItems = [
     {
@@ -2262,6 +2269,8 @@ watch(
     },
 );
 
+watch(activeSection, () => depotsStore.cancelIntradayRefreshes(), { flush: 'sync' });
+
 watch(
     [selectedAnalyzeHistoryRange, selectedAnalyzeHoldingId],
     () => {
@@ -2457,7 +2466,9 @@ onMounted(async () => {
 
     await Promise.all([
         loadWatchlistHoldingsForActiveSection().catch(() => {}),
-        depotsStore.loadIndexWatchItems().catch(() => {}),
+        activeSection.value === 'indices' || (activeSection.value === 'data' && activeDataSubsection.value === 'indices')
+            ? depotsStore.loadIndexWatchItems().catch(() => {})
+            : Promise.resolve(),
         activeSection.value === 'indices'
             ? depotsStore.loadIndexEodhdSyncSettings().catch(() => {})
             : Promise.resolve(),
@@ -2470,19 +2481,24 @@ onMounted(async () => {
     syncUpdateStatusPolling();
     syncActiveItemRefresh();
 
-    await depotsStore.loadDepots();
+    if (activeSection.value === 'depots') {
+        await depotsStore.loadDepots();
+    }
 
-    if (canManageUsers.value) {
-        await Promise.all([
-            usersStore.loadUsers(),
-            rolesStore.loadRoles(),
-        ]);
+    if (canManageUsers.value && activeSection.value === 'users') {
+        await usersStore.loadUsers();
+        await rolesStore.loadRoles();
+    }
+
+    if (canManageUsers.value && activeSection.value === 'roles') {
+        await rolesStore.loadRoles();
     }
 
     window.addEventListener('popstate', applyRouteFromPath);
 });
 
 onBeforeUnmount(() => {
+    depotsStore.cancelIntradayRefreshes();
     analyzeResearchSimulationRunId += 1;
     stopPriceRefreshPolling();
     stopIntradayBackfillPolling();
@@ -2738,6 +2754,7 @@ function navigateSection(section) {
 
     if (section === 'users') {
         usersStore.loadUsers(userPagination.value.current_page);
+        rolesStore.loadRoles(rolePagination.value.current_page);
     }
 
     if (section === 'roles') {
@@ -3084,6 +3101,15 @@ function syncUpdateStatusPolling() {
 }
 
 function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.current_page, options = {}) {
+    if (activeSection.value === 'dashboard' && activeDashboardSubsection.value === 'tests') {
+        return Promise.resolve();
+    }
+    if (!['dashboard', 'stocks', 'analyze'].includes(activeSection.value)
+        && !(activeSection.value === 'depot' && activeDepotSubsection.value === 'overview')
+        && !(activeSection.value === 'data' && activeDataSubsection.value === 'stocks')) {
+        return Promise.resolve();
+    }
+
     const shouldIncludeResearchSimulationCharts = activeSection.value === 'analyze'
         && activeAnalyzeSubsection.value === 'research'
         && activeAnalyzeResearchSubsection.value === 'simulation';
@@ -9272,7 +9298,16 @@ function limitAnalyzeChartPrices(prices) {
     }).filter((price) => price);
 }
 
+function isFreeIntradayPoint(price) {
+    return ['deutsche_boerse_trade', 'yahoo_intraday'].includes(price.source_key)
+        || ['observed_trade', 'regular_market_last'].includes(price.price_type)
+        || /Deutsche Börse|Yahoo Finance/.test(price.source_name ?? '');
+}
+
 function normalizeAnalyzeChartPrices(prices, rangeKey) {
+    if (prices.some(isFreeIntradayPoint)) {
+        return limitAnalyzeChartPrices(prices);
+    }
     if (!analyzeCalendarNormalizedRangeKeys.includes(rangeKey)) {
         return limitAnalyzeChartPrices(prices);
     }
@@ -9304,6 +9339,9 @@ function previousAnalyzeTradingClose(prices, currentPrices, rangeKey) {
 }
 
 function withAnalyzePreviousTradingClosePoint(prices, previousTradingClose, rangeKey) {
+    if (prices.some(isFreeIntradayPoint)) {
+        return prices;
+    }
     if (rangeKey !== 'today-1' || !previousTradingClose || prices.length === 0) {
         return prices;
     }
@@ -10324,6 +10362,10 @@ function analyzeSparklineExtremumMarker(point, direction, plot) {
 }
 
 function analyzeSparklinePath(points) {
+    if (points.some(point => point.interval === 'trade' || point.price_type === 'observed_trade'
+        || point.source_key === 'deutsche_boerse_trade' || /Deutsche Börse/.test(point.source_name ?? ''))) {
+        return '';
+    }
     if (points.length === 1) {
         const segmentOffset = 34;
 
@@ -10338,11 +10380,17 @@ function analyzeSparklinePath(points) {
             return `M ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
         }
 
-        return `${path} L ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+        const previous = points[index - 1];
+        const gap = isFreeIntradayPoint(point) && (point.source_name !== previous.source_name
+            || Math.abs(new Date(point.as_of) - new Date(previous.as_of)) > 5 * 60 * 1000);
+        return `${path} ${gap ? 'M' : 'L'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
     }, '');
 }
 
 function analyzeSparklineAreaPath(points, plot) {
+    if (points.some(isFreeIntradayPoint)) {
+        return '';
+    }
     if (points.length === 0) {
         return '';
     }
@@ -11216,7 +11264,7 @@ function buildHoldingIntradayChart(rows, holding) {
     return {
         ...chart,
         points,
-        linePoints: points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' '),
+        linePoints: points.some(isFreeIntradayPoint) ? '' : points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' '),
         horizontalGridLines,
         verticalGridLines: holdingIntradayChartTickPoints(points).map((point) => ({
             x: point.x,
@@ -11412,6 +11460,7 @@ function watchListLatestPriceClass(holding) {
 
 function latestPriceIsLive(holding) {
     return isLiveUpdateActive(priceRefreshSettings.value)
+        && !isFreeIntradayPoint(holding)
         && stockHoldingRefreshSchedule(holding).isActive
         && holding.latest_price !== null
         && holding.latest_price !== undefined
@@ -13194,6 +13243,8 @@ function formatIndexDataUpdateSchedule(settings) {
 
                             </div>
 
+                            <DashboardMarketDataTests v-else-if="activeDashboardSubsection === 'tests'" />
+
                             <section v-else class="dashboard-ki-page" aria-label="Dashboard KI">
                                 <div class="dashboard-ki-actions">
                                     <v-btn
@@ -13668,6 +13719,11 @@ function formatIndexDataUpdateSchedule(settings) {
                         </div>
 
                         <div v-if="activeSection === 'stocks'" aria-label="Stocks dashboard">
+                            <v-alert class="mb-4" type="info" variant="tonal" density="compact">
+                                Intraday: Deutsche Börse ca. 15 Minuten verzögert, beobachtete Trades mit Lücken;
+                                Yahoo Finance USA: echte 5-Minuten-OHLC, inoffiziell, Verzögerung unbekannt.
+                                Keine vollständige historische Nachlieferung. Bestehendes Abrufintervall bleibt einstellbar.
+                            </v-alert>
                             <div class="dashboard-heading mb-6">
                                 <div>
                                     <p class="text-overline text-primary mb-1">Dashboard</p>
@@ -13681,7 +13737,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         class="dashboard-action-button"
                                         color="secondary"
                                         prepend-icon="mdi-cloud-sync-outline"
-                                        title="Synchronize EOD and intraday data from EODHD."
+                                        title="Synchronize EODHD daily history and free intraday observations."
                                         type="button"
                                         variant="outlined"
                                         :disabled="isStockEodhdSyncRunning"
@@ -15010,7 +15066,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                             :cx="point.x"
                                                             :cy="point.y"
                                                             r="2.8"
-                                                        />
+                                                        ><title>{{ point.source_name || 'Stored source' }} · {{ point.datetime }} · {{ point.interval }}</title></circle>
                                                     </svg>
                                                 </div>
                                                 <div class="holding-intraday-table-wrap">
@@ -15034,7 +15090,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 </div>
                                             </div>
                                             <span v-else class="text-body-2 text-medium-emphasis">
-                                                No EODHD intraday prices available for this session.
+                                                No stored intraday observations available for this session. Free source coverage can have gaps.
                                             </span>
                                         </td>
                                     </tr>
@@ -15249,7 +15305,7 @@ function formatIndexDataUpdateSchedule(settings) {
                         </Teleport>
 
                         <v-progress-linear
-                            v-if="activeSection === 'stocks' && holdingsLoading"
+                            v-if="activeSection === 'stocks' && (holdingsLoading || holdings.some(holding => holding.historical_prices_fetching))"
                             indeterminate
                             color="primary"
                             class="mt-4"
@@ -16889,7 +16945,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             :cx="point.x"
                                             :cy="point.y"
                                             r="3"
-                                        />
+                                        ><title>{{ point.source_name || 'Stored source' }} · {{ point.as_of }} · {{ point.currency }} · {{ point.interval || point.price_type }}</title></circle>
                                     </template>
                                     <circle
                                         class="analyze-sparkline-point analyze-sparkline-point--first"
@@ -17034,7 +17090,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                 </svg>
                                 <div v-else class="text-body-2 text-medium-emphasis">
                                     <template v-if="isAnalyzeTodayRange(selectedAnalyzeHistoryRange)">
-                                        No EODHD intraday prices available for this session.
+                                        No stored intraday observations available for this session. Free source coverage can have gaps.
                                     </template>
                                     <template v-else>
                                         No stored prices for this range.

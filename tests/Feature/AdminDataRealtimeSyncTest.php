@@ -18,82 +18,19 @@ class AdminDataRealtimeSyncTest extends TestCase
 
     public function test_admin_can_sync_eodhd_realtime_quotes_in_one_batch_request(): void
     {
-        config(['services.eodhd.key' => 'test-token']);
         $this->travelTo(Carbon::parse('2026-06-05 12:05:00', 'Europe/Vienna'));
-        $admin = $this->adminUser();
-        $ames = StockHolding::factory()->create([
-            'symbol' => 'AMES',
-            'name' => 'Amundi IBEX 35 UCITS ETF',
-            'exchange' => 'XETRA',
-            'mic_code' => 'XETR',
-            'currency' => 'EUR',
-            'latest_price' => '10.000000',
-        ]);
-        $leer = StockHolding::factory()->create([
-            'symbol' => 'LEER',
-            'name' => 'Leerink',
-            'exchange' => 'XETRA',
-            'mic_code' => 'XETR',
-            'currency' => 'EUR',
-            'latest_price' => '20.000000',
-        ]);
-
-        Http::fake([
-            'eodhd.com/api/real-time/AMES.XETRA*' => Http::response([
-                [
-                    'code' => 'AMES.XETRA',
-                    'timestamp' => Carbon::parse('2026-06-05 10:00:00', 'UTC')->timestamp,
-                    'close' => 10.25,
-                ],
-                [
-                    'code' => 'LEER.XETRA',
-                    'timestamp' => Carbon::parse('2026-06-05 10:01:00', 'UTC')->timestamp,
-                    'close' => 20.75,
-                ],
-            ]),
-        ]);
-
-        $this->actingAs($admin)
-            ->postJson('/admin/data/realtime/sync')
-            ->assertOk()
-            ->assertJsonPath('requested_count', 2)
-            ->assertJsonPath('stored_count', 2)
-            ->assertJsonPath('unchanged_count', 0)
-            ->assertJsonPath('updated_count', 2)
-            ->assertJsonPath('failed_count', 0)
-            ->assertJsonPath('price_refresh_settings.last_refreshed_at', '2026-06-05T12:05:00+02:00')
+        $ames = StockHolding::factory()->create(['symbol' => 'AMES', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR', 'latest_price' => 10]);
+        $leer = StockHolding::factory()->create(['symbol' => 'LEER', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR', 'latest_price' => 20]);
+        $this->fakeEuropeanTrades([['holding' => $ames, 'price' => 10.25, 'at' => '2026-06-05 09:45:00'], ['holding' => $leer, 'price' => 20.75, 'at' => '2026-06-05 09:45:00']]);
+        $this->actingAs($this->adminUser())->postJson('/admin/data/realtime/sync')->assertOk()
+            ->assertJsonPath('requested_count', 2)->assertJsonPath('stored_count', 2)->assertJsonPath('updated_count', 2)
+            ->assertJsonPath('failed_count', 0)->assertJsonPath('price_refresh_settings.last_refreshed_at', '2026-06-05T12:05:00+02:00')
             ->assertJsonPath('price_refresh_settings.next_refresh_at', '2026-06-05T12:25:00+02:00');
-
-        $this->assertDatabaseHas('stock_realtime_prices', [
-            'stock_holding_id' => $ames->id,
-            'source_key' => 'eodhd_realtime',
-            'symbol' => 'AMES',
-            'price' => '10.25000000',
-        ]);
-        $this->assertDatabaseHas('stock_realtime_prices', [
-            'stock_holding_id' => $leer->id,
-            'source_key' => 'eodhd_realtime',
-            'symbol' => 'LEER',
-            'price' => '20.75000000',
-        ]);
-
-        $this->assertNotNull($ames->refresh()->latest_realtime_price_id);
-        $this->assertNotNull($leer->refresh()->latest_realtime_price_id);
-        $this->assertSame(2, StockRealtimePrice::query()->count());
-
-        $this->actingAs($admin)
-            ->postJson('/admin/data/realtime/sync')
-            ->assertOk()
-            ->assertJsonPath('message', 'EODHD sync: 0 record(s) created, 0 record(s) updated.')
-            ->assertJsonPath('requested_count', 2)
-            ->assertJsonPath('stored_count', 0)
-            ->assertJsonPath('unchanged_count', 2)
-            ->assertJsonPath('updated_count', 0)
-            ->assertJsonPath('failed_count', 0);
-
-        $this->assertSame(2, StockRealtimePrice::query()->count());
-        Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/real-time/AMES.XETRA')
-            && $request['s'] === 'LEER.XETRA');
+        $this->assertDatabaseHas('stock_realtime_prices', ['stock_holding_id' => $ames->id, 'source_key' => 'deutsche_boerse_trade', 'price' => '10.25000000']);
+        $this->assertDatabaseHas('stock_realtime_prices', ['stock_holding_id' => $leer->id, 'source_key' => 'deutsche_boerse_trade', 'price' => '20.75000000']);
+        $this->assertDatabaseHas('stock_holdings', ['id' => $ames->id, 'latest_price' => '10.000000']);
+        Http::assertSentCount(2);
+        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
 
     public function test_admin_can_list_selected_stock_realtime_prices_from_its_latest_vienna_date(): void

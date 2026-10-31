@@ -90,8 +90,8 @@ class EodhdMethodInformation
             [
                 'key' => 'stock-realtime',
                 'title' => 'Aktien-Livekurse',
-                'access' => 'real-time/{symbol} + s={additional-symbols}',
-                'description' => 'Lädt Aktienkurse in Batches, validiert sie und aktualisiert den ausgewählten Live-Kurs je Holding.',
+                'access' => 'Deutsche Börse Post-Trade / Yahoo Finance chart (US)',
+                'description' => FreeIntradayMarketData::Notice,
                 'triggers' => [
                     'Scheduler jede Minute: price-refresh:dispatch-due',
                     'HTTP POST /admin/watchlist/holdings/refresh-prices',
@@ -110,9 +110,10 @@ class EodhdMethodInformation
                     $this->method('Controller', AdminDataController::class, 'syncRealtime'),
                     $this->method('Dispatcher', DepotHoldingPriceRefreshDispatcher::class, 'dispatch'),
                     $this->method('Queue job', RefreshDepotHoldingPrices::class, 'handle'),
-                    $this->method('Service', EodhdBatchRealtimePriceService::class, 'syncAll'),
-                    $this->method('Service intern', EodhdBatchRealtimePriceService::class, 'syncBatch'),
-                    $this->method('EODHD client', EodhdApiClient::class, 'get'),
+                    $this->method('Service', FreeIntradayMarketData::class, 'syncAll'),
+                    $this->method('Service intern', FreeIntradayMarketData::class, 'europeanResult'),
+                    $this->method('Exchange source', DeutscheBoerseDelayedData::class, 'runBatch'),
+                    $this->method('US source', YahooFinanceMarketData::class, 'run'),
                 ],
                 'tables' => ['stock_realtime_prices', 'stock_holdings'],
                 'note' => 'Der Scheduler prüft jede Minute, führt den Zugriff aber nur aus, wenn der konfigurierte nächste Refresh fällig ist.',
@@ -176,8 +177,8 @@ class EodhdMethodInformation
             [
                 'key' => 'stock-intraday',
                 'title' => 'Aktien-Intraday-Kerzen',
-                'access' => 'intraday/{symbol.exchange}',
-                'description' => 'Lädt 5-Minuten-Kerzen für Backfill, aktuelle Lücken, Reparatur und Detailansichten.',
+                'access' => 'Deutsche Börse Post-Trade / Yahoo Finance chart (US)',
+                'description' => FreeIntradayMarketData::Notice,
                 'triggers' => [
                     'Scheduler jede Minute: intraday-candles:dispatch-due',
                     'HTTP POST /admin/data/historical/sync',
@@ -207,10 +208,10 @@ class EodhdMethodInformation
                     $this->method('Service intern', StockHoldingIntradayDataReloader::class, 'fetchIntradayRecords'),
                     $this->method('Repair service', StockHistoricalIntradayCandleRepairService::class, 'repair'),
                     $this->method('On-demand service', EodhdMarketData::class, 'ensureIntradaySamples'),
-                    $this->method('EODHD client', EodhdApiClient::class, 'get'),
+                    $this->method('Free provider service', FreeIntradayMarketData::class, 'records'),
                 ],
                 'tables' => ['stock_holding_intraday_candles'],
-                'note' => 'Mehrere Laravel-Pfade nutzen denselben EODHD-Endpunkt, unterscheiden sich aber bei Umfang und Ausführung.',
+                'note' => 'Beobachtete Trades sind keine OHLC-Kerzen. Nicht vorgehaltene Historie bleibt eine gemeldete Lücke.',
             ],
             [
                 'key' => 'index-realtime',

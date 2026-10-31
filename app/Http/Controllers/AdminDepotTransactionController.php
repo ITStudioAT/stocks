@@ -258,6 +258,8 @@ class AdminDepotTransactionController extends Controller
             ->get()
             ->values();
 
+        $this->stockPreviousCloseResolver->prime($holdings);
+
         return $holdings
             ->map(fn (StockHolding $holding): array => $this->depotHoldingPayload(
                 holding: $holding,

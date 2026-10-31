@@ -33,7 +33,11 @@ class AdminInfoTest extends TestCase
             $this->assertNotEmpty($table['eodhd']['documentation']);
 
             foreach ($table['eodhd']['documentation'] as $documentation) {
-                $this->assertStringStartsWith('https://eodhd.com/financial-apis/', $documentation['url']);
+                if ($table['eodhd']['mode'] === 'direct') {
+                    $this->assertStringStartsWith('https://eodhd.com/financial-apis/', $documentation['url']);
+                } else {
+                    $this->assertContains(parse_url($documentation['url'], PHP_URL_HOST), ['www.mds.deutsche-boerse.com', 'finance.yahoo.com']);
+                }
             }
         }
 
@@ -62,11 +66,11 @@ class AdminInfoTest extends TestCase
         $this->assertContains('stock_realtime_prices', $stockRealtimeMethods['tables']);
 
         $response
-            ->assertJsonPath('tables.'.array_search('stock_realtime_prices', $responseTableNames, true).'.eodhd.mode', 'direct')
-            ->assertJsonPath('tables.'.array_search('stock_realtime_prices', $responseTableNames, true).'.purpose_de', 'Kanonische Live-Aktienkurse und unverarbeitete EODHD-Antworten.')
+            ->assertJsonPath('tables.'.array_search('stock_realtime_prices', $responseTableNames, true).'.eodhd.mode', 'legacy')
+            ->assertJsonPath('tables.'.array_search('stock_realtime_prices', $responseTableNames, true).'.purpose_de', 'Kanonische verzögerte Aktienkurse mit tatsächlicher Quelle und Datenzeit.')
             ->assertJsonPath('tables.'.array_search('stock_realtime_prices', $responseTableNames, true).'.queue.used', true)
             ->assertJsonPath('tables.'.array_search('stock_realtime_prices', $responseTableNames, true).'.queue.name', 'default')
-            ->assertJsonPath('tables.'.array_search('stock_realtime_prices', $responseTableNames, true).'.eodhd.documentation.0.url', 'https://eodhd.com/financial-apis/live-ohlcv-stocks-api')
+            ->assertJsonPath('tables.'.array_search('stock_realtime_prices', $responseTableNames, true).'.eodhd.documentation.0.url', 'https://www.mds.deutsche-boerse.com/mds-en/real-time-data/Delayed-data')
             ->assertJsonPath('tables.'.array_search('stock_holding_daily_prices', $responseTableNames, true).'.cadence', 'On demand when historical coverage is requested; no automatic schedule.')
             ->assertJsonPath('tables.'.array_search('index_watch_items', $responseTableNames, true).'.queue.used', true)
             ->assertJsonMissing(['name' => 'users'])

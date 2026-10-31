@@ -3,7 +3,10 @@
 namespace App\Providers;
 
 use App\Jobs\AnalyzeStockResearch;
+use App\Models\AppConfig;
+use App\Models\StockPriceRefreshRun;
 use App\Services\PreviewRuntime;
+use App\Services\RequestReadCache;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -29,6 +32,9 @@ class AppServiceProvider extends ServiceProvider
         app(PreviewRuntime::class)->install();
         DB::prohibitDestructiveCommands($this->usesProtectedDatabase());
         $this->configureRateLimiters();
+        AppConfig::saved(fn () => app(RequestReadCache::class)->clear());
+        AppConfig::deleted(fn () => app(RequestReadCache::class)->clear());
+        StockPriceRefreshRun::saved(fn () => app(RequestReadCache::class)->clear());
     }
 
     private function configureRateLimiters(): void

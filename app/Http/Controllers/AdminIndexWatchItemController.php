@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\IndexWatchItem;
 use App\Models\IndexWatchItemPrice;
 use App\Models\IndexWatchItemRealtimePrice;
+use App\Services\ChartDataRefresh;
 use App\Services\EodhdApiUsage;
 use App\Services\IndexMarketHours;
 use App\Services\IndexWatchItemPriceRefresher;
@@ -33,14 +34,35 @@ class AdminIndexWatchItemController extends Controller
         private EodhdApiUsage $eodhdApiUsage,
         private KnownInstrumentMetadataCorrections $metadataCorrections,
         private IndexMarketHours $indexMarketHours,
+        private ChartDataRefresh $chartDataRefresh,
     ) {}
 
     public function index(): JsonResponse
     {
         $items = IndexWatchItem::query()
+            ->select('index_watch_items.*')
+            ->selectSub(IndexWatchItemRealtimePrice::query()->select('trading_date')
+                ->whereColumn('index_watch_item_id', 'index_watch_items.id')
+                ->orderByDesc('trading_date')->limit(1), 'read_realtime_date')
+            ->with(['prices' => fn ($query) => $query->orderByDesc('trading_date')->limit(IndexWatchItemPriceRefresher::RecentPriceLimit)])
             ->orderBy('symbol')
             ->orderBy('id')
             ->get();
+
+        $realtimePrices = IndexWatchItemRealtimePrice::query()->where(function ($query) use ($items): void {
+            $query->whereRaw('1 = 0');
+            foreach ($items as $item) {
+                if ($item->read_realtime_date !== null) {
+                    $query->orWhere(fn ($prices) => $prices->where('index_watch_item_id', $item->id)
+                        ->where('trading_date', '>=', Carbon::parse($item->read_realtime_date)->toDateString())
+                        ->where('trading_date', '<', Carbon::parse($item->read_realtime_date)->addDay()->toDateString()));
+                }
+            }
+        })->orderByDesc('as_of')->orderByDesc('id')
+            ->get(['id', 'index_watch_item_id', 'trading_date', 'price', 'as_of'])->groupBy('index_watch_item_id');
+        foreach ($items as $item) {
+            $item->setRelation('readRealtimePrices', $realtimePrices->get($item->id, collect()));
+        }
 
         return response()->json([
             'indexes' => $items->map(fn (IndexWatchItem $item): array => $this->indexWatchItemPayload($item)),
@@ -84,27 +106,22 @@ class AdminIndexWatchItemController extends Controller
         ]);
         $range = $validated['range'] ?? null;
         $priceLimit = self::PriceRangeLimits[$range] ?? IndexWatchItemPriceRefresher::RecentPriceLimit;
-        $hasPrices = $range === 'intraday'
-            ? $this->refreshIntradayPrice($indexWatchItem)
-            : $this->priceRefresher->ensureRecentPrices($indexWatchItem, $priceLimit);
-        $indexWatchItem->refresh();
+        $refresh = $request->isMethod('post')
+            ? $this->chartDataRefresh->requestIndex($indexWatchItem, $range, $priceLimit)
+            : $this->chartDataRefresh->indexStatus($indexWatchItem, $range);
         $payload = $this->indexWatchItemPayload($indexWatchItem, $priceLimit);
 
-        if (! $hasPrices && count($payload['recent_prices']) === 0) {
-            return response()->json([
-                'message' => 'Index prices could not be retrieved from EODHD.',
-                'index' => $payload,
-                'range' => $range,
-                'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
-            ], 422);
+        if ($refresh['status'] === 'unavailable' && $payload['recent_prices'] !== []) {
+            $refresh = ['status' => 'finished', 'error' => null];
         }
 
         return response()->json([
-            'message' => 'Index prices loaded.',
+            'message' => $refresh['error'] ?? (in_array($refresh['status'], ['queued', 'running'], true) ? 'Index prices are loading.' : 'Index prices loaded.'),
             'index' => $payload,
             'range' => $range,
+            'refresh' => $refresh,
             'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
-        ]);
+        ], in_array($refresh['status'], ['failed', 'unavailable'], true) ? 422 : 200);
     }
 
     public function destroy(IndexWatchItem $indexWatchItem): JsonResponse
@@ -114,15 +131,6 @@ class AdminIndexWatchItemController extends Controller
         return response()->json([
             'message' => 'Index removed.',
         ]);
-    }
-
-    private function refreshIntradayPrice(IndexWatchItem $indexWatchItem): bool
-    {
-        if ($this->priceRefresher->refresh($indexWatchItem)) {
-            return true;
-        }
-
-        return $indexWatchItem->prices()->exists();
     }
 
     /**
@@ -174,20 +182,27 @@ class AdminIndexWatchItemController extends Controller
         IndexWatchItem $item,
         int $priceLimit = IndexWatchItemPriceRefresher::RecentPriceLimit,
     ): array {
-        $recentPrices = $item->prices()
-            ->orderByDesc('trading_date')
-            ->limit($priceLimit)
-            ->get();
-        $latestRealtimeTradingDate = $item->realtimePrices()
-            ->orderByDesc('trading_date')
-            ->value('trading_date');
-        $realtimePrices = $latestRealtimeTradingDate
+        $recentPrices = $item->relationLoaded('prices')
+            ? $item->prices
+            : $item->prices()
+                ->orderByDesc('trading_date')
+                ->limit($priceLimit)
+                ->get();
+        $latestRealtimeTradingDate = $item->relationLoaded('readRealtimePrices')
+            ? $item->read_realtime_date
+            : $item->realtimePrices()
+                ->orderByDesc('trading_date')
+                ->value('trading_date');
+        $realtimePrices = $item->relationLoaded('readRealtimePrices')
+            ? $item->readRealtimePrices
+            : ($latestRealtimeTradingDate
             ? $item->realtimePrices()
-                ->whereDate('trading_date', $latestRealtimeTradingDate)
+                ->where('trading_date', '>=', Carbon::parse($latestRealtimeTradingDate)->toDateString())
+                ->where('trading_date', '<', Carbon::parse($latestRealtimeTradingDate)->addDay()->toDateString())
                 ->orderByDesc('as_of')
                 ->orderByDesc('id')
                 ->get(['id', 'trading_date', 'price', 'as_of'])
-            : collect();
+            : collect());
 
         return [
             'id' => $item->id,

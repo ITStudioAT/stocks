@@ -16,6 +16,23 @@ class StockHistoricalPriceService
         private StockPriceCatalog $stockPriceCatalog,
     ) {}
 
+    public function hasOutdatedEndOfDayStocks(): bool
+    {
+        $holdings = StockHolding::query()->get(['id', 'isin', 'wkn', 'symbol', 'mic_code', 'exchange']);
+        $keys = $holdings->map(fn (StockHolding $holding): string => $this->stockPriceCatalog->instrumentKeyForHolding($holding));
+        $latestDates = StockPrice::query()->whereIn('instrument_key', $keys)
+            ->whereNotNull('price')->whereNotNull('as_of')
+            ->selectRaw('instrument_key, MAX(as_of) as latest_as_of')->groupBy('instrument_key')
+            ->pluck('latest_as_of', 'instrument_key');
+        $expected = $this->completedTradingDay->date()->toDateString();
+
+        return $keys->contains(function (string $key) use ($latestDates, $expected): bool {
+            $latest = $latestDates->get($key);
+
+            return $latest === null || Carbon::parse($latest, config('app.timezone'))->setTimezone('Europe/Vienna')->toDateString() !== $expected;
+        });
+    }
+
     /**
      * @return array{date_from: string, date_to: string, required_to: string, is_complete: bool, total_count: int, available_count: int, missing_count: int, end_of_day_outdated_stocks: array<int, array{id: int, label: string, db_last_date: ?string}>, holdings: array<int, array{id: int, name: ?string, symbol: ?string, isin: ?string, exchange: ?string, mic_code: ?string, instrument_type: ?string, country: ?string, currency: ?string, latest_realtime_date: ?string, latest_realtime_rows: int, latest_realtime_day_first_record_at: ?string, latest_realtime_day_last_record_at: ?string, latest_realtime_day_record_count: int, latest_realtime_table_row_count: int, previous_realtime_date: ?string, previous_realtime_day_first_record_at: ?string, previous_realtime_day_last_record_at: ?string, previous_realtime_day_record_count: int, end_of_day_first_date: ?string, end_of_day_expected_last_date: string, end_of_day_last_date: ?string, end_of_day_row_count: int, end_of_day_table_row_count: int, is_available: bool, stored_count: int, stored_required_count: int, expected_required_count: int, first_date: ?string, latest_date: ?string}>}
      */
@@ -85,8 +102,8 @@ class StockHistoricalPriceService
 
         $storedDates = StockHoldingDailyPrice::query()
             ->where('stock_holding_id', $holding->id)
-            ->whereDate('trading_date', '>=', $from->toDateString())
-            ->whereDate('trading_date', '<=', $to->toDateString())
+            ->where('trading_date', '>=', $from->toDateString())
+            ->where('trading_date', '<', $to->copy()->addDay()->toDateString())
             ->pluck('trading_date')
             ->map(fn (mixed $date): string => Carbon::parse($date)->toDateString())
             ->flip();

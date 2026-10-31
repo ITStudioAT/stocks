@@ -2,7 +2,34 @@ import { defineStore } from 'pinia';
 
 export const csrfToken = () => document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
 
+const pendingRequests = new Map();
+
 export async function request(path, options = {}) {
+    const { deduplicate = false, ...requestOptions } = options;
+    const method = (requestOptions.method ?? 'GET').toUpperCase();
+    const shouldDeduplicate = !requestOptions.signal && (method === 'GET' || deduplicate);
+    const requestKey = JSON.stringify([path, method, requestOptions.body ?? null, requestOptions.headers ?? {}, csrfToken()]);
+
+    if (shouldDeduplicate && pendingRequests.has(requestKey)) {
+        return pendingRequests.get(requestKey);
+    }
+
+    const pendingRequest = sendRequest(path, requestOptions);
+
+    if (shouldDeduplicate) {
+        pendingRequests.set(requestKey, pendingRequest);
+    }
+
+    try {
+        return await pendingRequest;
+    } finally {
+        if (pendingRequests.get(requestKey) === pendingRequest) {
+            pendingRequests.delete(requestKey);
+        }
+    }
+}
+
+async function sendRequest(path, options) {
     const { headers = {}, ...requestOptions } = options;
     const response = await fetch(path, {
         credentials: 'same-origin',

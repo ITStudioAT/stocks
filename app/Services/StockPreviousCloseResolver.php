@@ -17,6 +17,22 @@ class StockPreviousCloseResolver
         private StockPriceCatalog $stockPriceCatalog,
     ) {}
 
+    /** @param Collection<int, StockHolding> $holdings */
+    public function prime(Collection $holdings): void
+    {
+        $keys = $holdings->map(fn (StockHolding $holding): string => $this->stockPriceCatalog->instrumentKeyForHolding($holding));
+        $prices = StockPrice::query()->whereIn('instrument_key', $keys)
+            ->where('source_key', 'eodhd_eod')->where('price_type', 'historical_eod')
+            ->whereNotNull('price')->whereNotNull('as_of')
+            ->orderByDesc('as_of')->orderByDesc('fetched_at')->orderByDesc('id')
+            ->get(['id', 'instrument_key', 'source_key', 'price_type', 'price', 'as_of', 'fetched_at'])
+            ->groupBy('instrument_key');
+
+        foreach ($holdings as $holding) {
+            $holding->setRelation('readStockPrices', $prices->get($this->stockPriceCatalog->instrumentKeyForHolding($holding), collect()));
+        }
+    }
+
     /**
      * @return array{
      *     previous_close: ?string,
@@ -56,16 +72,21 @@ class StockPreviousCloseResolver
      */
     private function officialCloses(StockHolding $holding, ?Carbon $cutoff): Collection
     {
-        return $this->stockPriceCatalog->pricesForHolding($holding)
-            ->where('source_key', 'eodhd_eod')
-            ->where('price_type', 'historical_eod')
-            ->whereNotNull('price')
-            ->whereNotNull('as_of')
-            ->when($cutoff !== null, fn ($query) => $query->where('as_of', '<', $cutoff->copy()->utc()))
-            ->orderByDesc('as_of')
-            ->orderByDesc('fetched_at')
-            ->orderByDesc('id')
-            ->get(['id', 'price', 'as_of', 'fetched_at'])
+        $prices = $holding->relationLoaded('readStockPrices')
+            ? $holding->readStockPrices->filter(fn (StockPrice $price): bool => $price->source_key === 'eodhd_eod'
+                && $price->price_type === 'historical_eod' && ($cutoff === null || Carbon::parse($price->getRawOriginal('as_of'), 'UTC')->lt($cutoff->copy()->utc())))
+            : $this->stockPriceCatalog->pricesForHolding($holding)
+                ->where('source_key', 'eodhd_eod')
+                ->where('price_type', 'historical_eod')
+                ->whereNotNull('price')
+                ->whereNotNull('as_of')
+                ->when($cutoff !== null, fn ($query) => $query->where('as_of', '<', $cutoff->copy()->utc()))
+                ->orderByDesc('as_of')
+                ->orderByDesc('fetched_at')
+                ->orderByDesc('id')
+                ->get(['id', 'price', 'as_of', 'fetched_at']);
+
+        return $prices
             ->unique(fn (StockPrice $stockPrice): string => $this->stockPriceDate($stockPrice) ?? "row-{$stockPrice->id}")
             ->take(2)
             ->values();
@@ -76,17 +97,19 @@ class StockPreviousCloseResolver
      */
     private function fallbackClose(StockHolding $holding, ?Carbon $cutoff): array
     {
-        $dailyPrice = StockHoldingDailyPrice::query()
-            ->where('stock_holding_id', $holding->id)
-            ->where(function ($query): void {
-                $query
-                    ->whereNotNull('close')
-                    ->orWhereNotNull('adjusted_close');
-            })
-            ->when($cutoff !== null, fn ($query) => $query->where('trading_date', '<', $cutoff->toDateString()))
-            ->orderByDesc('trading_date')
-            ->orderByDesc('id')
-            ->first(['id', 'trading_date', 'close', 'adjusted_close']);
+        $dailyPrice = $holding->relationLoaded('readPreviousDailyPrice')
+            ? $holding->readPreviousDailyPrice
+            : StockHoldingDailyPrice::query()
+                ->where('stock_holding_id', $holding->id)
+                ->where(function ($query): void {
+                    $query
+                        ->whereNotNull('close')
+                        ->orWhereNotNull('adjusted_close');
+                })
+                ->when($cutoff !== null, fn ($query) => $query->where('trading_date', '<', $cutoff->toDateString()))
+                ->orderByDesc('trading_date')
+                ->orderByDesc('id')
+                ->first(['id', 'trading_date', 'close', 'adjusted_close']);
 
         if ($cutoff === null) {
             return [
@@ -95,22 +118,26 @@ class StockPreviousCloseResolver
             ];
         }
 
-        $storedPrice = $this->stockPriceCatalog->pricesForHolding($holding)
-            ->whereNotNull('price')
-            ->whereNotNull('as_of')
-            ->where('as_of', '<', $cutoff->copy()->utc())
-            ->orderByDesc('as_of')
-            ->orderByDesc('fetched_at')
-            ->orderByDesc('id')
-            ->first(['id', 'price', 'as_of']);
-        $realtimePrice = StockRealtimePrice::query()
-            ->where('stock_holding_id', $holding->id)
-            ->whereNotNull('price')
-            ->whereNotNull('as_of')
-            ->where('as_of', '<', $cutoff->copy()->utc())
-            ->orderByDesc('as_of')
-            ->orderByDesc('id')
-            ->first(['id', 'price', 'as_of']);
+        $storedPrice = $holding->relationLoaded('readFallbackStockPrice')
+            ? $holding->readFallbackStockPrice
+            : $this->stockPriceCatalog->pricesForHolding($holding)
+                ->whereNotNull('price')
+                ->whereNotNull('as_of')
+                ->where('as_of', '<', $cutoff->copy()->utc())
+                ->orderByDesc('as_of')
+                ->orderByDesc('fetched_at')
+                ->orderByDesc('id')
+                ->first(['id', 'price', 'as_of']);
+        $realtimePrice = $holding->relationLoaded('readRealtimePrices')
+            ? $holding->readRealtimePrices->filter(fn (StockRealtimePrice $price): bool => Carbon::parse($price->getRawOriginal('as_of'), 'UTC')->lt($cutoff->copy()->utc()))->last()
+            : StockRealtimePrice::query()
+                ->where('stock_holding_id', $holding->id)
+                ->whereNotNull('price')
+                ->whereNotNull('as_of')
+                ->where('as_of', '<', $cutoff->copy()->utc())
+                ->orderByDesc('as_of')
+                ->orderByDesc('id')
+                ->first(['id', 'price', 'as_of']);
         $realtimeDate = $realtimePrice === null ? null : $this->storedDate($realtimePrice, 'as_of');
         $storedPriceDate = $storedPrice === null ? null : $this->storedDate($storedPrice, 'as_of');
         $dailyDate = $dailyPrice?->trading_date?->copy()->startOfDay();

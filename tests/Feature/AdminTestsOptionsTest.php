@@ -68,97 +68,29 @@ class AdminTestsOptionsTest extends TestCase
     public function test_admin_can_load_selected_stock_today_intraday_values(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-25 12:00:00', 'Europe/Vienna'));
-        config(['services.eodhd.key' => 'test-token']);
         $admin = $this->adminUser();
-        $holding = StockHolding::factory()->create([
-            'symbol' => 'AMES',
-            'name' => 'Amundi IBEX 35 UCITS ETF',
-            'currency' => 'EUR',
-            'exchange' => 'XETRA',
-            'mic_code' => 'XETR',
-            'latest_price' => '499.25000000',
-        ]);
-        Http::fake([
-            'eodhd.com/api/intraday/AMES.XETRA*' => Http::response([
-                [
-                    'timestamp' => Carbon::parse('2026-06-25 07:00:00', 'UTC')->timestamp,
-                    'gmtoffset' => 0,
-                    'datetime' => '2026-06-25 07:00:00',
-                    'open' => 498.1,
-                    'high' => 499.2,
-                    'low' => 497.9,
-                    'close' => 499.15,
-                    'volume' => 1200,
-                ],
-                [
-                    'timestamp' => Carbon::parse('2026-06-25 07:05:00', 'UTC')->timestamp,
-                    'gmtoffset' => 0,
-                    'datetime' => '2026-06-25 07:05:00',
-                    'open' => 499.15,
-                    'high' => 500.1,
-                    'low' => 498.8,
-                    'close' => 499.9,
-                    'volume' => 1400,
-                ],
-            ]),
-        ]);
-
-        $this->actingAs($admin)
-            ->postJson("/admin/tests/stocks/{$holding->id}/intraday")
-            ->assertOk()
-            ->assertJsonPath('stock.symbol', 'AMES')
-            ->assertJsonPath('day.trading_date', '2026-06-25')
-            ->assertJsonPath('day.interval', '5m')
-            ->assertJsonCount(2, 'day.rows')
-            ->assertJsonPath('day.rows.0.open', '498.10000000')
-            ->assertJsonPath('day.rows.0.close', '499.15000000')
-            ->assertJsonPath('day.rows.0.trading_date', '2026-06-25')
-            ->assertJsonPath('day.rows.0.interval', '5m')
-            ->assertJsonPath('day.rows.0.as_of', '2026-06-25 09:00:00')
-            ->assertJsonPath('day.rows.0.currency', 'EUR')
-            ->assertJsonPath('day.rows.0.source_key', 'eodhd_intraday')
-            ->assertJsonPath('day.rows.0.source_name', 'EODHD intraday')
-            ->assertJsonPath('day.rows.0.raw_payload.close', 499.15)
-            ->assertJsonPath('day.rows.1.close', '499.90000000')
-            ->assertJsonPath('refresh.status', 'finished')
-            ->assertJsonPath('refresh.stored_count', 2);
-
-        $this->assertDatabaseHas('stock_holding_intraday_candles', [
-            'stock_holding_id' => $holding->id,
-            'trading_date' => '2026-06-25',
-            'interval' => '5m',
-            'datetime' => '2026-06-25 07:05:00',
-            'close' => '499.90000000',
-            'source_name' => 'EODHD intraday',
-        ]);
-        Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/intraday/AMES.XETRA')
-            && $request['api_token'] === 'test-token'
-            && $request['fmt'] === 'json'
-            && $request['interval'] === '5m'
-            && is_numeric($request['from'])
-            && is_numeric($request['to']));
+        $holding = StockHolding::factory()->create(['symbol' => 'AMES', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
+        $this->fakeEuropeanTrades([['holding' => $holding, 'price' => 499.9, 'at' => '2026-06-25 07:05:00']]);
+        $this->actingAs($admin)->postJson("/admin/tests/stocks/{$holding->id}/intraday")->assertOk()
+            ->assertJsonPath('day.interval', 'trade')->assertJsonCount(1, 'day.rows')
+            ->assertJsonPath('day.rows.0.interval', 'trade')->assertJsonPath('day.rows.0.open', null)
+            ->assertJsonPath('day.rows.0.close', '499.90000000')->assertJsonPath('day.rows.0.currency', 'EUR')
+            ->assertJsonPath('day.rows.0.source_key', 'deutsche_boerse_trade')
+            ->assertJsonPath('day.rows.0.raw_payload.coverage_complete', false)
+            ->assertJsonPath('refresh.status', 'finished')->assertJsonPath('refresh.stored_count', 1);
+        Http::assertSentCount(2);
+        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
 
     public function test_admin_receives_intraday_errors_for_selected_stock(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-25 12:00:00', 'Europe/Vienna'));
-        config(['services.eodhd.key' => 'test-token']);
-        $admin = $this->adminUser();
-        $holding = StockHolding::factory()->create([
-            'symbol' => 'AMES',
-            'exchange' => 'XETRA',
-            'mic_code' => 'XETR',
-        ]);
-        Http::fake([
-            'eodhd.com/api/intraday/AMES.XETRA*' => Http::response([], 500),
-        ]);
-
-        $this->actingAs($admin)
-            ->postJson("/admin/tests/stocks/{$holding->id}/intraday")
-            ->assertStatus(422)
-            ->assertJsonPath('message', 'EODHD intraday request failed with HTTP 500.')
-            ->assertJsonPath('stock.symbol', 'AMES')
-            ->assertJsonPath('day.trading_date', '2026-06-25');
+        $holding = StockHolding::factory()->create(['symbol' => 'AMES', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
+        $this->fakeEuropeanTrades([]);
+        $this->actingAs($this->adminUser())->postJson("/admin/tests/stocks/{$holding->id}/intraday")
+            ->assertStatus(422)->assertJsonPath('stock.symbol', 'AMES')
+            ->assertJsonPath('message', 'No usable free intraday observation for AMES; coverage incomplete.');
+        $this->assertDatabaseCount('stock_holding_intraday_candles', 0);
     }
 
     public function test_guest_cannot_load_selected_stock_intraday_values(): void

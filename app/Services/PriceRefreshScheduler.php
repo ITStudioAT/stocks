@@ -28,6 +28,11 @@ class PriceRefreshScheduler
      */
     public function settings(): array
     {
+        return app(RequestReadCache::class)->remember(self::class.'.settings', fn (): array => $this->readSettings());
+    }
+
+    private function readSettings(): array
+    {
         $config = AppConfig::query()->firstOrCreate(
             ['key' => self::ConfigKey],
             ['value' => $this->defaultSettings()],
@@ -47,6 +52,11 @@ class PriceRefreshScheduler
      * @return array{trading_interval_minutes: int, trading_starts_before_minutes: int, trading_ends_after_minutes: int, trading_start_time: ?string, trading_end_time: ?string, closed_refresh_enabled: bool, closed_interval_minutes: int, last_refreshed_at: ?string, next_refresh_at: ?string, status: string, status_label: string, is_trading_time: bool, current_interval_minutes: int}
      */
     public function payload(): array
+    {
+        return app(RequestReadCache::class)->remember(self::class.'.payload', fn (): array => $this->buildPayload());
+    }
+
+    private function buildPayload(): array
     {
         $settings = $this->settings();
         $isTradingTime = $this->isAnyHoldingWithinTradingTimes(settings: $settings);
@@ -73,6 +83,11 @@ class PriceRefreshScheduler
      * @return array{refresh_id: string, status: string, processed: int, total: int, step: string, message: string, current: ?string, started_at: string, finished_at: ?string, error: ?string}|null
      */
     public function activeRefreshProgress(): ?array
+    {
+        return app(RequestReadCache::class)->remember(self::class.'.progress', fn (): ?array => $this->readActiveRefreshProgress());
+    }
+
+    private function readActiveRefreshProgress(): ?array
     {
         $run = StockPriceRefreshRun::query()
             ->whereIn('status', ['queued', 'running'])

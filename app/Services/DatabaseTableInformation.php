@@ -139,14 +139,16 @@ class DatabaseTableInformation
             ),
             (new StockHoldingIntradayCandle)->getTable() => $this->direct(
                 'Stock historical data',
-                'Five-minute and historical intraday candles per stock holding.',
-                'Fünf-Minuten- und historische Intraday-Kerzen je Aktienposition.',
-                'intraday/{symbol.exchange}',
+                'Observed delayed trades and US provider OHLC; historical legacy rows retained.',
+                'Beobachtete verzögerte Trades mit Lücken und US-OHLC; historische Bestandsdaten bleiben erhalten.',
+                'Deutsche Börse Post-Trade / Yahoo Finance chart',
                 [
-                    ['label' => 'Intraday prices', 'url' => 'https://eodhd.com/financial-apis/intraday-historical-data-api'],
+                    ['label' => 'Delayed trades', 'url' => 'https://www.mds.deutsche-boerse.com/mds-en/real-time-data/Delayed-data'],
+                    ['label' => 'US quotes', 'url' => 'https://finance.yahoo.com/quote/ARGT/'],
                 ],
-                $intradayCadence,
+                $priceCadence.'. '.FreeIntradayMarketData::Notice,
                 $queuedIntradayRefresh,
+                provider: 'free',
             ),
             (new StockHolding)->getTable() => $this->direct(
                 'Stock master data',
@@ -174,14 +176,16 @@ class DatabaseTableInformation
             ),
             (new StockRealtimePrice)->getTable() => $this->direct(
                 'Stock live data',
-                'Canonical live stock prices and raw EODHD payloads.',
-                'Kanonische Live-Aktienkurse und unverarbeitete EODHD-Antworten.',
-                'real-time/{symbol} with additional symbols batched by the s parameter',
+                'Canonical delayed stock observations with provider provenance.',
+                'Kanonische verzögerte Aktienkurse mit tatsächlicher Quelle und Datenzeit.',
+                'Deutsche Börse Post-Trade / Yahoo Finance chart',
                 [
-                    ['label' => 'Live prices', 'url' => 'https://eodhd.com/financial-apis/live-ohlcv-stocks-api'],
+                    ['label' => 'Delayed trades', 'url' => 'https://www.mds.deutsche-boerse.com/mds-en/real-time-data/Delayed-data'],
+                    ['label' => 'US quotes', 'url' => 'https://finance.yahoo.com/quote/ARGT/'],
                 ],
                 $priceCadence,
                 $queuedPriceRefresh,
+                provider: 'free',
             ),
         ];
     }
@@ -239,16 +243,17 @@ class DatabaseTableInformation
      * @param  array<int, array{label: string, url: string}>  $documentation
      * @return array{category: string, purpose: string, purpose_de: string, eodhd: array{mode: string, endpoint: string, access: string, documentation: array<int, array{label: string, url: string}>}, cadence: string, queue: array{used: bool, name: ?string, job: ?string, mode: string}}
      */
-    private function direct(string $category, string $purpose, string $purposeGerman, string $endpoint, array $documentation, string $cadence, array $queue): array
+    private function direct(string $category, string $purpose, string $purposeGerman, string $endpoint, array $documentation, string $cadence, array $queue, string $provider = 'eodhd'): array
     {
         return [
             'category' => $category,
             'purpose' => $purpose,
             'purpose_de' => $purposeGerman,
             'eodhd' => [
-                'mode' => 'direct',
+                'mode' => $provider === 'eodhd' ? 'direct' : 'legacy',
                 'endpoint' => $endpoint,
-                'access' => 'This table is populated directly from EODHD responses.',
+                'access' => $provider === 'eodhd' ? 'This table is populated directly from EODHD responses.'
+                    : 'Current writes use free delayed sources; existing EODHD records are retained. '.FreeIntradayMarketData::Notice,
                 'documentation' => $documentation,
             ],
             'cadence' => $cadence,

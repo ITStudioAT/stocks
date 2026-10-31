@@ -44,6 +44,7 @@ class EodhdMarketData
         private EodhdApiClient $apiClient,
         private EodhdErrorSanitizer $errorSanitizer,
         private IndexMarketHours $indexMarketHours,
+        private FreeIntradayMarketData $freeIntraday,
     ) {}
 
     public function refreshSessionPriceFields(StockHolding $holding, ?ValidatedQuote $latestQuote = null): void
@@ -95,28 +96,28 @@ class EodhdMarketData
 
     public function intradayStartQuote(StockHolding $holding, Carbon $from, Carbon $until): ?ValidatedQuote
     {
-        $errors = [];
-        $candidate = $this->candidate(
-            $holding,
-            self::IntradaySourceKey,
-            'EODHD intraday',
-            $this->intradayUrl($holding, $from, $until),
-        );
-        $records = $this->intradayRecords($holding, $from, $until, $errors);
+        $records = $this->freeIntraday->records($holding, $from, $until);
         $record = $this->firstPriceRecordBetween($records, $from, $until);
 
-        if ($record === null) {
+        if ($record === null || ($record['timestamp'] ?? PHP_INT_MAX) > $from->copy()->addMinutes(5)->timestamp) {
             return null;
         }
+        $candidate = $this->candidate($holding, $record['source_key'], $record['source_name'], $record['source_url']);
 
         $quote = $this->quoteFromPayload(
             holding: $holding,
             candidate: $candidate,
             payload: $record,
-            priceKey: 'close',
-            priceType: 'historical_session_start',
+            priceKey: $record['interval'] === '5m' ? 'open' : 'close',
+            priceType: 'observed_session_start',
             freshnessStatus: 'historical',
         );
+
+        if ($quote !== null) {
+            $quote->venue = $record['venue'];
+            $quote->mic = $record['mic'];
+            $quote->sourceQuality = $record['interval'] === 'trade' ? 'exchange_delayed' : 'unofficial';
+        }
 
         return $quote ? $this->validatedHistoricalQuote($quote) : null;
     }
@@ -137,22 +138,12 @@ class EodhdMarketData
             return;
         }
 
-        $emptySessionCacheKey = $this->intradayEmptySessionCacheKey($holding, $session['date']);
-
-        if (Cache::get($emptySessionCacheKey) === true) {
-            return;
-        }
-
         $errors = [];
         $records = $this->intradayRecordsForInterval($holding, $session['open'], $until, '5m', $errors);
 
         if ($records === []) {
-            Cache::put($emptySessionCacheKey, true, now()->addHours(6));
-
             return;
         }
-
-        Cache::forget($emptySessionCacheKey);
 
         $this->persistIntradayCandles(
             $holding,
@@ -180,7 +171,7 @@ class EodhdMarketData
     /**
      * @return array<int, array{title: string, trading_date: string, interval: string, rows: array<int, array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}>}>
      */
-    public function ensureLastSevenTradingDayFiveMinuteCandles(StockHolding $holding): array
+    public function ensureLastSevenTradingDayFiveMinuteCandles(StockHolding $holding, bool $fetchMissing = true): array
     {
         $currentSession = $this->currentTradingSessionWithStoredFiveMinuteCandles($holding);
         $sessions = collect($this->lastCompletedTradingSessions($holding, self::IntradayDetailTradingDayCount));
@@ -193,7 +184,7 @@ class EodhdMarketData
         }
 
         return $sessions
-            ->map(fn (array $session): array => $this->ensureFiveMinuteIntradayCandles($holding, $session))
+            ->map(fn (array $session): array => $this->ensureFiveMinuteIntradayCandles($holding, $session, $fetchMissing))
             ->all();
     }
 
@@ -223,9 +214,9 @@ class EodhdMarketData
      * @param  array{date: Carbon, open: Carbon, close: Carbon}  $session
      * @return array{title: string, trading_date: string, interval: string, rows: array<int, array{timestamp: ?int, gmtoffset: ?int, datetime: ?string, open: ?string, high: ?string, low: ?string, close: ?string, volume: ?int}>}
      */
-    private function ensureFiveMinuteIntradayCandles(StockHolding $holding, array $session): array
+    private function ensureFiveMinuteIntradayCandles(StockHolding $holding, array $session, bool $fetchMissing = true): array
     {
-        if (! $this->storedIntradayCandleQuery($holding, $session['date'], '5m')->exists()) {
+        if ($fetchMissing && ! $this->storedIntradayCandleQuery($holding, $session['date'], '5m')->exists()) {
             $errors = [];
             $records = $this->intradayRecordsForInterval($holding, $session['open'], $session['close'], '5m', $errors);
             $this->persistIntradayCandles(
@@ -237,11 +228,15 @@ class EodhdMarketData
             );
         }
 
+        $rows = $this->storedIntradayCandlePayload($holding, $session['date'], '5m');
+        $intervals = collect($rows)->pluck('interval')->unique();
+
         return [
             'title' => 'Intraday '.$session['date']->format('d.m.Y'),
             'trading_date' => $session['date']->toDateString(),
-            'interval' => '5m',
-            'rows' => $this->storedIntradayCandlePayload($holding, $session['date'], '5m'),
+            'interval' => $intervals->count() > 1 ? 'mixed' : ($intervals->first() ?? '5m'),
+            'notice' => FreeIntradayMarketData::Notice,
+            'rows' => $rows,
         ];
     }
 
@@ -374,6 +369,8 @@ class EodhdMarketData
             self::RealtimeSourceKey,
             self::IntradaySourceKey,
             self::EodSourceKey,
+            'deutsche_boerse_trade',
+            'yahoo_intraday',
         ];
     }
 
@@ -403,35 +400,7 @@ class EodhdMarketData
         string $interval,
         array &$errors,
     ): array {
-        $response = $this->get("intraday/{$this->eodhdSymbol($holding)}", [
-            'from' => $from->copy()->utc()->timestamp,
-            'to' => $until->copy()->utc()->timestamp,
-            'interval' => $interval,
-            'fmt' => 'json',
-        ], $errors);
-
-        if (! $response) {
-            return [];
-        }
-
-        $payload = $this->errorSanitizer->payload($response->json());
-
-        if (! is_array($payload)) {
-            $errors[] = "EODHD returned an invalid {$interval} intraday response.";
-
-            return [];
-        }
-
-        if (($payload['status'] ?? null) === 'error') {
-            $errors[] = $this->errorMessage($payload);
-
-            return [];
-        }
-
-        return collect($payload)
-            ->filter(fn (mixed $record): bool => is_array($record))
-            ->values()
-            ->all();
+        return $this->freeIntraday->records($holding, $from, $until);
     }
 
     /**
@@ -517,7 +486,8 @@ class EodhdMarketData
 
     private function marketTimezone(string $tradingTimes): ?string
     {
-        if (preg_match('/\bEurope\/[A-Za-z_]+\b/', $tradingTimes, $matches)) {
+        if (preg_match('/\b[A-Za-z_]+(?:\/[A-Za-z0-9_+-]+)+\b/', $tradingTimes, $matches)
+            && in_array($matches[0], timezone_identifiers_list(), true)) {
             return $matches[0];
         }
 
@@ -1090,29 +1060,9 @@ class EodhdMarketData
     /**
      * @param  array<int, array<string, mixed>>  $records
      */
-    private function persistIntradayCandles(
-        StockHolding $holding,
-        Carbon $tradingDate,
-        string $interval,
-        array $records,
-        string $sourceUrl,
-    ): void {
-        $now = now();
-        $rows = collect($records)
-            ->map(fn (array $record): ?array => $this->intradayCandleRow($holding, $tradingDate, $interval, $record, $sourceUrl, $now))
-            ->filter()
-            ->values()
-            ->all();
-
-        if ($rows === []) {
-            return;
-        }
-
-        StockHoldingIntradayCandle::query()->upsert(
-            $rows,
-            uniqueBy: ['stock_holding_id', 'interval', 'as_of'],
-            update: ['timestamp', 'gmtoffset', 'datetime', 'open', 'high', 'low', 'close', 'volume', 'currency', 'source_key', 'source_name', 'source_url', 'raw_payload', 'updated_at'],
-        );
+    private function persistIntradayCandles(StockHolding $holding, Carbon $tradingDate, string $interval, array $records, string $sourceUrl): void
+    {
+        $this->freeIntraday->persist($holding, $records);
     }
 
     /**
@@ -1180,9 +1130,15 @@ class EodhdMarketData
         return $this->storedIntradayCandleQuery($holding, $tradingDate, $interval)
             ->orderBy('as_of')
             ->orderBy('id')
-            ->get(['timestamp', 'gmtoffset', 'datetime', 'open', 'high', 'low', 'close', 'volume'])
+            ->get(['timestamp', 'gmtoffset', 'datetime', 'open', 'high', 'low', 'close', 'volume', 'interval', 'source_key', 'source_name', 'raw_payload'])
             ->map(fn (StockHoldingIntradayCandle $candle): array => [
                 'timestamp' => $candle->timestamp,
+                'interval' => $candle->interval,
+                'data_kind' => $candle->raw_payload['data_kind'] ?? 'legacy',
+                'source_key' => $candle->source_key,
+                'source_name' => $candle->source_name,
+                'mic' => $candle->raw_payload['mic'] ?? null,
+                'coverage_complete' => false,
                 'gmtoffset' => $candle->gmtoffset,
                 'datetime' => $candle->datetime,
                 'open' => $candle->open === null ? null : (string) $candle->open,
@@ -1201,9 +1157,10 @@ class EodhdMarketData
     {
         return StockHoldingIntradayCandle::query()
             ->where('stock_holding_id', $holding->id)
-            ->whereDate('trading_date', $tradingDate->toDateString())
-            ->where('interval', $interval)
-            ->where('source_key', self::IntradaySourceKey);
+            ->where('trading_date', '>=', $tradingDate->toDateString())
+            ->where('trading_date', '<', $tradingDate->copy()->addDay()->toDateString())
+            ->whereIn('interval', FreeIntradayMarketData::Intervals)
+            ->whereIn('source_key', FreeIntradayMarketData::CandleSources);
     }
 
     private function hasStoredIntradayCandlePrices(StockHolding $holding, Carbon $tradingDate, string $interval): bool
@@ -1221,7 +1178,8 @@ class EodhdMarketData
 
     private function intradayUrl(StockHolding $holding, Carbon $from, Carbon $until, string $interval = '1m'): string
     {
-        return "{$this->baseUrl()}/intraday/{$this->eodhdSymbol($holding)}?from={$from->copy()->utc()->timestamp}&to={$until->copy()->utc()->timestamp}&interval={$interval}&fmt=json";
+        return YahooFinanceMarketData::supports($holding->only(['isin', 'symbol', 'exchange', 'currency']))
+            ? 'https://finance.yahoo.com/quote/'.rawurlencode($holding->symbol).'/' : DeutscheBoerseDelayedData::CatalogUrl;
     }
 
     private function baseUrl(): string

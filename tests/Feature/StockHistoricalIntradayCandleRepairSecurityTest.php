@@ -3,7 +3,6 @@
 namespace Tests\Feature;
 
 use App\Models\StockHolding;
-use App\Services\EodhdMarketData;
 use App\Services\StockHistoricalIntradayCandleRepairService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -29,18 +28,14 @@ class StockHistoricalIntradayCandleRepairSecurityTest extends TestCase
             'symbol' => 'AAPL',
             'exchange' => 'US',
         ]);
-        $this->mock(EodhdMarketData::class)
-            ->expects('exchangeCodeForHolding')
-            ->once()
-            ->with($holding)
-            ->andReturn('US');
 
         try {
             app(StockHistoricalIntradayCandleRepairService::class)->repairHolding($holding);
             $this->fail('Expected the EODHD repair to fail.');
         } catch (RuntimeException $exception) {
             $this->assertStringNotContainsString('configured-repair-secret', $exception->getMessage());
-            $this->assertStringContainsString('api_token=[redacted]', $exception->getMessage());
+            $this->assertStringContainsString('retention', $exception->getMessage());
+            Http::assertNothingSent();
         }
     }
 }

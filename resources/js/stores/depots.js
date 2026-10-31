@@ -1,11 +1,34 @@
 import { defineStore } from 'pinia';
 import { request } from './auth';
 
+async function waitForIntradayRefresh(id, kind, isCurrent = () => true) {
+    for (let attempt = 0; attempt < 150; attempt += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 2000));
+        if (!isCurrent()) {
+            return false;
+        }
+        const data = await request(`/admin/watchlist/holdings/${id}/intraday-refresh/${kind}`);
+        if (data.refresh?.status === 'failed' || data.refresh?.status === 'unavailable') {
+            throw new Error(data.refresh.error || 'Intraday update failed.');
+        }
+        if (!['queued', 'running'].includes(data.refresh?.status)) {
+            if (data.refresh?.status !== 'finished') {
+                throw new Error('Intraday update expired. Please try again.');
+            }
+            return true;
+        }
+    }
+
+    throw new Error('Intraday update is still pending. Please try again later.');
+}
+
 export const useDepotStore = defineStore('depots', {
     state: () => ({
         activeDepot: null,
         depots: [],
         holdings: [],
+        holdingsRequestId: 0,
+        intradayRequestVersion: 0,
         indexWatchItems: [],
         indexEodhdSync: null,
         stockEodhdSync: null,
@@ -178,6 +201,7 @@ export const useDepotStore = defineStore('depots', {
             }
         },
         async loadWatchlistHoldings(page = 1, options = {}) {
+            const requestId = ++this.holdingsRequestId;
             const isSilent = options.silent === true;
             const query = new URLSearchParams({
                 page: String(page),
@@ -218,9 +242,12 @@ export const useDepotStore = defineStore('depots', {
                     ? '/admin/watchlist/holdings/charts'
                     : '/admin/watchlist/holdings';
                 const requestOptions = options.includeCharts === true
-                    ? { method: 'POST' }
+                    ? { method: 'POST', deduplicate: true }
                     : {};
                 const data = await request(`${endpoint}?${query.toString()}`, requestOptions);
+                if (requestId !== this.holdingsRequestId) {
+                    return;
+                }
                 this.activeDepot = data.depot ?? this.activeDepot;
                 this.priceRefreshSettings = data.price_refresh_settings;
                 this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
@@ -232,14 +259,43 @@ export const useDepotStore = defineStore('depots', {
                 this.uiPreferences = data.ui_preferences ?? this.uiPreferences;
                 this.holdings = data.holdings ?? [];
                 this.holdingsPagination = data.meta ?? this.holdingsPagination;
+                const pendingHoldings = this.holdings.filter(holding => ['queued', 'running'].includes(holding.intraday_refresh?.status));
+                if (pendingHoldings.length > 0) {
+                    const isCurrent = () => requestId === this.holdingsRequestId;
+                    Promise.all(pendingHoldings.map(holding => waitForIntradayRefresh(holding.id, 'samples', isCurrent)))
+                        .then(() => {
+                            if (isCurrent()) {
+                                return this.loadWatchlistHoldings(page, { ...options, silent: true });
+                            }
+                        })
+                        .catch(error => {
+                            if (isCurrent()) {
+                                this.holdingsError = error.message;
+                                this.holdings = this.holdings.map(holding => ({ ...holding, historical_prices_fetching: false }));
+                            }
+                        });
+                }
+                const failedRefresh = this.holdings.find(holding => holding.intraday_refresh?.error);
+                if (failedRefresh) {
+                    this.holdingsError = failedRefresh.intraday_refresh.error;
+                }
             } catch (error) {
-                this.holdingsError = error.message;
+                if (requestId === this.holdingsRequestId) {
+                    this.holdingsError = error.message;
+                }
                 throw error;
             } finally {
-                if (!isSilent) {
+                if (requestId === this.holdingsRequestId) {
                     this.holdingsLoading = false;
                 }
             }
+        },
+        cancelIntradayRefreshes() {
+            this.intradayRequestVersion += 1;
+            this.holdingsRequestId += 1;
+            this.holdingsLoading = false;
+            this.analyzeIntradayCandlesRequestedId = null;
+            this.analyzeIntradayCandlesLoading = false;
         },
         async loadActiveDepotHoldings(page = 1) {
             return await this.loadWatchlistHoldings(page);
@@ -702,12 +758,26 @@ export const useDepotStore = defineStore('depots', {
         },
         async ensureIndexWatchItemPrices(id, range = null) {
             this.holdingsError = '';
+            const requestVersion = this.intradayRequestVersion;
 
             try {
                 const query = range ? `?range=${encodeURIComponent(range)}` : '';
-                const data = await request(`/admin/index-watch-items/${id}/prices/ensure${query}`, {
-                    method: 'POST',
+                let data = await request(`/admin/index-watch-items/${id}/prices/ensure${query}`, {
+                    method: 'POST', deduplicate: true,
                 });
+                for (let attempt = 0; ['queued', 'running'].includes(data.refresh?.status); attempt += 1) {
+                    if (attempt >= 150) {
+                        throw new Error('Index update is still pending. Please try again later.');
+                    }
+                    await new Promise(resolve => window.setTimeout(resolve, 2000));
+                    if (requestVersion !== this.intradayRequestVersion) {
+                        return data;
+                    }
+                    data = await request(`/admin/index-watch-items/${id}/prices/refresh${query}`);
+                    if (data.refresh?.status === 'idle') {
+                        throw new Error('Index update expired. Please try again.');
+                    }
+                }
 
                 if (data.index) {
                     this.indexWatchItems = this.indexWatchItems.map((item) => {
@@ -1006,14 +1076,29 @@ export const useDepotStore = defineStore('depots', {
             }
         },
         async loadHoldingIntradayCandles(id) {
+            const requestVersion = this.intradayRequestVersion;
             this.analyzeIntradayCandlesRequestedId = id;
             this.analyzeIntradayCandlesLoading = true;
             this.analyzeIntradayCandlesError = '';
 
             try {
-                const data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`, {
-                    method: 'POST',
+                let data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`, {
+                    method: 'POST', deduplicate: true,
                 });
+
+                if (this.analyzeIntradayCandlesRequestedId === id) {
+                    this.analyzeIntradayCandles = data;
+                }
+                if (['queued', 'running'].includes(data.refresh?.status)) {
+                    const completed = await waitForIntradayRefresh(id, 'detail', () => this.intradayRequestVersion === requestVersion && this.analyzeIntradayCandlesRequestedId === id);
+                    if (!completed) {
+                        return data;
+                    }
+                    data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`, { method: 'POST', deduplicate: true });
+                }
+                if (data.refresh?.error) {
+                    throw new Error(data.refresh.error);
+                }
 
                 if (this.analyzeIntradayCandlesRequestedId === id) {
                     this.analyzeIntradayCandles = data;
@@ -1034,6 +1119,7 @@ export const useDepotStore = defineStore('depots', {
             }
         },
         async loadExpandedHoldingIntradayCandles(id) {
+            const requestVersion = this.intradayRequestVersion;
             this.holdingIntradayCandlesLoading = {
                 ...this.holdingIntradayCandlesLoading,
                 [id]: true,
@@ -1044,9 +1130,20 @@ export const useDepotStore = defineStore('depots', {
             };
 
             try {
-                const data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`, {
-                    method: 'POST',
+                let data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`, {
+                    method: 'POST', deduplicate: true,
                 });
+                this.holdingIntradayCandles = { ...this.holdingIntradayCandles, [id]: data };
+                if (['queued', 'running'].includes(data.refresh?.status)) {
+                    const completed = await waitForIntradayRefresh(id, 'detail', () => this.intradayRequestVersion === requestVersion);
+                    if (!completed) {
+                        return data;
+                    }
+                    data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`, { method: 'POST', deduplicate: true });
+                }
+                if (data.refresh?.error) {
+                    throw new Error(data.refresh.error);
+                }
 
                 this.holdingIntradayCandles = {
                     ...this.holdingIntradayCandles,

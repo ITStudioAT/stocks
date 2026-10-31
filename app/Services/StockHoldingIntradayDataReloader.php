@@ -140,8 +140,8 @@ class StockHoldingIntradayDataReloader
 
         $candlesByDate = StockHoldingIntradayCandle::query()
             ->where('stock_holding_id', $holding->id)
-            ->where('interval', self::Interval)
-            ->where('source_key', self::SourceKey)
+            ->whereIn('interval', FreeIntradayMarketData::Intervals)
+            ->whereIn('source_key', FreeIntradayMarketData::CandleSources)
             ->where(function ($query) use ($tradeDates): void {
                 foreach ($tradeDates as $tradingDate) {
                     $query->orWhereDate('trading_date', $tradingDate);
@@ -183,7 +183,8 @@ class StockHoldingIntradayDataReloader
             ->map(fn (array $day): array => [
                 'title' => 'Intraday '.$this->displayDate($day['date']->toDateString()).' - '.self::Interval,
                 'trading_date' => $day['date']->toDateString(),
-                'interval' => self::Interval,
+                'interval' => $this->intervalLabel($candlesByDate->get($day['date']->toDateString()) ?? collect()),
+                'notice' => FreeIntradayMarketData::Notice,
                 'overview' => $day['overview'],
                 'rows' => ($candlesByDate->get($day['date']->toDateString()) ?? collect())
                     ->map(fn (StockHoldingIntradayCandle $candle): array => $this->candlePayload($candle))
@@ -227,8 +228,8 @@ class StockHoldingIntradayDataReloader
     {
         return StockHoldingIntradayCandle::query()
             ->where('stock_holding_id', $holding->id)
-            ->where('interval', self::Interval)
-            ->where('source_key', self::SourceKey)
+            ->whereIn('interval', FreeIntradayMarketData::Intervals)
+            ->whereIn('source_key', FreeIntradayMarketData::CandleSources)
             ->whereDate('trading_date', $tradingDate)
             ->where(function ($query): void {
                 $query
@@ -252,8 +253,8 @@ class StockHoldingIntradayDataReloader
 
         $existingAsOf = StockHoldingIntradayCandle::query()
             ->where('stock_holding_id', $holding->id)
-            ->where('interval', self::Interval)
-            ->where('source_key', self::SourceKey)
+            ->whereIn('interval', FreeIntradayMarketData::Intervals)
+            ->whereIn('source_key', FreeIntradayMarketData::CandleSources)
             ->whereIn('as_of', collect($rows)->map(fn (array $row): Carbon => $row['as_of'])->all())
             ->pluck('as_of')
             ->map(fn (mixed $asOf): string => Carbon::parse($asOf)->utc()->toDateTimeString())
@@ -841,8 +842,8 @@ class StockHoldingIntradayDataReloader
         return StockHolding::query()
             ->leftJoin('stock_holding_intraday_candles', function ($join): void {
                 $join->on('stock_holdings.id', '=', 'stock_holding_intraday_candles.stock_holding_id')
-                    ->where('stock_holding_intraday_candles.interval', self::Interval)
-                    ->where('stock_holding_intraday_candles.source_key', self::SourceKey);
+                    ->whereIn('stock_holding_intraday_candles.interval', FreeIntradayMarketData::Intervals)
+                    ->whereIn('stock_holding_intraday_candles.source_key', FreeIntradayMarketData::CandleSources);
             })
             ->groupBy(
                 'stock_holdings.id',
@@ -851,6 +852,7 @@ class StockHoldingIntradayDataReloader
                 'stock_holdings.exchange',
                 'stock_holdings.mic_code',
                 'stock_holdings.currency',
+                'stock_holdings.isin',
             )
             ->havingRaw('MAX(stock_holding_intraday_candles.trading_date) IS NULL OR DATE(MAX(stock_holding_intraday_candles.trading_date)) < ?', [
                 $dateTo->toDateString(),
@@ -863,6 +865,7 @@ class StockHoldingIntradayDataReloader
                 'stock_holdings.exchange',
                 'stock_holdings.mic_code',
                 'stock_holdings.currency',
+                'stock_holdings.isin',
             ])
             ->selectRaw('MAX(stock_holding_intraday_candles.trading_date) as latest_date')
             ->get();
@@ -896,8 +899,8 @@ class StockHoldingIntradayDataReloader
         $latestDate = $holding->getAttribute('latest_date')
             ?? StockHoldingIntradayCandle::query()
                 ->where('stock_holding_id', $holding->id)
-                ->where('interval', self::Interval)
-                ->where('source_key', self::SourceKey)
+                ->whereIn('interval', FreeIntradayMarketData::Intervals)
+                ->whereIn('source_key', FreeIntradayMarketData::CandleSources)
                 ->max('trading_date');
 
         return $latestDate === null
@@ -939,8 +942,8 @@ class StockHoldingIntradayDataReloader
     {
         return StockHoldingIntradayCandle::query()
             ->where('stock_holding_id', $holding->id)
-            ->where('interval', self::Interval)
-            ->where('source_key', self::SourceKey)
+            ->whereIn('interval', FreeIntradayMarketData::Intervals)
+            ->whereIn('source_key', FreeIntradayMarketData::CandleSources)
             ->whereBetween('trading_date', [$dateFrom->toDateString(), $dateTo->toDateString()])
             ->where(function ($query): void {
                 $query
@@ -1077,36 +1080,12 @@ class StockHoldingIntradayDataReloader
      */
     private function fetchIntradayRecords(StockHolding $holding, Carbon $fromDay, ?Carbon $toDay = null): array
     {
-        $toDay ??= $fromDay;
-        $from = $fromDay->copy()->startOfDay()->utc();
-        $to = $toDay->copy()->endOfDay()->utc();
-        $response = $this->eodhdApiClient->get('intraday/'.$this->eodhdSymbol($holding), [
-            'fmt' => 'json',
-            'interval' => self::Interval,
-            'from' => $from->timestamp,
-            'to' => $to->timestamp,
-        ]);
-
-        if ($response->failed()) {
-            throw new RuntimeException("EODHD intraday request failed with HTTP {$response->status()}.");
+        $records = app(FreeIntradayMarketData::class)->records($holding, $fromDay->copy()->startOfDay()->utc(), ($toDay ?? $fromDay)->copy()->endOfDay()->utc());
+        if ($records === []) {
+            throw new RuntimeException('No free intraday observations in requested window; coverage incomplete.');
         }
 
-        $payload = $this->errorSanitizer->payload($response->json());
-
-        if (! is_array($payload)) {
-            throw new RuntimeException('EODHD returned an invalid intraday response.');
-        }
-
-        if (($payload['status'] ?? null) === 'error') {
-            $message = is_string($payload['message'] ?? null) ? $payload['message'] : 'EODHD returned an error response.';
-
-            throw new RuntimeException($this->errorSanitizer->message($message));
-        }
-
-        return collect($payload)
-            ->filter(fn (mixed $record): bool => is_array($record))
-            ->values()
-            ->all();
+        return $records;
     }
 
     /**
@@ -1114,87 +1093,22 @@ class StockHoldingIntradayDataReloader
      */
     private function storeRecords(StockHolding $holding, Carbon $tradingDate, array $records): int
     {
-        $now = now();
-        $sourceUrl = $this->sourceUrl($holding, $tradingDate, $tradingDate);
-        $this->deleteEmptyPriceRows($holding, $tradingDate);
-
-        $rows = collect($records)
-            ->map(fn (array $record): ?array => $this->row($holding, $tradingDate, $record, $sourceUrl, $now))
-            ->filter()
-            ->values()
-            ->all();
-
-        if ($rows === []) {
-            return 0;
-        }
-
-        StockHoldingIntradayCandle::query()->upsert(
-            $rows,
-            uniqueBy: ['stock_holding_id', 'interval', 'as_of'],
-            update: ['trading_date', 'timestamp', 'gmtoffset', 'datetime', 'open', 'high', 'low', 'close', 'volume', 'currency', 'source_key', 'source_name', 'source_url', 'raw_payload', 'updated_at'],
-        );
-
-        return count($rows);
+        return app(FreeIntradayMarketData::class)->persist($holding, $records);
     }
 
     /**
      * @param  array<int, array<string, mixed>>  $records
      * @param  array<string, true>  $missingDateKeys
      */
-    private function storeRangeRecords(
-        StockHolding $holding,
-        Carbon $fromDay,
-        Carbon $toDay,
-        array $records,
-        string $timezone,
-        array $missingDateKeys,
-        StockHoldingIntradayReloadRun $run,
-        string $holdingName,
-    ): int {
-        $now = now();
-        $sourceUrl = $this->sourceUrl($holding, $fromDay, $toDay);
+    private function storeRangeRecords(StockHolding $holding, Carbon $fromDay, Carbon $toDay, array $records, string $timezone, array $missingDateKeys, StockHoldingIntradayReloadRun $run, string $holdingName): int
+    {
+        $records = array_values(array_filter($records, function (array $record) use ($timezone, $missingDateKeys): bool {
+            $date = $this->recordTradingDate($record, $timezone);
 
-        $rows = collect($records)
-            ->map(function (array $record) use ($holding, $missingDateKeys, $now, $sourceUrl, $timezone): ?array {
-                $tradingDate = $this->recordTradingDate($record, $timezone);
+            return $date !== null && isset($missingDateKeys[$date->toDateString()]);
+        }));
 
-                if ($tradingDate === null || ! array_key_exists($tradingDate->toDateString(), $missingDateKeys)) {
-                    return null;
-                }
-
-                return $this->row($holding, $tradingDate, $record, $sourceUrl, $now);
-            })
-            ->filter()
-            ->values()
-            ->all();
-
-        if ($rows === []) {
-            $run->update([
-                'current' => "Storing data for {$holdingName}",
-                'message' => "Storing data for {$holdingName}: 0/0 saved.",
-            ]);
-
-            return 0;
-        }
-
-        $storedCount = 0;
-        $totalCount = count($rows);
-
-        foreach (array_chunk($rows, 100) as $chunk) {
-            StockHoldingIntradayCandle::query()->upsert(
-                $chunk,
-                uniqueBy: ['stock_holding_id', 'interval', 'as_of'],
-                update: ['trading_date', 'timestamp', 'gmtoffset', 'datetime', 'open', 'high', 'low', 'close', 'volume', 'currency', 'source_key', 'source_name', 'source_url', 'raw_payload', 'updated_at'],
-            );
-
-            $storedCount += count($chunk);
-            $run->update([
-                'current' => "Storing data for {$holdingName}",
-                'message' => "Storing data for {$holdingName}: {$storedCount}/{$totalCount} saved...",
-            ]);
-        }
-
-        return $storedCount;
+        return app(FreeIntradayMarketData::class)->persist($holding, $records);
     }
 
     /**
@@ -1254,7 +1168,7 @@ class StockHoldingIntradayDataReloader
     {
         StockHoldingIntradayCandle::query()
             ->where('stock_holding_id', $holding->id)
-            ->where('interval', self::Interval)
+            ->whereIn('interval', FreeIntradayMarketData::Intervals)
             ->where('as_of', $asOf)
             ->delete();
     }
@@ -1263,7 +1177,7 @@ class StockHoldingIntradayDataReloader
     {
         StockHoldingIntradayCandle::query()
             ->where('stock_holding_id', $holding->id)
-            ->where('interval', self::Interval)
+            ->whereIn('interval', FreeIntradayMarketData::Intervals)
             ->whereDate('trading_date', $tradingDate->toDateString())
             ->whereNull('open')
             ->whereNull('high')
@@ -1315,6 +1229,14 @@ class StockHoldingIntradayDataReloader
         ];
     }
 
+    /** @param Collection<int, StockHoldingIntradayCandle> $candles */
+    private function intervalLabel(Collection $candles): string
+    {
+        $intervals = $candles->pluck('interval')->unique();
+
+        return $intervals->count() > 1 ? 'mixed' : ($intervals->first() ?? '5m');
+    }
+
     private function rawDateTime(StockHoldingIntradayCandle $candle, string $key): ?string
     {
         $value = $candle->getRawOriginal($key);
@@ -1328,11 +1250,8 @@ class StockHoldingIntradayDataReloader
 
     private function sourceUrl(StockHolding $holding, Carbon $fromDay, Carbon $toDay): string
     {
-        $from = $fromDay->copy()->startOfDay()->utc()->timestamp;
-        $to = $toDay->copy()->endOfDay()->utc()->timestamp;
-        $baseUrl = rtrim((string) config('services.eodhd.base_url', 'https://eodhd.com/api'), '/');
-
-        return "{$baseUrl}/intraday/{$this->eodhdSymbol($holding)}?fmt=json&interval=".self::Interval."&from={$from}&to={$to}";
+        return YahooFinanceMarketData::supports($holding->only(['isin', 'symbol', 'exchange', 'currency']))
+            ? 'https://finance.yahoo.com/quote/'.rawurlencode($holding->symbol).'/' : DeutscheBoerseDelayedData::CatalogUrl;
     }
 
     private function eodhdSymbol(StockHolding $holding): string

@@ -1,5 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useDepotStore } from '../../../resources/js/stores/depots';
 
 function jsonResponse(data, options = {}) {
@@ -11,8 +11,95 @@ function jsonResponse(data, options = {}) {
 }
 
 describe('useDepotStore', () => {
+    afterEach(() => vi.useRealTimers());
     beforeEach(() => {
         setActivePinia(createPinia());
+    });
+
+    it('keeps stored candles visible while a queued refresh runs and reloads them after completion', async () => {
+        vi.useFakeTimers();
+        const stored = { intraday: { rows: [{ close: '100' }] }, refresh: { status: 'queued' } };
+        const completed = { intraday: { rows: [{ close: '101' }] }, refresh: { status: 'finished' } };
+        const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(stored))
+            .mockResolvedValueOnce(jsonResponse({ refresh: { status: 'running' } }))
+            .mockResolvedValueOnce(jsonResponse({ refresh: { status: 'finished' } }))
+            .mockResolvedValueOnce(jsonResponse(completed));
+        vi.stubGlobal('fetch', fetchMock);
+        const depots = useDepotStore();
+        const loading = depots.loadHoldingIntradayCandles(7);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(depots.analyzeIntradayCandles.intraday.rows[0].close).toBe('100');
+        expect(depots.analyzeIntradayCandlesLoading).toBe(true);
+        await vi.advanceTimersByTimeAsync(4000);
+        await loading;
+        expect(depots.analyzeIntradayCandles.intraday.rows[0].close).toBe('101');
+        expect(depots.analyzeIntradayCandlesLoading).toBe(false);
+        expect(fetchMock).toHaveBeenNthCalledWith(2, '/admin/watchlist/holdings/7/intraday-refresh/detail', expect.any(Object));
+    });
+
+    it('polls an index chart without repeating the provider-triggering POST', async () => {
+        vi.useFakeTimers();
+        const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ index: { id: 3, latest_price: '100' }, refresh: { status: 'queued' } }))
+            .mockResolvedValueOnce(jsonResponse({ index: { id: 3, latest_price: '101' }, refresh: { status: 'finished' } }));
+        vi.stubGlobal('fetch', fetchMock);
+        const depots = useDepotStore();
+        depots.indexWatchItems = [{ id: 3, latest_price: '100' }];
+        const loading = depots.ensureIndexWatchItemPrices(3, 'intraday');
+        await vi.advanceTimersByTimeAsync(2000);
+        expect((await loading).index.latest_price).toBe('101');
+        expect(depots.indexWatchItems[0].latest_price).toBe('101');
+        expect(fetchMock).toHaveBeenNthCalledWith(1, '/admin/index-watch-items/3/prices/ensure?range=intraday', expect.objectContaining({ method: 'POST' }));
+        expect(fetchMock).toHaveBeenNthCalledWith(2, '/admin/index-watch-items/3/prices/refresh?range=intraday', expect.not.objectContaining({ method: 'POST' }));
+    });
+
+    it('refreshes missing stock chart samples in the background without keeping the list request open', async () => {
+        vi.useFakeTimers();
+        const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ holdings: [{ id: 4, historical_prices_fetching: true, intraday_refresh: { status: 'queued' } }] }))
+            .mockResolvedValueOnce(jsonResponse({ refresh: { status: 'finished' } }))
+            .mockResolvedValueOnce(jsonResponse({ holdings: [{ id: 4, historical_prices_fetching: false, intraday_refresh: { status: 'finished' }, intraday_prices: [{ price: '101' }] }] }));
+        vi.stubGlobal('fetch', fetchMock);
+        const depots = useDepotStore();
+        await depots.loadWatchlistHoldings(1, { includeCharts: true, chartStockId: 4 });
+        expect(depots.holdingsLoading).toBe(false);
+        expect(depots.holdings[0].historical_prices_fetching).toBe(true);
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(depots.holdings[0].historical_prices_fetching).toBe(false);
+        expect(depots.holdings[0].intraday_prices[0].price).toBe('101');
+    });
+
+    it('stops polling after leaving a view and reports queue failures', async () => {
+        vi.useFakeTimers();
+        const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ refresh: { status: 'queued' } }));
+        vi.stubGlobal('fetch', fetchMock);
+        const depots = useDepotStore();
+        const loading = depots.loadHoldingIntradayCandles(7);
+        await vi.advanceTimersByTimeAsync(0);
+        depots.cancelIntradayRefreshes();
+        await vi.advanceTimersByTimeAsync(2000);
+        await loading;
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+
+        fetchMock.mockResolvedValueOnce(jsonResponse({ refresh: { status: 'queued' } }))
+            .mockResolvedValueOnce(jsonResponse({ refresh: { status: 'failed', error: 'Provider unavailable' } }));
+        const failed = depots.loadHoldingIntradayCandles(8).catch(error => error);
+        await vi.advanceTimersByTimeAsync(2000);
+        expect(await failed).toMatchObject({ message: 'Provider unavailable' });
+        expect(depots.analyzeIntradayCandlesError).toBe('Provider unavailable');
+        expect(depots.analyzeIntradayCandlesLoading).toBe(false);
+    });
+
+    it('does not replace a newer holding selection with a late previous response', async () => {
+        let resolveOlder;
+        const fetchMock = vi.fn().mockImplementationOnce(() => new Promise(resolve => { resolveOlder = resolve; }))
+            .mockResolvedValueOnce(jsonResponse({ holdings: [{ id: 2 }] }));
+        vi.stubGlobal('fetch', fetchMock);
+        const depots = useDepotStore();
+        const older = depots.loadWatchlistHoldings(1);
+        await depots.loadWatchlistHoldings(2, { silent: true });
+        resolveOlder(jsonResponse({ holdings: [{ id: 1 }] }));
+        await older;
+        expect(depots.holdings).toEqual([{ id: 2 }]);
+        expect(depots.holdingsLoading).toBe(false);
     });
 
     it('stores stock schedule status from an EODHD realtime sync', async () => {

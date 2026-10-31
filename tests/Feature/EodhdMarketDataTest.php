@@ -23,6 +23,8 @@ class EodhdMarketDataTest extends TestCase
             'eodhd_realtime',
             'eodhd_intraday',
             'eodhd_eod',
+            'deutsche_boerse_trade',
+            'yahoo_intraday',
         ], EodhdMarketData::sourceKeys());
     }
 
@@ -127,64 +129,21 @@ class EodhdMarketDataTest extends TestCase
 
     public function test_intraday_samples_are_retrieved_without_using_the_realtime_endpoint(): void
     {
-        config(['services.eodhd.key' => 'test-token']);
         $this->travelTo(Carbon::parse('2026-06-05 12:00:00', 'Europe/Vienna'));
         $holding = $this->xetraHolding();
-
-        Http::fake(function (Request $request) {
-            if (str_contains($request->url(), '/intraday/AMES.XETRA')) {
-                return Http::response([
-                    [
-                        'timestamp' => Carbon::parse('2026-06-05 07:00:00', 'UTC')->timestamp,
-                        'datetime' => '2026-06-05 07:00:00',
-                    ],
-                    [
-                        'timestamp' => Carbon::parse('2026-06-05 07:05:00', 'UTC')->timestamp,
-                        'datetime' => '2026-06-05 07:05:00',
-                        'open' => 470.15,
-                        'high' => 470.15,
-                        'low' => 470.15,
-                        'close' => 470.15,
-                        'api_token' => 'provider-echoed-intraday-secret',
-                    ],
-                    [
-                        'timestamp' => Carbon::parse('2026-06-05 09:55:00', 'UTC')->timestamp,
-                        'datetime' => '2026-06-05 09:55:00',
-                        'open' => 472.8,
-                        'high' => 472.8,
-                        'low' => 472.8,
-                        'close' => 472.8,
-                        'api_token' => 'provider-echoed-intraday-secret',
-                    ],
-                ]);
-            }
-
-            return Http::response([
-                'status' => 'error',
-                'message' => 'Unexpected endpoint.',
-            ], 500);
-        });
-
+        $this->fakeEuropeanTrades([['holding' => $holding, 'price' => 472.8, 'at' => '2026-06-05 09:45:00']]);
         app(EodhdMarketData::class)->ensureIntradaySamples($holding);
         app(EodhdMarketData::class)->ensureIntradaySamples($holding->refresh());
-
-        $this->assertSame(2, StockHoldingIntradayCandle::query()->where('stock_holding_id', $holding->id)->count());
-        $storedPayloads = StockHoldingIntradayCandle::query()
-            ->where('stock_holding_id', $holding->id)
-            ->get()
-            ->pluck('raw_payload');
-        $this->assertSame(['[redacted]', '[redacted]'], $storedPayloads->pluck('api_token')->all());
-        $this->assertStringNotContainsString('provider-echoed-intraday-secret', json_encode($storedPayloads, JSON_THROW_ON_ERROR));
-        $this->assertDatabaseMissing('stock_holding_intraday_candles', [
-            'stock_holding_id' => $holding->id,
-            'as_of' => '2026-06-05 07:00:00',
-        ]);
-        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), '/real-time/AMES.XETRA'));
+        $this->assertDatabaseCount('stock_holding_intraday_candles', 1);
+        $row = StockHoldingIntradayCandle::query()->firstOrFail();
+        $this->assertSame('trade', $row->interval);
+        $this->assertNull($row->open);
+        $this->assertSame('472.80000000', $row->close);
+        $this->assertFalse($row->raw_payload['coverage_complete']);
+        Http::assertSentCount(2);
+        Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
 
-    /**
-     * @param  array<string, mixed>  $attributes
-     */
     private function xetraHolding(array $attributes = []): StockHolding
     {
         return StockHolding::factory()->create([
