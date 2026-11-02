@@ -9,6 +9,7 @@ use Illuminate\Contracts\Auth\Authenticatable as UserContract;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 
 abstract class TestCase extends BaseTestCase
@@ -22,6 +23,8 @@ abstract class TestCase extends BaseTestCase
         }
 
         parent::setUp();
+
+        config(['services.free_intraday.request_interval_ms' => 0]);
 
         $this->withoutVite();
     }
@@ -44,13 +47,40 @@ abstract class TestCase extends BaseTestCase
     /** @param array<int, array{holding: StockHolding, price: float, at: string, mic?: string}> $trades */
     protected function fakeEuropeanTrades(array $trades): void
     {
+        Storage::fake('local');
         $files = [];
+        $times = [];
         foreach ($trades as $trade) {
             $date = Carbon::parse($trade['at'], 'UTC');
+            $times[] = $date->copy()->setTimezone('Europe/Berlin')->format('H:i');
             $name = 'DETR-posttrade-'.$date->format('Y-m-d\TH_i').'.json.gz';
             $files[$name][] = json_encode(['messageId' => 'posttrade', 'instrumentIdentificationCode' => $trade['holding']->isin,
                 'priceCurrency' => $trade['holding']->currency, 'price' => $trade['price'], 'priceNotation' => 1,
                 'venueOfExecution' => $trade['mic'] ?? 'XETA', 'tradingDateAndTime' => $date->format('Y-m-d\TH:i:s.000000000\Z')], JSON_THROW_ON_ERROR);
+        }
+        $start = $times === [] ? '09:00' : min($times);
+        $end = Carbon::parse($times === [] ? '09:00' : max($times))->addMinute()->format('H:i');
+        config(['services.free_intraday.session_start' => $start, 'services.free_intraday.session_end' => $end,
+            'services.free_intraday.batch_files' => 1200, 'services.free_intraday.batch_seconds' => 60]);
+        $today = now('Europe/Berlin')->startOfDay();
+        $previous = $today->copy()->subWeekdays(1);
+        foreach ([$previous, $today] as $day) {
+            $from = $day->copy()->setTimeFromTimeString($start)->utc();
+            $until = $day->copy()->setTimeFromTimeString($end)->utc();
+            if ($day->lessThan($today)) {
+                $dayRows = [];
+                foreach ($files as $filename => $rows) {
+                    if (str_contains($filename, $day->toDateString())) {
+                        $dayRows = [...$dayRows, ...$rows];
+                    }
+                }
+                $files['DETR-posttrade-daily-'.$day->toDateString().'.json.gz'] = $dayRows;
+
+                continue;
+            }
+            for ($minute = $from->copy(); $minute->lessThan($until); $minute->addMinute()) {
+                $files['DETR-posttrade-'.$minute->format('Y-m-d\TH_i').'.json.gz'] ??= [];
+            }
         }
         Http::fake(function ($request) use ($files) {
             $name = basename(parse_url($request->url(), PHP_URL_PATH));

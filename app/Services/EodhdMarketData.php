@@ -116,7 +116,7 @@ class EodhdMarketData
         if ($quote !== null) {
             $quote->venue = $record['venue'];
             $quote->mic = $record['mic'];
-            $quote->sourceQuality = $record['interval'] === 'trade' ? 'exchange_delayed' : 'unofficial';
+            $quote->sourceQuality = in_array($record['interval'], ['trade', 'xtrade'], true) ? 'exchange_delayed' : 'unofficial';
         }
 
         return $quote ? $this->validatedHistoricalQuote($quote) : null;
@@ -371,6 +371,8 @@ class EodhdMarketData
             self::EodSourceKey,
             'deutsche_boerse_trade',
             'yahoo_intraday',
+            'xetra_posttrade',
+            'yahoo_xetra_intraday',
         ];
     }
 
@@ -1138,7 +1140,9 @@ class EodhdMarketData
                 'source_key' => $candle->source_key,
                 'source_name' => $candle->source_name,
                 'mic' => $candle->raw_payload['mic'] ?? null,
-                'coverage_complete' => false,
+                'coverage_complete' => $candle->raw_payload['coverage_complete'] ?? false,
+                'coverage_from' => $candle->raw_payload['coverage_from'] ?? null,
+                'coverage_until' => $candle->raw_payload['coverage_until'] ?? null,
                 'gmtoffset' => $candle->gmtoffset,
                 'datetime' => $candle->datetime,
                 'open' => $candle->open === null ? null : (string) $candle->open,

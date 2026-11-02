@@ -101,11 +101,13 @@ class StockHoldingIntradayDataReloader
         try {
             $records = $this->fetchIntradayRecords($holding, $day['date']);
             $storedCount = $this->storeRecords($holding, $day['date'], $records);
+            $coverage = app(FreeIntradayMarketData::class)->coverage($holding);
 
             $run->update([
-                'status' => 'finished',
+                'status' => $coverage['coverage_complete'] ? 'finished' : 'partial',
                 'stored_count' => $storedCount,
                 'message' => "{$storedCount} intraday candles loaded/updated.",
+                'error_summary' => ['instruments' => [$coverage]],
                 'finished_at' => now(),
             ]);
         } catch (Throwable $exception) {
@@ -404,6 +406,22 @@ class StockHoldingIntradayDataReloader
         ]);
     }
 
+    public function createRecentRun(): StockHoldingIntradayReloadRun
+    {
+        $date = now('Europe/Vienna')->startOfDay();
+
+        return StockHoldingIntradayReloadRun::query()->create([
+            'id' => 'intraday-recent-'.Str::uuid()->toString(),
+            'stock_holding_id' => null,
+            'status' => 'queued',
+            'total_count' => StockHolding::query()->count(),
+            'date_from' => $date->copy()->subDays(6)->toDateString(),
+            'date_to' => $date->toDateString(),
+            'started_at' => now(),
+            'message' => 'Recent free intraday import queued. '.FreeIntradayMarketData::Notice,
+        ]);
+    }
+
     public function createLatestMissingRun(Carbon $targetDate): StockHoldingIntradayReloadRun
     {
         $dateTo = $targetDate->copy()->startOfDay();
@@ -439,11 +457,6 @@ class StockHoldingIntradayDataReloader
             throw new RuntimeException('No intraday days could be resolved for this stock.');
         }
 
-        $tradeDays = collect($days)
-            ->filter(fn (array $day): bool => $day['is_trading_day'])
-            ->values()
-            ->all();
-
         $run = StockHoldingIntradayReloadRun::query()->create([
             'id' => 'intraday-'.Str::uuid()->toString(),
             'stock_holding_id' => $holding->id,
@@ -454,17 +467,14 @@ class StockHoldingIntradayDataReloader
         ]);
 
         try {
-            $storedCount = 0;
-
-            foreach ($tradeDays as $day) {
-                $records = $this->fetchIntradayRecords($holding, $day['date']);
-                $storedCount += $this->storeRecords($holding, $day['date'], $records);
-            }
+            $storedCount = $this->importRecentForHolding($holding, $days[array_key_last($days)]['date'], $days[0]['date']);
+            $coverage = app(FreeIntradayMarketData::class)->coverage($holding);
 
             $run->update([
-                'status' => 'finished',
+                'status' => $coverage['coverage_complete'] ? 'finished' : 'partial',
                 'stored_count' => $storedCount,
-                'message' => "{$storedCount} intraday candles loaded/updated.",
+                'message' => "{$storedCount} intraday observations/OHLC loaded/updated. ".FreeIntradayMarketData::Notice,
+                'error_summary' => ['instruments' => [$coverage]],
                 'finished_at' => now(),
             ]);
         } catch (Throwable $exception) {
@@ -496,9 +506,10 @@ class StockHoldingIntradayDataReloader
             'message' => 'Reloading intraday data...',
         ]);
 
+        $instrumentReports = [];
         StockHolding::query()
             ->orderBy('id')
-            ->chunkById(50, function ($holdings) use ($run): void {
+            ->chunkById(50, function ($holdings) use ($run, &$instrumentReports): void {
                 foreach ($holdings as $holding) {
                     $run->update([
                         'current' => $holding->name ?: $holding->symbol,
@@ -507,12 +518,12 @@ class StockHoldingIntradayDataReloader
                     try {
                         $holdingRun = $this->reload($holding);
                         $run->increment('stored_count', $holdingRun->stored_count);
-                        $run->increment('success_count');
+                        $instrumentReports = [...$instrumentReports, ...($holdingRun->error_summary['instruments'] ?? [])];
+                        $run->increment($holdingRun->status === 'finished' ? 'success_count' : 'failed_count');
                     } catch (Throwable $exception) {
                         $run->increment('failed_count');
-                        $run->update([
-                            'error_summary' => ['message' => $this->errorSanitizer->message($exception->getMessage(), 255)],
-                        ]);
+                        $instrumentReports[] = ['isin' => $holding->isin, 'symbol' => $holding->symbol, 'coverage_complete' => false,
+                            'error' => $this->errorSanitizer->message($exception->getMessage(), 255)];
                     } finally {
                         $run->increment('processed_count');
                     }
@@ -521,7 +532,9 @@ class StockHoldingIntradayDataReloader
 
         $run->refresh();
         $run->update([
-            'status' => $run->failed_count > 0 ? ($run->success_count > 0 ? 'partial' : 'failed') : 'finished',
+            'status' => $run->failed_count > 0 ? ($run->success_count > 0 || $run->stored_count > 0 ? 'partial' : 'failed') : 'finished',
+            'error_summary' => ['message' => $run->failed_count > 0 ? 'Coverage incomplete or unverified; see per-instrument diagnostics.' : null,
+                'instruments' => $instrumentReports],
             'current' => null,
             'message' => $this->reloadAllMessage([
                 'total' => $run->total_count,
@@ -535,6 +548,16 @@ class StockHoldingIntradayDataReloader
     }
 
     public function importMissingYear(string $runId): void
+    {
+        $this->importMissing($runId);
+    }
+
+    public function importRecent(string $runId): void
+    {
+        $this->importMissing($runId, recentOnly: true);
+    }
+
+    private function importMissing(string $runId, bool $recentOnly = false): void
     {
         $run = StockHoldingIntradayReloadRun::query()->find($runId);
 
@@ -551,22 +574,36 @@ class StockHoldingIntradayDataReloader
             'total_count' => StockHolding::query()->count(),
             'date_from' => $dateFrom->toDateString(),
             'date_to' => $dateTo->toDateString(),
-            'message' => 'Backfilling missing intraday candles...',
+            'message' => $recentOnly ? 'Importing recent free intraday observations...' : 'Backfilling missing intraday candles...',
         ]);
 
+        $instrumentReports = [];
         StockHolding::query()
             ->orderBy('id')
-            ->chunkById(50, function ($holdings) use ($dateFrom, $dateTo, $run): void {
+            ->chunkById(50, function ($holdings) use ($dateFrom, $dateTo, $run, $recentOnly, &$instrumentReports): void {
                 foreach ($holdings as $holding) {
                     $run->update([
                         'current' => $holding->name ?: $holding->symbol,
                     ]);
 
                     try {
-                        $storedCount = $this->backfillMissingForHolding($holding, $dateFrom, $dateTo, $run);
+                        $storedCount = $recentOnly
+                            ? $this->importRecentForHolding($holding, $dateFrom, $dateTo)
+                            : $this->backfillMissingForHolding($holding, $dateFrom, $dateTo, $run);
                         $run->increment('stored_count', $storedCount);
+                        if ($recentOnly) {
+                            $coverage = app(FreeIntradayMarketData::class)->coverage($holding);
+                            $instrumentReports[$holding->isin] = $coverage;
+                            if (! $coverage['coverage_complete'] && ! YahooFinanceMarketData::supports($holding->toArray())) {
+                                throw new RuntimeException($holding->symbol.': incomplete Xetra coverage; inspect pending files and instrument errors.');
+                            }
+                        }
                         $run->increment('success_count');
                     } catch (Throwable $exception) {
+                        if ($recentOnly) {
+                            $instrumentReports[$holding->isin] ??= ['isin' => $holding->isin, 'symbol' => $holding->symbol, 'coverage_complete' => false];
+                            $instrumentReports[$holding->isin]['error'] = $this->errorSanitizer->message($exception->getMessage(), 255);
+                        }
                         $run->increment('failed_count');
                         $run->update([
                             'error_summary' => ['message' => $this->errorSanitizer->message($exception->getMessage(), 255)],
@@ -578,10 +615,13 @@ class StockHoldingIntradayDataReloader
             });
 
         $run->refresh();
+        $incomplete = $recentOnly && collect($instrumentReports)->contains(fn (array $item): bool => ! $item['coverage_complete']);
         $run->update([
-            'status' => $run->failed_count > 0 ? ($run->success_count > 0 ? 'partial' : 'failed') : 'finished',
+            'status' => $run->failed_count > 0 ? ($run->success_count > 0 ? 'partial' : 'failed') : ($incomplete ? 'partial' : 'finished'),
+            ...($recentOnly ? ['error_summary' => ['message' => $incomplete ? 'Coverage incomplete or unverified; see per-instrument diagnostics.' : null,
+                'instruments' => array_values($instrumentReports)]] : []),
             'current' => null,
-            'message' => $this->reloadAllMessage([
+            'message' => ($recentOnly ? FreeIntradayMarketData::Notice.' ' : '').$this->reloadAllMessage([
                 'total' => $run->total_count,
                 'success_count' => $run->success_count,
                 'failed_count' => $run->failed_count,
@@ -687,7 +727,7 @@ class StockHoldingIntradayDataReloader
                         $run = $this->reload($holding);
                         $summary['stored_count'] += $run->stored_count;
 
-                        if ($run->status === 'failed') {
+                        if ($run->status !== 'finished') {
                             $summary['failed_count']++;
 
                             continue;
@@ -732,6 +772,7 @@ class StockHoldingIntradayDataReloader
             'stored_count' => $run->stored_count,
             'success_count' => $run->success_count,
             'failed_count' => $run->failed_count,
+            'instrument_coverage' => $run->error_summary['instruments'] ?? [],
             'error' => is_array($run->error_summary)
                 ? $this->errorSanitizer->payload($run->error_summary['message'] ?? null, 255)
                 : null,
@@ -795,6 +836,15 @@ class StockHoldingIntradayDataReloader
         return $storedCount;
     }
 
+    private function importRecentForHolding(StockHolding $holding, Carbon $dateFrom, Carbon $dateTo): int
+    {
+        $isUs = YahooFinanceMarketData::supports($holding->only(['isin', 'symbol', 'exchange', 'currency']));
+        $from = $dateFrom->copy()->max($isUs ? now('Europe/Vienna')->subDays(6)->startOfDay() : now('Europe/Berlin')->subWeekdays(1)->startOfDay());
+        $records = $this->fetchIntradayRecords($holding, $from, $dateTo);
+
+        return app(FreeIntradayMarketData::class)->persist($holding, $records);
+    }
+
     private function backfillLatestMissingForHolding(
         StockHolding $holding,
         Carbon $dateTo,
@@ -840,7 +890,7 @@ class StockHoldingIntradayDataReloader
     private function latestMissingHoldings(Carbon $dateTo): Collection
     {
         return StockHolding::query()
-            ->leftJoin('stock_holding_intraday_candles', function ($join): void {
+            ->leftJoinSub(StockHoldingIntradayCandle::query(), 'stock_holding_intraday_candles', function ($join): void {
                 $join->on('stock_holdings.id', '=', 'stock_holding_intraday_candles.stock_holding_id')
                     ->whereIn('stock_holding_intraday_candles.interval', FreeIntradayMarketData::Intervals)
                     ->whereIn('stock_holding_intraday_candles.source_key', FreeIntradayMarketData::CandleSources);
@@ -1080,12 +1130,7 @@ class StockHoldingIntradayDataReloader
      */
     private function fetchIntradayRecords(StockHolding $holding, Carbon $fromDay, ?Carbon $toDay = null): array
     {
-        $records = app(FreeIntradayMarketData::class)->records($holding, $fromDay->copy()->startOfDay()->utc(), ($toDay ?? $fromDay)->copy()->endOfDay()->utc());
-        if ($records === []) {
-            throw new RuntimeException('No free intraday observations in requested window; coverage incomplete.');
-        }
-
-        return $records;
+        return app(FreeIntradayMarketData::class)->records($holding, $fromDay->copy()->startOfDay()->utc(), ($toDay ?? $fromDay)->copy()->endOfDay()->utc());
     }
 
     /**

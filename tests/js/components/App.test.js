@@ -463,6 +463,9 @@ describe('App', () => {
         const points = trades.map((trade, index) => ({ ...trade, x: index * 10, y: 20 }));
         expect(wrapper.vm.analyzeSparklinePath(points)).toBe('');
         expect(wrapper.vm.analyzeSparklineAreaPath(points, { bottom: 100 })).toBe('');
+        const officialTrades = trades.map(trade => ({ ...trade, source_key: 'xetra_posttrade', source_name: null, interval: 'xtrade' }));
+        expect(wrapper.vm.normalizeAnalyzeChartPrices(officialTrades, 'month')).toEqual(officialTrades);
+        expect(wrapper.vm.analyzeSparklinePath(officialTrades.map((trade, index) => ({ ...trade, x: index * 10, y: 20 })))).toBe('');
         const usPoints = points.map(point => ({ ...point, source_key: 'yahoo_intraday', source_name: 'Yahoo Finance', interval: '5m' }));
         expect(wrapper.vm.analyzeSparklinePath(usPoints).match(/M /g)).toHaveLength(2);
         expect(wrapper.vm.analyzeSparklinePath(usPoints)).not.toContain(' L ');

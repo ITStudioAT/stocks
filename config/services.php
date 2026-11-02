@@ -2,6 +2,25 @@
 
 return [
 
+    'free_intraday' => [
+        'batch_files' => 32,
+        'batch_seconds' => 20,
+        'request_interval_ms' => 2500,
+        'session_start' => '08:00',
+        'session_end' => '22:01',
+        // Verified against issuer listings and Xetra ISIN/EUR trade events on 2026-11-02.
+        'yahoo_xetra_symbols' => [
+            'BGCZPX003174' => 'CZX.DE',
+            'IE00B53L4X51' => 'SXRY.DE',
+            'FR0007056841' => 'DJAM.DE',
+            'IE0008RX29L5' => 'WDEY.DE',
+            'FR0010930644' => 'AMEE.DE',
+            'IE00BKWQ0P07' => 'SPYU.DE',
+            'IE00BMH5Y327' => 'V9N.DE',
+            'AT0000821103' => 'UN9.DE',
+        ],
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Third Party Services

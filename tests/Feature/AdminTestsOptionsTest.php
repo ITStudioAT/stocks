@@ -72,13 +72,13 @@ class AdminTestsOptionsTest extends TestCase
         $holding = StockHolding::factory()->create(['symbol' => 'AMES', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
         $this->fakeEuropeanTrades([['holding' => $holding, 'price' => 499.9, 'at' => '2026-06-25 07:05:00']]);
         $this->actingAs($admin)->postJson("/admin/tests/stocks/{$holding->id}/intraday")->assertOk()
-            ->assertJsonPath('day.interval', 'trade')->assertJsonCount(1, 'day.rows')
-            ->assertJsonPath('day.rows.0.interval', 'trade')->assertJsonPath('day.rows.0.open', null)
+            ->assertJsonPath('day.interval', 'xtrade')->assertJsonCount(1, 'day.rows')
+            ->assertJsonPath('day.rows.0.interval', 'xtrade')->assertJsonPath('day.rows.0.open', null)
             ->assertJsonPath('day.rows.0.close', '499.90000000')->assertJsonPath('day.rows.0.currency', 'EUR')
-            ->assertJsonPath('day.rows.0.source_key', 'deutsche_boerse_trade')
-            ->assertJsonPath('day.rows.0.raw_payload.coverage_complete', false)
+            ->assertJsonPath('day.rows.0.source_key', 'xetra_posttrade')
+            ->assertJsonPath('day.rows.0.raw_payload.coverage_complete', true)
             ->assertJsonPath('refresh.status', 'finished')->assertJsonPath('refresh.stored_count', 1);
-        Http::assertSentCount(2);
+        Http::assertSentCount(3);
         Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
 
@@ -86,10 +86,21 @@ class AdminTestsOptionsTest extends TestCase
     {
         Carbon::setTestNow(Carbon::parse('2026-06-25 12:00:00', 'Europe/Vienna'));
         $holding = StockHolding::factory()->create(['symbol' => 'AMES', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
-        $this->fakeEuropeanTrades([]);
+        Http::fake(['https://mfs.deutsche-boerse.com/api/DETR-posttrade' => Http::response('', 503)]);
         $this->actingAs($this->adminUser())->postJson("/admin/tests/stocks/{$holding->id}/intraday")
             ->assertStatus(422)->assertJsonPath('stock.symbol', 'AMES')
-            ->assertJsonPath('message', 'No usable free intraday observation for AMES; coverage incomplete.');
+            ->assertJsonPath('message', 'No observations in requested free intraday window; coverage incomplete, no prices fabricated.');
+        $this->assertDatabaseCount('stock_holding_intraday_candles', 0);
+    }
+
+    public function test_admin_receives_no_trading_status_for_fully_checked_empty_files(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-06-25 12:00:00', 'Europe/Vienna'));
+        $holding = StockHolding::factory()->create(['symbol' => 'AMES', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
+        $this->fakeEuropeanTrades([]);
+        $this->actingAs($this->adminUser())->postJson("/admin/tests/stocks/{$holding->id}/intraday")->assertOk()
+            ->assertJsonPath('refresh.status', 'finished')->assertJsonPath('refresh.stored_count', 0)
+            ->assertJsonPath('refresh.instrument_coverage.0.status', 'no_trades');
         $this->assertDatabaseCount('stock_holding_intraday_candles', 0);
     }
 

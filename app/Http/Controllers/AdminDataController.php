@@ -301,6 +301,7 @@ class AdminDataController extends Controller
 
         return response()->json([
             'stocks' => $reloader->stockOptions(),
+            'free_intraday' => FreeIntradayMarketData::storedCoverage($holding),
             'selected_stock_id' => $holding?->id,
             'days' => $holding ? $reloader->candlePayloads($holding) : [],
             'refresh' => $run ? $reloader->refreshPayload($run) : $reloader->latestRefreshPayload($holding),

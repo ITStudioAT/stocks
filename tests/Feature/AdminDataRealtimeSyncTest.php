@@ -26,10 +26,10 @@ class AdminDataRealtimeSyncTest extends TestCase
             ->assertJsonPath('requested_count', 2)->assertJsonPath('stored_count', 2)->assertJsonPath('updated_count', 2)
             ->assertJsonPath('failed_count', 0)->assertJsonPath('price_refresh_settings.last_refreshed_at', '2026-06-05T12:05:00+02:00')
             ->assertJsonPath('price_refresh_settings.next_refresh_at', '2026-06-05T12:25:00+02:00');
-        $this->assertDatabaseHas('stock_realtime_prices', ['stock_holding_id' => $ames->id, 'source_key' => 'deutsche_boerse_trade', 'price' => '10.25000000']);
-        $this->assertDatabaseHas('stock_realtime_prices', ['stock_holding_id' => $leer->id, 'source_key' => 'deutsche_boerse_trade', 'price' => '20.75000000']);
+        $this->assertDatabaseHas('stock_realtime_prices', ['stock_holding_id' => $ames->id, 'source_key' => 'xetra_posttrade', 'price' => '10.25000000']);
+        $this->assertDatabaseHas('stock_realtime_prices', ['stock_holding_id' => $leer->id, 'source_key' => 'xetra_posttrade', 'price' => '20.75000000']);
         $this->assertDatabaseHas('stock_holdings', ['id' => $ames->id, 'latest_price' => '10.000000']);
-        Http::assertSentCount(2);
+        Http::assertSentCount(3);
         Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
 

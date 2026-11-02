@@ -2,8 +2,10 @@
 
 namespace App\Models;
 
+use App\Services\IntradayMarketIdentity;
 use Database\Factories\StockRealtimePriceFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -12,6 +14,11 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 #[Fillable(['stock_holding_id', 'legacy_stock_price_id', 'instrument_key', 'quote_hash', 'source_key', 'source_name', 'source_url', 'source_quality', 'venue', 'mic', 'isin', 'wkn', 'symbol', 'currency', 'bid', 'ask', 'last', 'close', 'nav', 'price', 'price_type', 'spread_abs', 'spread_pct', 'as_of', 'fetched_at', 'freshness_status', 'validation_status', 'validation_errors', 'raw_text_hash', 'raw_payload', 'trading_times'])]
 class StockRealtimePrice extends Model
 {
+    protected static function booted(): void
+    {
+        static::addGlobalScope('configured-market', fn (Builder $query) => IntradayMarketIdentity::constrain($query, quote: true));
+    }
+
     /** @use HasFactory<StockRealtimePriceFactory> */
     use HasFactory;
 

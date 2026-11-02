@@ -693,14 +693,15 @@ class PriceRefreshSettingsTest extends TestCase
         $response = $this->actingAs($admin)
             ->postJson('/admin/intraday-backfill/run')
             ->assertAccepted()
-            ->assertJsonPath('message', 'Missing intraday backfill queued.')
+            ->assertJsonPath('message', 'Recent free intraday import queued.')
             ->assertJsonPath('intraday_backfill_refresh.status', 'queued')
             ->assertJsonPath('intraday_backfill_refresh.total', 2)
+            ->assertJsonPath('intraday_backfill_refresh.date_from', '2026-06-06')
             ->assertJsonPath('intraday_backfill_refresh.date_to', '2026-06-12');
 
         $refreshId = $response->json('intraday_backfill_refresh.refresh_id');
 
-        Queue::assertPushed(BackfillMissingStockHoldingIntradayCandles::class, fn (BackfillMissingStockHoldingIntradayCandles $job): bool => $job->refreshId === $refreshId);
+        Queue::assertPushed(BackfillMissingStockHoldingIntradayCandles::class, fn (BackfillMissingStockHoldingIntradayCandles $job): bool => $job->refreshId === $refreshId && $job->recentOnly);
 
         $config = AppConfig::query()->where('key', 'intraday_candle_backfill.schedule')->firstOrFail();
 

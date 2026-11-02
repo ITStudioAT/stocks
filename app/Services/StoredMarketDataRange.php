@@ -85,8 +85,8 @@ class StoredMarketDataRange
             ),
             MarketDataType::IntradayData => $this->summarize(
                 $holding->intradayCandles()->getQuery()
-                    ->where('interval', '5m')
-                    ->where('source_key', 'eodhd_intraday')
+                    ->whereIn('interval', FreeIntradayMarketData::Intervals)
+                    ->whereIn('source_key', FreeIntradayMarketData::CandleSources)
                     ->whereNotNull('close'),
                 'trading_date',
             ),

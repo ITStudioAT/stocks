@@ -166,7 +166,7 @@ class AdminPriceRefreshSettingsController extends Controller
         $run = $intradayBackfillScheduler->dispatchNow();
 
         return response()->json([
-            'message' => 'Missing intraday backfill queued.',
+            'message' => 'Recent free intraday import queued.',
             'intraday_backfill_settings' => $intradayBackfillScheduler->payload(),
             'intraday_backfill_refresh' => $run ? $intradayDataReloader->refreshPayload($run) : null,
             'eodhd_api_usage' => $eodhdApiUsage->payload(),

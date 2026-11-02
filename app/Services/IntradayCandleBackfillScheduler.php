@@ -48,7 +48,7 @@ class IntradayCandleBackfillScheduler
         return [
             ...$settings,
             'status' => $isRunning ? 'updating' : 'waiting',
-            'status_label' => $isRunning ? 'Backfilling intraday data' : 'waiting',
+            'status_label' => $isRunning ? 'Importing recent intraday data' : 'waiting',
         ];
     }
 
@@ -108,9 +108,9 @@ class IntradayCandleBackfillScheduler
         $run = $this->reloader->runningRun();
 
         if (! $run) {
-            $run = $this->reloader->createMissingYearRun();
+            $run = $this->reloader->createRecentRun();
 
-            BackfillMissingStockHoldingIntradayCandles::dispatch($run->id);
+            BackfillMissingStockHoldingIntradayCandles::dispatch($run->id, recentOnly: true);
         }
 
         $now = now(self::Timezone);

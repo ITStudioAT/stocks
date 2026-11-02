@@ -394,7 +394,7 @@ class AdminDataIntradayTest extends TestCase
         $run = app(StockHoldingIntradayDataReloader::class)->createRun();
         app(StockHoldingIntradayDataReloader::class)->import($run->id);
         $this->actingAs($this->adminUser())->getJson("/admin/data/intraday/reload/{$run->id}?stock={$holding->id}")->assertOk()
-            ->assertJsonPath('refresh.status', 'failed')->assertJsonPath('refresh.stored_count', 0)
+            ->assertJsonPath('refresh.status', 'finished')->assertJsonPath('refresh.stored_count', 0)
             ->assertJsonPath('refresh.processed', 1)->assertJsonPath('days.1.overview', 'Market closed: Corpus Christi')
             ->assertJsonCount(0, 'days.1.rows');
         $this->assertDatabaseCount('stock_holding_intraday_candles', 0);

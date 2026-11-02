@@ -8,6 +8,7 @@ import { useRoleStore } from './stores/roles';
 import { useUserStore } from './stores/users';
 import { formatAdaptiveNumber, formatPriceValue } from './utils/numberFormatters';
 import DashboardMarketDataTests from './DashboardMarketDataTests.vue';
+import FreeIntradayCoverage from './FreeIntradayCoverage.vue';
 import {
     calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio,
     calculateAnalyzeTrendV2BuyOncePortfolio,
@@ -9299,7 +9300,7 @@ function limitAnalyzeChartPrices(prices) {
 }
 
 function isFreeIntradayPoint(price) {
-    return ['deutsche_boerse_trade', 'yahoo_intraday'].includes(price.source_key)
+    return ['deutsche_boerse_trade', 'xetra_posttrade', 'yahoo_intraday', 'yahoo_xetra_intraday'].includes(price.source_key)
         || ['observed_trade', 'regular_market_last'].includes(price.price_type)
         || /Deutsche Börse|Yahoo Finance/.test(price.source_name ?? '');
 }
@@ -10362,7 +10363,8 @@ function analyzeSparklineExtremumMarker(point, direction, plot) {
 }
 
 function analyzeSparklinePath(points) {
-    if (points.some(point => point.interval === 'trade' || point.price_type === 'observed_trade'
+    if (points.some(point => ['trade', 'xtrade'].includes(point.interval) || point.price_type === 'observed_trade'
+        || point.source_key === 'xetra_posttrade'
         || point.source_key === 'deutsche_boerse_trade' || /Deutsche Börse/.test(point.source_name ?? ''))) {
         return '';
     }
@@ -19124,6 +19126,7 @@ function formatIndexDataUpdateSchedule(settings) {
                             <v-card-text v-else>
                                 Keine gespeicherten {{ dataTypeLabel(activeDataType) }} für diese Auswahl.
                             </v-card-text>
+                            <FreeIntradayCoverage v-if="selectedDataDateRange?.free_intraday" :report="selectedDataDateRange.free_intraday" />
                         </v-card>
 
                         <section

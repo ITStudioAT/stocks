@@ -17,10 +17,17 @@ class BackfillMissingStockHoldingIntradayCandles implements ShouldQueue
 
     public function __construct(
         public string $refreshId,
+        public bool $recentOnly = false,
     ) {}
 
     public function handle(StockHoldingIntradayDataReloader $reloader): void
     {
+        if ($this->recentOnly ?? false) {
+            $reloader->importRecent($this->refreshId);
+
+            return;
+        }
+
         $reloader->importMissingYear($this->refreshId);
     }
 

@@ -1599,10 +1599,10 @@ class AdminDepotHoldingTest extends TestCase
         $this->fakeEuropeanTrades([['holding' => $holding, 'price' => 471.75, 'at' => '2026-06-05 15:30:00']]);
         $this->completeQueuedChartRefresh($holding, 'detail');
         $this->postJson("/admin/watchlist/holdings/{$holding->id}/intraday-candles")->assertOk()
-            ->assertJsonPath('intraday.trading_date', '2026-06-05')->assertJsonPath('intraday.interval', 'trade')
+            ->assertJsonPath('intraday.trading_date', '2026-06-05')->assertJsonPath('intraday.interval', 'xtrade')
             ->assertJsonCount(7, 'intraday_days')->assertJsonCount(1, 'intraday.rows')
-            ->assertJsonPath('intraday.rows.0.interval', 'trade')->assertJsonPath('intraday.rows.0.open', null)
-            ->assertJsonPath('intraday.rows.0.close', '471.75000000')->assertJsonPath('intraday.rows.0.coverage_complete', false);
+            ->assertJsonPath('intraday.rows.0.interval', 'xtrade')->assertJsonPath('intraday.rows.0.open', null)
+            ->assertJsonPath('intraday.rows.0.close', '471.75000000')->assertJsonPath('intraday.rows.0.coverage_complete', true);
         $this->assertDatabaseCount('stock_holding_intraday_candles', 1);
         Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
@@ -1814,7 +1814,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->completeQueuedChartRefresh($holding, 'samples');
         $this->postJson('/admin/watchlist/holdings/charts?include_charts=1')->assertOk()
             ->assertJsonCount(1, 'holdings.0.intraday_prices')->assertJsonPath('holdings.0.intraday_prices.0.price', '470.15000000');
-        $this->assertDatabaseHas('stock_holding_intraday_candles', ['stock_holding_id' => $holding->id, 'interval' => 'trade', 'source_key' => 'deutsche_boerse_trade']);
+        $this->assertDatabaseHas('stock_holding_intraday_candles', ['stock_holding_id' => $holding->id, 'interval' => 'xtrade', 'source_key' => 'xetra_posttrade']);
         Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
 
@@ -1881,7 +1881,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->fakeEuropeanTrades([]);
         $this->completeQueuedChartRefresh($holding, 'samples');
         $this->postJson('/admin/watchlist/holdings/charts?include_charts=1')->assertOk()->assertJsonCount(0, 'holdings.0.intraday_prices');
-        $this->assertSame('failed', app(ChartDataRefresh::class)->status($holding, 'samples')['status']);
+        $this->assertSame('finished', app(ChartDataRefresh::class)->status($holding, 'samples')['status']);
         $this->assertDatabaseCount('stock_holding_intraday_candles', 0);
         Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }

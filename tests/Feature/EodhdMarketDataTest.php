@@ -25,6 +25,8 @@ class EodhdMarketDataTest extends TestCase
             'eodhd_eod',
             'deutsche_boerse_trade',
             'yahoo_intraday',
+            'xetra_posttrade',
+            'yahoo_xetra_intraday',
         ], EodhdMarketData::sourceKeys());
     }
 
@@ -129,18 +131,18 @@ class EodhdMarketDataTest extends TestCase
 
     public function test_intraday_samples_are_retrieved_without_using_the_realtime_endpoint(): void
     {
-        $this->travelTo(Carbon::parse('2026-06-05 12:00:00', 'Europe/Vienna'));
+        $this->travelTo(Carbon::parse('2026-06-05 12:02:00', 'Europe/Vienna'));
         $holding = $this->xetraHolding();
         $this->fakeEuropeanTrades([['holding' => $holding, 'price' => 472.8, 'at' => '2026-06-05 09:45:00']]);
         app(EodhdMarketData::class)->ensureIntradaySamples($holding);
         app(EodhdMarketData::class)->ensureIntradaySamples($holding->refresh());
         $this->assertDatabaseCount('stock_holding_intraday_candles', 1);
         $row = StockHoldingIntradayCandle::query()->firstOrFail();
-        $this->assertSame('trade', $row->interval);
+        $this->assertSame('xtrade', $row->interval);
         $this->assertNull($row->open);
         $this->assertSame('472.80000000', $row->close);
-        $this->assertFalse($row->raw_payload['coverage_complete']);
-        Http::assertSentCount(2);
+        $this->assertTrue($row->raw_payload['coverage_complete']);
+        Http::assertSentCount(3);
         Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }
 

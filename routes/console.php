@@ -20,6 +20,14 @@ if ($preview && config('security.preview.control_enabled') !== true) {
 }
 $canRun = static fn (): bool => ! $preview || app(PreviewBackgroundState::class)->enabled();
 
+Schedule::command('intraday:collect-free --queue')
+    ->everyMinute()
+    ->weekdays()
+    ->timezone('Europe/Vienna')
+    ->between('08:15', '23:00')
+    ->when(static fn (): bool => ! $preview)
+    ->withoutOverlapping(2);
+
 Schedule::command('price-refresh:dispatch-due')
     ->everyMinute()
     ->when($canRun)

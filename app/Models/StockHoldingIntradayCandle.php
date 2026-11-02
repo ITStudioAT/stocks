@@ -2,13 +2,20 @@
 
 namespace App\Models;
 
+use App\Services\IntradayMarketIdentity;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 #[Fillable(['stock_holding_id', 'trading_date', 'interval', 'as_of', 'timestamp', 'gmtoffset', 'datetime', 'open', 'high', 'low', 'close', 'volume', 'currency', 'source_key', 'source_name', 'source_url', 'raw_payload'])]
 class StockHoldingIntradayCandle extends Model
 {
+    protected static function booted(): void
+    {
+        static::addGlobalScope('configured-market', fn (Builder $query) => IntradayMarketIdentity::constrain($query));
+    }
+
     /**
      * @return array<string, string>
      */

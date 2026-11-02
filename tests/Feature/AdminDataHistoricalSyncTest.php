@@ -30,8 +30,8 @@ class AdminDataHistoricalSyncTest extends TestCase
             ->assertJsonPath('refresh.status', 'finished')
             ->assertJsonPath('intraday_backfill_settings.last_dispatched_at', '2026-06-26T18:00:00+02:00');
         $this->assertStringContainsString('Free intraday sync', $response->json('message'));
-        $this->assertDatabaseHas('stock_holding_intraday_candles', ['stock_holding_id' => $holding->id, 'interval' => 'trade',
-            'close' => '101.50000000', 'source_key' => 'deutsche_boerse_trade']);
+        $this->assertDatabaseHas('stock_holding_intraday_candles', ['stock_holding_id' => $holding->id, 'interval' => 'xtrade',
+            'close' => '101.50000000', 'source_key' => 'xetra_posttrade']);
         $this->assertSame(1, StockHoldingIntradayCandle::query()->where('stock_holding_id', $covered->id)->count());
         Http::assertNotSent(fn (Request $request): bool => str_contains($request->url(), 'eodhd.com'));
     }

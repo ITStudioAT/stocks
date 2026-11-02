@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\MarketDataType;
 use App\Models\IndexWatchItem;
 use App\Models\StockHolding;
+use App\Services\FreeIntradayMarketData;
 use App\Services\StoredMarketDataRange;
 use Illuminate\Http\JsonResponse;
 
@@ -38,7 +39,8 @@ class AdminDataRangeController extends Controller
     ): JsonResponse {
         return response()->json([
             'data_type' => $dataType->value,
-            'range' => $storedMarketDataRange->forStock($holding, $dataType),
+            'range' => [...$storedMarketDataRange->forStock($holding, $dataType),
+                ...($dataType === MarketDataType::IntradayData ? ['free_intraday' => FreeIntradayMarketData::storedCoverage($holding)] : [])],
         ]);
     }
 
@@ -48,7 +50,8 @@ class AdminDataRangeController extends Controller
     ): JsonResponse {
         return response()->json([
             'data_type' => $dataType->value,
-            'range' => $storedMarketDataRange->forAllStocks($dataType),
+            'range' => [...$storedMarketDataRange->forAllStocks($dataType),
+                ...($dataType === MarketDataType::IntradayData ? ['free_intraday' => FreeIntradayMarketData::storedCoverage()] : [])],
         ]);
     }
 }

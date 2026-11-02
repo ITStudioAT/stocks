@@ -22,8 +22,27 @@ class YahooFinanceMarketData
             && preg_match('/\A[A-Z][A-Z0-9.-]{0,9}\z/', (string) $item['symbol']) === 1;
     }
 
+    /** @param array<string, mixed> $item */
+    public static function supportsXetra(array $item): bool
+    {
+        $symbol = config('services.free_intraday.yahoo_xetra_symbols.'.$item['isin']);
+
+        return IntradayMarketIdentity::isXetra($item) && ($item['currency'] ?? null) === 'EUR'
+            && is_string($symbol) && $symbol === ($item['symbol'] ?? '').'.DE';
+    }
+
+    /** @param array<string, mixed> $item @return array<string, mixed> */
+    public function runXetra(array $item): array
+    {
+        if (! self::supportsXetra($item)) {
+            throw new RuntimeException('No verified Yahoo Xetra ISIN/symbol/currency mapping.');
+        }
+
+        return $this->run(collect([$item]), includeSeries: true, xetra: true);
+    }
+
     /** @param Collection<int, array<string, mixed>> $instruments @return array<string, mixed> */
-    public function run(Collection $instruments, bool $includeSeries = false): array
+    public function run(Collection $instruments, bool $includeSeries = false, bool $xetra = false): array
     {
         app(PreviewIsolation::class)->assertIntegrationAllowed();
         $started = hrtime(true) / 1e9;
@@ -37,7 +56,7 @@ class YahooFinanceMarketData
             $row = [...$item, 'price' => null, 'trade_at' => null, 'trade_venue' => null,
                 'trade_source' => 'Yahoo Finance', 'provider' => 'Yahoo Finance', 'state' => 'not_applicable',
                 'us_instrument' => self::supports($item)];
-            if (self::supports($item)) {
+            if ($xetra ? self::supportsXetra($item) : self::supports($item)) {
                 $row['state'] = 'not_found';
                 if ($requests >= 3 || hrtime(true) / 1e9 >= $deadline || $blocked) {
                     $row['quote_note'] = 'Nicht abgerufen: Anfrage-, Zeitlimit oder Anbietersperre.';
@@ -60,8 +79,8 @@ class YahooFinanceMarketData
                                         throw new RuntimeException('Downloadlimit erreicht.');
                                     }
                                 },
-                            ])->get('https://query1.finance.yahoo.com/v8/finance/chart/'.rawurlencode($item['symbol']),
-                                ['range' => '5d', 'interval' => '5m', 'includePrePost' => 'false']);
+                            ])->get('https://query1.finance.yahoo.com/v8/finance/chart/'.rawurlencode($item['symbol'].($xetra ? '.DE' : '')),
+                                ['range' => $xetra ? '1mo' : '5d', 'interval' => '5m', 'includePrePost' => 'false']);
                         if (in_array($response->status(), [403, 429], true)) {
                             $rateLimited = $response->status() === 429;
                             $blocked = true;
@@ -78,7 +97,7 @@ class YahooFinanceMarketData
                             throw new RuntimeException('Yahoo Finance: Abruf fehlgeschlagen oder Antwort zu groß.');
                         }
                         $chart = $response->json('chart.result.0');
-                        $row = [...$row, ...$this->parse($chart, $item)];
+                        $row = [...$row, ...$this->parse($chart, $item, $xetra)];
                         if ($includeSeries) {
                             $series = $this->series($chart);
                             $row['series'] = $series['rows'];
@@ -101,7 +120,7 @@ class YahooFinanceMarketData
 
         return [
             'status' => $warnings !== [] ? 'partial' : ($found === [] ? 'empty' : 'ok'),
-            'source' => 'Yahoo Finance · US-Kurse (inoffiziell)', 'source_code' => 'YAHOO',
+            'source' => $xetra ? 'Yahoo Finance · Xetra (inoffiziell, 15 min delayed)' : 'Yahoo Finance · US-Kurse (inoffiziell)', 'source_code' => 'YAHOO',
             'checked_at' => now()->toIso8601String(), 'search_before' => now('UTC')->toIso8601String(),
             'next_round' => null, 'rate_limited' => $rateLimited, 'provider_blocked' => $blocked,
             'catalog_generated_at' => null, 'newest_catalog_segment_at' => null,
@@ -117,10 +136,18 @@ class YahooFinanceMarketData
     }
 
     /** @param array<string, mixed> $item @return array<string, mixed> */
-    private function parse(mixed $chart, array $item): array
+    private function parse(mixed $chart, array $item, bool $xetra = false): array
     {
         $meta = is_array($chart) ? ($chart['meta'] ?? []) : [];
-        if (! is_array($meta) || ($meta['symbol'] ?? null) !== $item['symbol'] || ($meta['currency'] ?? null) !== 'USD'
+        if ($xetra) {
+            if (! self::supportsXetra($item) || ! is_array($meta) || ($meta['symbol'] ?? null) !== $item['symbol'].'.DE'
+                || ($meta['currency'] ?? null) !== 'EUR' || ($meta['exchangeName'] ?? null) !== 'GER'
+                || strtoupper((string) ($meta['fullExchangeName'] ?? '')) !== 'XETRA'
+                || ($meta['exchangeTimezoneName'] ?? null) !== 'Europe/Berlin'
+                || ! in_array($meta['instrumentType'] ?? null, ['ETF', 'EQUITY'], true)) {
+                throw new RuntimeException('Yahoo Xetra identity/currency/venue mismatch; quote rejected.');
+            }
+        } elseif (! is_array($meta) || ($meta['symbol'] ?? null) !== $item['symbol'] || ($meta['currency'] ?? null) !== 'USD'
             || ($item['symbol'] === 'ARGT' && $item['isin'] !== 'US37950E2596')
             || ! in_array($meta['exchangeName'] ?? null, ['PCX', 'NYQ', 'NMS', 'NGM', 'NCM', 'NAS', 'ASE', 'BTS', 'BATS'], true)
             || ($meta['exchangeTimezoneName'] ?? null) !== 'America/New_York'
@@ -139,8 +166,10 @@ class YahooFinanceMarketData
 
         return ['state' => 'found', 'price' => (string) $price, 'trade_at' => $at->format('Y-m-d\TH:i:s.u\Z'),
             'price_type' => 'regular_market_last', 'quote_venue' => substr((string) ($meta['fullExchangeName'] ?? $meta['exchangeName']), 0, 80),
-            'listing_mic' => $meta['exchangeName'] === 'PCX' ? 'ARCX' : null,
-            'quote_stale' => $stale, 'quote_note' => ($stale ? 'Veralteter Quellwert (älter als vier Tage). ' : '').
+            'listing_mic' => $xetra ? 'XETR' : ($meta['exchangeName'] === 'PCX' ? 'ARCX' : null),
+            'quote_stale' => $stale, 'quote_note' => $xetra
+                ? 'Verified ISIN/symbol/Xetra/EUR mapping; provider OHLC, not individual trades. 15 min delayed; completeness unverified.'
+                : ($stale ? 'Veralteter Quellwert (älter als vier Tage). ' : '').
                 'Letzter regulärer Marktkurs, kein einzelner verifizierter Trade. Möglicherweise verzögert; Verzögerung unbekannt. '.
                 'Ticker aus US-Bestand geprüft; Yahoo bestätigt keine ISIN und keinen Ausführungs-MIC.'];
     }
@@ -154,12 +183,13 @@ class YahooFinanceMarketData
         $prices = $chart['indicators']['quote'][0] ?? [];
         $rows = [];
         $invalid = 0;
-        foreach (array_slice($chart['timestamp'] ?? [], 0, 2000) as $index => $timestamp) {
+        $xetra = ($chart['meta']['exchangeName'] ?? null) === 'GER';
+        foreach (array_slice($chart['timestamp'] ?? [], -5000, preserve_keys: true) as $index => $timestamp) {
             if (! is_int($timestamp) || $timestamp % 300 !== 0 || $timestamp + 300 > now()->timestamp) {
                 continue;
             }
-            $date = CarbonImmutable::createFromTimestampUTC($timestamp)->setTimezone('America/New_York');
-            if (! $date->isWeekday() || $date->format('H:i') < '09:30' || $date->format('H:i') >= '16:00') {
+            $date = CarbonImmutable::createFromTimestampUTC($timestamp)->setTimezone($xetra ? 'Europe/Berlin' : 'America/New_York');
+            if (! $date->isWeekday() || $date->format('H:i') < ($xetra ? '09:00' : '09:30') || $date->format('H:i') >= ($xetra ? '17:36' : '16:00')) {
                 continue;
             }
             $values = [];
@@ -181,11 +211,11 @@ class YahooFinanceMarketData
             $volume = $prices['volume'][$index] ?? null;
             $rows[$timestamp] = ['timestamp' => $timestamp, 'datetime' => gmdate('Y-m-d H:i:s', $timestamp),
                 ...$values, 'volume' => is_int($volume) && $volume >= 0 ? $volume : null,
-                'interval' => '5m', 'data_kind' => 'provider_ohlc', 'currency' => 'USD',
-                'source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance 5m OHLC · delay unknown',
+                'interval' => '5m', 'data_kind' => 'provider_ohlc', 'currency' => $xetra ? 'EUR' : 'USD',
+                'source_key' => $xetra ? 'yahoo_xetra_intraday' : 'yahoo_intraday', 'source_name' => $xetra ? 'Yahoo Finance Xetra 5m OHLC · 15 min delayed' : 'Yahoo Finance 5m OHLC · delay unknown',
                 'source_url' => 'https://finance.yahoo.com/quote/'.rawurlencode($chart['meta']['symbol']).'/',
                 'venue' => $chart['meta']['fullExchangeName'] ?? $chart['meta']['exchangeName'],
-                'mic' => null, 'coverage_complete' => false, 'delay_minutes' => null];
+                'mic' => $xetra ? 'XETR' : null, 'coverage_complete' => false, 'delay_minutes' => $xetra ? 15 : null];
         }
         ksort($rows);
 

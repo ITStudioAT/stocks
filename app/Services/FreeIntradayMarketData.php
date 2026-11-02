@@ -2,11 +2,13 @@
 
 namespace App\Services;
 
+use App\Models\AppConfig;
 use App\Models\StockHolding;
 use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockRealtimePrice;
 use App\Services\WebMarketData\DTO\ParsedQuote;
 use App\Services\WebMarketData\DTO\ValidatedQuote;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use RuntimeException;
@@ -14,13 +16,13 @@ use Throwable;
 
 class FreeIntradayMarketData
 {
-    public const CandleSources = ['eodhd_intraday', 'deutsche_boerse_trade', 'yahoo_intraday'];
+    public const CandleSources = ['eodhd_intraday', 'deutsche_boerse_trade', 'xetra_posttrade', 'yahoo_intraday', 'yahoo_xetra_intraday'];
 
-    public const Intervals = ['5m', 'trade'];
+    public const Intervals = ['5m', 'trade', 'xtrade'];
 
-    public const Notice = 'Free intraday: Deutsche Börse trades ~15 min delayed, sparse observations with gaps; Yahoo 5m OHLC unofficial, delay unknown. No complete historical backfill.';
+    public const Notice = 'Free intraday: Xetra trades 15 min delayed; file coverage reported separately. Yahoo OHLC unofficial. No complete historical backfill or availability guarantee.';
 
-    public function __construct(private DeutscheBoerseDelayedData $europe, private YahooFinanceMarketData $us, private StockRealtimePriceCatalog $quotes) {}
+    public function __construct(private XetraIntradayCollector $europe, private YahooFinanceMarketData $us, private StockRealtimePriceCatalog $quotes) {}
 
     /** @return array<string, mixed> */
     private function identity(StockHolding $holding): array
@@ -49,47 +51,80 @@ class FreeIntradayMarketData
     }
 
     /** @return array<string, mixed> */
+    public function yahooSupplement(StockHolding $holding): array
+    {
+        $identity = $this->identity($holding);
+        if (! YahooFinanceMarketData::supportsXetra($identity)) {
+            throw new RuntimeException('Yahoo supplementation requires a verified ISIN/Xetra/EUR mapping.');
+        }
+
+        return $this->cached('free-intraday.xetra-yahoo.'.hash('sha256', json_encode($identity)), 'yahoo',
+            fn (): array => $this->us->runXetra($identity));
+    }
+
+    /** @return array<string, mixed> */
     private function europeanResult(): array
     {
-        $instruments = StockHolding::query()->orderBy('id')->limit(50)->get()
-            ->map(fn (StockHolding $holding): array => $this->identity($holding))
-            ->reject(fn (array $item): bool => YahooFinanceMarketData::supports($item))->values();
-        $key = 'free-intraday.eu.'.hash('sha256', json_encode($instruments->all()));
+        $result = $this->europe->collect();
+        foreach ($result['unresolved_corrections'] ?? [] as $isin) {
+            StockHoldingIntradayCandle::withoutGlobalScopes()->whereIn('source_key', ['xetra_posttrade', 'deutsche_boerse_trade'])
+                ->whereIn('stock_holding_id', StockHolding::query()->select('id')->where('isin', $isin))
+                ->whereIn('trading_date', array_keys($result['days']))->update(['raw_payload->quarantined' => true]);
+            StockRealtimePrice::withoutGlobalScopes()->whereIn('source_key', ['xetra_posttrade', 'deutsche_boerse_trade'])
+                ->whereIn('stock_holding_id', StockHolding::query()->select('id')->where('isin', $isin))
+                ->where('as_of', '>=', min(array_keys($result['days'])))->update(['raw_payload->quarantined' => true]);
+        }
 
-        return $this->cached($key, 'deutsche-boerse', function () use ($instruments): array {
-            $rows = [];
-            $warnings = [];
-            $exhausted = [];
-            $before = null;
-            $deadline = hrtime(true) / 1e9 + 25;
-            foreach (range(0, 8) as $batch) {
-                $source = ['DETR', 'DGAT', 'DFRA'][$batch % 3];
-                if (isset($exhausted[$source]) || $instruments->isEmpty()) {
-                    continue;
-                }
-                if (hrtime(true) / 1e9 >= $deadline) {
-                    $warnings[] = 'Deutsche Börse: search deadline reached; coverage incomplete.';
-                    break;
-                }
-                $result = $this->europe->runBatch($instruments, $batch, $before);
-                $before ??= $result['search_before'];
-                $warnings = [...$warnings, ...$result['warnings']];
-                foreach ($result['instruments'] as $row) {
-                    $row['fetched_at'] = $result['checked_at'];
-                    $rows[$row['isin']] = $row;
-                }
-                if ($result['next_round'] === null) {
-                    $exhausted[$source] = true;
-                }
-                $instruments = $instruments->reject(fn (array $item): bool => isset($rows[$item['isin']]) && $rows[$item['isin']]['price'] !== null)->values();
-                if ($result['rate_limited'] ?? false) {
-                    Cache::add('free-intraday.cooldown.deutsche-boerse', true, now()->addMinutes(5));
-                    break;
-                }
-            }
+        return $result;
+    }
 
-            return ['instruments' => array_values($rows), 'warnings' => array_values(array_unique($warnings))];
-        });
+    /** @return array<string, mixed> */
+    public function coverage(StockHolding $holding): array
+    {
+        if (YahooFinanceMarketData::supports($this->identity($holding))) {
+            $result = $this->usResult($holding);
+            $row = collect($result['instruments'])->firstWhere('isin', $holding->isin);
+
+            return ['isin' => $holding->isin, 'symbol' => $holding->symbol, 'currency' => $holding->currency,
+                'status' => ($row['price'] ?? null) === null ? 'unavailable' : 'available_unverified',
+                'coverage_complete' => false, 'trade_at' => $row['trade_at'] ?? null,
+                'quote_age_minutes' => isset($row['trade_at']) ? (int) Carbon::parse($row['trade_at'])->diffInMinutes(now(), absolute: true) : null,
+                'warnings' => $result['warnings'], 'days' => []];
+        }
+        $result = $this->europeanResult();
+
+        return collect($result['instruments'])->firstWhere('isin', $holding->isin)
+            ?? ['isin' => $holding->isin, 'symbol' => $holding->symbol, 'status' => 'unsupported_market',
+                'coverage_complete' => false, 'error' => 'No verified free source for the configured market.'];
+    }
+
+    /** @return array<string, mixed> */
+    public function xetraCoverage(bool $advance = false): array
+    {
+        return $this->europe->collect($advance);
+    }
+
+    /** @return array<string, mixed> */
+    public static function storedCoverage(?StockHolding $holding = null): array
+    {
+        $report = AppConfig::query()->where('key', 'free_intraday.sync.coverage.v1')->value('value') ?? [];
+        $xetra = AppConfig::query()->where('key', XetraIntradayCollector::ReportKey)->value('value') ?? [];
+        $rows = collect($report['coverage'] ?? [])->keyBy('isin');
+        foreach ($xetra['instruments'] ?? [] as $instrument) {
+            $rows->put($instrument['isin'], [...($rows->get($instrument['isin']) ?? []), ...$instrument]);
+        }
+        if ($holding !== null) {
+            $rows = $rows->filter(fn (array $row): bool => $row['isin'] === $holding->isin);
+        }
+        $excluded = StockHoldingIntradayCandle::withoutGlobalScopes()
+            ->whereIn('source_key', ['deutsche_boerse_trade', 'xetra_posttrade', 'yahoo_xetra_intraday'])
+            ->when($holding !== null, fn ($query) => $query->where('stock_holding_id', $holding->id))
+            ->whereNotIn('id', StockHoldingIntradayCandle::query()->select('id'))->count();
+
+        return ['checked_at' => $xetra['checked_at'] ?? $report['checked_at'] ?? null, 'notice' => self::Notice,
+            'pending_files' => $xetra['pending_files'] ?? null, 'days' => $xetra['days'] ?? [],
+            'instruments' => $rows->values()->all(), 'excluded_legacy_rows' => $excluded,
+            'terms_url' => 'https://mfs.deutsche-boerse.com/DETR-posttrade', 'licence' => 'Free for non-commercial use; no availability/completeness guarantee.'];
     }
 
     /** @return array<string, mixed> */
@@ -117,6 +152,15 @@ class FreeIntradayMarketData
     {
         $result = YahooFinanceMarketData::supports($this->identity($holding)) ? $this->usResult($holding) : $this->europeanResult();
         $row = collect($result['instruments'])->firstWhere('isin', $holding->isin);
+        if (($row['price'] ?? null) === null && ($row['status'] ?? null) !== 'unresolved_corrections' && YahooFinanceMarketData::supportsXetra($this->identity($holding))) {
+            $result = $this->yahooSupplement($holding);
+            $row = collect($result['instruments'])->firstWhere('isin', $holding->isin);
+            if (is_array($row)) {
+                $row['trade_source'] = 'Yahoo Finance Xetra';
+                $row['trade_venue'] = 'XETR';
+                $row['supplemental'] = true;
+            }
+        }
         if (! is_array($row) || $row['price'] === null || $row['currency'] !== $holding->currency || ($row['quote_stale'] ?? false)) {
             throw new RuntimeException(implode(' ', $result['warnings']) ?: "No usable free intraday observation for {$holding->symbol}; coverage incomplete.");
         }
@@ -130,25 +174,32 @@ class FreeIntradayMarketData
     public function records(StockHolding $holding, Carbon $from, Carbon $until): array
     {
         $isUs = YahooFinanceMarketData::supports($this->identity($holding));
-        if ($from->greaterThan($until) || $from->lessThan(now()->subDays($isUs ? 7 : 2))) {
+        if ($from->greaterThan($until) || $from->lessThan(now()->subDays($isUs ? 7 : 60))) {
             throw new RuntimeException('Requested intraday history is outside free source retention; existing data preserved, gap cannot be recovered.');
         }
-        $row = $this->latest($holding);
         if ($isUs) {
+            $row = $this->latest($holding);
             $records = $row['series'] ?? [];
         } else {
-            $timestamp = Carbon::parse($row['trade_at'])->utc()->timestamp;
-            $records = [['timestamp' => $timestamp, 'datetime' => gmdate('Y-m-d H:i:s', $timestamp),
-                'open' => null, 'high' => null, 'low' => null, 'close' => $row['price'], 'volume' => null,
-                'interval' => 'trade', 'currency' => $row['currency'], 'data_kind' => 'observed_trade',
-                'source_key' => 'deutsche_boerse_trade', 'source_name' => 'Deutsche Börse · '.$row['trade_source'].' · '.$row['trade_venue'].' · delayed sparse trades',
-                'source_url' => $this->europeanSourceUrl($row), 'venue' => $row['trade_source'],
-                'mic' => $row['trade_venue'], 'event_at' => $row['trade_order_at'],
-                'coverage_complete' => false, 'delay_minutes' => 15, 'warnings' => $row['warnings']]];
+            $result = $this->europeanResult();
+            $records = $result['series'][$holding->isin] ?? [];
+            $coverage = $this->coverage($holding);
+            $firstDay = min(array_keys($result['days']) ?: [now('Europe/Berlin')->toDateString()]);
+            $needsHistory = $from->copy()->setTimezone('Europe/Berlin')->toDateString() < $firstDay;
+            if (($coverage['status'] ?? null) !== 'unresolved_corrections'
+                && YahooFinanceMarketData::supportsXetra($this->identity($holding))
+                && ($needsHistory || ($records === [] && ! $coverage['coverage_complete']))) {
+                $supplement = $this->yahooSupplement($holding);
+                $records = [...$records, ...(collect($supplement['instruments'])->firstWhere('isin', $holding->isin)['series'] ?? [])];
+            }
         }
 
         $records = array_values(array_filter($records, fn (array $record): bool => $record['timestamp'] >= $from->timestamp && $record['timestamp'] <= $until->timestamp));
         if ($records === []) {
+            if (! $isUs && $coverage['coverage_complete'] && ! $needsHistory
+                && $until->copy()->setTimezone('Europe/Berlin')->toDateString() <= max(array_keys($result['days']))) {
+                return [];
+            }
             throw new RuntimeException('No observations in requested free intraday window; coverage incomplete, no prices fabricated.');
         }
 
@@ -165,11 +216,49 @@ class FreeIntradayMarketData
     /** @param array<int, array<string, mixed>> $records */
     private function persistRecords(StockHolding $holding, array $records): int
     {
+        $official = array_values(array_filter($records, fn (array $record): bool => $record['source_key'] === 'xetra_posttrade'));
+        if ($official !== [] && count($official) !== count($records)) {
+            return $this->persistRecords($holding, $official)
+                + $this->persistRecords($holding, array_values(array_filter($records, fn (array $record): bool => $record['source_key'] !== 'xetra_posttrade')));
+        }
+        if ($records !== [] && collect($records)->every(fn (array $record): bool => $record['source_key'] === 'xetra_posttrade')) {
+            if (! IntradayMarketIdentity::isXetra($this->identity($holding))) {
+                throw new RuntimeException('Xetra observations cannot be stored for another configured market.');
+            }
+            $rows = [];
+            $existing = StockHoldingIntradayCandle::withoutGlobalScopes()->where('stock_holding_id', $holding->id)
+                ->where('interval', 'xtrade')->whereBetween('timestamp', [min(array_column($records, 'timestamp')), max(array_column($records, 'timestamp'))])
+                ->get()->keyBy('timestamp');
+            foreach ($records as $record) {
+                if (($record['isin'] ?? null) !== $holding->isin || $record['currency'] !== $holding->currency
+                    || ! in_array($record['mic'] ?? null, IntradayMarketIdentity::XetraMics, true)) {
+                    throw new RuntimeException('Xetra observation identity, currency or venue mismatch.');
+                }
+                $previous = $existing->get($record['timestamp']);
+                if ($previous !== null && (($previous->raw_payload['mic'] ?? null) !== $record['mic']
+                    || ($previous->raw_payload['event_at'] ?? '') > $record['event_at'])) {
+                    continue;
+                }
+                $at = Carbon::createFromTimestampUTC($record['timestamp']);
+                $rows[] = ['stock_holding_id' => $holding->id, 'interval' => 'xtrade', 'as_of' => $at->format('Y-m-d H:i:s'),
+                    'trading_date' => $at->copy()->setTimezone('Europe/Berlin')->toDateString(), 'timestamp' => $record['timestamp'],
+                    'datetime' => $record['datetime'], 'open' => null, 'high' => null, 'low' => null, 'close' => $record['close'],
+                    'volume' => null, 'currency' => $record['currency'], 'source_key' => 'xetra_posttrade',
+                    'source_name' => $record['source_name'], 'source_url' => $record['source_url'],
+                    'raw_payload' => json_encode($record, JSON_THROW_ON_ERROR), 'created_at' => now(), 'updated_at' => now()];
+            }
+            foreach (array_chunk($rows, 300) as $chunk) {
+                StockHoldingIntradayCandle::query()->upsert($chunk, ['stock_holding_id', 'interval', 'as_of'],
+                    ['close', 'raw_payload', 'updated_at']);
+            }
+
+            return count($rows);
+        }
         $stored = 0;
         foreach ($records as $record) {
             $at = Carbon::createFromTimestampUTC($record['timestamp']);
             $timezone = YahooFinanceMarketData::supports($this->identity($holding)) ? 'America/New_York' : 'Europe/Berlin';
-            $existing = StockHoldingIntradayCandle::query()->where('stock_holding_id', $holding->id)
+            $existing = StockHoldingIntradayCandle::withoutGlobalScopes()->where('stock_holding_id', $holding->id)
                 ->where('interval', $record['interval'])->where('as_of', $at)->first();
             if ($existing !== null && $existing->source_key !== $record['source_key']) {
                 continue;
@@ -203,45 +292,79 @@ class FreeIntradayMarketData
         $unchanged = 0;
         $failed = 0;
         $errors = [];
+        $coverage = [];
+        $noTrades = 0;
         foreach ($holdings as $holding) {
             $hasCurrentQuote = false;
             try {
+                $coverage[$holding->symbol] = $this->coverage($holding);
+                if ($coverage[$holding->symbol]['collector_busy'] ?? false) {
+                    $failed++;
+                    $errors[] = $holding->symbol.': another collector is processing files; current quote preserved.';
+
+                    continue;
+                }
+                if ($coverage[$holding->symbol]['status'] === 'no_trades') {
+                    $noTrades++;
+                    $holding->update(['price_status' => 'no_trades']);
+
+                    continue;
+                }
                 $row = $this->latest($holding);
                 $isUs = YahooFinanceMarketData::supports($this->identity($holding));
+                $localNow = now($isUs ? 'America/New_York' : 'Europe/Berlin');
+                $isOpen = $localNow->isWeekday() && $localNow->format('H:i') >= ($isUs ? '09:30' : config('services.free_intraday.session_start'))
+                    && $localNow->format('H:i') < ($isUs ? '16:00' : config('services.free_intraday.session_end'));
+                $freshness = (! $isUs && ! $coverage[$holding->symbol]['coverage_complete']) || ($isOpen && Carbon::parse($row['trade_at'])->lessThan(now()->subHour())) ? 'stale' : 'delayed';
                 $quotePayload = $row;
                 unset($quotePayload['series']);
-                $quote = new ParsedQuote(sourceKey: $isUs ? 'yahoo_intraday' : 'deutsche_boerse_trade',
-                    sourceName: $isUs ? 'Yahoo Finance · delay unknown' : 'Deutsche Börse · '.$row['trade_source'].' · 15 min delayed',
-                    sourceUrl: $isUs ? 'https://finance.yahoo.com/quote/'.rawurlencode($holding->symbol).'/' : $this->europeanSourceUrl($row),
-                    sourceQuality: $isUs ? 'unofficial' : 'exchange_delayed', venue: $row['quote_venue'] ?? $row['trade_source'],
+                $supplemental = $row['supplemental'] ?? false;
+                $quote = new ParsedQuote(sourceKey: $isUs ? 'yahoo_intraday' : ($supplemental ? 'yahoo_xetra_intraday' : 'xetra_posttrade'),
+                    sourceName: $isUs ? 'Yahoo Finance · delay unknown' : ($supplemental ? 'Yahoo Finance Xetra · 15 min delayed' : 'Deutsche Börse · Xetra · 15 min delayed'),
+                    sourceUrl: $isUs || $supplemental ? 'https://finance.yahoo.com/quote/'.rawurlencode($holding->symbol.($supplemental ? '.DE' : '')).'/' : $this->europeanSourceUrl($row),
+                    sourceQuality: $isUs || $supplemental ? 'unofficial' : 'exchange_delayed', venue: $row['quote_venue'] ?? $row['trade_source'],
                     mic: $row['trade_venue'], isin: $holding->isin, symbol: $holding->symbol, currency: $row['currency'],
-                    price: $row['price'], last: $row['price'], priceType: $isUs ? 'regular_market_last' : 'observed_trade',
-                    asOf: Carbon::parse($row['trade_at'])->utc(), fetchedAt: Carbon::parse($row['fetched_at'])->utc(), freshnessStatus: 'delayed',
-                    rawPayload: [...$quotePayload, 'coverage_complete' => false, 'notice' => self::Notice]);
-                $price = $this->quotes->store($holding, new ValidatedQuote($quote, 'valid', 'delayed'), $holding->trading_times);
+                    price: $row['price'], last: $row['price'], priceType: $isUs || $supplemental ? 'regular_market_last' : 'observed_trade',
+                    asOf: Carbon::parse($row['trade_at'])->utc(), fetchedAt: Carbon::parse($row['fetched_at'])->utc(), freshnessStatus: $freshness,
+                    rawPayload: [...$quotePayload, 'coverage_complete' => $coverage[$holding->symbol]['coverage_complete'], 'notice' => self::Notice]);
+                $price = $this->quotes->store($holding, new ValidatedQuote($quote, 'valid', $freshness), $holding->trading_times);
                 $hasCurrentQuote = true;
                 $stored += (int) $price->wasRecentlyCreated;
                 $unchanged += (int) ! $price->wasRecentlyCreated;
-                $updated += StockHolding::query()->whereKey($holding->id)
-                    ->where(fn ($query) => $query->whereNull('latest_realtime_price_id')
-                        ->orWhereIn('latest_realtime_price_id', StockRealtimePrice::query()->select('id')
-                            ->where('stock_holding_id', $holding->id)->where('as_of', '<=', $quote->asOf)))
-                    ->update(['latest_realtime_price_id' => $price->id, 'latest_price_type' => $quote->priceType, 'price_status' => 'delayed']);
-                $this->persist($holding, $this->records($holding, now()->subDays($isUs ? 6 : 1), now()));
-                if ($row['warnings'] !== []) {
+                $validCurrentQuote = $holding->latestRealtimePrice;
+                if ($validCurrentQuote === null || Carbon::parse($validCurrentQuote->getRawOriginal('as_of'), 'UTC')->lessThanOrEqualTo($quote->asOf)) {
+                    $updated += StockHolding::query()->whereKey($holding->id)
+                        ->where('latest_realtime_price_id', $holding->latest_realtime_price_id)
+                        ->update(['latest_realtime_price_id' => $price->id, 'latest_price_type' => $quote->priceType, 'price_status' => $freshness]);
+                }
+                $this->persist($holding, $this->records($holding, $isUs ? now()->subDays(6) : now('Europe/Berlin')->subWeekdays(1)->startOfDay(), now()));
+                if ($row['warnings'] !== [] || (! $isUs && ! $coverage[$holding->symbol]['coverage_complete'])) {
                     $failed++;
-                    $errors = [...$errors, ...$row['warnings']];
+                    $errors = [...$errors, ...$row['warnings'], ...(! $isUs && ! $coverage[$holding->symbol]['coverage_complete']
+                        ? [$holding->symbol.': incomplete Xetra files; inspect instrument coverage.'] : [])];
                 }
             } catch (Throwable $exception) {
                 if (! $hasCurrentQuote) {
                     $holding->update(['price_status' => 'unavailable_now']);
                 }
                 $failed++;
-                $errors[] = $holding->symbol.': '.$exception->getMessage();
+                $message = $exception instanceof QueryException
+                    ? 'Database write failed; collected observations retained for retry.'
+                    : app(EodhdErrorSanitizer::class)->message($exception->getMessage(), 255);
+                $coverage[$holding->symbol] ??= [...$this->identity($holding), 'status' => 'unavailable', 'coverage_complete' => false];
+                $coverage[$holding->symbol]['sync_error'] = $message;
+                $errors[] = $holding->symbol.': '.$message;
             }
         }
 
-        return ['message' => self::Notice, 'requested_count' => $holdings->count(), 'stored_count' => $stored,
+        $completeCount = collect($coverage)->filter(fn (array $item): bool => $item['coverage_complete'])->count();
+
+        $result = ['message' => "{$completeCount}/{$holdings->count()} instruments have verified file coverage; {$noTrades} no trades. ".self::Notice,
+            'requested_count' => $holdings->count(), 'stored_count' => $stored, 'coverage' => array_values($coverage),
+            'coverage_complete_count' => $completeCount, 'no_trade_count' => $noTrades,
             'unchanged_count' => $unchanged, 'updated_count' => $updated, 'failed_count' => $failed, 'errors' => array_values(array_unique($errors))];
+        AppConfig::query()->updateOrCreate(['key' => 'free_intraday.sync.coverage.v1'], ['value' => ['checked_at' => now()->toIso8601String(), ...$result]]);
+
+        return $result;
     }
 }
