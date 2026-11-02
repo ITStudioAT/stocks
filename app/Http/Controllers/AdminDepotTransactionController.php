@@ -1213,7 +1213,7 @@ class AdminDepotTransactionController extends Controller
                 'ROW_NUMBER() OVER (PARTITION BY stock_holding_id, DATE(as_of) ORDER BY as_of DESC, id DESC) AS daily_rank',
             );
 
-        return StockRealtimePrice::query()
+        return StockRealtimePrice::withoutGlobalScope('configured-market')
             ->fromSub($rankedRealtimePrices, 'ranked_realtime_prices')
             ->where('daily_rank', 1)
             ->orderByDesc('as_of')

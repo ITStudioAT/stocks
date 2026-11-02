@@ -746,7 +746,7 @@ class DepotTransactionTest extends TestCase
         }
     }
 
-    public function test_month_start_balance_uses_latest_price_from_previous_month_end(): void
+    public function test_month_start_balance_uses_latest_valid_market_price_from_previous_month_end(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-07-03 12:00:00', 'Europe/Vienna'));
 
@@ -759,6 +759,9 @@ class DepotTransactionTest extends TestCase
             $holding = StockHolding::factory()->create([
                 'latest_price' => null,
                 'flatex_price' => '120.000000',
+                'exchange' => 'XETRA',
+                'mic_code' => 'XETR',
+                'currency' => 'EUR',
             ]);
             $latestRealtimePrice = StockRealtimePrice::factory()->for($holding)->create([
                 'price' => '120.00000000',
@@ -779,7 +782,21 @@ class DepotTransactionTest extends TestCase
                 'as_of' => '2026-06-30 15:36:00',
                 'fetched_at' => '2026-07-02 07:12:08',
                 'freshness_status' => 'stale',
+                'source_key' => 'xetra_posttrade',
+                'mic' => 'XETA',
+                'isin' => $holding->isin,
             ]);
+            foreach ([['XGAT', 'EUR', false], ['XETA', 'USD', false], ['XETA', 'EUR', true]] as $index => [$mic, $currency, $quarantined]) {
+                StockRealtimePrice::factory()->for($holding)->create([
+                    'price' => 999,
+                    'as_of' => '2026-06-30 16:0'.$index.':00',
+                    'source_key' => 'xetra_posttrade',
+                    'mic' => $mic,
+                    'isin' => $holding->isin,
+                    'currency' => $currency,
+                    'raw_payload' => ['quarantined' => $quarantined],
+                ]);
+            }
             DepotTransaction::factory()->create([
                 'depot_id' => $depot->id,
                 'stock_holding_id' => null,
@@ -811,6 +828,7 @@ class DepotTransactionTest extends TestCase
                 ->assertJsonPath('depot_valuations.latest.month_start_balance', '1020.00')
                 ->assertJsonPath('depot_valuations.latest.month_change_amount', '20.00')
                 ->assertJsonPath('depot_valuations.latest.month_change_percent', '1.96');
+            $this->assertDatabaseCount('stock_realtime_prices', 5);
         } finally {
             Carbon::setTestNow();
         }
