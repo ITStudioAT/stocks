@@ -1,3 +1,10 @@
+## 1.2.1
+
+### System
+
+- Veröffentlichung: Flow mit Ankündigung und Refresh
+
+
 ## 1.2.0
 
 ### System

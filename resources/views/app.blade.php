@@ -7,8 +7,11 @@
         <title>{{ config('stocks.name') }}</title>
         <link rel="icon" href="/favicon.ico" sizes="any">
         @vite(['resources/css/app.css', 'resources/js/app.js'])
+        <link rel="stylesheet" href="/deployment-notice.css">
+        <script type="module" src="/deployment-notice.js"></script>
     </head>
     <body>
         <div id="app"></div>
+        <x-deployment-notice />
     </body>
 </html>

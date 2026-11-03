@@ -9,6 +9,10 @@ use RecursiveIteratorIterator;
 use Symfony\Component\Process\Process;
 use Symfony\Component\Yaml\Yaml;
 
+use function Stocks\DeploymentStatus\readStatus;
+
+require_once __DIR__.'/../../scripts/deployment-status.php';
+
 class DeploymentWorkflowTest extends TestCase
 {
     /** @var array<int, string> */
@@ -409,6 +413,7 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertDirectoryExists("{$deploymentDirectory}/public/build");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
+        $this->assertSame('completed', readStatus("{$deploymentDirectory}/storage/framework"));
         $this->assertStringContainsString(
             'Cloudways platform Pull and deployment completed successfully.',
             $deployed->getOutput(),
@@ -428,6 +433,7 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-api-pulled");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
+        $this->assertSame('idle', readStatus("{$deploymentDirectory}/storage/framework"));
         $this->assertStringContainsString(
             'Cloudways did not complete the platform Pull; deployment was not started.',
             $failed->getErrorOutput(),
@@ -449,6 +455,7 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertDirectoryDoesNotExist("{$deploymentDirectory}/public/build");
         $this->assertFileExists("{$deploymentDirectory}/storage/framework/down");
         $this->assertFileExists("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
+        $this->assertSame('failed', readStatus("{$deploymentDirectory}/storage/framework"), $failed->getErrorOutput());
 
         unlink("{$deploymentDirectory}/storage/framework/fail-app-update");
         $resumed = $this->runCloudwaysShellFixture($deploymentDirectory);
@@ -473,6 +480,8 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertTrue($preparedAgain->isSuccessful(), $preparedAgain->getErrorOutput());
         $this->assertFileExists("{$deploymentDirectory}/storage/framework/down");
         $this->assertFileExists("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
+        $this->assertSame('maintenance', readStatus("{$deploymentDirectory}/storage/framework"));
+        $this->assertSame('scheduled', trim(file_get_contents("{$deploymentDirectory}/storage/framework/status-before-down")));
 
         $deployed = $this->runCloudwaysShellFixture($deploymentDirectory);
 
@@ -1210,6 +1219,7 @@ class DeploymentWorkflowTest extends TestCase
         }
 
         copy($this->projectPath('scripts/deploy_cloudways.sh'), "{$directory}/scripts/deploy_cloudways.sh");
+        copy($this->projectPath('scripts/deployment-status.php'), "{$directory}/scripts/deployment-status.php");
         file_put_contents("{$directory}/.env", "APP_ENV=production\n");
         file_put_contents("{$directory}/artisan", "fixture\n");
         file_put_contents("{$directory}/deployment/source-commit", str_repeat('a', 40)."\n");
@@ -1231,6 +1241,10 @@ class DeploymentWorkflowTest extends TestCase
         $this->writeExecutable("{$directory}/bin/php", <<<'BASH'
 #!/usr/bin/env bash
 set -e
+
+if [ "${1:-}" = "scripts/deployment-status.php" ]; then
+    exec "$STOCKS_TEST_PHP" "$@"
+fi
 
 if [ "${1:-}" = "scripts/source-manifest.php" ] && [ "${2:-}" = "prune-unlisted" ]; then
     if [ -f storage/framework/fail-source-prune ]; then
@@ -1267,6 +1281,8 @@ case "${2:-}" in
         touch storage/framework/cloudways-api-pulled
         ;;
     down)
+        "$STOCKS_TEST_PHP" -r 'require "scripts/deployment-status.php"; echo Stocks\DeploymentStatus\readStatus("storage/framework");' > storage/framework/status-before-down
+        [ "${3:-}" = "--render=maintenance" ]
         touch storage/framework/down
         ;;
     up)
@@ -1295,7 +1311,7 @@ BASH);
             'stocks-deployment-test',
             $bashDirectory,
             ...$arguments,
-        ], $directory);
+        ], $directory, ['DEPLOY_NOTICE_SECONDS' => '0', 'STOCKS_TEST_PHP' => $this->bashPath(PHP_BINARY)]);
         $process->run();
 
         return $process;
@@ -1371,7 +1387,7 @@ BASH);
             'export PATH="$1/bin:$PATH"; bash "$1/scripts/pdeploy_cloudways.sh"',
             'stocks-deployment-test',
             $bashDirectory,
-        ], $directory);
+        ], $directory, ['DEPLOY_NOTICE_SECONDS' => '0', 'STOCKS_TEST_PHP' => $this->bashPath(PHP_BINARY)]);
         $process->run();
 
         return $process;

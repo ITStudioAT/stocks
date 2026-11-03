@@ -1,0 +1,86 @@
+.stocks-maintenance-page {
+    margin: 0;
+    min-height: 100vh;
+    background: #0b111d;
+}
+
+.stocks-deployment-notice {
+    position: fixed;
+    inset: auto 1rem 1rem auto;
+    z-index: 10000;
+    box-sizing: border-box;
+    width: min(27rem, calc(100% - 2rem));
+    margin: 0;
+    padding: 1.25rem;
+    border: 1px solid #52677f;
+    border-radius: 1rem;
+    background: #172234;
+    color: #f1f5f9;
+    box-shadow: 0 1rem 4rem #0006;
+    font: 1rem / 1.55 system-ui, sans-serif;
+}
+
+.stocks-deployment-notice:modal,
+.stocks-maintenance-page .stocks-deployment-notice {
+    inset: 0;
+    width: min(36rem, calc(100% - 2rem));
+    max-height: calc(100% - 2rem);
+    margin: auto;
+    padding: clamp(1.5rem, 6vw, 3rem);
+    overflow: auto;
+}
+
+.stocks-deployment-notice::backdrop {
+    background: #0b111dc9;
+}
+
+.stocks-deployment-notice__label {
+    color: #8fe3b2;
+    font-size: .875rem;
+    font-weight: 650;
+}
+
+.stocks-deployment-notice h1 {
+    margin: .35rem 0 .5rem;
+    font-size: 1.4rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.stocks-deployment-notice:modal h1,
+.stocks-maintenance-page .stocks-deployment-notice h1 {
+    font-size: clamp(1.65rem, 5vw, 2.4rem);
+}
+
+.stocks-deployment-notice p {
+    margin: 0;
+}
+
+.stocks-deployment-notice__actions:has(button:not([hidden])) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .65rem;
+    margin-top: 1.25rem;
+}
+
+.stocks-deployment-notice button:not([hidden]) {
+    min-height: 2.75rem;
+    padding: .5rem 1rem;
+    border: 1px solid #8fe3b2;
+    border-radius: .5rem;
+    background: #8fe3b2;
+    color: #10251c;
+    font: inherit;
+    font-weight: 650;
+    cursor: pointer;
+}
+
+.stocks-deployment-notice button[data-deployment-dismiss]:not([hidden]) {
+    background: transparent;
+    color: #f1f5f9;
+}
+
+.stocks-deployment-notice button:focus-visible {
+    outline: 2px solid white;
+    outline-offset: 3px;
+}
