@@ -116,7 +116,8 @@ class EodhdMarketData
         if ($quote !== null) {
             $quote->venue = $record['venue'];
             $quote->mic = $record['mic'];
-            $quote->sourceQuality = in_array($record['interval'], ['trade', 'xtrade'], true) ? 'exchange_delayed' : 'unofficial';
+            $quote->sourceQuality = $record['source_key'] === 'eodhd_intraday' ? 'market_data_vendor'
+                : (in_array($record['interval'], ['trade', 'xtrade'], true) ? 'exchange_delayed' : 'unofficial');
         }
 
         return $quote ? $this->validatedHistoricalQuote($quote) : null;

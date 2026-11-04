@@ -16,6 +16,59 @@ describe('useDepotStore', () => {
         setActivePinia(createPinia());
     });
 
+    it('searches the free catalogue by default and keeps its source status visible', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+            results: [{ symbol: 'UN9', source_key: 'xetra_instruments' }],
+            message: 'Dated catalogue', status: 'stale', catalog_as_of: '2026-11-04',
+        }));
+        vi.stubGlobal('fetch', fetchMock);
+        const depots = useDepotStore();
+        await depots.searchStocks('UN9');
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ query: 'UN9', source: 'free' });
+        expect(depots.stockSearchStatus).toBe('stale');
+        expect(depots.stockSearchCatalogDate).toBe('2026-11-04');
+        expect(depots.stockSearchNotice).toBe('Dated catalogue');
+    });
+
+    it('uses EODHD search only after it is selected explicitly', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ results: [] }));
+        vi.stubGlobal('fetch', fetchMock);
+        const depots = useDepotStore();
+        depots.stockSearchSource = 'eodhd';
+        await depots.searchStocks('AAPL');
+        expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ query: 'AAPL', source: 'eodhd' });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('clears old search results and does not retry a failed free search with another provider', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ message: 'Unavailable' }, { ok: false, status: 503 }));
+        vi.stubGlobal('fetch', fetchMock);
+        const depots = useDepotStore();
+        depots.stockSearchResults = [{ symbol: 'OLD' }];
+        await expect(depots.searchStocks('UN9')).rejects.toThrow('Unavailable');
+        expect(depots.stockSearchResults).toEqual([]);
+        expect(depots.stockSearchSource).toBe('free');
+        expect(depots.stockSearchError).toBe('Unavailable');
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not apply a late EODHD search result after switching back to free search', async () => {
+        let finishPaidSearch;
+        const fetchMock = vi.fn().mockImplementationOnce(() => new Promise((resolve) => {
+            finishPaidSearch = resolve;
+        })).mockResolvedValueOnce(jsonResponse({ results: [{ symbol: 'FREE' }], message: 'Free source' }));
+        vi.stubGlobal('fetch', fetchMock);
+        const depots = useDepotStore();
+        depots.stockSearchSource = 'eodhd';
+        const paidSearch = depots.searchStocks('AAPL');
+        depots.stockSearchSource = 'free';
+        await depots.searchStocks('UN9');
+        finishPaidSearch(jsonResponse({ results: [{ symbol: 'PAID' }], message: 'EODHD source' }));
+        await paidSearch;
+        expect(depots.stockSearchResults).toEqual([{ symbol: 'FREE' }]);
+        expect(depots.stockSearchNotice).toBe('Free source');
+    });
+
     it('reloads only the selected stock and merges its new quote into both visible lists', async () => {
         const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
             status: 'updated', holding: { id: 34, latest_price: '17.64', latest_price_as_of: '2026-11-04T09:04:40+01:00' },

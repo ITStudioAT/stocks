@@ -10,7 +10,7 @@ class PublicMarketDataController extends Controller
 {
     public function indices(): JsonResponse
     {
-        $indexes = Cache::remember('public-market.indices.v1', now()->addMinutes(5), fn (): array => IndexWatchItem::query()
+        $indexes = Cache::remember('public-market.indices.v2', now()->addMinutes(5), fn (): array => IndexWatchItem::query()
             ->orderBy('symbol')
             ->get([
                 'symbol',
@@ -18,10 +18,12 @@ class PublicMarketDataController extends Controller
                 'country',
                 'currency',
                 'latest_price',
+                'latest_price_source',
                 'latest_price_change_pct',
             ])
             ->map(fn (IndexWatchItem $item): array => [
                 'symbol' => $item->symbol,
+                'latest_price_source' => $item->latest_price_source,
                 'name' => $item->name,
                 'country' => $item->country,
                 'currency' => $item->currency,

@@ -18,6 +18,7 @@ use App\Services\IndexDataUpdateScheduler;
 use App\Services\IndexPriceRefreshSettings;
 use App\Services\IndexWatchItemPriceRefresher;
 use App\Services\IntradayCandleBackfillScheduler;
+use App\Services\MarketDataProvenance;
 use App\Services\PriceRefreshScheduler;
 use App\Services\StockEndOfDayRepairService;
 use App\Services\StockHistoricalDataRepairService;
@@ -163,6 +164,7 @@ class AdminDataController extends Controller
                 'quote_hash' => $stockPrice->quote_hash,
                 'source_key' => $stockPrice->source_key,
                 'source_name' => $stockPrice->source_name,
+                'source_markers' => MarketDataProvenance::forRecord($stockPrice),
                 'source_url' => $stockPrice->source_url,
                 'source_quality' => $stockPrice->source_quality,
                 'venue' => $stockPrice->venue,

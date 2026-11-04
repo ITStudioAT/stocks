@@ -8,6 +8,7 @@ use App\Models\StockAiResearch;
 use App\Models\StockAiResearchSource;
 use App\Models\StockHolding;
 use App\Models\User;
+use App\Services\MarketDataProvenance;
 use App\Services\StockAiResearchService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -371,6 +372,7 @@ class AdminStockAiResearchTest extends TestCase
         $this->assertSame(100, $research->recommendation_hold_pct);
         $this->assertSame('no_reliable_assessment', $research->assessment['current_impact']);
         $this->assertSame($structured['summary'], $research->summary);
+        $normalizedDevelopment['source_markers'] = ['free'];
         $this->assertSame([$normalizedDevelopment], $research->developments);
         $this->assertSame('raised', $research->calculated_events['guidance'][0]['classification']);
         $this->assertSame(110, $research->calculated_events['guidance'][0]['current']['value']);
@@ -388,7 +390,7 @@ class AdminStockAiResearchTest extends TestCase
         $this->actingAs($admin)
             ->getJson("/admin/dashboard/ai/stocks/{$holding->id}/researches/{$research->id}")
             ->assertOk()
-            ->assertJsonPath('research.developments.0', $normalizedDevelopment)
+            ->assertJsonPath('research.developments.0', MarketDataProvenance::decorate($normalizedDevelopment))
             ->assertJsonPath('research.assessment.current_impact', 'no_reliable_assessment')
             ->assertJsonPath('research.recommendation', 'hold')
             ->assertJsonPath('research.recommendation_percentages', [
@@ -400,11 +402,13 @@ class AdminStockAiResearchTest extends TestCase
             ->assertJsonPath('research.calculated_events.guidance.0.classification', 'raised')
             ->assertJsonPath('research.sources.0', [
                 'url' => $normalizedDevelopment['source_url'],
+                'source_markers' => ['free'],
                 'title' => $normalizedDevelopment['source_title'],
                 'source_type' => 'regulator',
                 'confidence' => 'high',
                 'is_primary' => true,
                 'retrieved_at' => '2026-08-16T10:00:00+02:00',
+                'data_source_markers' => ['free'],
             ]);
 
         StockResearchAgent::assertPrompted(

@@ -450,6 +450,20 @@ function trendDailyPrices(direction = 'up') {
 }
 
 describe('App', () => {
+    it('retains historical and current origins through chart mapping and interpolation', () => {
+        window.history.pushState({}, '', '/admin/login');
+        vi.stubGlobal('fetch', vi.fn());
+        const wrapper = mountApp();
+        const oldPoint = { as_of: '2026-10-30T10:00:00Z', price: '50', chart_price: 50, source_markers: ['EODHD'] };
+        const newPoint = { as_of: '2026-10-30T10:30:00Z', price: '56', chart_price: 56, source_markers: ['free'] };
+        const intermediate = wrapper.vm.interpolateAnalyzeChartPrice(oldPoint, newPoint, 0.5, '2026-10-30T10:15:00Z', '2026-10-30');
+        expect(intermediate.source_markers).toEqual(['free', 'EODHD']);
+        expect(oldPoint.source_markers).toEqual(['EODHD']);
+        expect(newPoint.source_markers).toEqual(['free']);
+        const previousClose = wrapper.vm.stockPreviousTradingDayClose({ end_price_24: '50', end_price_24_date: '2026-10-29', end_price_24_source_markers: ['EODHD'] }, '2026-10-30');
+        expect(previousClose.source_markers).toEqual(['EODHD']);
+    });
+
     it('keeps free intraday observations at their real times without interpolation or hidden gap lines', () => {
         window.history.pushState({}, '', '/admin/login');
         vi.stubGlobal('fetch', vi.fn());
@@ -5599,6 +5613,9 @@ describe('App', () => {
         expect(document.body.textContent).toContain('Microsoft Corporation');
         expect(document.body.textContent).toContain('US5949181045');
         expect(document.body.textContent).toContain('NASDAQ');
+        expect(document.body.textContent).toContain('NASDAQ / XNAS / USD');
+        const freeSearchCall = fetchMock.mock.calls.find(([path]) => path === '/admin/stocks/search');
+        expect(JSON.parse(freeSearchCall[1].body).source).toBe('free');
 
         const addButton = Array.from(document.body.querySelectorAll('button'))
             .filter((button) => button.textContent.trim() === 'Add')
@@ -7271,7 +7288,7 @@ describe('App', () => {
         expect(coverageDialog.textContent).toContain('Apple Inc.');
         expect(coverageDialog.textContent).toContain('Earnings Calendar');
         expect(coverageDialog.textContent).toContain('Aktuell');
-        expect(coverageDialog.textContent).toContain('Quelle: EODHD');
+        expect(coverageDialog.textContent).toContain('Quelle: Quelle nicht belegt');
         coverageDialog.querySelector('.dashboard-ki-coverage-dialog-close').click();
         await flushPromises();
 

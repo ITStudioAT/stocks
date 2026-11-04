@@ -1,5 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue';
+import DataSourceMarkers from './DataSourceMarkers.vue';
+import { marketDataMarkers } from './utils/marketDataProvenance';
 import { formatPriceValue } from './utils/numberFormatters';
 
 const adminUrl = '/admin/login';
@@ -331,7 +333,7 @@ onUnmounted(() => {
                     >
                         <span class="ticker-symbol">{{ item.symbol }}</span>
                         <span v-if="item.country" class="ticker-country">{{ item.country }}</span>
-                        <span class="ticker-price">{{ formatTickerPrice(item) }}</span>
+                        <span class="ticker-price">{{ formatTickerPrice(item) }} <DataSourceMarkers :markers="marketDataMarkers(item, 'latest_price')" /></span>
                         <span
                             v-if="formatTickerChange(item)"
                             class="ticker-change"

@@ -34,12 +34,12 @@ class StoredQuoteComparison
                 $quote = null;
             }
             $stored = $quote !== null ? [
-                'price' => $quote->price, 'currency' => $quote->currency,
+                'price' => $quote->price, 'source_markers' => MarketDataProvenance::forRecord($quote), 'currency' => $quote->currency,
                 'as_of' => CarbonImmutable::parse($quote->getRawOriginal('as_of'), 'UTC')->utc()->format('Y-m-d\TH:i:s.u\Z'),
                 'trading_date' => null, 'source' => $quote->source_name ?: $quote->source_key,
                 'venue' => $quote->venue, 'mic' => $quote->mic, 'price_type' => $quote->price_type,
             ] : ($close === null ? null : [
-                'price' => $close->close, 'currency' => $close->currency, 'as_of' => null,
+                'price' => $close->close, 'source_markers' => MarketDataProvenance::forRecord($close), 'currency' => $close->currency, 'as_of' => null,
                 'trading_date' => $close->trading_date->toDateString(), 'source' => $close->source_name ?: $close->source_key,
                 'venue' => null, 'mic' => null, 'price_type' => 'daily_close',
             ]);

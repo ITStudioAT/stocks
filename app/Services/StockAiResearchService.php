@@ -168,9 +168,10 @@ class StockAiResearchService
             $officialPositionCount = count($webEtfSnapshot['positions'] ?? []);
 
             if ($webEtfSnapshot !== [] && $officialPositionCount > $providerPositionCount) {
-                $eodhdData['etf_snapshot'] = $webEtfSnapshot;
+                $eodhdData['etf_snapshot'] = [...$webEtfSnapshot, 'source_markers' => ['free']];
                 $eodhdData['coverage'][] = [
                     'dataset' => 'official_position_snapshot',
+                    'source_markers' => ['free'],
                     'symbol' => $eodhdData['instrument']['eodhd_symbol'] ?? null,
                     'status' => 'fresh',
                     'retrieved_at' => $retrievedAt,
@@ -262,6 +263,7 @@ class StockAiResearchService
             'error' => $research->status === 'failed' ? $research->error : null,
             'sources' => $research->sources->map(fn (StockAiResearchSource $source): array => [
                 'url' => $source->url,
+                'source_markers' => $research->calculation_snapshot['source_provenance'][$source->url] ?? MarketDataProvenance::markers($source->url, $source->title),
                 'title' => $source->title,
                 'source_type' => $source->source_type,
                 'confidence' => $source->confidence,
@@ -383,6 +385,7 @@ class StockAiResearchService
             'trump_connection' => $research->trump_connection,
             'sources' => $research->sources->map(fn (StockAiResearchSource $source): array => [
                 'url' => $source->url,
+                'source_markers' => $research->calculation_snapshot['source_provenance'][$source->url] ?? MarketDataProvenance::markers($source->url, $source->title),
                 'title' => $source->title,
                 'source_type' => $source->source_type,
                 'confidence' => $source->confidence,
@@ -562,6 +565,16 @@ class StockAiResearchService
             collect($result['consulted_sources'])->concat($this->structuredSources($result)),
             $retrievedAt,
         );
+
+        $sourceProvenance = $research->calculation_snapshot['source_provenance'] ?? [];
+        foreach ($response->meta->citations as $citation) {
+            if ($citation instanceof UrlCitation && ($url = $this->canonicalUrl($citation->url)) !== null) {
+                $sourceProvenance[$url] = MarketDataProvenance::merge($sourceProvenance[$url] ?? [], ['free']);
+            }
+        }
+        $newDevelopments = $newDevelopments->map(fn (array $development): array => [...$development,
+            'source_markers' => $sourceProvenance[$development['source_url']] ?? MarketDataProvenance::forRecord($development)]);
+        $research->update(['calculation_snapshot' => [...($research->calculation_snapshot ?? []), 'source_provenance' => $sourceProvenance]]);
 
         DB::transaction(function () use (
             $research,
@@ -1091,6 +1104,7 @@ class StockAiResearchService
                     'data_as_of' => $dataAsOf,
                     'freshness' => $this->freshness($publishedAt, $eventAt, $retrievedAt, $dataAsOf, 'complete'),
                     'coverage' => 'complete',
+                    'source_markers' => ['free'],
                     'source_title' => Str::limit(trim($input['source_title']), 255, ''),
                     'source_url' => $sourceUrl,
                 ];

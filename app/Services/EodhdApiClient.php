@@ -18,6 +18,10 @@ class EodhdApiClient
 
     public function get(string $path, array $query = [], int $usageUnits = 1): Response
     {
+        if (! config('services.eodhd.enabled', true)) {
+            throw new RuntimeException('EODHD integration is disabled by configuration.');
+        }
+
         app(PreviewIsolation::class)->assertEodhdAllowed();
         $apiToken = config('services.eodhd.key');
 
@@ -49,6 +53,10 @@ class EodhdApiClient
 
     public function configured(): bool
     {
+        if (! config('services.eodhd.enabled', true)) {
+            return false;
+        }
+
         $apiToken = config('services.eodhd.key');
 
         if (app(PreviewIsolation::class)->active()) {

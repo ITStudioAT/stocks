@@ -47,7 +47,7 @@ class AdminStockSearchTest extends TestCase
         $admin = $this->adminUser();
 
         $this->actingAs($admin)
-            ->postJson('/admin/stocks/search', ['query' => 'Apple'])
+            ->postJson('/admin/stocks/search', ['query' => 'Apple', 'source' => 'eodhd'])
             ->assertOk()
             ->assertJsonCount(10, 'results')
             ->assertJsonPath('results.0.symbol', 'AAPL1')
@@ -92,7 +92,7 @@ class AdminStockSearchTest extends TestCase
         $admin = $this->adminUser();
 
         $this->actingAs($admin)
-            ->postJson('/admin/stocks/search', ['query' => 'DE000A0D8Q23'])
+            ->postJson('/admin/stocks/search', ['query' => 'DE000A0D8Q23', 'source' => 'eodhd'])
             ->assertOk()
             ->assertJsonCount(1, 'results')
             ->assertJsonPath('results.0.symbol', 'EXXX')
@@ -130,7 +130,7 @@ class AdminStockSearchTest extends TestCase
         $admin = $this->adminUser();
 
         $this->actingAs($admin)
-            ->postJson('/admin/stocks/search', ['query' => 'ATX.INDX'])
+            ->postJson('/admin/stocks/search', ['query' => 'ATX.INDX', 'source' => 'eodhd'])
             ->assertOk()
             ->assertJsonCount(1, 'results')
             ->assertJsonPath('results.0.symbol', 'ATX')

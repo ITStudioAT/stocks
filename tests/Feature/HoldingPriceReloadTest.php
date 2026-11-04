@@ -24,6 +24,7 @@ class HoldingPriceReloadTest extends TestCase
         $this->assertSame(':memory:', config('database.connections.sqlite.database'));
         $this->travelTo(Carbon::parse('2026-11-04 10:00:00', 'Europe/Vienna'));
         Http::preventStrayRequests();
+        config(['services.eodhd.enabled' => false]);
     }
 
     public function test_reload_checks_the_free_feed_again_and_only_updates_the_selected_stock(): void

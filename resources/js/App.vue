@@ -10,6 +10,9 @@ import { formatAdaptiveNumber, formatPriceValue } from './utils/numberFormatters
 import DashboardMarketDataTests from './DashboardMarketDataTests.vue';
 import FreeIntradayCoverage from './FreeIntradayCoverage.vue';
 import HoldingPriceReload from './HoldingPriceReload.vue';
+import InstrumentSearchSource from './InstrumentSearchSource.vue';
+import DataSourceMarkers from './DataSourceMarkers.vue';
+import { marketDataMarkers, marketDataSourceText, mergeMarketDataMarkers } from './utils/marketDataProvenance';
 import {
     calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio,
     calculateAnalyzeTrendV2BuyOncePortfolio,
@@ -156,6 +159,10 @@ const {
     holdingIntradayCandlesErrors,
     uiPreferences,
     stockSearchResults,
+    stockSearchSource,
+    stockSearchNotice,
+    stockSearchCatalogDate,
+    stockSearchStatus,
     pagination: depotPagination,
     holdingsPagination,
     loading: depotsLoading,
@@ -330,6 +337,13 @@ const selectedIndexPriceRange = ref('intraday');
 const selectedIndexWatchItemForRemoval = ref(null);
 const transactionHolding = ref(null);
 const holdingSearchQuery = ref('');
+watch(stockSearchSource, () => {
+    depotsStore.stockSearchResults = [];
+    depotsStore.stockSearchError = '';
+    depotsStore.stockSearchNotice = '';
+    depotsStore.stockSearchCatalogDate = null;
+    depotsStore.stockSearchStatus = '';
+});
 const holdingSubtitle = ref('');
 const holdingForm = ref(emptyHoldingForm());
 const indexSearchQuery = ref('');
@@ -1358,6 +1372,10 @@ function buildAnalyzeTrendV2Rows(
 ) {
     const prices = analyzeTrendDailyPrices(holding);
     const depotStateByDate = analyzeTrendDepotStateByDate(holding, prices);
+    const provenanceByDate = new Map(prices.map((price, index) => [price.trading_date, {
+        source_markers: marketDataMarkers(price),
+        day_change_source_markers: marketDataMarkers([prices[index - 1], price]),
+    }]));
 
     return calculateAnalyzeTrendV2Rows(prices, {
         rowLimit: normalizeAnalyzeTrendRowLimit(rowLimit),
@@ -1366,6 +1384,7 @@ function buildAnalyzeTrendV2Rows(
         sellThreshold,
     }).map((row) => ({
         ...row,
+        ...provenanceByDate.get(row.date),
         depot: depotStateByDate.get(row.date) ?? {
             actions: [],
             changeAmount: null,
@@ -1584,6 +1603,16 @@ function analyzeTrendDepotTotal(holding, currentPrice) {
     };
 }
 
+function analyzeCalculationMarkers() {
+    const rowLimit = activeAnalyzeSubsection.value === 'research' ? analyzeResearchSettings.value.rows : analyzeTrendRowLimit.value;
+
+    return marketDataMarkers(holdings.value.map((holding) => {
+        const prices = analyzeTrendDailyPrices(holding).slice(-(Number(rowLimit) + 1));
+
+        return prices.length > 1 ? prices : [];
+    }));
+}
+
 function analyzeTrendDailyPrices(holding) {
     if (!Array.isArray(holding?.daily_prices)) {
         return [];
@@ -1591,6 +1620,7 @@ function analyzeTrendDailyPrices(holding) {
 
     return holding.daily_prices
         .map((price) => ({
+            source_markers: marketDataMarkers(price),
             trading_date: price.trading_date,
             price: Number(price.price),
             volume: Number.isFinite(Number(price.volume)) ? Number(price.volume) : null,
@@ -5883,6 +5913,9 @@ function openHoldingDialog() {
     holdingSubtitle.value = '';
     depotsStore.stockSearchResults = [];
     depotsStore.stockSearchError = '';
+    depotsStore.stockSearchSource = 'free';
+    depotsStore.stockSearchNotice = '';
+    depotsStore.stockSearchCatalogDate = null;
     holdingError.value = '';
     holdingMessage.value = '';
     isHoldingDialogOpen.value = true;
@@ -5928,6 +5961,9 @@ function openIndexDialog() {
     indexSearchQuery.value = '';
     depotsStore.stockSearchResults = [];
     depotsStore.stockSearchError = '';
+    depotsStore.stockSearchSource = 'free';
+    depotsStore.stockSearchNotice = '';
+    depotsStore.stockSearchCatalogDate = null;
     indexError.value = '';
     indexMessage.value = '';
     isIndexDialogOpen.value = true;
@@ -8023,6 +8059,19 @@ function depotPriceSourceButtonClass(source) {
     };
 }
 
+function depotHoldingValueMarkers(holding) {
+    return depotPriceSource.value === 'latest' && hasPositionPieces(holding) && stockHoldingValue(holding) !== null
+        ? marketDataMarkers(holding, 'latest_price') : [];
+}
+
+function depotHoldingsValueMarkers() {
+    return mergeMarketDataMarkers(...depotHoldings.value.map((holding) => depotHoldingValueMarkers(holding)));
+}
+
+function depotValuationMarkers(field) {
+    return marketDataMarkers(selectedDepotValuation(), field);
+}
+
 function selectedDepotHoldingPrice(holding) {
     return depotPriceSource.value === 'flatex'
         ? holding.flatex_price
@@ -8743,6 +8792,7 @@ function stockChartPrices(holding, range) {
                 : (asOfDate && !Number.isNaN(asOfDate.getTime()) ? localDateKey(asOfDate, displayTimeZone) : null);
 
             return {
+                ...price,
                 trading_date: tradingDate,
                 actual_price: price.price,
                 actual_price_as_of: asOf,
@@ -8767,6 +8817,7 @@ function stockChartPrices(holding, range) {
     return [
         ...chartPrices,
         {
+            source_markers: previousClose.source_markers,
             trading_date: previousClose.tradingDate,
             actual_price: previousClose.price,
             chart_label: formatIndexChartDate(previousClose.tradingDate) || 'Previous close',
@@ -8779,6 +8830,7 @@ function stockPreviousTradingDayClose(holding, currentTradingDate) {
 
     if (!Number.isNaN(previousClose) && holding.end_price_24 !== null && holding.end_price_24 !== '') {
         return {
+            source_markers: holding.end_price_24_source_markers ?? [],
             price: holding.end_price_24,
             tradingDate: holding.end_price_24_date ?? null,
         };
@@ -8798,6 +8850,7 @@ function stockPreviousTradingDayClose(holding, currentTradingDate) {
     }
 
     return {
+        source_markers: marketDataMarkers(previousDailyPrice),
         price: previousDailyPrice.price,
         tradingDate: previousDailyPrice.trading_date,
     };
@@ -8853,6 +8906,7 @@ function indexIntradayChartPrices(prices, indexItem) {
     const realtimePrices = (indexItem?.realtime_prices ?? [])
         .map((realtimePrice) => ({
             ...latestPrice,
+            ...realtimePrice,
             actual_price: realtimePrice.price,
             actual_price_as_of: realtimePrice.as_of,
             chart_label: formatIndexIntradayTime(realtimePrice.as_of) ?? 'Latest',
@@ -9486,6 +9540,7 @@ function interpolateAnalyzeChartPrice(previousPrice, nextPrice, ratio, chartAsOf
         chart_as_of: chartAsOf,
         chart_price: chartPrice,
         price: chartPrice.toFixed(8),
+        source_markers: mergeMarketDataMarkers(marketDataMarkers(previousPrice), marketDataMarkers(nextPrice)),
         is_interpolated: true,
     };
 }
@@ -13146,7 +13201,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 class="dashboard-performance-amount"
                                                 :class="dashboardPerformanceValueClass(card.performance)"
                                             >
-                                                {{ dashboardPerformanceAmount(card.performance) }}
+                                                {{ dashboardPerformanceAmount(card.performance) }} <DataSourceMarkers :markers="marketDataMarkers(card.performance)" />
                                             </div>
                                             <div
                                                 class="dashboard-performance-percent"
@@ -13183,7 +13238,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 class="dashboard-performance-amount"
                                                 :class="dashboardPerformanceValueClass(card.performance)"
                                             >
-                                                {{ dashboardPerformanceAmount(card.performance) }}
+                                                {{ dashboardPerformanceAmount(card.performance) }} <DataSourceMarkers :markers="marketDataMarkers(card.performance)" />
                                             </div>
                                             <div
                                                 class="dashboard-performance-percent"
@@ -13222,7 +13277,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <div class="dashboard-stock-signal-card-heading">
                                                 <div>
                                                     <div class="dashboard-stock-signal-card-name">
-                                                        {{ stockDisplayName(card.holding) }}
+                                                        {{ stockDisplayName(card.holding) }} <DataSourceMarkers :markers="marketDataMarkers(card.holding)" />
                                                     </div>
                                                     <div class="dashboard-stock-signal-card-symbol">
                                                         {{ card.holding.symbol || '-' }}
@@ -13295,7 +13350,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <div class="dashboard-ki-stock-copy">
                                                 <div class="dashboard-ki-stock-heading">
                                                     <v-card-title class="dashboard-ki-stock-title">
-                                                        {{ stockDisplayName(holding) }}
+                                                        {{ stockDisplayName(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding)" />
                                                     </v-card-title>
                                                     <v-btn
                                                         v-if="dashboardKiCoverageSection(dashboardKiNowRelevantResearch(holding.id))?.items.length"
@@ -13352,7 +13407,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                             size="x-small"
                                                             variant="tonal"
                                                         >
-                                                            {{ dashboardKiRecommendation(holding.id).label }}
+                                                            {{ dashboardKiRecommendation(holding.id).label }} <DataSourceMarkers :markers="dashboardKiRecommendation(holding.id).isFallback ? [] : marketDataMarkers(dashboardKiDisplayedResearch(holding.id))" />
                                                         </v-chip>
                                                     </div>
                                                     <div
@@ -13461,7 +13516,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     >
                                                         <div class="dashboard-ki-development-section-heading">
                                                             <v-icon :icon="section.icon" size="18" />
-                                                            <strong>{{ section.title }}</strong>
+                                                            <strong>{{ section.title }} <DataSourceMarkers :markers="marketDataMarkers(section.items)" /></strong>
                                                         </div>
                                                         <div v-if="section.items.length" class="dashboard-ki-calculated-list">
                                                             <article
@@ -13541,9 +13596,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                                                     class="dashboard-ki-item-source"
                                                                     rel="noopener noreferrer"
                                                                     target="_blank"
-                                                                >Quelle: {{ item.source_title || item.source_url }}</a>
+                                                                >Quelle: {{ item.source_title || item.source_url }} <DataSourceMarkers :markers="marketDataMarkers(item)" /></a>
                                                                 <span v-else class="dashboard-ki-item-source">
-                                                                    Quelle: {{ item.source_title || 'EODHD' }}
+                                                                    Quelle: {{ item.source_title || 'Quelle nicht belegt' }} <DataSourceMarkers :markers="marketDataMarkers(item)" />
                                                                 </span>
                                                             </article>
                                                         </div>
@@ -13602,7 +13657,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             </div>
 
                                             <p class="dashboard-ki-research-summary">
-                                                {{ dashboardKiDisplayedResearch(holding.id).summary }}
+                                                {{ dashboardKiDisplayedResearch(holding.id).summary }} <DataSourceMarkers :markers="marketDataMarkers(dashboardKiDisplayedResearch(holding.id))" />
                                             </p>
 
                                             <p
@@ -13624,7 +13679,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     rel="noopener noreferrer"
                                                     target="_blank"
                                                 >
-                                                    {{ source.title || source.url }}
+                                                    {{ source.title || source.url }} <DataSourceMarkers :markers="marketDataMarkers(source)" />
                                                 </a>
                                             </div>
 
@@ -13700,9 +13755,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         class="dashboard-ki-item-source"
                                                         rel="noopener noreferrer"
                                                         target="_blank"
-                                                    >Quelle: {{ item.source_title || item.source_url }}</a>
+                                                    >Quelle: {{ item.source_title || item.source_url }} <DataSourceMarkers :markers="marketDataMarkers(item)" /></a>
                                                     <span v-else class="dashboard-ki-item-source">
-                                                        Quelle: {{ item.source_title || 'EODHD' }}
+                                                        Quelle: {{ item.source_title || 'Quelle nicht belegt' }} <DataSourceMarkers :markers="marketDataMarkers(item)" />
                                                     </span>
                                                 </article>
                                             </div>
@@ -14476,12 +14531,12 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <span class="index-watch-card-symbol">{{ indexItem.symbol }}</span>
                                             <span class="index-watch-card-country">{{ indexItem.country || '-' }}</span>
                                         </span>
-                                        <span class="index-watch-card-label">{{ indexItem.name || 'Index' }}</span>
+                                        <span class="index-watch-card-label">{{ indexItem.name || 'Index' }} <DataSourceMarkers :markers="marketDataMarkers(indexItem)" /></span>
                                         <span class="index-watch-card-price" :class="indexChangeClass(indexItem)">
                                             <span v-if="formatIndexChangePercent(indexItem)">
                                                 {{ formatIndexChangePercent(indexItem) }}
                                             </span>
-                                            <span>{{ formatIndexPrice(indexItem) }}</span>
+                                            <span>{{ formatIndexPrice(indexItem) }} <DataSourceMarkers :markers="marketDataMarkers(indexItem, 'latest_price')" /></span>
                                         </span>
                                         <span
                                             v-if="indexWatchItemRefreshSchedule(indexItem).sessionWindow"
@@ -14566,7 +14621,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         @keydown.space.prevent="activeSection === 'stocks' && toggleStockWatchItemSelection(holding)"
                                     >
                                     <div class="mobile-stock-name">
-                                        {{ stockDisplayName(holding) }}
+                                        {{ stockDisplayName(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding)" />
                                     </div>
                                     <div v-if="holding.subtitle" class="stock-subtitle text-caption text-info font-weight-medium">
                                         {{ holding.subtitle }}
@@ -14602,7 +14657,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             :class="mobileHoldingPriceClass(holding)"
                                         >
                                             <span class="mobile-stock-price-main">
-                                                <span>{{ formatMobileHoldingPrice(holding) }}</span>
+                                                <span>{{ formatMobileHoldingPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'latest_price')" /></span>
                                                 <span
                                                     v-if="formatMobileHoldingPriceLoadedAt(holding)"
                                                     class="mobile-price-loaded-at"
@@ -14614,7 +14669,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 v-if="mobileHoldingPriceChangeText(holding)"
                                                 class="mobile-stock-price-change"
                                             >
-                                                {{ mobileHoldingPriceChangeText(holding) }}
+                                                {{ mobileHoldingPriceChangeText(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'end_price_24')" />
                                             </span>
                                         </span>
                                     </div>
@@ -14727,7 +14782,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             </div>
                                         </td>
                                         <td class="watch-list-content-cell">
-                                            <div>{{ stockDisplayName(holding) }}</div>
+                                            <div>{{ stockDisplayName(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding)" /></div>
                                             <div v-if="holding.subtitle" class="stock-subtitle text-caption text-info font-weight-medium">
                                                 {{ holding.subtitle }}
                                             </div>
@@ -14798,7 +14853,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         v-if="mobileHoldingPriceChangeText(holding)"
                                                         class="latest-price-change"
                                                     >
-                                                        {{ mobileHoldingPriceChangeText(holding) }}
+                                                        {{ mobileHoldingPriceChangeText(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'end_price_24')" />
                                                     </span>
                                                 </span>
                                             </span>
@@ -14807,7 +14862,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <td v-else class="watch-list-content-cell">
                                             <span class="latest-price-value d-inline-flex flex-column" :class="watchListLatestPriceClass(holding)">
                                                 <span class="d-inline-flex align-center ga-1">
-                                                    <span>{{ formatLatestPrice(holding) }}</span>
+                                                    <span>{{ formatLatestPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'latest_price')" /></span>
                                                     <span
                                                         v-if="latestPriceIsLive(holding)"
                                                         class="watch-list-live-badge latest-price-live-badge"
@@ -14833,12 +14888,12 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <HoldingPriceReload v-if="isCompactWatchListTable" :holding="holding" />
                                         </td>
                                         <td class="watch-list-content-cell">
-                                            <span>{{ formatSessionPrice(holding.start_price, holding) }}</span>
+                                            <span>{{ formatSessionPrice(holding.start_price, holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'start_price')" /></span>
                                         </td>
                                         <td class="watch-list-content-cell">
                                             <span class="d-inline-flex flex-column">
                                                 <span class="d-inline-flex align-center ga-1">
-                                                    <span>{{ formatSessionPrice(holding.end_price_24, holding) }}</span>
+                                                    <span>{{ formatSessionPrice(holding.end_price_24, holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'end_price_24')" /></span>
                                                 </span>
                                             </span>
                                         </td>
@@ -14940,6 +14995,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     v-if="expandedHoldingIntradayChart(holding).points.length"
                                                     class="holding-intraday-chart-panel"
                                                 >
+                                                    <DataSourceMarkers :markers="marketDataMarkers(expandedHoldingIntradayChart(holding).points)" />
                                                     <svg
                                                         class="holding-intraday-chart"
                                                         :viewBox="`0 0 ${expandedHoldingIntradayChart(holding).width} ${expandedHoldingIntradayChart(holding).height}`"
@@ -15073,7 +15129,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                             :cx="point.x"
                                                             :cy="point.y"
                                                             r="2.8"
-                                                        ><title>{{ point.source_name || 'Stored source' }} · {{ point.datetime }} · {{ point.interval }}</title></circle>
+                                                        ><title>{{ marketDataSourceText(point) }} · {{ point.source_name || 'Stored source' }} · {{ point.datetime }} · {{ point.interval }}</title></circle>
                                                     </svg>
                                                 </div>
                                                 <div class="holding-intraday-table-wrap">
@@ -15125,7 +15181,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </span>
                                 </span>
                                 <span class="index-price-dialog-name">
-                                    {{ stockDisplayName(selectedStockWatchItem, 'Stock') }}
+                                    {{ stockDisplayName(selectedStockWatchItem, 'Stock') }} <DataSourceMarkers :markers="marketDataMarkers(selectedStockWatchItem)" />
                                 </span>
                                 <span v-if="selectedStockWatchItem.subtitle" class="index-price-dialog-code stock-subtitle text-info font-weight-medium">
                                     {{ selectedStockWatchItem.subtitle }}
@@ -15171,7 +15227,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <span v-if="formatLatestPriceChangePercent(selectedStockWatchItem)">
                                             {{ formatLatestPriceChangePercent(selectedStockWatchItem) }}
                                         </span>
-                                        <span>{{ formatLatestPrice(selectedStockWatchItem) }}</span>
+                                        <span>{{ formatLatestPrice(selectedStockWatchItem) }} <DataSourceMarkers :markers="marketDataMarkers(selectedStockWatchItem, 'latest_price')" /></span>
                                     </span>
                                 </div>
 
@@ -15200,6 +15256,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     >
                                         Previous trading day's close to latest available price.
                                     </div>
+                                    <DataSourceMarkers :markers="marketDataMarkers(selectedStockChart.points)" />
                                     <svg
                                         v-if="selectedStockChart.points.length"
                                         class="stock-price-chart index-price-chart"
@@ -15280,7 +15337,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 :cx="point.x"
                                                 :cy="point.y"
                                                 r="4"
-                                            />
+                                            ><title>{{ marketDataSourceText(point) }} · {{ point.as_of || point.trading_date || point.label }}</title></circle>
                                         </template>
                                         <text
                                             v-if="selectedStockChart.firstLabel"
@@ -15290,7 +15347,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             :text-anchor="selectedStockChart.firstLabel.labelAnchor"
                                         >
                                             {{ selectedStockPriceRange === 'intraday' ? 'Previous close' : 'Start' }}
-                                            {{ formatStockChartEndpointPrice(selectedStockChart.firstLabel) }}
+                                            {{ formatStockChartEndpointPrice(selectedStockChart.firstLabel) }} <tspan>{{ marketDataSourceText(selectedStockChart.firstLabel) }}</tspan>
                                         </text>
                                         <text
                                             v-if="selectedStockChart.latestLabel"
@@ -15299,7 +15356,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             :y="selectedStockChart.latestLabel.labelY"
                                             :text-anchor="selectedStockChart.latestLabel.labelAnchor"
                                         >
-                                            End {{ formatStockChartEndpointPrice(selectedStockChart.latestLabel) }}
+                                            End {{ formatStockChartEndpointPrice(selectedStockChart.latestLabel) }} <tspan>{{ marketDataSourceText(selectedStockChart.latestLabel) }}</tspan>
                                             {{ selectedStockChart.latestLabel.changePercent }}
                                         </text>
                                     </svg>
@@ -15335,6 +15392,7 @@ function formatIndexDataUpdateSchedule(settings) {
                             <v-card>
                                 <v-card-title>Add stock</v-card-title>
                                 <v-card-text>
+                                    <InstrumentSearchSource v-model="stockSearchSource" :notice="stockSearchNotice" :catalog-date="stockSearchCatalogDate" :status="stockSearchStatus" />
                                     <form
                                         id="holding-search-form"
                                         class="d-flex align-center ga-3 mb-5"
@@ -15373,18 +15431,23 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 <th>Name</th>
                                                 <th>ISIN</th>
                                                 <th>WKN / Valor</th>
-                                                <th>Exchange</th>
+                                                <th>Exchange / MIC / Currency</th>
                                                 <th>Type</th>
                                                 <th class="text-right">Action</th>
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            <tr v-for="result in stockSearchResults" :key="`${result.symbol}-${result.exchange}-${result.mic_code}`">
+                                            <tr v-for="result in stockSearchResults" :key="`${result.isin}-${result.symbol}-${result.exchange}-${result.mic_code}-${result.currency}`">
                                                 <td>{{ result.symbol }}</td>
-                                                <td>{{ result.name }}</td>
+                                                <td>
+                                                    {{ result.name }}
+                                                    <div v-if="result.source_name" class="text-caption text-medium-emphasis">
+                                                        {{ result.source_name }} <DataSourceMarkers :markers="marketDataMarkers(result)" /><span v-if="result.source_as_of"> · {{ result.source_as_of }}</span>
+                                                    </div>
+                                                </td>
                                                 <td>{{ result.isin || '-' }}</td>
                                                 <td>{{ result.wkn || result.valor || '-' }}</td>
-                                                <td>{{ result.exchange }}</td>
+                                                <td>{{ result.exchange }} / {{ result.mic_code || '-' }} / {{ result.currency || '-' }}</td>
                                                 <td>{{ result.instrument_type }}</td>
                                                 <td class="text-right">
                                                     <v-btn
@@ -15654,6 +15717,7 @@ function formatIndexDataUpdateSchedule(settings) {
                             <v-card>
                                 <v-card-title>Add index</v-card-title>
                                 <v-card-text>
+                                    <InstrumentSearchSource v-model="stockSearchSource" :notice="stockSearchNotice" :catalog-date="stockSearchCatalogDate" :status="stockSearchStatus" />
                                     <form
                                         id="index-search-form"
                                         class="d-flex align-center ga-3 mb-5"
@@ -15687,18 +15751,23 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 <th>Name</th>
                                                 <th>ISIN</th>
                                                 <th>WKN / Valor</th>
-                                                <th>Exchange</th>
+                                                <th>Exchange / MIC / Currency</th>
                                                 <th>Type</th>
                                                 <th class="text-right">Action</th>
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            <tr v-for="result in stockSearchResults" :key="`index-${result.symbol}-${result.exchange}-${result.mic_code}`">
+                                            <tr v-for="result in stockSearchResults" :key="`index-${result.isin}-${result.symbol}-${result.exchange}-${result.mic_code}-${result.currency}`">
                                                 <td>{{ result.symbol }}</td>
-                                                <td>{{ result.name }}</td>
+                                                <td>
+                                                    {{ result.name }}
+                                                    <div v-if="result.source_name" class="text-caption text-medium-emphasis">
+                                                        {{ result.source_name }} <DataSourceMarkers :markers="marketDataMarkers(result)" /><span v-if="result.source_as_of"> · {{ result.source_as_of }}</span>
+                                                    </div>
+                                                </td>
                                                 <td>{{ result.isin || '-' }}</td>
                                                 <td>{{ result.wkn || result.valor || '-' }}</td>
-                                                <td>{{ result.exchange }}</td>
+                                                <td>{{ result.exchange }} / {{ result.mic_code || '-' }} / {{ result.currency || '-' }}</td>
                                                 <td>{{ result.instrument_type }}</td>
                                                 <td class="text-right">
                                                     <v-btn
@@ -15739,7 +15808,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </span>
                                     </span>
                                     <span class="index-price-dialog-name">
-                                        {{ selectedIndexWatchItem.name || 'Index' }}
+                                        {{ selectedIndexWatchItem.name || 'Index' }} <DataSourceMarkers :markers="marketDataMarkers(selectedIndexWatchItem)" />
                                     </span>
                                     <span v-if="selectedIndexWatchItem.eodhd_code" class="index-price-dialog-code">
                                         {{ selectedIndexWatchItem.eodhd_code }}
@@ -15790,7 +15859,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <span v-if="formatIndexChangePercent(selectedIndexWatchItem)">
                                                 {{ formatIndexChangePercent(selectedIndexWatchItem) }}
                                             </span>
-                                            <span>{{ formatIndexDialogActualPrice(selectedIndexWatchItem) }}</span>
+                                            <span>{{ formatIndexDialogActualPrice(selectedIndexWatchItem) }} <DataSourceMarkers :markers="marketDataMarkers(selectedIndexWatchItem, 'latest_price')" /></span>
                                         </span>
                                     </div>
 
@@ -15819,6 +15888,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         >
                                             Previous trading day's close to latest available price.
                                         </div>
+                                        <DataSourceMarkers :markers="marketDataMarkers(selectedIndexChart.points)" />
                                         <svg
                                             v-if="selectedIndexChart.points.length"
                                             class="index-price-chart"
@@ -15899,7 +15969,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     :cx="point.x"
                                                     :cy="point.y"
                                                     r="4"
-                                                />
+                                                ><title>{{ marketDataSourceText(point) }} · {{ point.as_of || point.trading_date || point.label }}</title></circle>
                                             </template>
                                             <text
                                                 v-if="selectedIndexChart.firstLabel"
@@ -15909,7 +15979,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 :text-anchor="selectedIndexChart.firstLabel.labelAnchor"
                                             >
                                                 {{ selectedIndexPriceRange === 'intraday' ? 'Previous close' : 'Start' }}
-                                                {{ formatIndexChartEndpointPrice(selectedIndexChart.firstLabel) }}
+                                                {{ formatIndexChartEndpointPrice(selectedIndexChart.firstLabel) }} <tspan>{{ marketDataSourceText(selectedIndexChart.firstLabel) }}</tspan>
                                             </text>
                                             <text
                                                 v-if="selectedIndexChart.latestLabel"
@@ -15918,7 +15988,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 :y="selectedIndexChart.latestLabel.labelY"
                                                 :text-anchor="selectedIndexChart.latestLabel.labelAnchor"
                                             >
-                                                End {{ formatIndexChartEndpointPrice(selectedIndexChart.latestLabel) }}
+                                                End {{ formatIndexChartEndpointPrice(selectedIndexChart.latestLabel) }} <tspan>{{ marketDataSourceText(selectedIndexChart.latestLabel) }}</tspan>
                                                 {{ selectedIndexChart.latestLabel.changePercent }}
                                             </text>
                                         </svg>
@@ -15989,6 +16059,9 @@ function formatIndexDataUpdateSchedule(settings) {
                     </section>
 
                     <section v-if="activeSection === 'analyze'">
+                        <div v-if="analyzeCalculationMarkers().length" class="text-caption mb-2" aria-label="Analysis price data provenance">
+                            Price data <DataSourceMarkers :markers="analyzeCalculationMarkers()" />
+                        </div>
                         <div class="mb-6">
                             <p class="text-overline text-primary mb-1">Analyze</p>
                             <h1 class="text-h4">Analyze</h1>
@@ -16795,7 +16868,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </span>
                                     </span>
                                     <span class="index-watch-card-label analyze-holding-card-name">
-                                        {{ stockDisplayLabel(holding) }}
+                                        {{ stockDisplayLabel(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding)" />
                                     </span>
                                     <span class="index-watch-card-price analyze-holding-card-price">
                                         {{ formatHoldingCardPrice(holding) }}
@@ -16851,17 +16924,18 @@ function formatIndexDataUpdateSchedule(settings) {
                             >
                                 <div class="analyze-sparkline-header">
                                     <span class="analyze-sparkline-name">
-                                        {{ stockDisplayLabel(selectedAnalyzeHolding) }}
+                                        {{ stockDisplayLabel(selectedAnalyzeHolding) }} <DataSourceMarkers :markers="marketDataMarkers(selectedAnalyzeChartSourcePrices)" />
                                     </span>
                                     <span class="analyze-sparkline-meta">
                                         {{ formatAnalyzeSparklineDate(selectedAnalyzeSparkline.first) }}
-                                        · {{ formatAnalyzeSparklinePrice(selectedAnalyzeSparkline.first) }}
+                                        · {{ formatAnalyzeSparklinePrice(selectedAnalyzeSparkline.first) }} <DataSourceMarkers :markers="marketDataMarkers(selectedAnalyzeSparkline.first)" />
                                         -
                                         {{ formatAnalyzeSparklineDate(selectedAnalyzeSparkline.latest) }}
-                                        · {{ formatAnalyzeSparklinePrice(selectedAnalyzeSparkline.latest) }}
+                                        · {{ formatAnalyzeSparklinePrice(selectedAnalyzeSparkline.latest) }} <DataSourceMarkers :markers="marketDataMarkers(selectedAnalyzeSparkline.latest)" />
                                         · {{ selectedAnalyzeRangeCaptureLabel }}
                                     </span>
                                 </div>
+                                <DataSourceMarkers :markers="marketDataMarkers(selectedAnalyzeSparkline.points)" />
                                 <svg
                                     v-if="selectedAnalyzeSparkline.points.length"
                                     class="analyze-sparkline"
@@ -16952,20 +17026,20 @@ function formatIndexDataUpdateSchedule(settings) {
                                             :cx="point.x"
                                             :cy="point.y"
                                             r="3"
-                                        ><title>{{ point.source_name || 'Stored source' }} · {{ point.as_of }} · {{ point.currency }} · {{ point.interval || point.price_type }}</title></circle>
+                                        ><title>{{ marketDataSourceText(point) }} · {{ point.source_name || 'Stored source' }} · {{ point.as_of }} · {{ point.currency }} · {{ point.interval || point.price_type }}</title></circle>
                                     </template>
                                     <circle
                                         class="analyze-sparkline-point analyze-sparkline-point--first"
                                         :cx="selectedAnalyzeSparkline.first.x"
                                         :cy="selectedAnalyzeSparkline.first.y"
                                         r="3"
-                                    />
+                                    ><title>{{ marketDataSourceText(selectedAnalyzeSparkline.first) }} · {{ selectedAnalyzeSparkline.first.as_of || selectedAnalyzeSparkline.first.date || selectedAnalyzeSparkline.first.trading_date || '' }}</title></circle>
                                     <circle
                                         class="analyze-sparkline-point analyze-sparkline-point--latest"
                                         :cx="selectedAnalyzeSparkline.latest.x"
                                         :cy="selectedAnalyzeSparkline.latest.y"
                                         r="4"
-                                    />
+                                    ><title>{{ marketDataSourceText(selectedAnalyzeSparkline.latest) }} · {{ selectedAnalyzeSparkline.latest.as_of || selectedAnalyzeSparkline.latest.date || selectedAnalyzeSparkline.latest.trading_date || '' }}</title></circle>
                                     <text
                                         v-if="selectedAnalyzeSparkline.firstLabel"
                                         class="analyze-sparkline-endpoint-label analyze-sparkline-endpoint-label--start"
@@ -17141,7 +17215,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </span>
                                     </span>
                                     <span class="index-watch-card-label analyze-holding-card-name">
-                                        {{ stockDisplayLabel(holding) }}
+                                        {{ stockDisplayLabel(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding)" />
                                     </span>
                                     <span class="index-watch-card-price analyze-holding-card-price">
                                         {{ formatHoldingCardPrice(holding) }}
@@ -17187,7 +17261,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 >
                                                     <td>{{ formatRecentStoredPriceDate(realtimePrice) }}</td>
                                                     <td>{{ formatRecentStoredPriceTime(realtimePrice) }}</td>
-                                                    <td class="text-right">{{ formatRecentStoredPrice(realtimePrice, selectedAnalyzeHolding) }}</td>
+                                                    <td class="text-right">{{ formatRecentStoredPrice(realtimePrice, selectedAnalyzeHolding) }} <DataSourceMarkers :markers="marketDataMarkers(realtimePrice)" /></td>
                                                     <td class="text-right" :class="priceChangePercentClass(realtimePrice.previousChangePercent)">
                                                         {{ formatPriceChangePercent(realtimePrice.previousChangePercent) }}
                                                     </td>
@@ -17226,7 +17300,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 >
                                                     <td>{{ formatRecentStoredPriceDate(intradayPrice) }}</td>
                                                     <td>{{ formatRecentStoredPriceTime(intradayPrice) }}</td>
-                                                    <td class="text-right">{{ formatRecentStoredPrice(intradayPrice, selectedAnalyzeHolding) }}</td>
+                                                    <td class="text-right">{{ formatRecentStoredPrice(intradayPrice, selectedAnalyzeHolding) }} <DataSourceMarkers :markers="marketDataMarkers(intradayPrice)" /></td>
                                                     <td class="text-right" :class="priceChangePercentClass(intradayPrice.previousChangePercent)">
                                                         {{ formatPriceChangePercent(intradayPrice.previousChangePercent) }}
                                                     </td>
@@ -17285,7 +17359,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </span>
                                     </span>
                                     <span class="index-watch-card-label analyze-holding-card-name">
-                                        {{ stockDisplayLabel(holding) }}
+                                        {{ stockDisplayLabel(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding)" />
                                     </span>
                                     <span class="index-watch-card-price analyze-holding-card-price">
                                         {{ formatHoldingCardPrice(holding) }}
@@ -17503,7 +17577,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <span
                                             class="index-watch-card-label analyze-holding-card-name analyze-holding-card-name--compact"
                                         >
-                                            {{ stockDisplayName(holding) }}
+                                            {{ stockDisplayName(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding)" />
                                         </span>
                                         <span
                                             v-if="holding.subtitle || holding.stock_subtitle"
@@ -17804,9 +17878,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 :key="trendRow.date"
                                             >
                                                 <td>{{ formatAnalyzeTrendDate(trendRow.date) }}</td>
-                                                <td class="text-right">{{ formatAnalyzeTrendPrice(trendRow.price, selectedAnalyzeHolding) }}</td>
+                                                <td class="text-right">{{ formatAnalyzeTrendPrice(trendRow.price, selectedAnalyzeHolding) }} <DataSourceMarkers :markers="marketDataMarkers(trendRow)" /></td>
                                                 <td class="text-right" :class="priceChangePercentClass(trendRow.dayChangePercent)">
-                                                    {{ formatPriceChangePercent(trendRow.dayChangePercent) }}
+                                                    {{ formatPriceChangePercent(trendRow.dayChangePercent) }} <DataSourceMarkers :markers="marketDataMarkers(trendRow, 'day_change')" />
                                                 </td>
                                                 <td>
                                                     <div
@@ -19079,6 +19153,7 @@ function formatIndexDataUpdateSchedule(settings) {
                         >
                             <v-card-title class="text-subtitle-1 font-weight-bold">
                                 {{ selectedDataRangeTitle }} · {{ dataTypeLabel(activeDataType) }}
+                                <DataSourceMarkers :markers="marketDataMarkers(selectedDataDateRange)" />
                             </v-card-title>
                             <div
                                 v-if="selectedDataRangeInstrument"
@@ -20188,7 +20263,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 <td>{{ formatDataHistoricalLatestEntryDateTime(entry) }}</td>
                                                 <td class="test-live-data-latest-price-cell">
                                                     <span class="test-live-data-latest-price-value">
-                                                        <span>{{ formatDataLiveLatestEntryPrice(entry) }}</span>
+                                                        <span>{{ formatDataLiveLatestEntryPrice(entry) }} <DataSourceMarkers :markers="marketDataMarkers(entry)" /></span>
                                                         <v-icon
                                                             v-if="entry.priceTrend === 'up'"
                                                             class="test-live-data-latest-price-arrow test-live-data-latest-price-arrow--up"
@@ -20267,7 +20342,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 <td>{{ formatRecentStoredPriceDate(entry) }}</td>
                                                 <td class="test-live-data-latest-price-cell">
                                                     <span class="test-live-data-latest-price-value">
-                                                        <span>{{ formatDataLiveLatestEntryPrice(entry) }}</span>
+                                                        <span>{{ formatDataLiveLatestEntryPrice(entry) }} <DataSourceMarkers :markers="marketDataMarkers(entry)" /></span>
                                                         <v-icon
                                                             v-if="entry.priceTrend === 'up'"
                                                             class="test-live-data-latest-price-arrow test-live-data-latest-price-arrow--up"
@@ -20348,7 +20423,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 <td>{{ formatRecentStoredPriceTime(entry) }}</td>
                                                 <td class="test-live-data-latest-price-cell">
                                                     <span class="test-live-data-latest-price-value">
-                                                        <span>{{ formatDataRealtimeLatestEntryPrice(entry) }}</span>
+                                                        <span>{{ formatDataRealtimeLatestEntryPrice(entry) }} <DataSourceMarkers :markers="marketDataMarkers(entry)" /></span>
                                                         <v-icon
                                                             v-if="entry.priceTrend === 'up'"
                                                             class="test-live-data-latest-price-arrow test-live-data-latest-price-arrow--up"
@@ -20992,11 +21067,11 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </div>
                                         <div class="mobile-depot-year-stock-row">
                                             <span class="text-caption text-medium-emphasis">{{ depotStockPeriodEntryLabel() }}</span>
-                                            <span>{{ formatDepotYearStockPrice(stock, 'average_buy_or_year_start_price') }}</span>
+                                            <span>{{ formatDepotYearStockPrice(stock, 'average_buy_or_year_start_price') }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'average_buy_or_year_start_price')" /></span>
                                         </div>
                                         <div class="mobile-depot-year-stock-row">
                                             <span class="text-caption text-medium-emphasis">Ø Sell / in stock</span>
-                                            <span>{{ formatDepotYearStockPrice(stock, 'average_sell_or_current_price') }}</span>
+                                            <span>{{ formatDepotYearStockPrice(stock, 'average_sell_or_current_price') }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'average_sell_or_current_price')" /></span>
                                         </div>
                                         <div class="mobile-depot-year-stock-row">
                                             <span class="text-caption text-medium-emphasis">Traded volume (money)</span>
@@ -21007,8 +21082,8 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <span>{{ formatDepotStockTradedPieces(stock) }}</span>
                                         </div>
                                         <div class="mobile-depot-year-stock-row font-weight-medium" :class="depotYearStockChangeClass(stock)">
-                                            <span>{{ formatDepotYearStockChangePercent(stock) }}</span>
-                                            <span>{{ formatDepotYearStockChangeAmount(stock) }} EUR</span>
+                                            <span>{{ formatDepotYearStockChangePercent(stock) }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'change_percent')" /></span>
+                                            <span>{{ formatDepotYearStockChangeAmount(stock) }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'change_amount')" /> EUR</span>
                                         </div>
                                     </article>
                                 </div>
@@ -21039,10 +21114,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 </div>
                                             </td>
                                             <td class="text-right">
-                                                {{ formatDepotYearStockPrice(stock, 'average_buy_or_year_start_price') }}
+                                                {{ formatDepotYearStockPrice(stock, 'average_buy_or_year_start_price') }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'average_buy_or_year_start_price')" />
                                             </td>
                                             <td class="text-right">
-                                                {{ formatDepotYearStockPrice(stock, 'average_sell_or_current_price') }}
+                                                {{ formatDepotYearStockPrice(stock, 'average_sell_or_current_price') }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'average_sell_or_current_price')" />
                                             </td>
                                             <td class="text-right">
                                                 {{ formatDepotStockTradedVolume(stock) }}
@@ -21051,10 +21126,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                                 {{ formatDepotStockTradedPieces(stock) }}
                                             </td>
                                             <td class="text-right font-weight-medium" :class="depotYearStockChangeClass(stock)">
-                                                {{ formatDepotYearStockChangePercent(stock) }}
+                                                {{ formatDepotYearStockChangePercent(stock) }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'change_percent')" />
                                             </td>
                                             <td class="text-right font-weight-medium" :class="depotYearStockChangeClass(stock)">
-                                                {{ formatDepotYearStockChangeAmount(stock) }}
+                                                {{ formatDepotYearStockChangeAmount(stock) }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'change_amount')" />
                                             </td>
                                         </tr>
                                     </tbody>
@@ -21086,7 +21161,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <tbody>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Depot balance</td>
-                                            <td class="text-right">{{ formatDepotStockBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotStockBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('stock_balance')" /></td>
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Cash balance</td>
@@ -21094,11 +21169,11 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Account balance</td>
-                                            <td class="text-right">{{ formatDepotAccountBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotAccountBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('account_balance')" /></td>
                                         </tr>
                                         <tr class="depot-account-yesterday-row">
                                             <td class="text-medium-emphasis text-caption">Account Yesterday</td>
-                                            <td class="text-right">{{ formatDepotPreviousDayBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotPreviousDayBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('previous_day_balance')" /></td>
                                         </tr>
                                         <tr v-if="hasDepotPreviousDayExternalCashFlow()" class="depot-account-external-cash-flow-row">
                                             <td class="text-medium-emphasis text-caption">External cash flow today</td>
@@ -21109,7 +21184,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             <td class="text-right">
                                                 <span :class="depotPreviousDayChangeClass()">
                                                     {{ formatDepotPreviousDayChangePercent() }} ·
-                                                    {{ formatDepotPreviousDayChangeAmount() }}
+                                                    {{ formatDepotPreviousDayChangeAmount() }} <DataSourceMarkers :markers="depotValuationMarkers('previous_day_change_amount')" />
                                                 </span>
                                             </td>
                                         </tr>
@@ -21127,26 +21202,26 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Balance {{ formatCurrentDayMonth() }}</td>
-                                            <td class="text-right">{{ formatDepotCurrentBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotCurrentBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('current_balance')" /></td>
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">+/-</td>
                                             <td class="text-right">
                                                 <span :class="depotBalanceChangeClass()">
-                                                    {{ formatDepotBalanceChangePercent() }} · {{ formatDepotBalanceChangeAmount() }}
+                                                    {{ formatDepotBalanceChangePercent() }} · {{ formatDepotBalanceChangeAmount() }} <DataSourceMarkers :markers="depotValuationMarkers('balance_change_amount')" />
                                                 </span>
                                             </td>
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Corrected balance (-27,5%)</td>
-                                            <td class="text-right">{{ formatDepotCorrectedBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotCorrectedBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('current_balance')" /></td>
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Corrected +/-</td>
                                             <td class="text-right">
                                                 <span :class="depotCorrectedBalanceChangeClass()">
                                                     {{ formatDepotCorrectedBalanceChangePercent() }} ·
-                                                    {{ formatDepotCorrectedBalanceChangeAmount() }}
+                                                    {{ formatDepotCorrectedBalanceChangeAmount() }} <DataSourceMarkers :markers="depotValuationMarkers('balance_change_amount')" />
                                                 </span>
                                             </td>
                                         </tr>
@@ -21160,17 +21235,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <tbody>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Balance {{ formatOneWeekAgoDayMonth() }}</td>
-                                            <td class="text-right">{{ formatDepotOneWeekStartBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotOneWeekStartBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('one_week_start_balance')" /></td>
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Balance {{ formatCurrentDayMonth() }}</td>
-                                            <td class="text-right">{{ formatDepotCurrentBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotCurrentBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('current_balance')" /></td>
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">1 week</td>
                                             <td class="text-right">
                                                 <span :class="depotOneWeekChangeClass()">
-                                                    {{ formatDepotOneWeekChangePercent() }} · {{ formatDepotOneWeekChangeAmount() }}
+                                                    {{ formatDepotOneWeekChangePercent() }} · {{ formatDepotOneWeekChangeAmount() }} <DataSourceMarkers :markers="depotValuationMarkers('one_week_change_amount')" />
                                                 </span>
                                             </td>
                                         </tr>
@@ -21184,17 +21259,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <tbody>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Balance {{ formatPreviousMonthEndDayMonth() }}</td>
-                                            <td class="text-right">{{ formatDepotMonthStartBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotMonthStartBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('month_start_balance')" /></td>
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Balance {{ formatCurrentDayMonth() }}</td>
-                                            <td class="text-right">{{ formatDepotCurrentBalance() }}</td>
+                                            <td class="text-right">{{ formatDepotCurrentBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('current_balance')" /></td>
                                         </tr>
                                         <tr>
                                             <td class="text-medium-emphasis text-caption">Month</td>
                                             <td class="text-right">
                                                 <span :class="depotMonthChangeClass()">
-                                                    {{ formatDepotMonthChangePercent() }} · {{ formatDepotMonthChangeAmount() }}
+                                                    {{ formatDepotMonthChangePercent() }} · {{ formatDepotMonthChangeAmount() }} <DataSourceMarkers :markers="depotValuationMarkers('month_change_amount')" />
                                                 </span>
                                             </td>
                                         </tr>
@@ -21237,7 +21312,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     class="mobile-depot-stock-card"
                                 >
                                     <div class="mobile-depot-stock-name">
-                                        <div>{{ stockDisplayName(holding) }}</div>
+                                        <div>{{ stockDisplayName(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding)" /></div>
                                         <div
                                             v-if="holding.subtitle"
                                             class="stock-subtitle text-caption text-info font-weight-medium"
@@ -21248,8 +21323,8 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </div>
                                     <div class="mobile-depot-stock-row mobile-depot-stock-row--prices">
                                         <span>{{ formatPositionPieces(holding) }}</span>
-                                        <span>{{ formatLatestPrice(holding) }}</span>
-                                        <span>{{ formatStockHoldingValue(holding) }}</span>
+                                        <span>{{ formatLatestPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'latest_price')" /></span>
+                                        <span>{{ formatStockHoldingValue(holding) }} <DataSourceMarkers :markers="depotHoldingValueMarkers(holding)" /></span>
                                     </div>
                                     <div
                                         v-if="analyzeTrendV2Signals(holding).length"
@@ -21266,17 +21341,17 @@ function formatIndexDataUpdateSchedule(settings) {
                                         </span>
                                     </div>
                                     <div class="mobile-depot-stock-row text-caption">
-                                        <span>Prev Day {{ formatPreviousDayPrice(holding) }}</span>
+                                        <span>Prev Day {{ formatPreviousDayPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'previous_day_price')" /></span>
                                         <span :class="previousDayChangePercentClass(holding)">
-                                            {{ formatPreviousDayChangePercent(holding) }}
+                                            {{ formatPreviousDayChangePercent(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'previous_day_change_percent')" />
                                         </span>
                                     </div>
                                     <div class="mobile-depot-stock-row font-weight-medium" :class="yearStartChangeClass(holding)">
                                         <span>
                                             {{ yearStartChangeSymbol(holding) }}
-                                            {{ formatYearStartChangePercent(holding) }}
+                                            {{ formatYearStartChangePercent(holding) }} <DataSourceMarkers :markers="depotHoldingValueMarkers(holding)" />
                                         </span>
-                                        <span>{{ formatYearStartChangeAmount(holding) }}</span>
+                                        <span>{{ formatYearStartChangeAmount(holding) }} <DataSourceMarkers :markers="depotHoldingValueMarkers(holding)" /></span>
                                     </div>
                                     <div class="mobile-depot-stock-actions">
                                         <v-btn
@@ -21344,7 +21419,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <tr v-for="holding in depotHoldings" :key="holding.id" :class="depotHoldingRowClass(holding)">
                                         <td v-if="!isCompactDepotStocksTable">{{ holding.symbol || '-' }}</td>
                                         <td>
-                                            <div>{{ stockDisplayName(holding) }}</div>
+                                            <div>{{ stockDisplayName(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding)" /></div>
                                             <div
                                                 v-if="holding.subtitle"
                                                 class="stock-subtitle text-caption text-info font-weight-medium"
@@ -21367,12 +21442,12 @@ function formatIndexDataUpdateSchedule(settings) {
                                             </div>
                                         </td>
                                         <td class="text-right">{{ formatPositionPieces(holding) }}</td>
-                                        <td class="text-right">{{ formatStockHoldingValue(holding) }}</td>
-                                        <td class="text-right">{{ formatLatestPrice(holding) }}</td>
-                                        <td class="text-right">{{ formatPreviousDayPrice(holding) }}</td>
+                                        <td class="text-right">{{ formatStockHoldingValue(holding) }} <DataSourceMarkers :markers="depotHoldingValueMarkers(holding)" /></td>
+                                        <td class="text-right">{{ formatLatestPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'latest_price')" /></td>
+                                        <td class="text-right">{{ formatPreviousDayPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'previous_day_price')" /></td>
                                         <td class="text-right">
                                             <span class="font-weight-medium" :class="previousDayChangePercentClass(holding)">
-                                                {{ formatPreviousDayChangePercent(holding) }}
+                                                {{ formatPreviousDayChangePercent(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'previous_day_change_percent')" />
                                             </span>
                                         </td>
                                         <td class="text-right">
@@ -21401,12 +21476,12 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <td class="text-right">
                                             <span class="d-inline-flex align-center justify-end ga-1 font-weight-medium" :class="yearStartChangeClass(holding)">
                                                 <span>{{ yearStartChangeSymbol(holding) }}</span>
-                                                <span>{{ formatYearStartChangePercent(holding) }}</span>
+                                                <span>{{ formatYearStartChangePercent(holding) }} <DataSourceMarkers :markers="depotHoldingValueMarkers(holding)" /></span>
                                             </span>
                                         </td>
                                         <td class="text-right">
                                             <span class="font-weight-medium" :class="yearStartChangeClass(holding)">
-                                                {{ formatYearStartChangeAmount(holding) }}
+                                                {{ formatYearStartChangeAmount(holding) }} <DataSourceMarkers :markers="depotHoldingValueMarkers(holding)" />
                                             </span>
                                         </td>
                                         <td class="text-right">
@@ -21438,7 +21513,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         <td :colspan="isCompactDepotStocksTable ? 9 : 11" class="text-right font-weight-bold">Sum</td>
                                         <td class="text-right">
                                             <span class="font-weight-bold" :class="depotHoldingsChangeAmountTotalClass()">
-                                                {{ formatDepotHoldingsChangeAmountTotal() }}
+                                                {{ formatDepotHoldingsChangeAmountTotal() }} <DataSourceMarkers :markers="depotHoldingsValueMarkers()" />
                                             </span>
                                         </td>
                                         <td />
@@ -21458,16 +21533,18 @@ function formatIndexDataUpdateSchedule(settings) {
                                     <div class="text-right">
                                         <div class="text-caption text-medium-emphasis">
                                             {{ formatDepotPerformanceDate(depotPerformanceChart.first?.date) }}
-                                            {{ formatDepotPerformanceEndpoint(depotPerformanceChart.first) }}
+                                            {{ formatDepotPerformanceEndpoint(depotPerformanceChart.first) }} <DataSourceMarkers :markers="marketDataMarkers(depotPerformanceChart.first)" />
                                             -
                                             {{ formatDepotPerformanceDate(depotPerformanceChart.latest?.date) }}
-                                            {{ formatDepotPerformanceEndpoint(depotPerformanceChart.latest) }}
+                                            {{ formatDepotPerformanceEndpoint(depotPerformanceChart.latest) }} <DataSourceMarkers :markers="marketDataMarkers(depotPerformanceChart.latest)" />
                                         </div>
                                         <div class="font-weight-bold" :class="depotPerformanceChangeClass()">
-                                            {{ formatDepotPerformanceChangePercent() }} · {{ formatDepotPerformanceChangeAmount() }}
+                                            {{ formatDepotPerformanceChangePercent() }} · {{ formatDepotPerformanceChangeAmount() }} <DataSourceMarkers :markers="marketDataMarkers([depotPerformanceChart.first, depotPerformanceChart.latest])" />
                                         </div>
                                     </div>
                                 </div>
+
+                                <DataSourceMarkers :markers="marketDataMarkers(depotPerformanceChart.points)" />
 
                                 <svg
                                     v-if="depotPerformanceChart.points.length"
@@ -21541,19 +21618,25 @@ function formatIndexDataUpdateSchedule(settings) {
                                         :points="depotPerformanceChart.linePoints"
                                     />
                                     <circle
+                                        class="depot-performance-source-point"
+                                        v-for="point in depotPerformanceChart.points"
+                                        :key="'depot-source-' + point.date"
+                                        :cx="point.x" :cy="point.y" r="6" fill="transparent" pointer-events="all"
+                                    ><title>{{ marketDataSourceText(point) }} · {{ point.date }} · {{ formatDepotPerformanceEndpoint(point) }}</title></circle>
+                                    <circle
                                         v-if="depotPerformanceChart.first"
                                         class="index-price-chart-point"
                                         :cx="depotPerformanceChart.first.x"
                                         :cy="depotPerformanceChart.first.y"
                                         r="4"
-                                    />
+                                    ><title>{{ marketDataSourceText(depotPerformanceChart.first) }} · {{ depotPerformanceChart.first.as_of || depotPerformanceChart.first.date || depotPerformanceChart.first.trading_date || '' }}</title></circle>
                                     <circle
                                         v-if="depotPerformanceChart.latest"
                                         class="index-price-chart-point"
                                         :cx="depotPerformanceChart.latest.x"
                                         :cy="depotPerformanceChart.latest.y"
                                         r="4"
-                                    />
+                                    ><title>{{ marketDataSourceText(depotPerformanceChart.latest) }} · {{ depotPerformanceChart.latest.as_of || depotPerformanceChart.latest.date || depotPerformanceChart.latest.trading_date || '' }}</title></circle>
                                     <template v-if="depotPerformanceChart.highMarker">
                                         <line
                                             class="depot-performance-chart-extremum-line depot-performance-chart-extremum-line--high"
@@ -21567,14 +21650,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                             :cx="depotPerformanceChart.highMarker.x"
                                             :cy="depotPerformanceChart.highMarker.y"
                                             r="5"
-                                        />
+                                        ><title>{{ marketDataSourceText(depotPerformanceChart.highMarker) }} · {{ depotPerformanceChart.highMarker.as_of || depotPerformanceChart.highMarker.date || depotPerformanceChart.highMarker.trading_date || '' }}</title></circle>
                                         <text
                                             class="depot-performance-chart-extremum-label depot-performance-chart-extremum-label--high"
                                             :x="depotPerformanceChart.highMarker.labelX"
                                             :y="depotPerformanceChart.highMarker.labelY"
                                             :text-anchor="depotPerformanceChart.highMarker.labelAnchor"
                                         >
-                                            High {{ formatDepotPerformanceEndpoint(depotPerformanceChart.highMarker) }}
+                                            High {{ formatDepotPerformanceEndpoint(depotPerformanceChart.highMarker) }} <tspan>{{ marketDataSourceText(depotPerformanceChart.highMarker) }}</tspan>
                                         </text>
                                     </template>
                                     <template v-if="depotPerformanceChart.lowMarker">
@@ -21590,14 +21673,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                             :cx="depotPerformanceChart.lowMarker.x"
                                             :cy="depotPerformanceChart.lowMarker.y"
                                             r="5"
-                                        />
+                                        ><title>{{ marketDataSourceText(depotPerformanceChart.lowMarker) }} · {{ depotPerformanceChart.lowMarker.as_of || depotPerformanceChart.lowMarker.date || depotPerformanceChart.lowMarker.trading_date || '' }}</title></circle>
                                         <text
                                             class="depot-performance-chart-extremum-label depot-performance-chart-extremum-label--low"
                                             :x="depotPerformanceChart.lowMarker.labelX"
                                             :y="depotPerformanceChart.lowMarker.labelY"
                                             :text-anchor="depotPerformanceChart.lowMarker.labelAnchor"
                                         >
-                                            Low {{ formatDepotPerformanceEndpoint(depotPerformanceChart.lowMarker) }}
+                                            Low {{ formatDepotPerformanceEndpoint(depotPerformanceChart.lowMarker) }} <tspan>{{ marketDataSourceText(depotPerformanceChart.lowMarker) }}</tspan>
                                         </text>
                                     </template>
                                     <text
@@ -21607,7 +21690,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         :y="depotPerformanceChart.firstLabel.labelY"
                                         :text-anchor="depotPerformanceChart.firstLabel.labelAnchor"
                                     >
-                                        {{ formatDepotPerformanceEndpoint(depotPerformanceChart.firstLabel) }}
+                                        {{ formatDepotPerformanceEndpoint(depotPerformanceChart.firstLabel) }} <tspan>{{ marketDataSourceText(depotPerformanceChart.firstLabel) }}</tspan>
                                     </text>
                                     <text
                                         v-if="depotPerformanceChart.latestLabel"
@@ -21616,7 +21699,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                         :y="depotPerformanceChart.latestLabel.labelY"
                                         :text-anchor="depotPerformanceChart.latestLabel.labelAnchor"
                                     >
-                                        {{ formatDepotPerformanceEndpoint(depotPerformanceChart.latestLabel) }}
+                                        {{ formatDepotPerformanceEndpoint(depotPerformanceChart.latestLabel) }} <tspan>{{ marketDataSourceText(depotPerformanceChart.latestLabel) }}</tspan>
                                     </text>
                                 </svg>
                                 <p v-else class="text-medium-emphasis text-body-2 mb-0">

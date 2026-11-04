@@ -8,6 +8,7 @@ use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockRealtimePrice;
 use App\Services\WebMarketData\DTO\ParsedQuote;
 use App\Services\WebMarketData\DTO\ValidatedQuote;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -147,7 +148,7 @@ class FreeIntradayMarketData
             return Cache::remember($key, now()->addMinutes(2), $load);
         });
         if (! is_array($result)) {
-            throw new RuntimeException("{$family}: another source request is in progress.");
+            throw new MarketDataSourceBusy("{$family}: another source request is in progress.");
         }
         if (($result['rate_limited'] ?? false) || ($result['provider_blocked'] ?? false)) {
             Cache::add('free-intraday.cooldown.'.$family, true, now()->addMinutes(5));
@@ -182,6 +183,31 @@ class FreeIntradayMarketData
     /** @return array<int, array<string, mixed>> */
     public function records(StockHolding $holding, Carbon $from, Carbon $until): array
     {
+        if ($from->greaterThan($until)) {
+            throw new RuntimeException('Intraday start must precede end.');
+        }
+        $availableFrom = null;
+        try {
+            $records = $this->freeRecords($holding, $from, $until, $availableFrom);
+        } catch (RuntimeException $exception) {
+            if ($exception instanceof MarketDataSourceBusy || $exception instanceof QueryException || ! app(EodhdApiClient::class)->configured()) {
+                throw $exception;
+            }
+
+            return app(EodhdIntradayFallback::class)->records($holding, $from, $until);
+        }
+        if ($availableFrom !== null && $from->lt($availableFrom) && app(EodhdApiClient::class)->configured()) {
+            $older = app(EodhdIntradayFallback::class)->records($holding, $from, min($until, $availableFrom->copy()->subSecond()));
+
+            return [...$older, ...$records];
+        }
+
+        return $records;
+    }
+
+    /** @return array<int, array<string, mixed>> */
+    private function freeRecords(StockHolding $holding, Carbon $from, Carbon $until, ?Carbon &$availableFrom = null): array
+    {
         $isUs = YahooFinanceMarketData::supports($this->identity($holding));
         if ($from->greaterThan($until) || $from->lessThan(now()->subDays($isUs ? 7 : 60))) {
             throw new RuntimeException('Requested intraday history is outside free source retention; existing data preserved, gap cannot be recovered.');
@@ -189,17 +215,26 @@ class FreeIntradayMarketData
         if ($isUs) {
             $row = $this->latest($holding);
             $records = $row['series'] ?? [];
+            $availableFrom = $records === [] ? null : Carbon::createFromTimestampUTC(min(array_column($records, 'timestamp')))->setTimezone('America/New_York')->startOfDay()->utc();
         } else {
             $result = $this->europeanResult($holding);
+            if ($result['collector_busy'] ?? false) {
+                throw new MarketDataSourceBusy('Another collector is processing files; existing data preserved.');
+            }
             $records = $result['series'][$holding->isin] ?? [];
             $coverage = $this->coverage($holding);
             $firstDay = min(array_keys($result['days']) ?: [now('Europe/Berlin')->toDateString()]);
+            $availableFrom = Carbon::parse($firstDay, 'Europe/Berlin')->startOfDay()->utc();
             $needsHistory = $from->copy()->setTimezone('Europe/Berlin')->toDateString() < $firstDay;
             if (($coverage['status'] ?? null) !== 'unresolved_corrections'
                 && YahooFinanceMarketData::supportsXetra($this->identity($holding))
                 && ($needsHistory || ($records === [] && ! $coverage['coverage_complete']))) {
                 $supplement = $this->yahooSupplement($holding);
-                $records = [...$records, ...(collect($supplement['instruments'])->firstWhere('isin', $holding->isin)['series'] ?? [])];
+                $supplementRecords = collect($supplement['instruments'])->firstWhere('isin', $holding->isin)['series'] ?? [];
+                $records = [...$records, ...$supplementRecords];
+                if ($supplementRecords !== []) {
+                    $availableFrom = min($availableFrom, Carbon::createFromTimestampUTC(min(array_column($supplementRecords, 'timestamp')))->setTimezone('Europe/Berlin')->startOfDay()->utc());
+                }
             }
         }
 
@@ -316,8 +351,10 @@ class FreeIntradayMarketData
         $errors = [];
         $coverage = [];
         $noTrades = 0;
+        $fallbackHoldings = collect();
         foreach ($holdings as $holding) {
             $hasCurrentQuote = false;
+            $freeQuoteResolved = false;
             try {
                 if ($reload) {
                     if (YahooFinanceMarketData::supports($this->identity($holding))) {
@@ -346,6 +383,7 @@ class FreeIntradayMarketData
                     continue;
                 }
                 $row = $this->latest($holding);
+                $freeQuoteResolved = true;
                 $isUs = YahooFinanceMarketData::supports($this->identity($holding));
                 $localNow = now($isUs ? 'America/New_York' : 'Europe/Berlin');
                 $isOpen = $localNow->isWeekday() && $localNow->format('H:i') >= ($isUs ? '09:30' : config('services.free_intraday.session_start'))
@@ -372,13 +410,22 @@ class FreeIntradayMarketData
                         ->where('latest_realtime_price_id', $holding->latest_realtime_price_id)
                         ->update(['latest_realtime_price_id' => $price->id, 'latest_price_type' => $quote->priceType, 'price_status' => $freshness]);
                 }
-                $this->persist($holding, $this->records($holding, $isUs ? now()->subDays(6) : now('Europe/Berlin')->subWeekdays(1)->startOfDay(), now()));
+                $this->persist($holding, $this->freeRecords($holding, $isUs ? now()->subDays(6) : now('Europe/Berlin')->subWeekdays(1)->startOfDay(), now()));
                 if ($row['warnings'] !== [] || (! $isUs && ! $coverage[$holding->symbol]['coverage_complete'])) {
                     $failed++;
                     $errors = [...$errors, ...$row['warnings'], ...(! $isUs && ! $coverage[$holding->symbol]['coverage_complete']
                         ? [$holding->symbol.': incomplete Xetra files; inspect instrument coverage.'] : [])];
                 }
             } catch (Throwable $exception) {
+                if (! $freeQuoteResolved && ! ($exception instanceof QueryException) && ! ($exception instanceof MarketDataSourceBusy)
+                    && ! ($exception instanceof LockTimeoutException) && app(EodhdApiClient::class)->configured()) {
+                    $fallbackHoldings->push($holding);
+                    $coverage[$holding->symbol] = [...($coverage[$holding->symbol] ?? $this->identity($holding)),
+                        'status' => 'fallback_pending', 'coverage_complete' => false,
+                        'free_source_error' => app(EodhdErrorSanitizer::class)->message($exception->getMessage(), 255)];
+
+                    continue;
+                }
                 if (! $hasCurrentQuote) {
                     $holding->update(['price_status' => 'unavailable_now']);
                 }
@@ -389,6 +436,21 @@ class FreeIntradayMarketData
                 $coverage[$holding->symbol] ??= [...$this->identity($holding), 'status' => 'unavailable', 'coverage_complete' => false];
                 $coverage[$holding->symbol]['sync_error'] = $message;
                 $errors[] = $holding->symbol.': '.$message;
+            }
+        }
+
+        if ($fallbackHoldings->isNotEmpty()) {
+            $fallback = app(EodhdBatchRealtimePriceService::class)->syncHoldings($fallbackHoldings);
+            $stored += $fallback['stored_count'];
+            $updated += $fallback['updated_count'];
+            $unchanged += $fallback['unchanged_count'];
+            $failed += $fallback['failed_count'];
+            $errors = [...$errors, ...$fallback['errors']];
+            foreach ($fallbackHoldings as $holding) {
+                $coverage[$holding->symbol]['status'] = $fallback['failed_count'] === 0 ? 'fallback' : 'fallback_incomplete';
+                if ($fallback['failed_count'] === 0) {
+                    $coverage[$holding->symbol]['source_markers'] = ['EODHD'];
+                }
             }
         }
 

@@ -55,7 +55,7 @@ class StockHoldingPriceReadBatch
                         ->where('as_of', '<', $from)->orderByDesc('as_of')->orderByDesc('id')->limit(1));
                 }
             })->orderBy('as_of')->orderBy('id')
-            ->get(['id', 'stock_holding_id', 'price', 'currency', 'as_of', 'fetched_at', 'source_name', 'source_url', 'venue', 'price_type', 'spread_pct', 'validation_errors', 'trading_times'])
+            ->get(['id', 'stock_holding_id', 'price', 'currency', 'as_of', 'fetched_at', 'source_key', 'source_name', 'source_url', 'venue', 'price_type', 'spread_pct', 'validation_errors', 'trading_times'])
             ->groupBy('stock_holding_id');
 
         $candles = StockHoldingIntradayCandle::query()->where(function ($query) use ($metadata): void {
@@ -85,7 +85,7 @@ class StockHoldingPriceReadBatch
                     ->orderByDesc('trading_date')->orderByDesc('id')->limit(1));
             }
         });
-        $fallbackDailyPrices = $fallbackDailyQuery->get(['id', 'stock_holding_id', 'trading_date', 'close', 'adjusted_close'])->keyBy('stock_holding_id');
+        $fallbackDailyPrices = $fallbackDailyQuery->get(['id', 'stock_holding_id', 'trading_date', 'close', 'adjusted_close', 'source_key', 'source_name'])->keyBy('stock_holding_id');
         $fallbackStockPrices = StockPrice::query()->where(function ($query) use ($metadata, $holdings): void {
             $query->whereRaw('1 = 0');
             foreach ($holdings as $holding) {
@@ -97,7 +97,7 @@ class StockHoldingPriceReadBatch
                 }
             }
         })->orderByDesc('as_of')->orderByDesc('fetched_at')->orderByDesc('id')
-            ->get(['id', 'instrument_key', 'price', 'as_of', 'fetched_at'])->groupBy('instrument_key');
+            ->get(['id', 'instrument_key', 'price', 'as_of', 'fetched_at', 'source_key', 'source_name'])->groupBy('instrument_key');
 
         foreach ($holdings as $holding) {
             $row = $metadata->get($holding->id);

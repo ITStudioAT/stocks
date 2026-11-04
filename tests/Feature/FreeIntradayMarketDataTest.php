@@ -33,11 +33,13 @@ class FreeIntradayMarketDataTest extends TestCase
         parent::setUp();
         $this->travelTo(Carbon::parse('2026-10-30 22:00:00', 'UTC'));
         Http::preventStrayRequests();
+        config(['services.eodhd.enabled' => false]);
         Storage::fake('local');
     }
 
     public function test_automatic_sync_persists_actual_sparse_trades_and_real_us_ohlc_idempotently_without_eodhd(): void
     {
+        config(['services.eodhd.enabled' => true, 'services.eodhd.key' => 'fake-token']);
         $europe = $this->holding();
         $us = $this->holding(true);
         $this->providers();
@@ -82,6 +84,7 @@ class FreeIntradayMarketDataTest extends TestCase
 
     public function test_storage_failures_remain_visible_per_instrument_without_exposing_sql_payloads(): void
     {
+        config(['services.eodhd.enabled' => true, 'services.eodhd.key' => 'fake-token']);
         $this->holding();
         $this->providers();
         $this->mock(StockRealtimePriceCatalog::class)->shouldReceive('store')->andThrow(
@@ -97,6 +100,7 @@ class FreeIntradayMarketDataTest extends TestCase
 
     public function test_a_real_quote_does_not_turn_missing_files_into_successful_coverage(): void
     {
+        config(['services.eodhd.enabled' => true, 'services.eodhd.key' => 'fake-token']);
         $this->holding();
         $this->providers();
         config(['services.free_intraday.session_start' => '17:34']);
@@ -109,6 +113,7 @@ class FreeIntradayMarketDataTest extends TestCase
 
     public function test_complete_empty_files_mean_no_trading_and_do_not_fabricate_a_quote(): void
     {
+        config(['services.eodhd.enabled' => true, 'services.eodhd.key' => 'fake-token']);
         $this->holding();
         $this->providers(withTrade: false);
         $result = app(FreeIntradayMarketData::class)->syncAll();

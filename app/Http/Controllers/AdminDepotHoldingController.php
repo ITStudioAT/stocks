@@ -23,6 +23,7 @@ use App\Services\FreeIntradayMarketData;
 use App\Services\IndexDataUpdateScheduler;
 use App\Services\IndexPriceRefreshSettings;
 use App\Services\KnownInstrumentMetadataCorrections;
+use App\Services\MarketDataProvenance;
 use App\Services\PriceRefreshScheduler;
 use App\Services\StockHistoricalPriceService;
 use App\Services\StockHoldingPriceReadBatch;
@@ -102,7 +103,7 @@ class AdminDepotHoldingController extends Controller
                         ->where(fn ($query) => $query
                             ->whereNotNull('adjusted_close')
                             ->orWhereNotNull('close'))
-                        ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'adjusted_close', 'volume', 'currency']);
+                        ->select(['id', 'stock_holding_id', 'trading_date', 'close', 'adjusted_close', 'volume', 'currency', 'source_key', 'source_name']);
 
                     if ($historyRowLimit !== null) {
                         return $query
@@ -292,6 +293,7 @@ class AdminDepotHoldingController extends Controller
                 'currency' => $stockPrice->currency,
                 'as_of' => $this->storedStockPriceTimestamp($stockPrice, 'as_of'),
                 'source_name' => $stockPrice->source_name,
+                'source_markers' => MarketDataProvenance::forRecord($stockPrice),
                 'price_type' => $stockPrice->price_type,
                 'venue' => $stockPrice->venue,
             ])
@@ -357,6 +359,7 @@ class AdminDepotHoldingController extends Controller
                 'interval' => $intradayCandle->interval,
                 'source_key' => $intradayCandle->source_key,
                 'source_name' => $intradayCandle->source_name,
+                'source_markers' => MarketDataProvenance::forRecord($intradayCandle),
                 'price' => (string) $intradayCandle->close,
                 'currency' => $intradayCandle->currency,
                 'as_of' => $this->storedIntradayCandleTimestamp($intradayCandle),
@@ -384,7 +387,7 @@ class AdminDepotHoldingController extends Controller
             ->whereNotNull('as_of')
             ->orderByDesc('as_of')
             ->orderByDesc('id')
-            ->get(['id', 'price', 'currency', 'as_of'])
+            ->get(['id', 'price', 'currency', 'as_of', 'source_key', 'source_name'])
             ->unique(fn (StockPrice $stockPrice): string => $this->storedStockPriceDateTime($stockPrice, 'as_of')
                 ?->setTimezone(config('app.timezone'))
                 ->toDateString() ?? "row-{$stockPrice->id}")
@@ -393,6 +396,7 @@ class AdminDepotHoldingController extends Controller
             ->map(fn (StockPrice $stockPrice): array => [
                 'id' => $stockPrice->id,
                 'price' => (string) $stockPrice->price,
+                'source_markers' => MarketDataProvenance::forRecord($stockPrice),
                 'currency' => $stockPrice->currency,
                 'as_of' => $this->storedStockPriceTimestamp($stockPrice, 'as_of'),
             ])
@@ -719,11 +723,16 @@ class AdminDepotHoldingController extends Controller
             'country' => $holding->country,
             'currency' => $holding->currency,
             'latest_price' => $latestPrice,
+            'latest_price_source_markers' => MarketDataProvenance::forRecord($latestStoredPrice),
             'flatex_price' => $this->pricePayload($holding->flatex_price),
             'start_price' => $startPrice,
+            'start_price_source_markers' => MarketDataProvenance::forRecord($dashboardSessionPrices['start_price']),
             'end_price' => $endPrice,
+            'end_price_source_markers' => $latestEndPrice['source_markers'] ?? [],
             'end_price_24' => $end24Price,
             'end_price_48' => $endOfDaySessionPrices['end_price_48'],
+            'end_price_24_source_markers' => $endOfDaySessionPrices['end_price_24_source_markers'],
+            'end_price_48_source_markers' => $endOfDaySessionPrices['end_price_48_source_markers'],
             'start_price_date' => $relevantTradingDate ?? $sessionPriceDates['start_price_date'],
             'end_price_date' => $latestEndPrice['date'] ?? $relevantTradingDate ?? $sessionPriceDates['end_price_date'],
             'end_price_24_date' => $endOfDaySessionPrices['end_price_24_date'],
@@ -792,6 +801,8 @@ class AdminDepotHoldingController extends Controller
         return [
             'end_price_24' => $this->pricePayload($previousCloses['previous_close']),
             'end_price_48' => $this->pricePayload($previousCloses['earlier_close']),
+            'end_price_24_source_markers' => $previousCloses['previous_close_source_markers'],
+            'end_price_48_source_markers' => $previousCloses['earlier_close_source_markers'],
             'end_price_24_date' => $previousCloses['previous_close_date'],
             'end_price_48_date' => $previousCloses['earlier_close_date'],
         ];
@@ -854,7 +865,7 @@ class AdminDepotHoldingController extends Controller
                 ->whereNotNull('as_of')
                 ->orderByDesc('as_of')
                 ->orderByDesc('id')
-                ->first(['id', 'price', 'as_of']);
+                ->first(['id', 'price', 'as_of', 'source_key', 'source_name']);
         $latestIntradayCandle = $holding->relationLoaded('readLatestCandle')
             ? $holding->readLatestCandle
             : $holding->intradayCandles()
@@ -862,7 +873,7 @@ class AdminDepotHoldingController extends Controller
                 ->whereNotNull('as_of')
                 ->orderByDesc('as_of')
                 ->orderByDesc('id')
-                ->first(['id', 'trading_date', 'close', 'as_of']);
+                ->first(['id', 'trading_date', 'close', 'as_of', 'source_key', 'source_name']);
 
         if ($latestRealtimePrice === null && $latestIntradayCandle === null) {
             return [
@@ -874,6 +885,7 @@ class AdminDepotHoldingController extends Controller
         if ($latestRealtimePrice === null) {
             return [
                 'price' => (string) $latestIntradayCandle?->close,
+                'source_markers' => MarketDataProvenance::forRecord($latestIntradayCandle),
                 'date' => $latestIntradayCandle?->trading_date?->toDateString(),
             ];
         }
@@ -885,6 +897,7 @@ class AdminDepotHoldingController extends Controller
 
             return [
                 'price' => (string) $latestRealtimePrice->price,
+                'source_markers' => MarketDataProvenance::forRecord($latestRealtimePrice),
                 'date' => $latestRealtimeDate,
             ];
         }
@@ -895,12 +908,14 @@ class AdminDepotHoldingController extends Controller
         if ($latestRealtimeAsOf === null || ($latestIntradayAsOf !== null && $latestIntradayAsOf->greaterThan($latestRealtimeAsOf))) {
             return [
                 'price' => (string) $latestIntradayCandle->close,
+                'source_markers' => MarketDataProvenance::forRecord($latestIntradayCandle),
                 'date' => $latestIntradayCandle->trading_date?->toDateString(),
             ];
         }
 
         return [
             'price' => (string) $latestRealtimePrice->price,
+            'source_markers' => MarketDataProvenance::forRecord($latestRealtimePrice),
             'date' => $latestRealtimeAsOf?->setTimezone(config('app.timezone'))->toDateString(),
         ];
     }
@@ -928,7 +943,7 @@ class AdminDepotHoldingController extends Controller
                 ->where('as_of', '<=', $dayEnd)
                 ->orderBy('as_of')
                 ->orderBy('id')
-                ->get(['id', 'price', 'currency', 'as_of', 'fetched_at', 'source_name', 'source_url', 'venue', 'price_type', 'spread_pct', 'validation_errors', 'trading_times']);
+                ->get(['id', 'price', 'currency', 'as_of', 'fetched_at', 'source_key', 'source_name', 'source_url', 'venue', 'price_type', 'spread_pct', 'validation_errors', 'trading_times']);
 
         return [
             'start_price' => $prices->first(),
@@ -979,7 +994,7 @@ class AdminDepotHoldingController extends Controller
                 ->whereNotNull('close')
                 ->orderBy('as_of')
                 ->orderBy('id')
-                ->get(['id', 'trading_date', 'close', 'currency', 'as_of', 'timestamp', 'source_name', 'source_url']);
+                ->get(['id', 'trading_date', 'close', 'currency', 'as_of', 'timestamp', 'source_key', 'source_name', 'source_url']);
 
         return [
             'start_price' => $candles->first(),
@@ -1360,6 +1375,7 @@ class AdminDepotHoldingController extends Controller
                 'currency' => $stockPrice->currency,
                 'as_of' => $this->storedStockPriceTimestamp($stockPrice, 'as_of'),
                 'source_name' => $stockPrice->source_name,
+                'source_markers' => MarketDataProvenance::forRecord($stockPrice),
                 'price_type' => $stockPrice->price_type,
             ]);
         $latestTradingDayPrices = $latestTradingDayRealtimePrices
@@ -1502,7 +1518,7 @@ class AdminDepotHoldingController extends Controller
             ->orderBy('trading_date')
             ->orderBy('as_of')
             ->orderBy('id')
-            ->get(['id', 'trading_date', 'close', 'currency', 'as_of', 'timestamp', 'source_name'])
+            ->get(['id', 'trading_date', 'close', 'currency', 'as_of', 'timestamp', 'source_key', 'source_name'])
             ->groupBy(fn (StockHoldingIntradayCandle $intradayCandle): string => $intradayCandle->trading_date->toDateString())
             ->flatMap(fn (Collection $intradayCandles): Collection => $this->evenlySampleRows(
                 $intradayCandles,
@@ -1541,6 +1557,7 @@ class AdminDepotHoldingController extends Controller
                 'currency' => $intradayCandle->currency,
                 'as_of' => $this->storedIntradayCandleTimestamp($intradayCandle),
                 'source_name' => $intradayCandle->source_name,
+                'source_markers' => MarketDataProvenance::forRecord($intradayCandle),
                 'price_type' => 'intraday',
             ])
             ->merge($sampledRealtimePrices->map(fn (StockRealtimePrice $stockPrice): array => [
@@ -1549,6 +1566,7 @@ class AdminDepotHoldingController extends Controller
                 'currency' => $stockPrice->currency,
                 'as_of' => $this->storedStockPriceTimestamp($stockPrice, 'as_of'),
                 'source_name' => $stockPrice->source_name,
+                'source_markers' => MarketDataProvenance::forRecord($stockPrice),
                 'price_type' => $stockPrice->price_type,
             ]))
             ->filter(fn (array $price): bool => $price['as_of'] !== null && $price['price'] !== '')
@@ -1610,13 +1628,14 @@ class AdminDepotHoldingController extends Controller
             ->whereNotNull('close')
             ->orderBy('as_of')
             ->orderBy('id')
-            ->get(['id', 'close', 'currency', 'as_of', 'timestamp', 'source_name'])
+            ->get(['id', 'close', 'currency', 'as_of', 'timestamp', 'source_key', 'source_name'])
             ->map(fn (StockHoldingIntradayCandle $intradayCandle): array => [
                 'id' => $intradayCandle->id,
                 'price' => (string) $intradayCandle->close,
                 'currency' => $intradayCandle->currency,
                 'as_of' => $this->storedIntradayCandleTimestamp($intradayCandle),
                 'source_name' => $intradayCandle->source_name,
+                'source_markers' => MarketDataProvenance::forRecord($intradayCandle),
                 'price_type' => 'intraday',
             ])
             ->all();
@@ -1657,6 +1676,7 @@ class AdminDepotHoldingController extends Controller
                 'currency' => $intradayPrice->currency,
                 'as_of' => $this->storedIntradayPriceTimestamp($intradayPrice),
                 'source_name' => $intradayPrice->source_name,
+                'source_markers' => MarketDataProvenance::forRecord($intradayPrice),
                 'price_type' => $intradayPrice->price_type,
             ])
             ->all();
@@ -1797,6 +1817,7 @@ class AdminDepotHoldingController extends Controller
                 'currency' => $stockPrice->currency,
                 'as_of' => $this->storedStockPriceTimestamp($stockPrice, 'as_of'),
                 'source_name' => $stockPrice->source_name,
+                'source_markers' => MarketDataProvenance::forRecord($stockPrice),
                 'price_type' => $stockPrice->price_type,
             ])
             ->all();
@@ -1894,6 +1915,7 @@ class AdminDepotHoldingController extends Controller
                 'price' => (string) ($price->adjusted_close ?? $price->close),
                 'volume' => $price->volume,
                 'currency' => $price->currency,
+                'source_markers' => MarketDataProvenance::forRecord($price),
             ])
             ->filter(fn (array $price): bool => $price['price'] !== '')
             ->values()
@@ -1964,6 +1986,7 @@ class AdminDepotHoldingController extends Controller
                 'stock_holding_intraday_candles.trading_date',
                 'stock_holding_intraday_candles.close',
                 'stock_holding_intraday_candles.currency',
+                'stock_holding_intraday_candles.source_key',
                 DB::raw('volume_per_day.daily_volume as volume'),
             ])
             ->map(fn (StockHoldingIntradayCandle $price): array => [
@@ -1971,6 +1994,7 @@ class AdminDepotHoldingController extends Controller
                 'price' => (string) $price->close,
                 'volume' => $price->volume === null ? null : (int) $price->volume,
                 'currency' => $price->currency,
+                'source_markers' => MarketDataProvenance::forRecord($price),
             ])
             ->all();
     }
@@ -2022,7 +2046,7 @@ class AdminDepotHoldingController extends Controller
                 ->where('as_of', '<', Carbon::parse($latestTradingDate, 'UTC')->addDay()->startOfDay())
                 ->orderByDesc('as_of')
                 ->orderByDesc('id')
-                ->first(['price', 'currency', 'as_of']);
+                ->first(['price', 'currency', 'as_of', 'source_key', 'source_name']);
 
         if ($latestRealtimePrice === null) {
             return null;
@@ -2033,6 +2057,7 @@ class AdminDepotHoldingController extends Controller
             'price' => (string) $latestRealtimePrice->price,
             'volume' => null,
             'currency' => $latestRealtimePrice->currency,
+            'source_markers' => MarketDataProvenance::forRecord($latestRealtimePrice),
         ];
     }
 
@@ -2122,6 +2147,7 @@ class AdminDepotHoldingController extends Controller
                 'interval' => $intradayCandle->interval,
                 'source_key' => $intradayCandle->source_key,
                 'source_name' => $intradayCandle->source_name,
+                'source_markers' => MarketDataProvenance::forRecord($intradayCandle),
                 'coverage_complete' => false,
                 'price' => (string) $intradayCandle->close,
                 'currency' => $intradayCandle->currency,

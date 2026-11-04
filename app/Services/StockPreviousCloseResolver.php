@@ -52,8 +52,10 @@ class StockPreviousCloseResolver
             return [
                 'previous_close' => $previousClose->price,
                 'previous_close_date' => $this->stockPriceDate($previousClose),
+                'previous_close_source_markers' => ['EODHD'],
                 'earlier_close' => $earlierClose instanceof StockPrice ? $earlierClose->price : null,
                 'earlier_close_date' => $earlierClose instanceof StockPrice ? $this->stockPriceDate($earlierClose) : null,
+                'earlier_close_source_markers' => $earlierClose instanceof StockPrice ? ['EODHD'] : [],
             ];
         }
 
@@ -62,8 +64,10 @@ class StockPreviousCloseResolver
         return [
             'previous_close' => $fallback['price'],
             'previous_close_date' => $fallback['date'],
+            'previous_close_source_markers' => $fallback['source_markers'],
             'earlier_close' => null,
             'earlier_close_date' => null,
+            'earlier_close_source_markers' => [],
         ];
     }
 
@@ -109,12 +113,13 @@ class StockPreviousCloseResolver
                 ->when($cutoff !== null, fn ($query) => $query->where('trading_date', '<', $cutoff->toDateString()))
                 ->orderByDesc('trading_date')
                 ->orderByDesc('id')
-                ->first(['id', 'trading_date', 'close', 'adjusted_close']);
+                ->first(['id', 'trading_date', 'close', 'adjusted_close', 'source_key', 'source_name']);
 
         if ($cutoff === null) {
             return [
                 'price' => $dailyPrice?->close ?? $dailyPrice?->adjusted_close,
                 'date' => $dailyPrice?->trading_date?->toDateString(),
+                'source_markers' => MarketDataProvenance::forRecord($dailyPrice),
             ];
         }
 
@@ -127,7 +132,7 @@ class StockPreviousCloseResolver
                 ->orderByDesc('as_of')
                 ->orderByDesc('fetched_at')
                 ->orderByDesc('id')
-                ->first(['id', 'price', 'as_of']);
+                ->first(['id', 'price', 'as_of', 'source_key', 'source_name']);
         $realtimePrice = $holding->relationLoaded('readRealtimePrices')
             ? $holding->readRealtimePrices->filter(fn (StockRealtimePrice $price): bool => Carbon::parse($price->getRawOriginal('as_of'), 'UTC')->lt($cutoff->copy()->utc()))->last()
             : StockRealtimePrice::query()
@@ -137,7 +142,7 @@ class StockPreviousCloseResolver
                 ->where('as_of', '<', $cutoff->copy()->utc())
                 ->orderByDesc('as_of')
                 ->orderByDesc('id')
-                ->first(['id', 'price', 'as_of']);
+                ->first(['id', 'price', 'as_of', 'source_key', 'source_name']);
         $realtimeDate = $realtimePrice === null ? null : $this->storedDate($realtimePrice, 'as_of');
         $storedPriceDate = $storedPrice === null ? null : $this->storedDate($storedPrice, 'as_of');
         $dailyDate = $dailyPrice?->trading_date?->copy()->startOfDay();
@@ -151,6 +156,7 @@ class StockPreviousCloseResolver
             return [
                 'price' => $realtimePrice->price,
                 'date' => $realtimeDate->toDateString(),
+                'source_markers' => MarketDataProvenance::forRecord($realtimePrice),
             ];
         }
 
@@ -158,12 +164,14 @@ class StockPreviousCloseResolver
             return [
                 'price' => $storedPrice->price,
                 'date' => $storedPriceDate->toDateString(),
+                'source_markers' => MarketDataProvenance::forRecord($storedPrice),
             ];
         }
 
         return [
             'price' => $dailyPrice?->close ?? $dailyPrice?->adjusted_close,
             'date' => $dailyPrice?->trading_date?->toDateString(),
+            'source_markers' => MarketDataProvenance::forRecord($dailyPrice),
         ];
     }
 

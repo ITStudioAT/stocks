@@ -7,6 +7,7 @@ use App\Models\StockHolding;
 use App\Models\StockPrice;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Barryvdh\DomPDF\PDF as DomPdfDocument;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 use Symfony\Component\HttpFoundation\Response;
 use Throwable;
@@ -58,12 +59,14 @@ class WatchlistPdfReport
      */
     private function holdings(): array
     {
-        return StockHolding::query()
-            ->with('latestStockPrice')
+        $holdings = StockHolding::query()
+            ->with(['latestStockPrice', 'latestRealtimePrice'])
             ->orderBy('name')
             ->orderBy('isin')
-            ->get()
-            ->map(fn (StockHolding $holding): array => $this->holdingPayload($holding))
+            ->get();
+        app(StockHoldingPriceReadBatch::class)->load($holdings);
+
+        return $holdings->map(fn (StockHolding $holding): array => MarketDataProvenance::decorate($this->holdingPayload($holding)))
             ->all();
     }
 
@@ -93,10 +96,12 @@ class WatchlistPdfReport
      */
     private function holdingPayload(StockHolding $holding): array
     {
-        $latestStockPrice = $holding->latestStockPrice;
+        $latestStockPrice = collect([$holding->latestStockPrice, $holding->readRealtimePrices->last(), $holding->readLatestCandle])
+            ->filter(fn (?Model $price): bool => ($price?->price ?? $price?->close) !== null)
+            ->sortByDesc(fn (Model $price): string => $price->getRawOriginal('as_of') ?? '')->first();
         $latestPriceStatus = $this->latestPriceStatus($holding);
-        $hasCurrentPrice = in_array($latestPriceStatus, ['realtime', 'fresh', 'delayed', 'suspicious', 'unavailable_now'], true);
-        $latestPrice = $hasCurrentPrice ? $this->pricePayload($holding->latest_price) : null;
+        $hasCurrentPrice = ($latestStockPrice?->price ?? $latestStockPrice?->close ?? $holding->latest_price) !== null;
+        $latestPrice = $hasCurrentPrice ? $this->pricePayload($latestStockPrice?->price ?? $latestStockPrice?->close ?? $holding->latest_price) : null;
         $startPrice = $this->pricePayload($holding->start_price);
         $endPrice = $this->pricePayload($holding->end_price);
         $end24Price = $this->pricePayload($holding->end_price_24);
@@ -106,6 +111,14 @@ class WatchlistPdfReport
             ? $this->storedStockPriceTimestamp($latestStockPrice, 'as_of')
             : $holding->latest_price_as_of;
         $tradingTimes = $latestStockPrice?->trading_times ?? $holding->trading_times;
+        $previousCloses = app(StockPreviousCloseResolver::class)->resolve($holding, $latestPriceAsOf);
+        $end24Price = $this->pricePayload($previousCloses['previous_close']);
+        $tradingDate = $latestPriceAsOf === null ? null : Carbon::parse($latestPriceAsOf)->setTimezone(config('app.timezone'))->toDateString();
+        $startRecord = $holding->readRealtimePrices->concat($holding->readIntradayCandles)
+            ->filter(fn (Model $price): bool => Carbon::parse($price->getRawOriginal('as_of'), 'UTC')->setTimezone(config('app.timezone'))->toDateString() === $tradingDate)
+            ->sortBy(fn (Model $price): string => $price->getRawOriginal('as_of'))->first();
+        $startPrice = $this->pricePayload($startRecord?->price ?? $startRecord?->close ?? $holding->start_price);
+        $endPrice = $latestPrice ?? $endPrice;
 
         return [
             'id' => $holding->id,
@@ -120,14 +133,19 @@ class WatchlistPdfReport
             'country' => $holding->country,
             'currency' => $holding->currency,
             'latest_price' => $latestPrice,
+            'latest_price_source_markers' => $latestStockPrice === null ? MarketDataProvenance::markers($holding->latest_price_source) : MarketDataProvenance::forRecord($latestStockPrice),
             'start_price' => $startPrice,
+            'start_price_source_markers' => MarketDataProvenance::forRecord($startRecord),
             'end_price' => $endPrice,
-            'end_price_24' => $end24Price,
-            'end_price_48' => $this->pricePayload($holding->end_price_48),
-            'start_price_date' => $sessionPriceDates['start_price_date'],
-            'end_price_date' => $sessionPriceDates['end_price_date'],
-            'end_price_24_date' => $sessionPriceDates['end_price_24_date'],
-            'end_price_48_date' => $sessionPriceDates['end_price_48_date'],
+            'end_price_source_markers' => $latestPrice === null ? [] : MarketDataProvenance::forRecord($latestStockPrice),
+            'end_price_24' => $this->pricePayload($previousCloses['previous_close']),
+            'end_price_48' => $this->pricePayload($previousCloses['earlier_close']),
+            'end_price_24_source_markers' => $previousCloses['previous_close_source_markers'],
+            'end_price_48_source_markers' => $previousCloses['earlier_close_source_markers'],
+            'start_price_date' => $startRecord === null ? $sessionPriceDates['start_price_date'] : $tradingDate,
+            'end_price_date' => $latestPrice === null ? $sessionPriceDates['end_price_date'] : $tradingDate,
+            'end_price_24_date' => $previousCloses['previous_close_date'],
+            'end_price_48_date' => $previousCloses['earlier_close_date'],
             'historical_prices_fetching' => $sessionPrices['historical_prices_fetching'],
             'latest_price_trend' => $this->latestPriceTrend($latestPrice, $end24Price),
             'latest_price_change_pct' => $this->latestPriceChangePercent($latestPrice, $end24Price),
@@ -308,34 +326,17 @@ class WatchlistPdfReport
         return number_format((((float) $latestPrice - (float) $referencePrice) / (float) $referencePrice) * 100, 2, '.', '');
     }
 
-    private function previousStoredPrice(StockHolding $holding, ?StockPrice $latestStockPrice): ?string
+    private function previousStoredPrice(StockHolding $holding, ?Model $latestStockPrice): ?string
     {
         if ($latestStockPrice === null) {
             return null;
         }
 
-        $query = $this->stockPriceCatalog
-            ->pricesForHolding($holding)
-            ->whereKeyNot($latestStockPrice->id)
-            ->whereIn('source_key', EodhdMarketData::sourceKeys())
-            ->whereNotNull('price');
+        $previous = $holding->readRealtimePrices->concat($holding->readIntradayCandles)->concat($holding->readStockPrices)
+            ->filter(fn (Model $price): bool => $price->getRawOriginal('as_of') < $latestStockPrice->getRawOriginal('as_of'))
+            ->sortByDesc(fn (Model $price): string => $price->getRawOriginal('as_of'))->first();
 
-        if ($latestStockPrice->as_of !== null) {
-            $query->where(function ($query) use ($latestStockPrice): void {
-                $query
-                    ->where('as_of', '<', $latestStockPrice->as_of)
-                    ->orWhere(function ($query) use ($latestStockPrice): void {
-                        $query
-                            ->where('as_of', $latestStockPrice->as_of)
-                            ->where('id', '<', $latestStockPrice->id);
-                    });
-            });
-        }
-
-        return $query
-            ->orderByDesc('as_of')
-            ->orderByDesc('id')
-            ->value('price');
+        return $previous?->price ?? $previous?->close;
     }
 
     /**
@@ -343,7 +344,7 @@ class WatchlistPdfReport
      */
     private function recentStoredPrices(StockHolding $holding): array
     {
-        return $this->stockPriceCatalog
+        $historical = $this->stockPriceCatalog
             ->pricesForHolding($holding)
             ->whereIn('source_key', EodhdMarketData::sourceKeys())
             ->whereNotNull('price')
@@ -358,9 +359,19 @@ class WatchlistPdfReport
                 'currency' => $stockPrice->currency,
                 'as_of' => $this->storedStockPriceTimestamp($stockPrice, 'as_of'),
                 'source_name' => $stockPrice->source_name,
+                'source_markers' => MarketDataProvenance::forRecord($stockPrice),
                 'price_type' => $stockPrice->price_type,
-            ])
-            ->all();
+            ])->all();
+        $current = $holding->readRealtimePrices->concat($holding->readIntradayCandles)
+            ->filter(fn (Model $price): bool => Carbon::parse($price->getRawOriginal('as_of'), 'UTC')->gte(now()->subDay()))
+            ->map(fn (Model $price): array => [
+                'id' => $price->id, 'price' => (string) ($price->price ?? $price->close), 'currency' => $price->currency,
+                'as_of' => $this->storedStockPriceTimestamp($price, 'as_of'), 'source_name' => $price->source_name,
+                'source_markers' => MarketDataProvenance::forRecord($price), 'price_type' => $price->price_type ?? $price->interval,
+            ]);
+
+        return collect($historical)->concat($current)->unique(fn (array $price): string => implode('|', [$price['as_of'], $price['source_name'], $price['price']]))
+            ->sortBy('as_of')->values()->all();
     }
 
     private function sourceDateTimePayload(?string $asOf, bool $hasCurrentPrice): ?string
@@ -376,7 +387,7 @@ class WatchlistPdfReport
         }
     }
 
-    private function storedStockPriceTimestamp(StockPrice $stockPrice, string $column): ?string
+    private function storedStockPriceTimestamp(Model $stockPrice, string $column): ?string
     {
         $value = $stockPrice->getRawOriginal($column);
 

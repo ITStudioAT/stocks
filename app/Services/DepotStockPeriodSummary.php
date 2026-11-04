@@ -73,12 +73,14 @@ class DepotStockPeriodSummary
         }
 
         $holdings = $holdingsQuery->get();
+        $openingSources = [];
+        $closingSources = [];
         $openingPriceByHoldingId = $definition['start'] === null
             ? collect()
-            : $this->historicalPriceByHoldingId($statesByHoldingId->keys(), $definition['start']->copy()->subSecond());
+            : $this->historicalPriceByHoldingId($statesByHoldingId->keys(), $definition['start']->copy()->subSecond(), $openingSources);
         $closingPriceByHoldingId = $definition['uses_current_price']
             ? collect()
-            : $this->historicalPriceByHoldingId($statesByHoldingId->keys(), $definition['cutoff']);
+            : $this->historicalPriceByHoldingId($statesByHoldingId->keys(), $definition['cutoff'], $closingSources);
 
         return $holdings
             ->map(fn (StockHolding $holding): array => $this->stockPayload(
@@ -88,6 +90,8 @@ class DepotStockPeriodSummary
                 closingPrice: $definition['uses_current_price']
                     ? $this->currentPrice($holding)
                     : $closingPriceByHoldingId->get($holding->id),
+                openingSources: $openingSources[$holding->id] ?? [],
+                closingSources: $definition['uses_current_price'] ? $this->currentPriceSources($holding) : ($closingSources[$holding->id] ?? []),
             ))
             ->values()
             ->all();
@@ -184,7 +188,7 @@ class DepotStockPeriodSummary
      * @param  Collection<int, int|string>  $holdingIds
      * @return Collection<int, string>
      */
-    private function historicalPriceByHoldingId(Collection $holdingIds, Carbon $cutoff): Collection
+    private function historicalPriceByHoldingId(Collection $holdingIds, Carbon $cutoff, array &$sources): Collection
     {
         $dailyPriceByHoldingId = StockHoldingDailyPrice::query()
             ->whereIn('stock_holding_id', $holdingIds->all())
@@ -196,7 +200,7 @@ class DepotStockPeriodSummary
             })
             ->orderByDesc('trading_date')
             ->orderByDesc('id')
-            ->get(['stock_holding_id', 'trading_date', 'adjusted_close', 'close'])
+            ->get(['stock_holding_id', 'trading_date', 'adjusted_close', 'close', 'source_key', 'source_name'])
             ->groupBy('stock_holding_id')
             ->map(fn (Collection $prices): ?StockHoldingDailyPrice => $prices->first());
         $realtimePriceByHoldingId = StockRealtimePrice::query()
@@ -205,11 +209,11 @@ class DepotStockPeriodSummary
             ->where('as_of', '<=', $cutoff)
             ->orderByDesc('as_of')
             ->orderByDesc('id')
-            ->get(['stock_holding_id', 'price', 'as_of'])
+            ->get(['stock_holding_id', 'price', 'as_of', 'source_key', 'source_name'])
             ->groupBy('stock_holding_id')
             ->map(fn (Collection $prices): ?StockRealtimePrice => $prices->first());
 
-        return $holdingIds->mapWithKeys(function (int|string $holdingId) use ($dailyPriceByHoldingId, $realtimePriceByHoldingId): array {
+        return $holdingIds->mapWithKeys(function (int|string $holdingId) use ($dailyPriceByHoldingId, $realtimePriceByHoldingId, &$sources): array {
             $dailyPrice = $dailyPriceByHoldingId->get($holdingId);
             $realtimePrice = $realtimePriceByHoldingId->get($holdingId);
             $dailyDate = $dailyPrice?->trading_date?->copy()->startOfDay();
@@ -217,6 +221,9 @@ class DepotStockPeriodSummary
             $price = $realtimePrice?->price !== null && ($dailyDate === null || $realtimeDate?->gt($dailyDate))
                 ? $realtimePrice->price
                 : $dailyPrice?->adjusted_close ?? $dailyPrice?->close;
+
+            $chosenRecord = $realtimePrice?->price !== null && ($dailyDate === null || $realtimeDate?->gt($dailyDate)) ? $realtimePrice : $dailyPrice;
+            $sources[(int) $holdingId] = $price === null ? [] : MarketDataProvenance::forRecord($chosenRecord);
 
             return $price === null ? [] : [(int) $holdingId => $price];
         });
@@ -235,7 +242,7 @@ class DepotStockPeriodSummary
      * }  $state
      * @return array<string, int|string|null>
      */
-    private function stockPayload(StockHolding $holding, array $state, ?string $openingPrice, ?string $closingPrice): array
+    private function stockPayload(StockHolding $holding, array $state, ?string $openingPrice, ?string $closingPrice, array $openingSources, array $closingSources): array
     {
         $entryPieces = $state['opening_pieces'] + $state['bought_pieces'];
         $entryValue = ($state['opening_pieces'] * $this->openingPrice($state, $openingPrice)) + $state['bought_amount'];
@@ -249,7 +256,15 @@ class DepotStockPeriodSummary
             ? ($changeAmount / $entryValue) * 100
             : null;
 
+        $entrySources = $state['opening_pieces'] > 0 && is_numeric($openingPrice) ? $openingSources : [];
+        $exitSources = $state['position_pieces'] > 0 && is_numeric($closingPrice) ? $closingSources : [];
+        $changeSources = $changeAmount === null ? [] : MarketDataProvenance::merge($entrySources, $exitSources);
+
         return [
+            'average_buy_or_year_start_price_source_markers' => $entrySources,
+            'average_sell_or_current_price_source_markers' => $exitSources,
+            'change_amount_source_markers' => $changeSources,
+            'change_percent_source_markers' => $changeSources,
             'id' => $holding->id,
             'symbol' => $holding->symbol,
             'name' => $holding->name,
@@ -283,6 +298,14 @@ class DepotStockPeriodSummary
         }
 
         return $state['opening_cost'] / $state['opening_pieces'];
+    }
+
+    /** @return array<int, string> */
+    private function currentPriceSources(StockHolding $holding): array
+    {
+        $record = $holding->latestRealtimePrice?->price !== null ? $holding->latestRealtimePrice : $holding->latestStockPrice;
+
+        return $record?->price !== null ? MarketDataProvenance::forRecord($record) : MarketDataProvenance::markers($holding->latest_price_source);
     }
 
     private function currentPrice(StockHolding $holding): ?string

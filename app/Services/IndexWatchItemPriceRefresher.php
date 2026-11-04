@@ -78,7 +78,7 @@ class IndexWatchItemPriceRefresher
             'last_price' => $lastPrice,
             'actual_price_as_of' => $actualPrice !== null ? $asOf : null,
             'last_price_as_of' => $lastPrice !== null ? $asOf : null,
-            'raw_payload' => $payload,
+            'raw_payload' => [...$payload, '_source' => 'EODHD'],
         ]);
 
         $this->storeRealtimePrice(
@@ -104,7 +104,7 @@ class IndexWatchItemPriceRefresher
             'latest_price_as_of' => $asOf,
             'latest_price_source' => 'EODHD real-time',
             'trading_times' => $this->tradingTimes($item),
-            'raw_payload' => $payload,
+            'raw_payload' => [...$payload, '_source' => 'EODHD'],
         ]);
 
         return true;
@@ -299,7 +299,7 @@ class IndexWatchItemPriceRefresher
                 'change_percent' => $changePercent,
                 'currency' => $currency,
                 'source_name' => 'EODHD real-time',
-                'raw_payload' => $payload,
+                'raw_payload' => [...$payload, '_source' => 'EODHD'],
             ],
         );
     }
@@ -328,7 +328,7 @@ class IndexWatchItemPriceRefresher
             'last_price' => $lastPrice,
             'actual_price_as_of' => $asOf,
             'last_price_as_of' => $asOf,
-            'raw_payload' => $payload,
+            'raw_payload' => [...$payload, '_source' => 'EODHD'],
         ];
     }
 

@@ -23,8 +23,8 @@ class WebQuoteValidator
             $errors[] = 'Price is missing or not greater than zero.';
         }
 
-        if ((bool) config('market-data.strict_currency', true) && Str::upper((string) $quote->currency) !== (string) config('market-data.default_currency', 'EUR')) {
-            $errors[] = 'Currency is not EUR.';
+        if ((bool) config('market-data.strict_currency', true) && Str::upper((string) $quote->currency) !== Str::upper($instrument->currency ?? (string) config('market-data.default_currency', 'EUR'))) {
+            $errors[] = 'Currency does not match holding.';
         }
 
         if ($instrument->isin !== null && $quote->isin !== null && Str::upper($quote->isin) !== $instrument->isin) {

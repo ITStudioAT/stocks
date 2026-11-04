@@ -1,4 +1,6 @@
 <script setup>
+import DataSourceMarkers from './DataSourceMarkers.vue';
+import { marketDataMarkers } from './utils/marketDataProvenance';
 import { onBeforeUnmount, ref } from 'vue';
 import { request } from './stores/auth';
 import { formatPriceValue } from './utils/numberFormatters';
@@ -200,7 +202,7 @@ function finding(instrument) {
                 </ul>
                 <dl class="text-body-2 mb-4">
                     <dt>Test abgeschlossen · Europe/Vienna</dt><dd>{{ dateTime(result.checked_at) }}</dd>
-                    <dt>Quellen</dt><dd>{{ result.source }} · Deutsche Börse: 15 Minuten verzögert; Yahoo: Verzögerung unbekannt</dd>
+                    <dt>Quellen</dt><dd>{{ result.source }} <DataSourceMarkers :markers="['free']" /> · Deutsche Börse: 15 Minuten verzögert; Yahoo: Verzögerung unbekannt</dd>
                     <dt>Katalog erstellt</dt><dd>{{ dateTime(result.catalog_generated_at) }}</dd>
                     <dt>Jüngstes ausgewähltes Dateisegment</dt><dd>{{ dateTime(result.newest_catalog_segment_at) }}</dd>
                     <dt>Jüngster tatsächlich gelesener Quellzeitpunkt</dt>
@@ -235,7 +237,7 @@ function finding(instrument) {
                                 <template v-if="instrument.stored_quote">
                                     <div>{{ formatPriceValue(instrument.stored_quote.price) }} {{ instrument.stored_quote.currency }}</div>
                                     <div>{{ instrument.stored_quote.as_of ? dateTime(instrument.stored_quote.as_of) : `Tagesschluss ${instrument.stored_quote.trading_date} (keine Uhrzeit)` }}</div>
-                                    <div class="text-caption">{{ instrument.stored_quote.source }} · {{ instrument.stored_quote.venue || 'Handelsplatz unbekannt' }} · MIC {{ instrument.stored_quote.mic || '–' }} · {{ instrument.stored_quote.price_type }}</div>
+                                    <div class="text-caption">{{ instrument.stored_quote.source }} <DataSourceMarkers :markers="marketDataMarkers(instrument.stored_quote)" /> · {{ instrument.stored_quote.venue || 'Handelsplatz unbekannt' }} · MIC {{ instrument.stored_quote.mic || '–' }} · {{ instrument.stored_quote.price_type }}</div>
                                     <div v-if="instrument.stored_quote.stale" class="text-caption text-warning">Gespeicherter Kurs veraltet (älter als vier Tage)</div>
                                 </template>
                                 <span v-else>Kein gespeicherter Kurs</span>

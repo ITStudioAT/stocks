@@ -11,6 +11,7 @@ use Illuminate\Http\Client\Response;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
@@ -28,10 +29,22 @@ class EodhdBatchRealtimePriceService
         private WebQuoteValidator $validator,
     ) {}
 
+    /** @return array<string, mixed> */
+    public function syncHolding(StockHolding $holding): array
+    {
+        return $this->syncBatch(collect([$holding]));
+    }
+
     /**
      * @return array{message: string, requested_count: int, stored_count: int, unchanged_count: int, updated_count: int, failed_count: int, errors: array<int, string>}
      */
     public function syncAll(): array
+    {
+        return $this->syncHoldings(StockHolding::query()->whereNotNull('symbol')->orderBy('name')->orderBy('symbol')->get());
+    }
+
+    /** @param Collection<int, StockHolding> $holdings @return array<string, mixed> */
+    public function syncHoldings(Collection $holdings): array
     {
         $requestedCount = 0;
         $storedCount = 0;
@@ -40,12 +53,7 @@ class EodhdBatchRealtimePriceService
         $failedCount = 0;
         $errors = [];
 
-        StockHolding::query()
-            ->whereNotNull('symbol')
-            ->orderBy('name')
-            ->orderBy('symbol')
-            ->get()
-            ->chunk(self::BatchSize)
+        $holdings->chunk(self::BatchSize)
             ->each(function (Collection $holdings) use (&$requestedCount, &$storedCount, &$unchangedCount, &$updatedCount, &$failedCount, &$errors): void {
                 $requestedCount += $holdings->count();
 
@@ -82,6 +90,9 @@ class EodhdBatchRealtimePriceService
      */
     private function syncBatch(Collection $holdings): array
     {
+        if (Cache::has('market-data.eodhd-realtime.cooldown')) {
+            throw new RuntimeException('EODHD realtime is temporarily unavailable; previous quotes preserved.');
+        }
         $symbols = $holdings
             ->mapWithKeys(fn (StockHolding $holding): array => [$holding->id => $this->eodhdSymbol($holding)])
             ->filter();
@@ -103,6 +114,9 @@ class EodhdBatchRealtimePriceService
             ...($secondarySymbols->isNotEmpty() ? ['s' => $secondarySymbols->implode(',')] : []),
         ]);
 
+        if ($response->status() === 429 || $response->serverError()) {
+            Cache::put('market-data.eodhd-realtime.cooldown', true, now()->addMinutes(2));
+        }
         if ($response->failed()) {
             throw new RuntimeException("EODHD realtime request failed with HTTP {$response->status()}.");
         }
@@ -149,6 +163,9 @@ class EodhdBatchRealtimePriceService
 
             if ($validatedQuote->isSelectable()) {
                 $updatedCount += $this->updateHolding($holding, $storedPrice, $validatedQuote->freshnessStatus);
+            } else {
+                $failedCount++;
+                $errors[] = "EODHD realtime quote for {$holding->symbol} failed validation; previous quote preserved.";
             }
         }
 
@@ -244,22 +261,23 @@ class EodhdBatchRealtimePriceService
 
     private function updateHolding(StockHolding $holding, StockRealtimePrice $storedPrice, string $priceStatus): int
     {
+        $current = $holding->latestRealtimePrice;
+        if ($current !== null && $current->as_of->greaterThan($storedPrice->as_of)) {
+            return 0;
+        }
         if ((int) $holding->latest_realtime_price_id === (int) $storedPrice->id && $holding->price_status === $priceStatus) {
             return 0;
         }
 
-        $holding->update([
-            'currency' => $storedPrice->currency ?? $holding->currency,
+        return StockHolding::query()->whereKey($holding->id)->where('latest_realtime_price_id', $holding->latest_realtime_price_id)->update([
             'latest_realtime_price_id' => $storedPrice->id,
             'price_status' => $priceStatus,
             'source_verified_at' => now(),
             'trading_times' => $storedPrice->trading_times,
         ]);
-
-        return 1;
     }
 
-    private function eodhdSymbol(StockHolding $holding): string
+    public function eodhdSymbol(StockHolding $holding): string
     {
         return Str::upper((string) $holding->symbol).'.'.$this->exchangeCode($holding);
     }

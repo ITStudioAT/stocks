@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\AddMarketDataProvenance;
 use App\Http\Middleware\EnsureAuthenticationRevisionIsCurrent;
 use App\Http\Middleware\EnsurePreviewIsolation;
 use App\Http\Middleware\EnsureTrustedHost;
@@ -22,6 +23,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->prepend(EnsureTrustedHost::class);
         $middleware->prepend(EnsurePreviewIsolation::class);
         $middleware->append(SecurityHeaders::class);
+        $middleware->append(AddMarketDataProvenance::class);
 
         $middleware->alias([
             'auth.session' => EnsureAuthenticationRevisionIsCurrent::class,

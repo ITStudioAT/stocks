@@ -92,6 +92,11 @@ export const useDepotStore = defineStore('depots', {
             ],
         },
         stockSearchResults: [],
+        stockSearchSource: 'free',
+        stockSearchNotice: '',
+        stockSearchCatalogDate: null,
+        stockSearchStatus: '',
+        stockSearchRequestId: 0,
         pagination: {
             current_page: 1,
             last_page: 1,
@@ -1493,21 +1498,38 @@ export const useDepotStore = defineStore('depots', {
             }
         },
         async searchStocks(query) {
+            const requestId = ++this.stockSearchRequestId;
+            const source = this.stockSearchSource;
             this.stockSearchLoading = true;
             this.stockSearchError = '';
+            this.stockSearchNotice = '';
+            this.stockSearchCatalogDate = null;
+            this.stockSearchStatus = '';
+            this.stockSearchResults = [];
 
             try {
                 const data = await request('/admin/stocks/search', {
                     method: 'POST',
-                    body: JSON.stringify({ query }),
+                    body: JSON.stringify({ query, source }),
                 });
+                if (requestId !== this.stockSearchRequestId || source !== this.stockSearchSource) {
+                    return;
+                }
                 this.stockSearchResults = data.results;
+                this.stockSearchNotice = data.message ?? '';
+                this.stockSearchCatalogDate = data.catalog_as_of ?? null;
+                this.stockSearchStatus = data.status ?? '';
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
             } catch (error) {
+                if (requestId !== this.stockSearchRequestId || source !== this.stockSearchSource) {
+                    return;
+                }
                 this.stockSearchError = error.message;
                 throw error;
             } finally {
-                this.stockSearchLoading = false;
+                if (requestId === this.stockSearchRequestId) {
+                    this.stockSearchLoading = false;
+                }
             }
         },
         async createDepot(payload) {

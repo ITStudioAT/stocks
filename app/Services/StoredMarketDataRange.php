@@ -135,7 +135,7 @@ class StoredMarketDataRange
     {
         if ($cacheGlobally) {
             $connection = $prices->getConnection();
-            $key = 'market-data-range:'.hash('sha256', serialize([
+            $key = 'market-data-range:v2:'.hash('sha256', serialize([
                 $connection->getName(), $connection->getDatabaseName(), config('app.timezone'),
                 $prices->toSql(), $prices->getBindings(), $dateColumn, $storedAsUtcTimestamp,
             ]));
@@ -143,6 +143,7 @@ class StoredMarketDataRange
             return Cache::remember($key, now()->addSeconds(self::GlobalStatisticsCacheSeconds), fn (): array => $this->summarize($prices, $dateColumn, $storedAsUtcTimestamp));
         }
 
+        $sourcePrices = clone $prices;
         $range = $prices
             ->toBase()
             ->selectRaw("MIN({$dateColumn}) AS date_from")
@@ -154,7 +155,34 @@ class StoredMarketDataRange
             'date_from' => $this->storedDate($range?->date_from, $storedAsUtcTimestamp),
             'date_to' => $this->storedDate($range?->date_to, $storedAsUtcTimestamp),
             'row_count' => (int) ($range?->row_count ?? 0),
+            'source_markers' => $this->sourceMarkers($sourcePrices),
         ];
+    }
+
+    /** @return array<int, string> */
+    private function sourceMarkers(Builder $prices): array
+    {
+        $markers = [];
+        if ($prices->getModel() instanceof IndexWatchItemPrice) {
+            foreach ((clone $prices)->select('raw_payload->_source as provenance_source')->distinct()->toBase()->get()->pluck('provenance_source') as $source) {
+                $markers = MarketDataProvenance::merge($markers, MarketDataProvenance::markers($source));
+            }
+            $legacy = (clone $prices)->whereNull('raw_payload->_source')->where(function (Builder $query): void {
+                $query->where(fn (Builder $query) => $query->whereNotNull('raw_payload->date')->whereNotNull('raw_payload->close')->whereJsonContainsKey('raw_payload->adjusted_close'))
+                    ->orWhere(fn (Builder $query) => $query->whereNotNull('raw_payload->code')->whereNotNull('raw_payload->timestamp')->whereNotNull('raw_payload->close'));
+            })->exists();
+
+            return MarketDataProvenance::merge($markers, $legacy ? ['EODHD'] : []);
+        }
+        $columns = array_values(array_intersect(['source_key', 'source_name'], $prices->getModel()->getFillable()));
+        if ($columns === []) {
+            return [];
+        }
+        foreach ((clone $prices)->select($columns)->distinct()->get() as $price) {
+            $markers = MarketDataProvenance::merge($markers, MarketDataProvenance::forRecord($price));
+        }
+
+        return $markers;
     }
 
     private function storedDate(mixed $value, bool $storedAsUtcTimestamp): ?string

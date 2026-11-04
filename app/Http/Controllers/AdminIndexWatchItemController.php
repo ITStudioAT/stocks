@@ -10,6 +10,7 @@ use App\Services\EodhdApiUsage;
 use App\Services\IndexMarketHours;
 use App\Services\IndexWatchItemPriceRefresher;
 use App\Services\KnownInstrumentMetadataCorrections;
+use App\Services\MarketDataProvenance;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -59,7 +60,7 @@ class AdminIndexWatchItemController extends Controller
                 }
             }
         })->orderByDesc('as_of')->orderByDesc('id')
-            ->get(['id', 'index_watch_item_id', 'trading_date', 'price', 'as_of'])->groupBy('index_watch_item_id');
+            ->get(['id', 'index_watch_item_id', 'trading_date', 'price', 'as_of', 'source_name'])->groupBy('index_watch_item_id');
         foreach ($items as $item) {
             $item->setRelation('readRealtimePrices', $realtimePrices->get($item->id, collect()));
         }
@@ -201,7 +202,7 @@ class AdminIndexWatchItemController extends Controller
                 ->where('trading_date', '<', Carbon::parse($latestRealtimeTradingDate)->addDay()->toDateString())
                 ->orderByDesc('as_of')
                 ->orderByDesc('id')
-                ->get(['id', 'trading_date', 'price', 'as_of'])
+                ->get(['id', 'trading_date', 'price', 'as_of', 'source_name'])
             : collect());
 
         return [
@@ -225,6 +226,7 @@ class AdminIndexWatchItemController extends Controller
             'trading_times' => $this->indexMarketHours->effectiveTradingTimes($item),
             'recent_prices' => $recentPrices
                 ->map(fn (IndexWatchItemPrice $price): array => [
+                    'source_markers' => MarketDataProvenance::forIndexPrice($price),
                     'trading_date' => $price->trading_date?->toDateString(),
                     'start_price' => $this->pricePayload($price->start_price),
                     'actual_price' => $this->pricePayload($price->actual_price),
@@ -240,6 +242,7 @@ class AdminIndexWatchItemController extends Controller
                 ->all(),
             'realtime_prices' => $realtimePrices
                 ->map(fn (IndexWatchItemRealtimePrice $price): array => [
+                    'source_markers' => MarketDataProvenance::forRecord($price),
                     'trading_date' => $price->trading_date?->toDateString(),
                     'price' => $this->pricePayload($price->price),
                     'as_of' => $this->storedUtcTimestamp($price, 'as_of'),

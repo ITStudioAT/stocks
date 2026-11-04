@@ -345,7 +345,8 @@ class StockResearchNowRelevant
             'data_as_of' => $event['data_as_of'] ?? null,
             'freshness' => $event['freshness'] ?? null,
             'coverage' => $event['coverage'] ?? 'partial',
-            'source_title' => $event['source_title'] ?? $this->datasetSourceTitle($event['source_datasets'] ?? []),
+            'source_title' => $event['source_title'] ?? null,
+            'source_markers' => $event['source_markers'] ?? [],
             'source_url' => $event['source_url'] ?? null,
         ];
     }
@@ -398,7 +399,8 @@ class StockResearchNowRelevant
                 'coverage' => in_array($dataset['status'] ?? null, ['fresh', 'cached_fresh'], true)
                     ? 'complete'
                     : (($dataset['status'] ?? null) === 'unavailable' ? 'source_failed' : 'partial'),
-                'source_title' => $coverage['provider'] ?? 'EODHD',
+                'source_title' => $coverage['provider'] ?? null,
+                'source_markers' => $dataset['source_markers'] ?? (in_array($dataset['status'] ?? null, ['fresh', 'cached_fresh', 'stale_cache'], true) ? MarketDataProvenance::markers($coverage['provider'] ?? null) : []),
                 'source_url' => null,
             ])
             ->all();

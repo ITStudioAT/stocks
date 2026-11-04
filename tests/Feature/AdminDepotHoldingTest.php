@@ -1593,6 +1593,7 @@ class AdminDepotHoldingTest extends TestCase
 
     public function test_admin_can_fetch_and_store_last_trading_day_five_minute_intraday_candles(): void
     {
+        config(['services.eodhd.enabled' => false]);
         $this->travelTo(Carbon::parse('2026-06-05 18:10:00', 'Europe/Berlin'));
         $holding = StockHolding::factory()->create(['symbol' => 'AMES', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR',
             'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Berlin']);

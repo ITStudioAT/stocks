@@ -28,6 +28,7 @@ class StockResearchCurrentEvents
             'version' => 1,
             'captured_at' => $capturedAt,
             'etf' => [
+                'source_markers' => $evidence['etf_snapshot']['source_markers'] ?? MarketDataProvenance::forRecord($evidence['etf_snapshot'] ?? []),
                 'classification' => $this->string($evidence['etf_snapshot']['classification'] ?? null),
                 'scope' => $this->positionScope($evidence['etf_snapshot']['positions'] ?? []),
                 'data_as_of' => $this->dateTimeOrDate($evidence['etf_snapshot']['source_as_of'] ?? null),
@@ -59,7 +60,7 @@ class StockResearchCurrentEvents
             $comparisonSnapshotId,
         );
 
-        return [
+        $result = [
             'version' => 1,
             'calculated_at' => $currentSnapshot['captured_at'],
             'history_usage' => 'comparison_only',
@@ -84,6 +85,28 @@ class StockResearchCurrentEvents
             )),
             'data_coverage' => $this->dataCoverage($evidence),
         ];
+        $annotate = function (array $event) use (&$annotate, $evidence, $currentSnapshot): array {
+            foreach ($event as $key => $value) {
+                if (is_array($value)) {
+                    $event[$key] = $annotate($value);
+                }
+            }
+            if (isset($event['source_datasets'])) {
+                $markers = $event['source_markers'] ?? MarketDataProvenance::forRecord($event);
+                foreach ($event['source_datasets'] ?? [] as $dataset) {
+                    if ($dataset === 'etf_snapshot') {
+                        $markers = MarketDataProvenance::merge($markers, $currentSnapshot['etf']['source_markers'] ?? []);
+                    } elseif ($dataset !== 'structured_guidance' && ! empty($evidence[$dataset])) {
+                        $markers = MarketDataProvenance::merge($markers, MarketDataProvenance::markers($evidence['provider'] ?? null));
+                    }
+                }
+                $event['source_markers'] = $markers;
+            }
+
+            return $event;
+        };
+
+        return MarketDataProvenance::decorate($annotate($result));
     }
 
     /**
@@ -390,6 +413,7 @@ class StockResearchCurrentEvents
             ->filter(fn (mixed $item): bool => is_array($item))
             ->map(fn (array $item): array => [
                 'dataset' => $this->string($item['dataset'] ?? null),
+                'source_markers' => $item['source_markers'] ?? (in_array($item['status'] ?? null, ['fresh', 'cached_fresh', 'stale_cache'], true) ? MarketDataProvenance::markers($evidence['provider'] ?? null) : []),
                 'symbol' => $this->string($item['symbol'] ?? null),
                 'status' => $this->string($item['status'] ?? null) ?? 'unknown',
                 'retrieved_at' => $this->dateTime($item['retrieved_at'] ?? null),
@@ -486,6 +510,7 @@ class StockResearchCurrentEvents
                 'freshness' => $current['freshness'] ?? 'current',
                 'coverage' => 'complete',
                 'source_datasets' => ['structured_guidance'],
+                'source_markers' => $current['source_markers'] ?? [],
                 'source_title' => $current['source_title'] ?? null,
                 'source_url' => $current['source_url'] ?? null,
                 'comparison_snapshot_id' => $comparisonSnapshotId,
@@ -816,6 +841,7 @@ class StockResearchCurrentEvents
                 'data_as_of' => $this->dateTimeOrDate($record['data_as_of'] ?? null),
                 'freshness' => $this->string($record['freshness'] ?? null),
                 'source_title' => $this->string($record['source_title'] ?? null),
+                'source_markers' => $record['source_markers'] ?? MarketDataProvenance::forRecord($record),
                 'source_url' => $this->string($record['source_url'] ?? null),
             ];
         }

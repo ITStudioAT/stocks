@@ -1469,7 +1469,7 @@ class V2IndexEodhdSyncService
                     'last_price' => $this->decimal(Arr::get($record, 'adjusted_close')) ?? $close,
                     'actual_price_as_of' => $asOf,
                     'last_price_as_of' => $asOf,
-                    'raw_payload' => $record,
+                    'raw_payload' => [...$record, '_source' => 'EODHD'],
                     'created_at' => $now,
                     'updated_at' => $now,
                 ];
