@@ -48,7 +48,7 @@ class PerformanceReadPathsTest extends TestCase
         $batchCount = count(DB::getQueryLog());
         $this->assertLessThanOrEqual($singleCount + 2, $batchCount, "Query count grew from {$singleCount} to {$batchCount}.");
 
-        StockRealtimePrice::factory()->create(['stock_holding_id' => $holding->id, 'price' => 105, 'as_of' => '2026-06-05 13:00:00']);
+        StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->create(['stock_holding_id' => $holding->id, 'price' => 105, 'as_of' => '2026-06-05 13:00:00']);
         $prices = collect($this->getJson($path)->assertOk()->json('holdings'))->keyBy('id');
         $this->assertSame('105.000000', $prices[$holding->id]['latest_price']);
         DB::disableQueryLog();
@@ -70,14 +70,14 @@ class PerformanceReadPathsTest extends TestCase
         DB::disableQueryLog();
     }
 
-    public function test_shared_instrument_fallbacks_keep_each_holdings_own_date_cutoff(): void
+    public function test_shared_instruments_do_not_use_unverified_or_stale_fallbacks(): void
     {
         $this->signIn();
         $this->travelTo(Carbon::parse('2026-06-05 14:00:00', 'Europe/Vienna'));
         $first = StockHolding::factory()->create(['isin' => null, 'wkn' => null, 'symbol' => 'SHARED']);
         $second = StockHolding::factory()->create(['isin' => null, 'wkn' => null, 'symbol' => 'SHARED']);
-        StockRealtimePrice::factory()->create(['stock_holding_id' => $first->id, 'as_of' => '2026-06-05 12:00:00']);
-        StockRealtimePrice::factory()->create(['stock_holding_id' => $second->id, 'as_of' => '2026-06-04 12:00:00']);
+        StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->create(['stock_holding_id' => $first->id, 'as_of' => '2026-06-05 12:00:00']);
+        StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->create(['stock_holding_id' => $second->id, 'as_of' => '2026-06-04 12:00:00']);
         foreach ([3, 4] as $day) {
             StockPrice::factory()->create([
                 'instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($first),
@@ -86,8 +86,8 @@ class PerformanceReadPathsTest extends TestCase
             ]);
         }
         $holdings = collect($this->getJson('/admin/watchlist/holdings?all=1')->assertOk()->json('holdings'))->keyBy('id');
-        $this->assertSame('104.000000', $holdings[$first->id]['end_price_24']);
-        $this->assertSame('103.000000', $holdings[$second->id]['end_price_24']);
+        $this->assertNull($holdings[$first->id]['end_price_24']);
+        $this->assertNull($holdings[$second->id]['end_price_24']);
     }
 
     public function test_lightweight_end_of_day_status_matches_detailed_coverage_at_day_boundaries(): void
@@ -115,7 +115,7 @@ class PerformanceReadPathsTest extends TestCase
             foreach ([10, 11] as $hour) {
                 StockHoldingIntradayCandle::query()->create([
                     'stock_holding_id' => $holding->id, 'trading_date' => '2026-06-05',
-                    'interval' => '5m', 'source_key' => 'eodhd_intraday', 'close' => 100 + $hour,
+                    'interval' => '5m', 'source_key' => 'yahoo_intraday', 'close' => 100 + $hour,
                     'as_of' => "2026-06-05 {$hour}:00:00",
                 ]);
             }
@@ -139,7 +139,7 @@ class PerformanceReadPathsTest extends TestCase
     public function test_index_chart_refresh_is_queued_once_and_reports_worker_failure(): void
     {
         $this->signIn();
-        config(['services.eodhd.key' => 'test-token']);
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true, 'services.eodhd.key' => 'test-token']);
         Queue::fake();
         Http::fake();
         $item = IndexWatchItem::factory()->create();
@@ -160,10 +160,10 @@ class PerformanceReadPathsTest extends TestCase
         $this->signIn();
         $this->travelTo(Carbon::parse('2026-06-05 14:00:00', 'Europe/Vienna'));
         $holding = StockHolding::factory()->create();
-        StockHoldingIntradayCandle::query()->create(['stock_holding_id' => $holding->id, 'trading_date' => '2026-06-03', 'interval' => '5m', 'source_key' => 'eodhd_intraday', 'as_of' => '2026-06-03 10:00:00', 'close' => 100]);
+        StockHoldingIntradayCandle::query()->create(['stock_holding_id' => $holding->id, 'trading_date' => '2026-06-03', 'interval' => '5m', 'source_key' => 'yahoo_intraday', 'as_of' => '2026-06-03 10:00:00', 'close' => 100]);
         $path = '/admin/data/stocks/intraday-data/date-range';
         $this->getJson($path)->assertOk()->assertJsonPath('range.row_count', 1);
-        StockHoldingIntradayCandle::query()->create(['stock_holding_id' => $holding->id, 'trading_date' => '2026-06-04', 'interval' => '5m', 'source_key' => 'eodhd_intraday', 'as_of' => '2026-06-04 10:00:00', 'close' => 100]);
+        StockHoldingIntradayCandle::query()->create(['stock_holding_id' => $holding->id, 'trading_date' => '2026-06-04', 'interval' => '5m', 'source_key' => 'yahoo_intraday', 'as_of' => '2026-06-04 10:00:00', 'close' => 100]);
         DB::enableQueryLog();
         DB::flushQueryLog();
         $this->getJson($path)->assertOk()->assertJsonPath('range.row_count', 1);
@@ -181,7 +181,7 @@ class PerformanceReadPathsTest extends TestCase
         config(['services.eodhd.key' => 'test-token']);
         Queue::fake();
         Http::fake();
-        $holding = StockHolding::factory()->create(['trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna']);
+        $holding = StockHolding::factory()->create(['exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR', 'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna']);
         $path = "/admin/watchlist/holdings/charts?include_charts=1&chart_stock_id={$holding->id}";
         $this->getJson('/admin/watchlist/holdings?include_charts=1')->assertOk();
         Queue::assertNothingPushed();
@@ -207,7 +207,7 @@ class PerformanceReadPathsTest extends TestCase
         $this->travelTo(Carbon::parse('2026-06-05 18:10:00', 'Europe/Vienna'));
         $holding = StockHolding::factory()->create();
         foreach (['2026-06-03', '2026-06-04'] as $date) {
-            StockHoldingIntradayCandle::query()->create(['stock_holding_id' => $holding->id, 'trading_date' => $date, 'interval' => '5m', 'source_key' => 'eodhd_intraday', 'close' => 100, 'as_of' => $date.' 10:00:00']);
+            StockHoldingIntradayCandle::query()->create(['stock_holding_id' => $holding->id, 'trading_date' => $date, 'interval' => '5m', 'source_key' => 'yahoo_intraday', 'close' => 100, 'as_of' => $date.' 10:00:00']);
         }
         DB::enableQueryLog();
         DB::flushQueryLog();
@@ -227,8 +227,8 @@ class PerformanceReadPathsTest extends TestCase
 
     private function holdingWithPrices(): StockHolding
     {
-        $holding = StockHolding::factory()->create(['trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna']);
-        StockRealtimePrice::factory()->create(['stock_holding_id' => $holding->id, 'price' => 102, 'as_of' => '2026-06-05 11:00:00']);
+        $holding = StockHolding::factory()->create(['exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR', 'trading_times' => 'Monday-Friday 09:00-17:30 Europe/Vienna']);
+        StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->create(['stock_holding_id' => $holding->id, 'price' => 102, 'as_of' => '2026-06-05 11:00:00']);
         StockHoldingDailyPrice::factory()->create(['stock_holding_id' => $holding->id, 'trading_date' => '2026-06-04', 'close' => 101]);
         StockPrice::factory()->create(['instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($holding), 'source_key' => 'eodhd_eod', 'price_type' => 'historical_eod', 'price' => 101, 'as_of' => '2026-06-04 19:00:00']);
 

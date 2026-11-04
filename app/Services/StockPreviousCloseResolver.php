@@ -3,200 +3,187 @@
 namespace App\Services;
 
 use App\Models\StockHolding;
-use App\Models\StockHoldingDailyPrice;
+use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockPrice;
 use App\Models\StockRealtimePrice;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
 class StockPreviousCloseResolver
 {
-    private const Timezone = 'Europe/Vienna';
+    public const FreeSources = ['deutsche_boerse_trade', 'xetra_posttrade', 'yahoo_intraday', 'yahoo_xetra_intraday'];
 
-    public function __construct(
-        private StockPriceCatalog $stockPriceCatalog,
-    ) {}
+    public function __construct(private StockPriceCatalog $stockPriceCatalog, private FreeTradingCalendar $calendar) {}
 
     /** @param Collection<int, StockHolding> $holdings */
-    public function prime(Collection $holdings): void
+    public function prime(Collection $holdings, ?Carbon $reference = null, ?Carbon $from = null): void
     {
-        $keys = $holdings->map(fn (StockHolding $holding): string => $this->stockPriceCatalog->instrumentKeyForHolding($holding));
-        $prices = StockPrice::query()->whereIn('instrument_key', $keys)
-            ->where('source_key', 'eodhd_eod')->where('price_type', 'historical_eod')
-            ->whereNotNull('price')->whereNotNull('as_of')
-            ->orderByDesc('as_of')->orderByDesc('fetched_at')->orderByDesc('id')
-            ->get(['id', 'instrument_key', 'source_key', 'price_type', 'price', 'as_of', 'fetched_at'])
-            ->groupBy('instrument_key');
+        $from = ($from ?? ($reference ?? now())->copy()->subDays(14))->copy()->utc();
+        $until = ($reference ?? now())->copy()->addDay()->utc();
+        $prices = $this->dailyRecords(StockPrice::query()->whereIn('instrument_key', $holdings->map(fn (StockHolding $holding): string => $this->stockPriceCatalog->instrumentKeyForHolding($holding)))
+            ->whereIn('source_key', self::FreeSources)->where('as_of', '>=', $from)->where('as_of', '<', $until), 'instrument_key', $holdings->mapWithKeys(fn (StockHolding $holding): array => [$this->stockPriceCatalog->instrumentKeyForHolding($holding) => $holding->currency])->all())->groupBy('instrument_key');
+        $quotes = $this->dailyRecords(StockRealtimePrice::query()->whereIn('stock_holding_id', $holdings->pluck('id')->all())
+            ->whereIn('source_key', self::FreeSources)->where('as_of', '>=', $from)->where('as_of', '<', $until), 'stock_holding_id', $holdings->pluck('currency', 'id')->all())->groupBy('stock_holding_id');
+        $candles = $this->dailyRecords(StockHoldingIntradayCandle::query()->whereIn('stock_holding_id', $holdings->pluck('id')->all())
+            ->whereIn('source_key', self::FreeSources)->where('as_of', '>=', $from)->where('as_of', '<', $until), 'stock_holding_id', $holdings->pluck('currency', 'id')->all())->groupBy('stock_holding_id');
 
         foreach ($holdings as $holding) {
-            $holding->setRelation('readStockPrices', $prices->get($this->stockPriceCatalog->instrumentKeyForHolding($holding), collect()));
+            $observations = collect($prices->get($this->stockPriceCatalog->instrumentKeyForHolding($holding), collect())->all())
+                ->concat($quotes->get($holding->id, collect()))->concat($candles->get($holding->id, collect()));
+            $holding->setRelation('readPreviousCloseObservations', $observations);
         }
     }
 
     /**
-     * @return array{
-     *     previous_close: ?string,
-     *     previous_close_date: ?string,
-     *     earlier_close: ?string,
-     *     earlier_close_date: ?string,
-     * }
+     * Last observed free prices on the expected venue days; never official closes.
+     *
+     * @return array{previous_close: ?string, previous_close_date: ?string, previous_close_source_markers: array<int, string>, earlier_close: ?string, earlier_close_date: ?string, earlier_close_source_markers: array<int, string>}
      */
-    public function resolve(StockHolding $holding, Carbon|string|null $currentTradingDate): array
+    public function resolve(StockHolding $holding): array
     {
-        $cutoff = $this->cutoff($currentTradingDate);
-        $officialCloses = $this->officialCloses($holding, $cutoff);
-        $previousClose = $officialCloses->get(0);
-        $earlierClose = $officialCloses->get(1);
-
-        if ($previousClose instanceof StockPrice) {
-            return [
-                'previous_close' => $previousClose->price,
-                'previous_close_date' => $this->stockPriceDate($previousClose),
-                'previous_close_source_markers' => ['EODHD'],
-                'earlier_close' => $earlierClose instanceof StockPrice ? $earlierClose->price : null,
-                'earlier_close_date' => $earlierClose instanceof StockPrice ? $this->stockPriceDate($earlierClose) : null,
-                'earlier_close_source_markers' => $earlierClose instanceof StockPrice ? ['EODHD'] : [],
-            ];
-        }
-
-        $fallback = $this->fallbackClose($holding, $cutoff);
+        $timezone = $this->calendar->timezone($holding);
+        $reference = now($timezone ?? 'Europe/Vienna')->startOfDay();
+        $previousDay = $this->calendar->previousDay($holding, $reference);
+        $earlierDay = $previousDay === null ? null : $this->calendar->previousDay($holding, $previousDay);
+        $observations = $previousDay === null ? collect() : $this->observations($holding, $earlierDay ?? $previousDay, $reference);
+        $previous = $previousDay === null ? null : $this->lastObservation($holding, $observations, $previousDay);
+        $earlier = $earlierDay === null ? null : $this->lastObservation($holding, $observations, $earlierDay);
 
         return [
-            'previous_close' => $fallback['price'],
-            'previous_close_date' => $fallback['date'],
-            'previous_close_source_markers' => $fallback['source_markers'],
-            'earlier_close' => null,
-            'earlier_close_date' => null,
-            'earlier_close_source_markers' => [],
+            'previous_close' => $previous,
+            'previous_close_date' => $previousDay?->toDateString(),
+            'previous_close_source_markers' => $previous === null ? [] : ['free'],
+            'earlier_close' => $earlier,
+            'earlier_close_date' => $earlierDay?->toDateString(),
+            'earlier_close_source_markers' => $earlier === null ? [] : ['free'],
         ];
     }
 
-    /**
-     * @return Collection<int, StockPrice>
-     */
-    private function officialCloses(StockHolding $holding, ?Carbon $cutoff): Collection
+    public function comparisonReference(StockHolding $holding, Carbon|string|null $asOf, ?string $previousPrice, ?string $previousDate): ?string
     {
-        $prices = $holding->relationLoaded('readStockPrices')
-            ? $holding->readStockPrices->filter(fn (StockPrice $price): bool => $price->source_key === 'eodhd_eod'
-                && $price->price_type === 'historical_eod' && ($cutoff === null || Carbon::parse($price->getRawOriginal('as_of'), 'UTC')->lt($cutoff->copy()->utc())))
-            : $this->stockPriceCatalog->pricesForHolding($holding)
-                ->where('source_key', 'eodhd_eod')
-                ->where('price_type', 'historical_eod')
-                ->whereNotNull('price')
-                ->whereNotNull('as_of')
-                ->when($cutoff !== null, fn ($query) => $query->where('as_of', '<', $cutoff->copy()->utc()))
-                ->orderByDesc('as_of')
-                ->orderByDesc('fetched_at')
-                ->orderByDesc('id')
-                ->get(['id', 'price', 'as_of', 'fetched_at']);
+        $timezone = $this->calendar->timezone($holding);
 
-        return $prices
-            ->unique(fn (StockPrice $stockPrice): string => $this->stockPriceDate($stockPrice) ?? "row-{$stockPrice->id}")
-            ->take(2)
-            ->values();
-    }
-
-    /**
-     * @return array{price: ?string, date: ?string}
-     */
-    private function fallbackClose(StockHolding $holding, ?Carbon $cutoff): array
-    {
-        $dailyPrice = $holding->relationLoaded('readPreviousDailyPrice')
-            ? $holding->readPreviousDailyPrice
-            : StockHoldingDailyPrice::query()
-                ->where('stock_holding_id', $holding->id)
-                ->where(function ($query): void {
-                    $query
-                        ->whereNotNull('close')
-                        ->orWhereNotNull('adjusted_close');
-                })
-                ->when($cutoff !== null, fn ($query) => $query->where('trading_date', '<', $cutoff->toDateString()))
-                ->orderByDesc('trading_date')
-                ->orderByDesc('id')
-                ->first(['id', 'trading_date', 'close', 'adjusted_close', 'source_key', 'source_name']);
-
-        if ($cutoff === null) {
-            return [
-                'price' => $dailyPrice?->close ?? $dailyPrice?->adjusted_close,
-                'date' => $dailyPrice?->trading_date?->toDateString(),
-                'source_markers' => MarketDataProvenance::forRecord($dailyPrice),
-            ];
-        }
-
-        $storedPrice = $holding->relationLoaded('readFallbackStockPrice')
-            ? $holding->readFallbackStockPrice
-            : $this->stockPriceCatalog->pricesForHolding($holding)
-                ->whereNotNull('price')
-                ->whereNotNull('as_of')
-                ->where('as_of', '<', $cutoff->copy()->utc())
-                ->orderByDesc('as_of')
-                ->orderByDesc('fetched_at')
-                ->orderByDesc('id')
-                ->first(['id', 'price', 'as_of', 'source_key', 'source_name']);
-        $realtimePrice = $holding->relationLoaded('readRealtimePrices')
-            ? $holding->readRealtimePrices->filter(fn (StockRealtimePrice $price): bool => Carbon::parse($price->getRawOriginal('as_of'), 'UTC')->lt($cutoff->copy()->utc()))->last()
-            : StockRealtimePrice::query()
-                ->where('stock_holding_id', $holding->id)
-                ->whereNotNull('price')
-                ->whereNotNull('as_of')
-                ->where('as_of', '<', $cutoff->copy()->utc())
-                ->orderByDesc('as_of')
-                ->orderByDesc('id')
-                ->first(['id', 'price', 'as_of', 'source_key', 'source_name']);
-        $realtimeDate = $realtimePrice === null ? null : $this->storedDate($realtimePrice, 'as_of');
-        $storedPriceDate = $storedPrice === null ? null : $this->storedDate($storedPrice, 'as_of');
-        $dailyDate = $dailyPrice?->trading_date?->copy()->startOfDay();
-
-        if ($storedPrice?->price !== null && $storedPriceDate !== null && ($dailyDate === null || $storedPriceDate->gte($dailyDate))) {
-            $dailyPrice = null;
-            $dailyDate = $storedPriceDate;
-        }
-
-        if ($realtimePrice?->price !== null && $realtimeDate !== null && ($dailyDate === null || $realtimeDate->gte($dailyDate))) {
-            return [
-                'price' => $realtimePrice->price,
-                'date' => $realtimeDate->toDateString(),
-                'source_markers' => MarketDataProvenance::forRecord($realtimePrice),
-            ];
-        }
-
-        if ($storedPrice?->price !== null && $storedPriceDate !== null && $storedPriceDate->equalTo($dailyDate)) {
-            return [
-                'price' => $storedPrice->price,
-                'date' => $storedPriceDate->toDateString(),
-                'source_markers' => MarketDataProvenance::forRecord($storedPrice),
-            ];
-        }
-
-        return [
-            'price' => $dailyPrice?->close ?? $dailyPrice?->adjusted_close,
-            'date' => $dailyPrice?->trading_date?->toDateString(),
-            'source_markers' => MarketDataProvenance::forRecord($dailyPrice),
-        ];
-    }
-
-    private function cutoff(Carbon|string|null $currentTradingDate): ?Carbon
-    {
-        if ($currentTradingDate === null) {
+        if ($timezone === null || $asOf === null || $previousPrice === null || $previousDate === null) {
             return null;
         }
 
-        return Carbon::parse($currentTradingDate, self::Timezone)->startOfDay();
+        $date = Carbon::parse($asOf, 'UTC')->setTimezone($timezone)->toDateString();
+
+        return $date > $previousDate && $date <= now($timezone)->toDateString() ? $previousPrice : null;
     }
 
-    private function stockPriceDate(StockPrice $stockPrice): ?string
+    public function latestObservation(StockHolding $holding): StockPrice|StockRealtimePrice|StockHoldingIntradayCandle|null
     {
-        return $this->storedDate($stockPrice, 'as_of')?->toDateString();
+        $observations = $holding->relationLoaded('readPreviousCloseObservations')
+            ? $holding->readPreviousCloseObservations
+            : $this->observations($holding, now()->subDays(14), now()->addDay());
+
+        return $observations->filter(fn ($record): bool => is_numeric($record->price ?? $record->close) && (float) ($record->price ?? $record->close) > 0
+            && $record->currency === $holding->currency && in_array($record->source_key, self::FreeSources, true)
+            && ! ($record->raw_payload['quarantined'] ?? false)
+            && ! in_array($record->validation_status, ['invalid', 'rejected'], true))
+            ->sortByDesc(fn ($record): string => ($record->getRawOriginal('as_of') ?? '').'|'.($record->getRawOriginal('fetched_at') ?? ''))->first();
     }
 
-    private function storedDate(StockPrice|StockRealtimePrice $stockPrice, string $column): ?Carbon
+    public function latestPrice(StockHolding $holding): ?string
     {
-        $value = $stockPrice->getRawOriginal($column);
+        $record = $this->latestObservation($holding);
 
-        if ($value === null || trim((string) $value) === '') {
+        if ($record !== null) {
+            return (string) ($record->price ?? $record->close);
+        }
+
+        return MarketDataProvenance::markers($holding->latest_price_source) === ['free'] ? $holding->latest_price : null;
+    }
+
+    public function priceAt(StockHolding $holding, Carbon $cutoff): ?string
+    {
+        $timezone = $this->calendar->timezone($holding);
+
+        if ($timezone === null) {
             return null;
         }
 
-        return Carbon::parse((string) $value, 'UTC')->setTimezone(self::Timezone)->startOfDay();
+        $day = $this->calendar->previousDay($holding, $cutoff->copy()->setTimezone($timezone)->startOfDay()->addDay());
+
+        if ($day === null) {
+            return null;
+        }
+
+        return $this->lastObservation($holding, $this->observations($holding, $day, $day->copy()->addDay()), $day);
+    }
+
+    /**
+     * @param  array<int|string, string|null>  $currencies
+     * @return Collection<int, StockPrice|StockRealtimePrice|StockHoldingIntradayCandle>
+     */
+    private function dailyRecords(Builder $query, string $partition, array $currencies): Collection
+    {
+        $query->where(function (Builder $query) use ($partition, $currencies): void {
+            $query->whereRaw('1 = 0');
+
+            foreach ($currencies as $identity => $currency) {
+                $query->orWhere(fn (Builder $query) => $query->where($partition, $identity)->where('currency', $currency));
+            }
+        });
+        $model = $query->getModel();
+        $table = $model->getTable();
+        $query->where(fn ($query) => $query->whereNull('raw_payload->quarantined')->orWhere('raw_payload->quarantined', false));
+
+        if (! $model instanceof StockHoldingIntradayCandle) {
+            $query->whereNotNull('price')->where('price', '>', 0)
+                ->where(fn ($query) => $query->whereNull('validation_status')->orWhereNotIn('validation_status', ['invalid', 'rejected']));
+        } else {
+            $query->whereNotNull('close')->where('close', '>', 0);
+        }
+
+        $order = $model instanceof StockHoldingIntradayCandle ? 'as_of DESC, id DESC' : 'as_of DESC, fetched_at DESC, id DESC';
+        $columns = ['id', 'source_key', 'source_name', 'source_url', 'currency', 'as_of', 'created_at', 'updated_at'];
+        $columns = [...$columns, ...($model instanceof StockHoldingIntradayCandle
+            ? ['stock_holding_id', 'close', 'trading_date', 'interval']
+            : [$model instanceof StockPrice ? 'instrument_key' : 'stock_holding_id', 'price', 'fetched_at', 'validation_status', 'freshness_status'])];
+        $ranked = $query->select(array_map(fn (string $column): string => "{$table}.{$column}", $columns))
+            ->selectRaw("ROW_NUMBER() OVER (PARTITION BY {$partition}, SUBSTR(as_of, 1, 13) ORDER BY {$order}) AS observation_rank");
+
+        return $model->newQueryWithoutScopes()->fromSub($ranked, $table)->where('observation_rank', 1)->get();
+    }
+
+    /** @return Collection<int, StockPrice|StockRealtimePrice|StockHoldingIntradayCandle> */
+    private function observations(StockHolding $holding, Carbon $from, Carbon $until): Collection
+    {
+        if ($holding->relationLoaded('readPreviousCloseObservations')) {
+            return $holding->readPreviousCloseObservations;
+        }
+
+        $from = $from->copy()->utc();
+        $until = $until->copy()->utc();
+        $prices = $this->stockPriceCatalog->pricesForHolding($holding)->whereIn('source_key', self::FreeSources)
+            ->where('as_of', '>=', $from)->where('as_of', '<', $until)->get();
+        $quotes = StockRealtimePrice::query()->where('stock_holding_id', $holding->id)->whereIn('source_key', self::FreeSources)
+            ->where('as_of', '>=', $from)->where('as_of', '<', $until)->get();
+        $candles = StockHoldingIntradayCandle::query()->where('stock_holding_id', $holding->id)->whereIn('source_key', self::FreeSources)
+            ->where('as_of', '>=', $from)->where('as_of', '<', $until)->get();
+
+        return collect($prices->all())->concat($quotes)->concat($candles);
+    }
+
+    /** @param Collection<int, StockPrice|StockRealtimePrice|StockHoldingIntradayCandle> $observations */
+    private function lastObservation(StockHolding $holding, Collection $observations, Carbon $day): ?string
+    {
+        $from = $day->copy()->utc()->toDateTimeString();
+        $until = $day->copy()->addDay()->utc()->toDateTimeString();
+        $observation = $observations->filter(function ($record) use ($holding, $from, $until): bool {
+            $asOf = $record->getRawOriginal('as_of');
+            $price = $record instanceof StockHoldingIntradayCandle ? $record->close : $record->price;
+
+            return $asOf !== null && $asOf >= $from && $asOf < $until
+                && is_numeric($price) && (float) $price > 0 && $record->currency === $holding->currency
+                && in_array($record->source_key, self::FreeSources, true)
+                && ! ($record->raw_payload['quarantined'] ?? false)
+                && ! in_array($record->validation_status, ['invalid', 'rejected'], true);
+        })->sortByDesc(fn ($record): string => $record->getRawOriginal('as_of').'|'.($record->getRawOriginal('fetched_at') ?? ''))->first();
+
+        return $observation === null ? null : (string) ($observation instanceof StockHoldingIntradayCandle ? $observation->close : $observation->price);
     }
 }

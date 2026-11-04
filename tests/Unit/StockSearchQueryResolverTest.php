@@ -14,6 +14,7 @@ class StockSearchQueryResolverTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
 
         Http::preventStrayRequests();
     }

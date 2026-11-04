@@ -55,6 +55,17 @@ class PublicMarketDataTest extends TestCase
             ->assertJsonPath('sign', 1);
     }
 
+    public function test_public_indices_label_retained_paid_quotes_with_their_actual_timestamp(): void
+    {
+        IndexWatchItem::factory()->create(['symbol' => 'DAX', 'latest_price' => 24000,
+            'latest_price_source' => 'EODHD real-time', 'latest_price_as_of' => '2026-11-03 12:00:00']);
+
+        $this->getJson('/indices')->assertOk()
+            ->assertJsonPath('indexes.0.quote_status', 'stored')
+            ->assertJsonPath('indexes.0.latest_price', '24000.0000')
+            ->assertJsonPath('indexes.0.latest_price_as_of', '2026-11-03T12:00:00+00:00');
+    }
+
     public function test_public_market_responses_are_cached(): void
     {
         $index = IndexWatchItem::factory()->create(['latest_price_change_pct' => '1.000000']);

@@ -78,7 +78,7 @@ class CloudwaysApiClient
         $response = $this->request()
             ->retry(
                 [250, 750],
-                fn (Throwable $exception): bool => $exception instanceof ConnectionException
+                when: fn (Throwable $exception): bool => $exception instanceof ConnectionException
                     || ($exception instanceof RequestException && $exception->response->serverError()),
             )
             ->get('/git/history', [

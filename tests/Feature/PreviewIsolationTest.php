@@ -35,6 +35,12 @@ use Tests\TestCase;
 
 class PreviewIsolationTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_non_preview_requests_keep_their_existing_behavior(): void
     {
         $this->assertFalse(app(PreviewIsolation::class)->active());

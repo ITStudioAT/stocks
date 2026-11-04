@@ -17,6 +17,12 @@ class EodhdMarketDataTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_source_keys_include_all_eodhd_storage_sources(): void
     {
         $this->assertSame([

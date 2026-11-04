@@ -17,6 +17,12 @@ class AdminDataEndOfDaySyncTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_admin_can_sync_missing_eodhd_end_of_day_prices(): void
     {
         config(['services.eodhd.key' => 'test-token']);

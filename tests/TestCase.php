@@ -24,6 +24,7 @@ abstract class TestCase extends BaseTestCase
 
         parent::setUp();
 
+        Http::preventStrayRequests();
         config(['services.free_intraday.request_interval_ms' => 0]);
 
         $this->withoutVite();

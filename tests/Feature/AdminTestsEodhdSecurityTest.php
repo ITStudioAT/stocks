@@ -12,6 +12,12 @@ class AdminTestsEodhdSecurityTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_ticker_provider_errors_do_not_expose_eodhd_tokens(): void
     {
         config(['services.eodhd.key' => 'configured-ticker-secret']);

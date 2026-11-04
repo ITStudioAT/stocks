@@ -208,6 +208,15 @@ function formatTickerPrice(item) {
     return formatPriceValue(item.latest_price, item.currency);
 }
 
+function formatTickerAsOf(item) {
+    const timestamp = Date.parse(item.latest_price_as_of ?? '');
+    if (!Number.isFinite(timestamp)) {
+        return 'date unavailable';
+    }
+
+    return new Intl.DateTimeFormat('de-AT', { timeZone: 'Europe/Vienna', dateStyle: 'short', timeStyle: 'short' }).format(timestamp);
+}
+
 function formatTickerChange(item) {
     if (item.latest_price_change_pct == null) return null;
     const num = Number(item.latest_price_change_pct);
@@ -332,6 +341,7 @@ onUnmounted(() => {
                         :class="{ 'is-updated': updatedSymbols.has(item.symbol) }"
                     >
                         <span class="ticker-symbol">{{ item.symbol }}</span>
+                        <span v-if="item.quote_status === 'stored'" class="ticker-country">Stored · {{ formatTickerAsOf(item) }}</span>
                         <span v-if="item.country" class="ticker-country">{{ item.country }}</span>
                         <span class="ticker-price">{{ formatTickerPrice(item) }} <DataSourceMarkers :markers="marketDataMarkers(item, 'latest_price')" /></span>
                         <span

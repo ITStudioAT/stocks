@@ -23,6 +23,12 @@ class AdminV2IndexEodhdSyncTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_invalid_api_token_stops_the_sync_after_the_first_request(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-08-10 10:00:00', 'Europe/Vienna'));

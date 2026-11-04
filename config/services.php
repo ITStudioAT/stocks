@@ -102,8 +102,12 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    'market_data' => [
+        'free_only' => true,
+    ],
+
     'eodhd' => [
-        'enabled' => env('EODHD_ENABLED', true),
+        'enabled' => false,
         'key' => env('EODHD_API'),
         'base_url' => env('EODHD_BASE_URL', 'https://eodhd.com/api'),
         'connect_timeout' => env('EODHD_CONNECT_TIMEOUT', 5),

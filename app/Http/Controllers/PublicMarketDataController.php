@@ -3,14 +3,16 @@
 namespace App\Http\Controllers;
 
 use App\Models\IndexWatchItem;
+use App\Services\MarketDataProvenance;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 
 class PublicMarketDataController extends Controller
 {
     public function indices(): JsonResponse
     {
-        $indexes = Cache::remember('public-market.indices.v2', now()->addMinutes(5), fn (): array => IndexWatchItem::query()
+        $indexes = Cache::remember('public-market.indices.v3', now()->addMinutes(5), fn (): array => IndexWatchItem::query()
             ->orderBy('symbol')
             ->get([
                 'symbol',
@@ -19,10 +21,14 @@ class PublicMarketDataController extends Controller
                 'currency',
                 'latest_price',
                 'latest_price_source',
+                'latest_price_as_of',
                 'latest_price_change_pct',
             ])
             ->map(fn (IndexWatchItem $item): array => [
                 'symbol' => $item->symbol,
+                'latest_price_as_of' => $item->getRawOriginal('latest_price_as_of') === null
+                    ? null : Carbon::parse($item->getRawOriginal('latest_price_as_of'), 'UTC')->toIso8601String(),
+                'quote_status' => config('services.market_data.free_only', true) && MarketDataProvenance::markers($item->latest_price_source) !== ['free'] ? 'stored' : 'available',
                 'latest_price_source' => $item->latest_price_source,
                 'name' => $item->name,
                 'country' => $item->country,

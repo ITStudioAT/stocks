@@ -16,6 +16,7 @@ class EodhdStockResearchDataTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
 
         Cache::flush();
         $this->travelTo(Carbon::parse('2026-08-16 10:00:00', 'Europe/Vienna'));

@@ -935,6 +935,7 @@ class AdminDepotHoldingTest extends TestCase
         $this->travelTo(Carbon::parse('2026-06-04 10:00:00', 'Europe/Berlin'));
         $holding = StockHolding::factory()->create([
             'symbol' => 'LYXIB',
+            'exchange' => 'XETRA', 'mic_code' => 'XETR',
             'currency' => 'EUR',
             'latest_price' => '191.500000',
             'latest_price_fetched_at' => '2026-06-04 08:20:00',
@@ -966,15 +967,15 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.latest_price', '191.500000')
             ->assertJsonPath('holdings.0.start_price', '190.000000')
             ->assertJsonPath('holdings.0.end_price', '191.500000')
-            ->assertJsonPath('holdings.0.end_price_24', '194.500000')
-            ->assertJsonPath('holdings.0.end_price_48', '189.750000')
+            ->assertJsonPath('holdings.0.end_price_24', '193.000000')
+            ->assertJsonPath('holdings.0.end_price_48', '189.000000')
             ->assertJsonPath('holdings.0.start_price_date', '2026-06-04')
             ->assertJsonPath('holdings.0.end_price_date', '2026-06-04')
             ->assertJsonPath('holdings.0.end_price_24_date', '2026-06-03')
             ->assertJsonPath('holdings.0.end_price_48_date', '2026-06-02')
             ->assertJsonPath('holdings.0.historical_prices_fetching', false)
             ->assertJsonPath('holdings.0.latest_price_trend', 'down')
-            ->assertJsonPath('holdings.0.latest_price_change_pct', '-1.54');
+            ->assertJsonPath('holdings.0.latest_price_change_pct', '-0.78');
     }
 
     public function test_admin_listing_uses_realtime_price_for_end_price_when_it_is_newer_than_intraday_candle(): void
@@ -1039,9 +1040,9 @@ class AdminDepotHoldingTest extends TestCase
             ->assertOk()
             ->assertJsonPath('holdings.0.latest_price', '201.250000')
             ->assertJsonPath('holdings.0.start_price', '200.000000')
-            ->assertJsonPath('holdings.0.end_price_24', '90.000000')
+            ->assertJsonPath('holdings.0.end_price_24', null)
             ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-04T08:10:00+02:00')
-            ->assertJsonPath('holdings.0.latest_price_source', 'EODHD intraday')
+            ->assertJsonPath('holdings.0.latest_price_source', 'Yahoo Finance')
             ->assertJsonPath('holdings.0.price_type', 'intraday');
     }
 
@@ -1064,9 +1065,9 @@ class AdminDepotHoldingTest extends TestCase
             ->assertOk()
             ->assertJsonPath('holdings.0.latest_price', '103.750000')
             ->assertJsonPath('holdings.0.start_price', '102.500000')
-            ->assertJsonPath('holdings.0.end_price_24', '95.000000')
+            ->assertJsonPath('holdings.0.end_price_24', null)
             ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-05T08:15:00+00:00')
-            ->assertJsonPath('holdings.0.latest_price_source', 'EODHD real-time')
+            ->assertJsonPath('holdings.0.latest_price_source', 'Yahoo Finance')
             ->assertJsonPath('holdings.0.price_type', 'last');
     }
 
@@ -1415,7 +1416,7 @@ class AdminDepotHoldingTest extends TestCase
             ->assertOk()
             ->assertJsonPath('holdings.0.latest_price', '104.500000')
             ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-15T12:00:00+00:00')
-            ->assertJsonPath('holdings.0.latest_price_source', 'EODHD real-time')
+            ->assertJsonPath('holdings.0.latest_price_source', 'Yahoo Finance')
             ->assertJsonPath('holdings.0.recent_prices.0.price', '104.50000000');
     }
 
@@ -1969,8 +1970,8 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.start_price', '191.000000')
             ->assertJsonPath('holdings.0.end_price', '195.250000')
             ->assertJsonPath('holdings.0.latest_price', '195.250000')
-            ->assertJsonPath('holdings.0.latest_price_trend', 'up')
-            ->assertJsonPath('holdings.0.latest_price_change_pct', '2.23');
+            ->assertJsonPath('holdings.0.latest_price_trend', null)
+            ->assertJsonPath('holdings.0.latest_price_change_pct', null);
     }
 
     public function test_admin_listing_falls_back_to_latest_price_when_session_has_no_quotes(): void
@@ -1997,7 +1998,7 @@ class AdminDepotHoldingTest extends TestCase
             ->assertOk()
             ->assertJsonPath('holdings.0.latest_price', null)
             ->assertJsonPath('holdings.0.start_price', null)
-            ->assertJsonPath('holdings.0.end_price', '50.000000')
+            ->assertJsonPath('holdings.0.end_price', null)
             ->assertJsonPath('holdings.0.latest_price_trend', null)
             ->assertJsonPath('holdings.0.latest_price_change_pct', null);
     }
@@ -2031,10 +2032,10 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonPath('holdings.0.start_price', '100.000000')
             ->assertJsonPath('holdings.0.end_price', '110.000000')
             ->assertJsonPath('holdings.0.latest_price', '110.000000')
-            ->assertJsonPath('holdings.0.end_price_24', '100.000000')
-            ->assertJsonPath('holdings.0.end_price_24_date', '2026-06-03')
-            ->assertJsonPath('holdings.0.latest_price_trend', 'up')
-            ->assertJsonPath('holdings.0.latest_price_change_pct', '10.00');
+            ->assertJsonPath('holdings.0.end_price_24', null)
+            ->assertJsonPath('holdings.0.end_price_24_date', null)
+            ->assertJsonPath('holdings.0.latest_price_trend', null)
+            ->assertJsonPath('holdings.0.latest_price_change_pct', null);
     }
 
     public function test_admin_can_add_a_selected_stock_holding(): void
@@ -2706,8 +2707,8 @@ class AdminDepotHoldingTest extends TestCase
         return StockPrice::query()->create([
             'instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($holding),
             'quote_hash' => hash('sha256', "{$holding->id}|{$asOf}|{$price}|{$priceType}"),
-            'source_key' => 'eodhd_realtime',
-            'source_name' => 'EODHD real-time',
+            'source_key' => 'yahoo_intraday',
+            'source_name' => 'Yahoo Finance',
             'source_url' => 'https://example.com',
             'source_quality' => 'market_data_vendor',
             'isin' => $holding->isin,
@@ -2729,8 +2730,8 @@ class AdminDepotHoldingTest extends TestCase
             'stock_holding_id' => $holding->id,
             'instrument_key' => app(StockPriceCatalog::class)->instrumentKeyForHolding($holding),
             'quote_hash' => hash('sha256', "{$holding->id}|realtime|{$asOf}|{$price}|{$priceType}"),
-            'source_key' => 'eodhd_realtime',
-            'source_name' => 'EODHD real-time',
+            'source_key' => 'yahoo_intraday',
+            'source_name' => 'Yahoo Finance',
             'source_url' => 'https://example.com',
             'source_quality' => 'market_data_vendor',
             'isin' => $holding->isin,
@@ -2755,8 +2756,8 @@ class AdminDepotHoldingTest extends TestCase
             'as_of' => Carbon::parse($asOf, 'UTC'),
             'close' => $price,
             'currency' => $holding->currency,
-            'source_key' => 'eodhd_intraday',
-            'source_name' => 'EODHD intraday',
+            'source_key' => 'yahoo_intraday',
+            'source_name' => 'Yahoo Finance',
         ]);
     }
 

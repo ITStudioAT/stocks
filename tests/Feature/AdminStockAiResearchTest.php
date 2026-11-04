@@ -184,7 +184,7 @@ class AdminStockAiResearchTest extends TestCase
         );
     }
 
-    public function test_research_prompt_includes_current_eodhd_evidence_and_partial_coverage(): void
+    public function test_research_uses_public_evidence_without_paid_market_reactions(): void
     {
         Queue::fake();
         config(['services.eodhd.key' => 'eodhd-test-token']);
@@ -263,8 +263,8 @@ class AdminStockAiResearchTest extends TestCase
         $this->assertSame('issuer_reported_index_constituents', $research->calculation_snapshot['etf']['classification']);
         $this->assertCount(2, $research->calculation_snapshot['etf']['positions']);
         $this->assertSame('comparison_only', $research->calculated_events['history_usage']);
-        $this->assertSame(0.4967, $research->calculated_events['market_reactions'][0]['reaction_pct']);
-        $this->assertSame('latest_available_session', $research->calculated_events['market_reactions'][0]['session_label']);
+        $this->assertSame([], $research->calculated_events['market_reactions']);
+        Http::assertNothingSent();
         $this->assertSame(55, $research->analyst_consensus[0]['buy_pct']);
         $this->assertSame('hold', $research->recommendation);
         $this->assertSame(100, $research->recommendation_hold_pct);
@@ -281,7 +281,7 @@ class AdminStockAiResearchTest extends TestCase
         $this->actingAs($admin)
             ->getJson("/admin/dashboard/ai/stocks/{$holding->id}/researches/{$research->id}")
             ->assertOk()
-            ->assertJsonPath('research.calculated_events.market_reactions.0.reaction_pct', 0.4967)
+            ->assertJsonCount(0, 'research.calculated_events.market_reactions')
             ->assertJsonPath('research.calculated_events.history_usage', 'comparison_only')
             ->assertJsonPath('research.analyst_consensus.0.buy_pct', 55)
             ->assertJsonPath('research.recommendation', 'hold')
@@ -291,12 +291,11 @@ class AdminStockAiResearchTest extends TestCase
 
         StockResearchAgent::assertPrompted(
             fn (AgentPrompt $prompt): bool => str_contains($prompt->prompt, '"eodhd_current_evidence"')
-                && str_contains($prompt->prompt, '"status": "partial"')
-                && str_contains($prompt->prompt, 'Amundi publishes a current ETF notice')
-                && str_contains($prompt->prompt, '"recent_market_context"')
+                && str_contains($prompt->prompt, 'EODHD is disabled.')
+                && ! str_contains($prompt->prompt, 'Amundi publishes a current ETF notice')
                 && str_contains($prompt->prompt, '"server_calculated_current_events"')
-                && str_contains($prompt->prompt, '"reaction_pct": 0.4967')
-                && str_contains($prompt->prompt, '"unsupported_subscription"')
+                && ! str_contains($prompt->prompt, '"reaction_pct": 0.4967')
+                && str_contains($prompt->prompt, '"not_configured"')
                 && str_contains($prompt->prompt, '"preferred_web_domains"')
                 && str_contains($prompt->prompt, '"amundietf.com"')
                 && ! str_contains($prompt->prompt, '"allowed_web_domains"')

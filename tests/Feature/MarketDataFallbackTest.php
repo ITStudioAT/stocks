@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\StockHolding;
+use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockRealtimePrice;
 use App\Services\EodhdIntradayFallback;
 use App\Services\FreeIntradayMarketData;
@@ -28,18 +29,18 @@ class MarketDataFallbackTest extends TestCase
         Http::preventStrayRequests();
     }
 
-    public function test_missing_free_quote_uses_eodhd_for_only_the_requested_instrument(): void
+    public function test_missing_free_quote_does_not_request_a_paid_replacement(): void
     {
         $holding = $this->holding();
         $other = StockHolding::factory()->create();
         $this->mock(XetraIntradayCollector::class)->shouldReceive('collect')->andThrow(new RuntimeException('Free feed unavailable.'));
         Http::fake(['eodhd.com/api/real-time/RAW.XETRA*' => Http::response($this->quote())]);
         $result = app(FreeIntradayMarketData::class)->syncHolding($holding);
-        $this->assertSame(0, $result['failed_count']);
-        $this->assertSame(['EODHD'], $result['coverage'][0]['source_markers']);
-        $this->assertSame('eodhd_realtime', $holding->fresh()->latestRealtimePrice->source_key);
+        $this->assertSame(1, $result['failed_count']);
+        $this->assertSame('unavailable', $result['coverage'][0]['status']);
+        $this->assertNull($holding->fresh()->latest_realtime_price_id);
         $this->assertNull($other->fresh()->latest_realtime_price_id);
-        Http::assertSentCount(1);
+        Http::assertNothingSent();
     }
 
     public function test_failed_fallback_preserves_price_and_origin(): void
@@ -67,7 +68,7 @@ class MarketDataFallbackTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_bulk_outage_uses_twenty_instrument_batches(): void
+    public function test_bulk_outage_marks_all_quotes_missing_without_paid_batches(): void
     {
         StockHolding::factory()->count(21)->sequence(fn ($sequence): array => ['symbol' => 'F'.$sequence->index])
             ->create(['exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR', 'latest_price' => null]);
@@ -79,31 +80,31 @@ class MarketDataFallbackTest extends TestCase
             return Http::response(array_map(fn (string $symbol): array => [...$this->quote(), 'code' => $symbol], $symbols));
         }]);
         $result = app(FreeIntradayMarketData::class)->syncAll();
-        $this->assertSame(21, $result['stored_count']);
-        $this->assertSame(0, $result['failed_count']);
-        Http::assertSentCount(2);
+        $this->assertSame(0, $result['stored_count']);
+        $this->assertSame(21, $result['failed_count']);
+        Http::assertNothingSent();
     }
 
-    public function test_a_free_quote_saved_while_eodhd_is_loading_cannot_be_overwritten(): void
+    public function test_a_concurrently_saved_free_quote_is_preserved_when_the_current_free_request_fails(): void
     {
         $holding = $this->holding();
         $newerId = null;
-        $this->mock(XetraIntradayCollector::class)->shouldReceive('collect')->andThrow(new RuntimeException('Free feed unavailable.'));
-        Http::fake(['eodhd.com/api/real-time/*' => function () use ($holding, &$newerId) {
-            $newer = StockRealtimePrice::factory()->create(['stock_holding_id' => $holding->id, 'isin' => $holding->isin,
-                'symbol' => $holding->symbol, 'source_key' => 'yahoo_xetra_intraday', 'source_name' => 'Yahoo Finance Xetra',
-                'source_url' => 'https://finance.yahoo.com/quote/RAW.DE/', 'as_of' => now()]);
+        $this->mock(XetraIntradayCollector::class)->shouldReceive('collect')->andReturnUsing(function () use ($holding, &$newerId): array {
+            $newer = StockRealtimePrice::factory()->create(['stock_holding_id' => $holding->id, 'source_key' => 'yahoo_xetra_intraday',
+                'source_name' => 'Yahoo Finance Xetra', 'as_of' => now()]);
             $newerId = $newer->id;
             StockHolding::query()->whereKey($holding->id)->update(['latest_realtime_price_id' => $newerId]);
 
-            return Http::response($this->quote());
-        }]);
+            throw new RuntimeException('Free collector is temporarily unavailable.');
+        });
+        Http::fake();
         app(FreeIntradayMarketData::class)->syncHolding($holding);
         $this->assertSame($newerId, $holding->fresh()->latest_realtime_price_id);
         $this->assertSame('yahoo_xetra_intraday', $holding->fresh()->latestRealtimePrice->source_key);
+        Http::assertNothingSent();
     }
 
-    public function test_old_history_uses_eodhd_without_relabelling_or_overwriting_existing_records(): void
+    public function test_old_history_stays_missing_and_preserves_owned_provider_records(): void
     {
         $holding = $this->holding();
         $from = Carbon::parse('2026-06-01 08:00', 'UTC');
@@ -112,19 +113,22 @@ class MarketDataFallbackTest extends TestCase
             ['timestamp' => $from->timestamp, 'open' => 55, 'high' => 57, 'low' => 54, 'close' => 56, 'volume' => 10],
             ['timestamp' => $from->timestamp, 'open' => 1, 'high' => 2, 'low' => 1, 'close' => 2, 'currency' => 'USD'],
         ])]);
-        $provider = app(FreeIntradayMarketData::class);
-        $records = $provider->records($holding, $from, $until);
-        $this->assertCount(1, $records);
-        $this->assertSame('eodhd_intraday', $records[0]['source_key']);
-        $this->assertSame(['EODHD'], $records[0]['source_markers']);
-        $provider->persist($holding, $records);
-        $provider->records($holding, $from, $until);
-        $this->assertDatabaseHas('stock_holding_intraday_candles', ['source_key' => 'eodhd_intraday', 'close' => 56]);
-        Http::assertSentCount(1);
+        $existing = StockHoldingIntradayCandle::query()->create(['stock_holding_id' => $holding->id,
+            'trading_date' => '2026-06-01', 'as_of' => $from, 'interval' => '5m', 'source_key' => 'eodhd_intraday', 'close' => 56]);
+        try {
+            app(FreeIntradayMarketData::class)->records($holding, $from, $until);
+            $this->fail('Unavailable free history must remain missing.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('outside free source retention', $exception->getMessage());
+        }
+        $this->assertSame('eodhd_intraday', $existing->fresh()->source_key);
+        $this->assertSame('56.00000000', $existing->fresh()->close);
+        Http::assertNothingSent();
     }
 
     public function test_running_time_windows_share_a_cache_and_failures_have_a_cooldown(): void
     {
+        config(['services.market_data.free_only' => false]);
         $holding = $this->holding();
         $from = now()->subHour();
         Http::fake(['eodhd.com/api/intraday/*' => Http::response([
@@ -139,6 +143,7 @@ class MarketDataFallbackTest extends TestCase
 
     public function test_failed_history_requests_are_not_repeated_during_the_cooldown(): void
     {
+        config(['services.market_data.free_only' => false]);
         $holding = $this->holding();
         $from = now()->subMonth();
         Http::fake(['eodhd.com/api/intraday/*' => Http::response([], 429)]);
@@ -153,7 +158,7 @@ class MarketDataFallbackTest extends TestCase
         Http::assertSentCount(1);
     }
 
-    public function test_partial_free_history_only_requests_the_older_missing_period(): void
+    public function test_partial_free_history_keeps_the_older_gap_without_a_paid_request(): void
     {
         $holding = $this->holding();
         $free = ['timestamp' => Carbon::parse('2026-11-04 09:00', 'UTC')->timestamp, 'source_key' => 'xetra_posttrade', 'close' => '56'];
@@ -165,9 +170,8 @@ class MarketDataFallbackTest extends TestCase
             ['timestamp' => Carbon::parse('2026-11-02 09:00', 'UTC')->timestamp, 'open' => 54, 'high' => 56, 'low' => 53, 'close' => 55],
         ])]);
         $records = app(FreeIntradayMarketData::class)->records($holding, Carbon::parse('2026-11-01', 'UTC'), now());
-        $this->assertSame(['eodhd_intraday', 'xetra_posttrade'], array_column($records, 'source_key'));
-        Http::assertSent(fn ($request): bool => $request['to'] < Carbon::parse('2026-11-03', 'Europe/Berlin')->timestamp);
-        Http::assertSentCount(1);
+        $this->assertSame(['xetra_posttrade'], array_column($records, 'source_key'));
+        Http::assertNothingSent();
     }
 
     private function holding(): StockHolding

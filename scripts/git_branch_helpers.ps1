@@ -619,6 +619,8 @@ function gitdeploy {
     }
     & php scripts/frontend-release.php verify $sourceCommit
     if ($LASTEXITCODE -ne 0) { throw 'The local release package did not verify.' }
+    . (Join-Path $PSScriptRoot 'git_deploy_helpers.ps1')
+    $deploymentInput = Get-StocksLiveDeploymentInput
     $target = 'sftp_gkstocks_admin@165.227.156.99'
     $root = '/home/1486907.cloudwaysapps.com/cfbckymfgk/public_html'
     Write-Host "Live target: $target $root" -ForegroundColor Yellow
@@ -632,9 +634,9 @@ function gitdeploy {
         (Invoke-StocksGit rev-parse HEAD) -cne $releaseCommit) {
         throw 'main changed during confirmation. Review and retry gitdeploy.'
     }
-    . (Join-Path $PSScriptRoot 'git_deploy_helpers.ps1')
-    $remoteCommand = "cd '$root' && test -f scripts/pdeploy_cloudways.sh && STOCKS_EXPECTED_SOURCE_COMMIT=$sourceCommit composer pdeploy --no-interaction && test `"`$(tr -d '\r\n' < deployment/source-commit)`" = '$sourceCommit'"
-    Invoke-StocksLiveSsh -Destination $target -Command $remoteCommand
+    Assert-StocksClean
+    $remoteCommand = "cd '$root' && tr -d '\r' | bash -s -- '$sourceCommit'"
+    Invoke-StocksLiveSsh -Destination $target -Command $remoteCommand -InputText $deploymentInput
     Write-Host "Live deployment completed for source $sourceCommit." -ForegroundColor Green
 }
 

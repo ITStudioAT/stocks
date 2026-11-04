@@ -16,6 +16,12 @@ class EodhdEndOfDayDataServiceTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_it_fetches_and_stores_only_missing_stock_price_dates(): void
     {
         config(['services.eodhd.key' => 'test-token']);

@@ -426,6 +426,7 @@ POWERSHELL);
         file_put_contents($this->directory.'/pc/deployment/source-commit', $source."\n");
         file_put_contents($this->directory.'/pc/scripts/git_deploy_helpers.ps1', <<<'POWERSHELL'
 function Invoke-StocksLiveSsh { param([string]$Destination, [string]$Command) Write-Output "SSH $Destination $Command" }
+function Get-StocksLiveDeploymentInput { 'fixture deployment input' }
 POWERSHELL);
         $this->git($this->directory.'/pc', 'add', '-A');
         $this->git($this->directory.'/pc', 'commit', '-m', 'Build fixture release');
@@ -442,7 +443,7 @@ POWERSHELL);
         $this->assertTrue($deployed->isSuccessful(), $deployed->getOutput().$deployed->getErrorOutput());
         $this->assertStringContainsString('SSH sftp_gkstocks_admin@165.227.156.99', $deployed->getOutput());
         $this->assertStringContainsString('GitHub tests run in the background', $deployed->getOutput());
-        $this->assertStringContainsString("STOCKS_EXPECTED_SOURCE_COMMIT={$source} composer pdeploy --no-interaction", $deployed->getOutput());
+        $this->assertStringContainsString("bash -s -- '{$source}'", $deployed->getOutput());
         $this->assertSame($release, $this->git($this->directory.'/origin.git', 'rev-parse', 'main'));
     }
 

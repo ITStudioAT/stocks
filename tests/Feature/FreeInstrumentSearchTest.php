@@ -45,7 +45,7 @@ class FreeInstrumentSearchTest extends TestCase
         $this->assertNull(Cache::get('eodhd-api-usage:day:2026-11-04'));
     }
 
-    public function test_search_uses_eodhd_if_free_sources_have_no_suitable_result(): void
+    public function test_search_leaves_results_empty_if_free_sources_have_no_suitable_result(): void
     {
         config(['services.eodhd.enabled' => true]);
         Http::fake([
@@ -53,9 +53,8 @@ class FreeInstrumentSearchTest extends TestCase
             'eodhd.com/api/search/*' => Http::response([['Code' => 'NEWCO', 'Name' => 'New Company', 'Exchange' => 'US', 'Currency' => 'USD', 'Type' => 'Common Stock']]),
         ]);
         $this->actingAs($this->admin())->postJson('/admin/stocks/search', ['query' => 'Newco'])
-            ->assertOk()->assertJsonPath('source', 'EODHD')->assertJsonPath('results.0.symbol', 'NEWCO')
-            ->assertJsonPath('results.0.source_markers', ['EODHD']);
-        Http::assertSent(fn ($request): bool => str_contains($request->url(), 'eodhd.com/api/search/'));
+            ->assertOk()->assertJsonPath('source', 'free')->assertJsonCount(0, 'results');
+        Http::assertNotSent(fn ($request): bool => str_contains($request->url(), 'eodhd.com/api/search/'));
         $this->assertSame(XetraInstrumentCatalog::Url, Http::recorded()[0][0]->url());
     }
 

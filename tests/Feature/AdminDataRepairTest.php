@@ -17,6 +17,12 @@ class AdminDataRepairTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_admin_can_count_stocks_missing_one_year_of_end_of_day_prices(): void
     {
         Carbon::setTestNow('2026-06-26 12:00:00');

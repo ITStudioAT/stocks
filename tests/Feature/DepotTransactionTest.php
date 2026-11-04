@@ -9,14 +9,47 @@ use App\Models\StockHoldingDailyPrice;
 use App\Models\StockPrice;
 use App\Models\StockRealtimePrice;
 use App\Models\User;
+use App\Services\FreeTradingCalendar;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Http;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
 class DepotTransactionTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_missing_free_reference_stays_missing_in_holdings_sums_and_chart_points(): void
+    {
+        $this->travelTo(Carbon::parse('2026-11-04 15:00:00', 'UTC'));
+        Http::preventStrayRequests();
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create(['account_balance' => 100, 'is_active' => true]);
+        $holding = StockHolding::factory()->create(['symbol' => 'ALV', 'isin' => 'DE0008404005',
+            'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
+        StockRealtimePrice::factory()->create(['stock_holding_id' => $holding->id, 'source_key' => 'xetra_posttrade',
+            'source_name' => 'Deutsche Börse', 'mic' => 'XETR', 'currency' => 'EUR', 'price' => 20, 'as_of' => '2026-11-04 12:00:00']);
+        StockRealtimePrice::factory()->create(['stock_holding_id' => $holding->id, 'source_key' => 'eodhd_realtime',
+            'price' => 999, 'currency' => 'EUR', 'as_of' => '2026-11-03 16:30:00']);
+        DepotTransaction::factory()->create(['depot_id' => $depot->id, 'stock_holding_id' => $holding->id,
+            'type' => 'buy', 'pieces' => 2, 'total_amount' => 30, 'unit_price' => 15,
+            'cash_delta' => -30, 'balance_after' => 100, 'booked_at' => '2026-11-02 12:00:00']);
+
+        $response = $this->actingAs($admin)->getJson('/admin/depot-transactions')->assertOk()
+            ->assertJsonPath('depot_holdings.0.latest_price', '20.00000000')
+            ->assertJsonPath('depot_holdings.0.previous_day_price', null)
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', null)
+            ->assertJsonPath('depot_valuations.latest.current_balance', '140.00')
+            ->assertJsonPath('depot_valuations.latest.previous_day_balance', null)
+            ->assertJsonPath('depot_valuations.latest.previous_day_change_amount', null)
+            ->assertJsonPath('depot_valuations.latest.previous_day_change_percent', null);
+        $series = collect($response->json('depot_performance_series'));
+        $this->assertNull($series->firstWhere('date', '2026-11-03')['account_balance']);
+        $this->assertSame('140.00', $series->last()['account_balance']);
+        $this->assertSame(['free'], $response->json('depot_holdings.0.latest_price_source_markers'));
+        Http::assertNothingSent();
+    }
 
     public function test_actual_year_stocks_include_realized_and_unrealized_performance(): void
     {
@@ -28,26 +61,26 @@ class DepotTransactionTest extends TestCase
                 'account_balance' => '10000.00',
                 'is_active' => true,
             ]);
-            $carriedHolding = StockHolding::factory()->create([
+            $carriedHolding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
                 'symbol' => 'ALPHA',
                 'name' => 'Alpha Carried Stock',
                 'subtitle' => 'Carried position',
                 'currency' => 'EUR',
                 'latest_price' => '140.000000',
             ]);
-            $tradedHolding = StockHolding::factory()->create([
+            $tradedHolding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
                 'symbol' => 'BETA',
                 'name' => 'Beta Traded Stock',
                 'currency' => 'EUR',
                 'latest_price' => '210.000000',
             ]);
-            $closedHolding = StockHolding::factory()->create([
+            $closedHolding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
                 'symbol' => 'GAMMA',
                 'name' => 'Gamma Closed Stock',
                 'currency' => 'EUR',
                 'latest_price' => '60.000000',
             ]);
-            $excludedHolding = StockHolding::factory()->create([
+            $excludedHolding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
                 'symbol' => 'OLD',
                 'name' => 'Old Closed Stock',
                 'currency' => 'EUR',
@@ -274,7 +307,7 @@ class DepotTransactionTest extends TestCase
             'account_balance' => '1000.00',
             'is_active' => true,
         ]);
-        $holding = StockHolding::factory()->create([
+        $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
             'name' => 'iShares ETF',
             'subtitle' => 'Distributing share class',
             'isin' => 'DE000A0D8Q23',
@@ -342,7 +375,7 @@ class DepotTransactionTest extends TestCase
             'account_balance' => '1000.00',
             'is_active' => true,
         ]);
-        $holding = StockHolding::factory()->create([
+        $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
             'symbol' => 'AAPL',
             'name' => 'Apple Inc.',
         ]);
@@ -397,7 +430,7 @@ class DepotTransactionTest extends TestCase
             'account_balance' => '100.00',
             'is_active' => true,
         ]);
-        $holding = StockHolding::factory()->create();
+        $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create();
 
         $this->actingAs($admin)
             ->postJson('/admin/depot-transactions/stocks', [
@@ -449,7 +482,7 @@ class DepotTransactionTest extends TestCase
             'account_balance' => '0.00',
             'is_active' => true,
         ]);
-        $holding = StockHolding::factory()->create([
+        $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
             'name' => 'Apple Inc.',
             'isin' => 'US0378331005',
         ]);
@@ -597,7 +630,7 @@ class DepotTransactionTest extends TestCase
                 'is_active' => true,
                 'created_at' => '2026-06-03 14:26:50',
             ]);
-            $holding = StockHolding::factory()->create([
+            $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
                 'latest_price' => '150.000000',
                 'flatex_price' => '150.000000',
             ]);
@@ -664,9 +697,9 @@ class DepotTransactionTest extends TestCase
                 ->assertJsonPath('depot_valuations.latest.month_start_balance', '83236.56')
                 ->assertJsonPath('depot_valuations.latest.month_change_amount', '-25980.00')
                 ->assertJsonPath('depot_valuations.latest.month_change_percent', '-31.21')
-                ->assertJsonPath('depot_valuations.latest.one_week_start_balance', '57236.56')
-                ->assertJsonPath('depot_valuations.latest.one_week_change_amount', '20.00')
-                ->assertJsonPath('depot_valuations.latest.one_week_change_percent', '0.03');
+                ->assertJsonPath('depot_valuations.latest.one_week_start_balance', null)
+                ->assertJsonPath('depot_valuations.latest.one_week_change_amount', null)
+                ->assertJsonPath('depot_valuations.latest.one_week_change_percent', null);
         } finally {
             Carbon::setTestNow();
         }
@@ -756,14 +789,14 @@ class DepotTransactionTest extends TestCase
                 'account_balance' => '800.00',
                 'is_active' => true,
             ]);
-            $holding = StockHolding::factory()->create([
+            $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
                 'latest_price' => null,
                 'flatex_price' => '120.000000',
                 'exchange' => 'XETRA',
                 'mic_code' => 'XETR',
                 'currency' => 'EUR',
             ]);
-            $latestRealtimePrice = StockRealtimePrice::factory()->for($holding)->create([
+            $latestRealtimePrice = StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->for($holding)->create([
                 'price' => '120.00000000',
                 'as_of' => '2026-07-03 10:00:00',
                 'fetched_at' => '2026-07-03 10:00:00',
@@ -777,7 +810,7 @@ class DepotTransactionTest extends TestCase
                 'close' => '200.00000000',
                 'adjusted_close' => '200.00000000',
             ]);
-            StockRealtimePrice::factory()->for($holding)->create([
+            StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->for($holding)->create([
                 'price' => '110.00000000',
                 'as_of' => '2026-06-30 15:36:00',
                 'fetched_at' => '2026-07-02 07:12:08',
@@ -787,7 +820,7 @@ class DepotTransactionTest extends TestCase
                 'isin' => $holding->isin,
             ]);
             foreach ([['XGAT', 'EUR', false], ['XETA', 'USD', false], ['XETA', 'EUR', true]] as $index => [$mic, $currency, $quarantined]) {
-                StockRealtimePrice::factory()->for($holding)->create([
+                StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->for($holding)->create([
                     'price' => 999,
                     'as_of' => '2026-06-30 16:0'.$index.':00',
                     'source_key' => 'xetra_posttrade',
@@ -834,7 +867,7 @@ class DepotTransactionTest extends TestCase
         }
     }
 
-    public function test_one_week_balance_uses_previous_calendar_week_end(): void
+    public function test_one_week_balance_remains_missing_without_free_previous_week_close(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-07-03 12:00:00', 'Europe/Vienna'));
 
@@ -844,7 +877,7 @@ class DepotTransactionTest extends TestCase
                 'account_balance' => '700.00',
                 'is_active' => true,
             ]);
-            $holding = StockHolding::factory()->create([
+            $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
                 'latest_price' => '120.000000',
                 'flatex_price' => '120.000000',
             ]);
@@ -900,9 +933,9 @@ class DepotTransactionTest extends TestCase
                 ->getJson('/admin/depot-transactions')
                 ->assertOk()
                 ->assertJsonPath('depot_valuations.latest.current_balance', '1060.00')
-                ->assertJsonPath('depot_valuations.latest.one_week_start_balance', '970.00')
-                ->assertJsonPath('depot_valuations.latest.one_week_change_amount', '90.00')
-                ->assertJsonPath('depot_valuations.latest.one_week_change_percent', '9.28');
+                ->assertJsonPath('depot_valuations.latest.one_week_start_balance', null)
+                ->assertJsonPath('depot_valuations.latest.one_week_change_amount', null)
+                ->assertJsonPath('depot_valuations.latest.one_week_change_percent', null);
         } finally {
             Carbon::setTestNow();
         }
@@ -918,7 +951,7 @@ class DepotTransactionTest extends TestCase
                 'account_balance' => '955.00',
                 'is_active' => true,
             ]);
-            $holding = StockHolding::factory()->create([
+            $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
                 'latest_price' => '150.000000',
                 'flatex_price' => '150.000000',
             ]);
@@ -976,11 +1009,11 @@ class DepotTransactionTest extends TestCase
             $juneTenthPoint = $series->firstWhere('date', '2026-06-10');
             $latestPoint = $series->last();
 
-            $this->assertSame('240.00', $februaryFirstPoint['stock_balance']);
+            $this->assertNull($februaryFirstPoint['stock_balance']);
             $this->assertSame('955.00', $februaryFirstPoint['cash_balance']);
-            $this->assertSame('1195.00', $februaryFirstPoint['account_balance']);
+            $this->assertNull($februaryFirstPoint['account_balance']);
             $this->assertSame('955.00', $juneTenthPoint['cash_balance']);
-            $this->assertSame('1195.00', $juneTenthPoint['account_balance']);
+            $this->assertNull($juneTenthPoint['account_balance']);
             $this->assertSame('2026-06-13', $latestPoint['date']);
             $this->assertSame('300.00', $latestPoint['stock_balance']);
             $this->assertSame('1255.00', $latestPoint['account_balance']);
@@ -999,11 +1032,11 @@ class DepotTransactionTest extends TestCase
                 'account_balance' => '800.00',
                 'is_active' => true,
             ]);
-            $holding = StockHolding::factory()->create([
-                'latest_price' => null,
+            $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
+                'latest_price' => null, 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR',
                 'flatex_price' => '130.000000',
             ]);
-            $latestRealtimePrice = StockRealtimePrice::factory()->for($holding)->create([
+            $latestRealtimePrice = StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->for($holding)->create([
                 'price' => '130.00000000',
                 'as_of' => '2026-07-03 10:00:00',
                 'fetched_at' => '2026-07-03 10:00:00',
@@ -1017,17 +1050,17 @@ class DepotTransactionTest extends TestCase
                 'close' => '50.00000000',
                 'adjusted_close' => '50.00000000',
             ]);
-            StockRealtimePrice::factory()->for($holding)->create([
+            StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->for($holding)->create([
                 'price' => '100.00000000',
                 'as_of' => '2026-06-30 17:35:00',
                 'fetched_at' => '2026-06-30 17:36:00',
             ]);
-            StockRealtimePrice::factory()->for($holding)->create([
+            StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->for($holding)->create([
                 'price' => '110.00000000',
                 'as_of' => '2026-07-01 17:35:00',
                 'fetched_at' => '2026-07-01 17:36:00',
             ]);
-            StockRealtimePrice::factory()->for($holding)->create([
+            StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->for($holding)->create([
                 'price' => '120.00000000',
                 'as_of' => '2026-07-02 17:35:00',
                 'fetched_at' => '2026-07-02 17:36:00',
@@ -1102,7 +1135,7 @@ class DepotTransactionTest extends TestCase
         $otherDepot = Depot::factory()->create([
             'is_active' => false,
         ]);
-        $ownedHolding = StockHolding::factory()->create([
+        $ownedHolding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
             'symbol' => 'AAPL',
             'name' => 'Apple Inc.',
             'subtitle' => 'Core technology holding',
@@ -1125,11 +1158,11 @@ class DepotTransactionTest extends TestCase
             'adjusted_close' => '188.00000000',
             'currency' => 'USD',
         ]);
-        $soldHolding = StockHolding::factory()->create([
+        $soldHolding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
             'symbol' => 'MSFT',
             'name' => 'Microsoft Corp.',
         ]);
-        $otherDepotHolding = StockHolding::factory()->create([
+        $otherDepotHolding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
             'symbol' => 'GOOG',
             'name' => 'Alphabet Inc.',
         ]);
@@ -1177,9 +1210,9 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('depot_holdings.0.subtitle', 'Core technology holding')
             ->assertJsonPath('depot_holdings.0.isin', 'US0378331005')
             ->assertJsonPath('depot_holdings.0.latest_price', '191.500000')
-            ->assertJsonPath('depot_holdings.0.previous_day_price', '188.00000000')
-            ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-06-12')
-            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '1.86')
+            ->assertJsonPath('depot_holdings.0.previous_day_price', null)
+            ->assertJsonPath('depot_holdings.0.previous_day_price_date', app(FreeTradingCalendar::class)->previousDay($ownedHolding, now())?->toDateString())
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', null)
             ->assertJsonPath('depot_holdings.0.flatex_price', '191.500000')
             ->assertJsonPath('depot_holdings.0.year_start_price', '120.00000000')
             ->assertJsonPath('depot_holdings.0.currency', 'USD')
@@ -1210,11 +1243,11 @@ class DepotTransactionTest extends TestCase
             'account_balance' => '800.00',
             'is_active' => true,
         ]);
-        $winningHolding = StockHolding::factory()->create([
+        $winningHolding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
             'latest_price' => '150.000000',
             'flatex_price' => '150.000000',
         ]);
-        $losingHolding = StockHolding::factory()->create([
+        $losingHolding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
             'latest_price' => '50.000000',
             'flatex_price' => '50.000000',
         ]);
@@ -1270,7 +1303,7 @@ class DepotTransactionTest extends TestCase
             'account_balance' => '700.00',
             'is_active' => true,
         ]);
-        $holding = StockHolding::factory()->create([
+        $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
             'latest_price' => '110.000000',
             'flatex_price' => '110.000000',
         ]);
@@ -1300,12 +1333,13 @@ class DepotTransactionTest extends TestCase
 
     public function test_depot_holding_payload_uses_latest_realtime_price_when_available(): void
     {
+        $this->travelTo(Carbon::parse('2026-06-15 12:00:00', 'Europe/Vienna'));
         $admin = $this->adminUser();
         $depot = Depot::factory()->create([
             'account_balance' => '1000.00',
             'is_active' => true,
         ]);
-        $holding = StockHolding::factory()->create([
+        $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
             'symbol' => 'AAPL',
             'name' => 'Apple Inc.',
             'isin' => 'US0378331005',
@@ -1314,7 +1348,7 @@ class DepotTransactionTest extends TestCase
             'latest_price_fetched_at' => Carbon::parse('2026-06-12 16:00:00', 'UTC'),
             'latest_price_as_of' => '2026-06-12T14:00:00+00:00',
         ]);
-        $realtimePrice = StockRealtimePrice::factory()->create([
+        $realtimePrice = StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->create([
             'stock_holding_id' => $holding->id,
             'symbol' => 'AAPL',
             'isin' => 'US0378331005',
@@ -1364,21 +1398,21 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('depot_holdings.0.latest_price', '121.25000000')
             ->assertJsonPath('depot_holdings.0.latest_price_status', 'realtime')
             ->assertJsonPath('depot_holdings.0.latest_price_fetched_at', '2026-06-15T07:23:00+02:00')
-            ->assertJsonPath('depot_holdings.0.previous_day_price', '118.00000000')
-            ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-06-11')
-            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '2.75')
+            ->assertJsonPath('depot_holdings.0.previous_day_price', '121.25000000')
+            ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-06-12')
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', null)
             ->assertJsonPath('depot_valuations.latest.stock_balance', '242.50')
             ->assertJsonPath('depot_valuations.latest.current_balance', '1242.50');
     }
 
-    public function test_depot_holding_payload_uses_daily_close_for_previous_day_price(): void
+    public function test_depot_holding_payload_does_not_use_paid_daily_close_for_previous_day_price(): void
     {
         $admin = $this->adminUser();
         $depot = Depot::factory()->create([
             'account_balance' => '1000.00',
             'is_active' => true,
         ]);
-        $holding = StockHolding::factory()->create([
+        $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
             'symbol' => 'AAPL',
             'currency' => 'USD',
             'latest_price' => '191.500000',
@@ -1406,25 +1440,26 @@ class DepotTransactionTest extends TestCase
         $this->actingAs($admin)
             ->getJson('/admin/depot-transactions')
             ->assertOk()
-            ->assertJsonPath('depot_holdings.0.previous_day_price', '188.00000000')
-            ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-06-12')
-            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '1.86');
+            ->assertJsonPath('depot_holdings.0.previous_day_price', null)
+            ->assertJsonPath('depot_holdings.0.previous_day_price_date', null)
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', null);
     }
 
-    public function test_depot_holding_payload_prefers_official_eod_over_realtime_and_stale_daily_price(): void
+    public function test_depot_holding_payload_uses_free_observation_and_ignores_paid_official_close(): void
     {
+        $this->travelTo(Carbon::parse('2026-08-07 12:00:00', 'Europe/Vienna'));
         $admin = $this->adminUser();
         $depot = Depot::factory()->create([
             'account_balance' => '1000.00',
             'is_active' => true,
         ]);
-        $holding = StockHolding::factory()->create([
-            'symbol' => 'CEBS',
+        $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
+            'symbol' => 'CEBS', 'exchange' => 'XETRA', 'mic_code' => 'XETR',
             'currency' => 'EUR',
             'isin' => 'IE00063FT9K6',
             'latest_price' => '9.796000',
         ]);
-        $latestRealtimePrice = StockRealtimePrice::factory()->create([
+        $latestRealtimePrice = StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->create([
             'stock_holding_id' => $holding->id,
             'symbol' => 'CEBS',
             'currency' => 'EUR',
@@ -1436,7 +1471,7 @@ class DepotTransactionTest extends TestCase
         $holding->update([
             'latest_realtime_price_id' => $latestRealtimePrice->id,
         ]);
-        StockRealtimePrice::factory()->create([
+        StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->create([
             'stock_holding_id' => $holding->id,
             'symbol' => 'CEBS',
             'currency' => 'EUR',
@@ -1482,9 +1517,9 @@ class DepotTransactionTest extends TestCase
             ->getJson('/admin/depot-transactions')
             ->assertOk()
             ->assertJsonPath('depot_holdings.0.latest_price', '9.79600000')
-            ->assertJsonPath('depot_holdings.0.previous_day_price', '9.78100000')
+            ->assertJsonPath('depot_holdings.0.previous_day_price', '9.84300000')
             ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-08-06')
-            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '0.15');
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '-0.48');
     }
 
     public function test_depot_year_start_price_uses_only_current_open_lots_after_sells(): void
@@ -1497,7 +1532,7 @@ class DepotTransactionTest extends TestCase
                 'account_balance' => '50000.00',
                 'is_active' => true,
             ]);
-            $holding = StockHolding::factory()->create([
+            $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
                 'symbol' => 'SEC0',
                 'name' => 'iShares MSCI Global Semiconductors UCITS ETF USD Acc',
                 'currency' => 'EUR',

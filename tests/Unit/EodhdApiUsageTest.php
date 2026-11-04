@@ -14,6 +14,12 @@ use Tests\TestCase;
 
 class EodhdApiUsageTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_it_reports_remaining_hourly_and_daily_calls(): void
     {
         Cache::flush();

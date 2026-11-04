@@ -21,6 +21,7 @@ class EodhdIntegrationSwitchTest extends TestCase
         parent::setUp();
 
         config([
+            'services.market_data.free_only' => false,
             'services.eodhd.enabled' => true,
             'services.eodhd.key' => 'isolated-test-token',
             'services.eodhd.base_url' => 'https://eodhd.com/api',
@@ -76,6 +77,33 @@ class EodhdIntegrationSwitchTest extends TestCase
             'splits' => ['splits/AAPL.US'],
             'forex' => ['eod/USDEUR.FOREX'],
         ];
+    }
+
+    public function test_the_shipped_application_configuration_disables_new_provider_requests(): void
+    {
+        $configuration = require base_path('config/services.php');
+        $this->assertFalse($configuration['eodhd']['enabled']);
+        $this->assertTrue($configuration['market_data']['free_only']);
+        config(['services.eodhd.enabled' => $configuration['eodhd']['enabled']]);
+
+        $this->assertFalse(app(EodhdApiClient::class)->configured());
+        Http::assertNothingSent();
+    }
+
+    #[DataProvider('eodhdEndpoints')]
+    public function test_free_only_policy_blocks_requests_even_with_legacy_cached_configuration(string $path): void
+    {
+        config(['services.market_data' => null, 'services.eodhd.enabled' => true]);
+        $this->assertFalse(app(EodhdApiClient::class)->configured());
+
+        try {
+            app(EodhdApiClient::class)->get($path);
+            $this->fail('A cached legacy provider setting bypassed the free-only policy.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('EODHD integration is disabled by configuration.', $exception->getMessage());
+        }
+
+        Http::assertNothingSent();
     }
 
     public function test_disabled_integration_does_not_initialize_usage_counters(): void

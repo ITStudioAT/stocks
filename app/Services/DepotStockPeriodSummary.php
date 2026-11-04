@@ -13,6 +13,8 @@ use Illuminate\Support\Collection;
 
 class DepotStockPeriodSummary
 {
+    public function __construct(private StockPreviousCloseResolver $previousCloseResolver) {}
+
     /**
      * @return array{
      *     period: string,
@@ -73,6 +75,10 @@ class DepotStockPeriodSummary
         }
 
         $holdings = $holdingsQuery->get();
+
+        if ($definition['uses_current_price']) {
+            $this->previousCloseResolver->prime($holdings);
+        }
         $openingSources = [];
         $closingSources = [];
         $openingPriceByHoldingId = $definition['start'] === null
@@ -245,13 +251,14 @@ class DepotStockPeriodSummary
     private function stockPayload(StockHolding $holding, array $state, ?string $openingPrice, ?string $closingPrice, array $openingSources, array $closingSources): array
     {
         $entryPieces = $state['opening_pieces'] + $state['bought_pieces'];
-        $entryValue = ($state['opening_pieces'] * $this->openingPrice($state, $openingPrice)) + $state['bought_amount'];
+        $openingPriceValue = $this->openingPrice($state, $openingPrice);
+        $entryValue = $openingPriceValue === null ? null : ($state['opening_pieces'] * $openingPriceValue) + $state['bought_amount'];
         $exitValue = $closingPrice === null && $state['position_pieces'] > 0
             ? null
             : $state['sold_amount'] + ($state['position_pieces'] * (float) $closingPrice);
-        $averageEntryPrice = $entryPieces > 0 ? $entryValue / $entryPieces : null;
+        $averageEntryPrice = $entryPieces > 0 && $entryValue !== null ? $entryValue / $entryPieces : null;
         $averageExitPrice = $entryPieces > 0 && $exitValue !== null ? $exitValue / $entryPieces : null;
-        $changeAmount = $exitValue !== null ? $exitValue - $entryValue : null;
+        $changeAmount = $exitValue !== null && $entryValue !== null ? $exitValue - $entryValue : null;
         $changePercent = $changeAmount !== null && $entryValue > 0
             ? ($changeAmount / $entryValue) * 100
             : null;
@@ -287,7 +294,7 @@ class DepotStockPeriodSummary
     /**
      * @param  array{opening_pieces: float, opening_cost: float}  $state
      */
-    private function openingPrice(array $state, ?string $historicalPrice): float
+    private function openingPrice(array $state, ?string $historicalPrice): ?float
     {
         if ($state['opening_pieces'] <= 0) {
             return 0;
@@ -297,22 +304,18 @@ class DepotStockPeriodSummary
             return (float) $historicalPrice;
         }
 
-        return $state['opening_cost'] / $state['opening_pieces'];
+        return null;
     }
 
     /** @return array<int, string> */
     private function currentPriceSources(StockHolding $holding): array
     {
-        $record = $holding->latestRealtimePrice?->price !== null ? $holding->latestRealtimePrice : $holding->latestStockPrice;
-
-        return $record?->price !== null ? MarketDataProvenance::forRecord($record) : MarketDataProvenance::markers($holding->latest_price_source);
+        return $this->currentPrice($holding) === null ? [] : ['free'];
     }
 
     private function currentPrice(StockHolding $holding): ?string
     {
-        return $holding->latestRealtimePrice?->price
-            ?? $holding->latestStockPrice?->price
-            ?? $holding->latest_price;
+        return $this->previousCloseResolver->latestPrice($holding);
     }
 
     /**

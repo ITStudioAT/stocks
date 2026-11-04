@@ -2,6 +2,7 @@
 
 use App\Console\Commands\RedactEodhdErrors;
 use App\Models\AdminLoginCode;
+use App\Services\EodhdApiClient;
 use App\Services\PreviewBackgroundState;
 use App\Services\PreviewIsolation;
 use Illuminate\Foundation\Inspiring;
@@ -19,6 +20,7 @@ if ($preview && config('security.preview.control_enabled') !== true) {
     return;
 }
 $canRun = static fn (): bool => ! $preview || app(PreviewBackgroundState::class)->enabled();
+$canRunEodhd = static fn (): bool => $canRun() && app(EodhdApiClient::class)->configured();
 
 Schedule::command('intraday:collect-free --queue')
     ->everyMinute()
@@ -40,22 +42,22 @@ Schedule::command('intraday-candles:dispatch-due')
 
 Schedule::command('end-of-day-data:dispatch-due')
     ->everyMinute()
-    ->when($canRun)
+    ->when($canRunEodhd)
     ->withoutOverlapping(10);
 
 Schedule::command('indices-data:dispatch-due')
     ->everyMinute()
-    ->when($canRun)
+    ->when($canRunEodhd)
     ->withoutOverlapping(10);
 
 Schedule::command('indices:eodhd-sync:dispatch-due')
     ->everyMinute()
-    ->when($canRun)
+    ->when($canRunEodhd)
     ->withoutOverlapping(30);
 
 Schedule::command('indices:v2-realtime:dispatch-due')
     ->everyMinute()
-    ->when($canRun)
+    ->when($canRunEodhd)
     ->withoutOverlapping(10);
 
 Schedule::command('model:prune', ['--model' => [AdminLoginCode::class]])

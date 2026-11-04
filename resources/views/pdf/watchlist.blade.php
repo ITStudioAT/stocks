@@ -317,7 +317,7 @@
 
     <main>
         <div class="summary">
-            <strong>{{ count($holdings) }}</strong> {{ \Illuminate\Support\Str::plural('instrument', count($holdings)) }} on the watch-list. Prices listed below cover the last 24 hours.
+            <strong>{{ count($holdings) }}</strong> {{ \Illuminate\Support\Str::plural('instrument', count($holdings)) }} on the watch-list. Last-day references are observed free prices, not official closes. Missing values remain unavailable.
         </div>
 
         @forelse ($holdings as $holding)

@@ -97,13 +97,13 @@ class WatchlistPdfReport
     private function holdingPayload(StockHolding $holding): array
     {
         $latestStockPrice = collect([$holding->latestStockPrice, $holding->readRealtimePrices->last(), $holding->readLatestCandle])
-            ->filter(fn (?Model $price): bool => ($price?->price ?? $price?->close) !== null)
+            ->filter(fn (?Model $price): bool => ($price?->price ?? $price?->close) !== null && MarketDataProvenance::forRecord($price) === ['free'])
             ->sortByDesc(fn (Model $price): string => $price->getRawOriginal('as_of') ?? '')->first();
         $latestPriceStatus = $this->latestPriceStatus($holding);
-        $hasCurrentPrice = ($latestStockPrice?->price ?? $latestStockPrice?->close ?? $holding->latest_price) !== null;
+        $hasCurrentPrice = ($latestStockPrice?->price ?? $latestStockPrice?->close) !== null;
         $latestPrice = $hasCurrentPrice ? $this->pricePayload($latestStockPrice?->price ?? $latestStockPrice?->close ?? $holding->latest_price) : null;
         $startPrice = $this->pricePayload($holding->start_price);
-        $endPrice = $this->pricePayload($holding->end_price);
+        $endPrice = $latestPrice;
         $end24Price = $this->pricePayload($holding->end_price_24);
         $sessionPrices = $this->tradingSessionPriceResolver->resolve($holding, $latestPrice);
         $sessionPriceDates = $this->sessionPriceDates($holding);
@@ -111,13 +111,14 @@ class WatchlistPdfReport
             ? $this->storedStockPriceTimestamp($latestStockPrice, 'as_of')
             : $holding->latest_price_as_of;
         $tradingTimes = $latestStockPrice?->trading_times ?? $holding->trading_times;
-        $previousCloses = app(StockPreviousCloseResolver::class)->resolve($holding, $latestPriceAsOf);
+        $previousCloses = app(StockPreviousCloseResolver::class)->resolve($holding);
         $end24Price = $this->pricePayload($previousCloses['previous_close']);
+        $changeReference = app(StockPreviousCloseResolver::class)->comparisonReference($holding, $latestStockPrice?->getRawOriginal('as_of') ?? $latestPriceAsOf, $end24Price, $previousCloses['previous_close_date']);
         $tradingDate = $latestPriceAsOf === null ? null : Carbon::parse($latestPriceAsOf)->setTimezone(config('app.timezone'))->toDateString();
         $startRecord = $holding->readRealtimePrices->concat($holding->readIntradayCandles)
             ->filter(fn (Model $price): bool => Carbon::parse($price->getRawOriginal('as_of'), 'UTC')->setTimezone(config('app.timezone'))->toDateString() === $tradingDate)
             ->sortBy(fn (Model $price): string => $price->getRawOriginal('as_of'))->first();
-        $startPrice = $this->pricePayload($startRecord?->price ?? $startRecord?->close ?? $holding->start_price);
+        $startPrice = $this->pricePayload($startRecord?->price ?? $startRecord?->close);
         $endPrice = $latestPrice ?? $endPrice;
 
         return [
@@ -133,7 +134,7 @@ class WatchlistPdfReport
             'country' => $holding->country,
             'currency' => $holding->currency,
             'latest_price' => $latestPrice,
-            'latest_price_source_markers' => $latestStockPrice === null ? MarketDataProvenance::markers($holding->latest_price_source) : MarketDataProvenance::forRecord($latestStockPrice),
+            'latest_price_source_markers' => $latestPrice === null ? [] : MarketDataProvenance::forRecord($latestStockPrice),
             'start_price' => $startPrice,
             'start_price_source_markers' => MarketDataProvenance::forRecord($startRecord),
             'end_price' => $endPrice,
@@ -147,8 +148,8 @@ class WatchlistPdfReport
             'end_price_24_date' => $previousCloses['previous_close_date'],
             'end_price_48_date' => $previousCloses['earlier_close_date'],
             'historical_prices_fetching' => $sessionPrices['historical_prices_fetching'],
-            'latest_price_trend' => $this->latestPriceTrend($latestPrice, $end24Price),
-            'latest_price_change_pct' => $this->latestPriceChangePercent($latestPrice, $end24Price),
+            'latest_price_trend' => $this->latestPriceTrend($latestPrice, $changeReference),
+            'latest_price_change_pct' => $this->latestPriceChangePercent($latestPrice, $changeReference),
             'latest_price_tick_trend' => $this->latestPriceTrend($latestPrice, $this->previousStoredPrice($holding, $latestStockPrice)),
             'latest_price_status' => $latestPriceStatus,
             'price_status' => $latestPriceStatus,
@@ -332,7 +333,7 @@ class WatchlistPdfReport
             return null;
         }
 
-        $previous = $holding->readRealtimePrices->concat($holding->readIntradayCandles)->concat($holding->readStockPrices)
+        $previous = $holding->readRealtimePrices->concat($holding->readIntradayCandles)->concat($holding->readPreviousCloseObservations)
             ->filter(fn (Model $price): bool => $price->getRawOriginal('as_of') < $latestStockPrice->getRawOriginal('as_of'))
             ->sortByDesc(fn (Model $price): string => $price->getRawOriginal('as_of'))->first();
 

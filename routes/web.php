@@ -34,6 +34,7 @@ use App\Http\Controllers\AdminV2IndexRealtimeSyncController;
 use App\Http\Controllers\AdminV2StockEodhdSyncController;
 use App\Http\Controllers\PreviewControlController;
 use App\Http\Controllers\PublicMarketDataController;
+use App\Http\Middleware\BlockPaidMarketDataRequests;
 use App\Services\PreviewIsolation;
 use Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse;
 use Illuminate\Cookie\Middleware\EncryptCookies;
@@ -179,9 +180,11 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
     Route::get('/admin/watchlist/holdings/pdf', [AdminDepotHoldingController::class, 'exportPdf'])->name('admin.watchlist.holdings.pdf');
     Route::get('/admin/index-watch-items', [AdminIndexWatchItemController::class, 'index'])->name('admin.index-watch-items.index');
     Route::post('/admin/index-watch-items/{indexWatchItem}/prices/ensure', [AdminIndexWatchItemController::class, 'ensurePrices'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.index-watch-items.prices.ensure');
     Route::get('/admin/index-watch-items/{indexWatchItem}/prices/refresh', [AdminIndexWatchItemController::class, 'ensurePrices'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->name('admin.index-watch-items.prices.refresh');
     Route::post('/admin/watchlist/holdings', [AdminDepotHoldingController::class, 'store'])->name('admin.watchlist.holdings.store');
     Route::post('/admin/index-watch-items', [AdminIndexWatchItemController::class, 'store'])
@@ -189,16 +192,19 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
         ->name('admin.index-watch-items.store');
     Route::delete('/admin/index-watch-items/{indexWatchItem}', [AdminIndexWatchItemController::class, 'destroy'])->name('admin.index-watch-items.destroy');
     Route::post('/admin/v2/indices/eodhd-sync', [AdminV2IndexEodhdSyncController::class, 'store'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.v2.indices.eodhdSync.store');
     Route::get('/admin/v2/indices/eodhd-sync/{indexEodhdSyncRun}', [AdminV2IndexEodhdSyncController::class, 'show'])->name('admin.v2.indices.eodhdSync.show');
     Route::get('/admin/v2/indices/eodhd-sync-settings', [AdminV2IndexEodhdSyncSettingsController::class, 'show'])->name('admin.v2.indices.eodhdSyncSettings.show');
     Route::patch('/admin/v2/indices/eodhd-sync-settings', [AdminV2IndexEodhdSyncSettingsController::class, 'update'])->name('admin.v2.indices.eodhdSyncSettings.update');
     Route::post('/admin/v2/indices/realtime-sync', [AdminV2IndexRealtimeSyncController::class, 'store'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.v2.indices.realtimeSync.store');
     Route::get('/admin/v2/stocks/eodhd-sync', [AdminV2StockEodhdSyncController::class, 'index'])->name('admin.v2.stocks.eodhdSync.index');
     Route::post('/admin/v2/stocks/eodhd-sync', [AdminV2StockEodhdSyncController::class, 'store'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.v2.stocks.eodhdSync.store');
     Route::get('/admin/v2/stocks/eodhd-sync/{stockEodhdSyncRun}', [AdminV2StockEodhdSyncController::class, 'show'])->name('admin.v2.stocks.eodhdSync.show');
@@ -213,13 +219,16 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.tests.stocks.intraday');
     Route::post('/admin/tests/tickers', [AdminTestsController::class, 'tickers'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.tests.tickers');
     Route::post('/admin/tests/exchanges', [AdminTestsController::class, 'exchanges'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.tests.exchanges');
     Route::get('/admin/data/exchanges', [AdminDataController::class, 'exchanges'])->name('admin.data.exchanges');
     Route::post('/admin/data/exchanges/reload', [AdminDataController::class, 'reload'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.data.exchanges.reload');
     Route::get('/admin/data/exchanges/reload/{refreshId}', [AdminDataController::class, 'reloadStatus'])->name('admin.data.exchanges.reload.status');
@@ -227,6 +236,7 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
     Route::get('/admin/data/health/stock-trading-times', [AdminStockTradingTimeHealthCheckController::class, 'show'])->name('admin.data.health.stockTradingTimes.show');
     Route::post('/admin/data/health/stock-trading-times', [AdminStockTradingTimeHealthCheckController::class, 'store'])->name('admin.data.health.stockTradingTimes.store');
     Route::post('/admin/data/health/stock-trading-times/repair', AdminStockTradingTimeRepairController::class)
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.data.health.stockTradingTimes.repair');
     Route::get('/admin/data/indices/{dataType}/date-range', [AdminDataRangeController::class, 'allIndices'])->name('admin.data.indices.dateRange.all');
@@ -237,12 +247,15 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.data.realtime.sync');
     Route::post('/admin/data/end-of-day/sync', [AdminDataController::class, 'syncEndOfDay'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.data.endOfDay.sync');
     Route::post('/admin/data/indices/sync', [AdminDataController::class, 'syncIndices'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.data.indices.sync');
     Route::post('/admin/data/indices/historical/sync', [AdminDataController::class, 'syncIndexHistorical'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.data.indices.historical.sync');
     Route::post('/admin/data/historical/sync', [AdminDataController::class, 'syncHistorical'])
@@ -255,9 +268,11 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
     Route::get('/admin/data/intraday/reload/{refreshId}', [AdminDataController::class, 'reloadIntradayStatus'])->name('admin.data.intraday.reload.status');
     Route::get('/admin/data/repair', [AdminDataController::class, 'repair'])->name('admin.data.repair');
     Route::post('/admin/data/repair/end-of-day', [AdminDataController::class, 'repairEndOfDay'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.data.repair.endOfDay');
     Route::post('/admin/data/repair/end-of-day/{holding}', [AdminDataController::class, 'repairEndOfDayStock'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.data.repair.endOfDay.stock');
     Route::post('/admin/data/repair/historical-data', [AdminDataController::class, 'repairHistoricalData'])
@@ -268,11 +283,13 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
         ->name('admin.data.repair.historicalData.stock');
     Route::get('/admin/watchlist/holdings/historical-prices/coverage', [AdminStockHistoricalPriceController::class, 'coverage'])->name('admin.watchlist.holdings.historical-prices.coverage');
     Route::post('/admin/watchlist/holdings/historical-prices/ensure', [AdminStockHistoricalPriceController::class, 'ensure'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.watchlist.holdings.historical-prices.ensure');
     Route::get('/admin/watchlist/holdings/historical-price-rows', [AdminHistoricalPriceRowsController::class, 'show'])
         ->name('admin.watchlist.holdings.historical-price-rows.show');
     Route::post('/admin/watchlist/holdings/historical-price-rows', [AdminHistoricalPriceRowsController::class, 'store'])
+        ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.watchlist.holdings.historical-price-rows.store');
     Route::patch('/admin/watchlist/holdings/{holding}', [AdminDepotHoldingController::class, 'update'])->name('admin.watchlist.holdings.update');

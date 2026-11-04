@@ -53,7 +53,7 @@ class EodhdStockResearchData
                     'status' => 'not_configured',
                     'retrieved_at' => null,
                 ]],
-                'instruction' => 'EODHD_API is not configured. Use current authoritative web sources as fallback.',
+                'instruction' => 'EODHD is disabled. Use current authoritative public web sources. Mark unavailable fundamentals, dividends, earnings or prices as missing; never invent replacements.',
             ];
         }
 

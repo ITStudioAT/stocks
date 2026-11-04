@@ -20,6 +20,12 @@ class AdminStockHistoricalPriceTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_admin_can_sync_missing_stock_history_with_the_unified_eodhd_service(): void
     {
         config(['services.eodhd.key' => 'test-token']);

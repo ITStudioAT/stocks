@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-project_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+project_directory="${STOCKS_DEPLOY_PROJECT_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$project_directory"
 
 php scripts/preview-guard.php
@@ -36,16 +36,14 @@ restore_after_pull_failure() {
 pull_with_cloudways_api() {
     echo "No Git working tree found; using the Cloudways platform Pull API."
 
-    if ! php artisan cloudways:pull --check --no-interaction; then
-        echo "Configure the Cloudways deployment API values, clear cached configuration, and run composer pdeploy again." >&2
-        exit 1
-    fi
-
-    STOCKS_CLOUDWAYS_TERMINAL_PULL=true bash scripts/deploy_cloudways.sh --prepare
-    maintenance_prepared=true
-
-    if ! php artisan cloudways:pull --no-interaction; then
-        echo "Cloudways did not complete the platform Pull; deployment was not started." >&2
+    if [ -n "${STOCKS_EXPECTED_SOURCE_COMMIT:-}" ] &&
+        [ -f deployment/source-commit ] &&
+        ! compgen -G "storage/framework/cloudways-pull-*.json" > /dev/null &&
+        [ "$(tr -d '\r\n' < deployment/source-commit)" = "$STOCKS_EXPECTED_SOURCE_COMMIT" ] &&
+        php scripts/frontend-release.php verify "$STOCKS_EXPECTED_SOURCE_COMMIT"; then
+        echo "The selected release is already pulled; resuming deployment without another platform Pull."
+    elif ! php "${STOCKS_CLOUDWAYS_PULL_LAUNCHER:-artisan}" cloudways:pull --prepare-deployment --source="${STOCKS_EXPECTED_SOURCE_COMMIT:-}" --no-interaction; then
+        echo "Cloudways Pull did not complete. Its persisted state will be checked before any subsequent Pull." >&2
         exit 1
     fi
 

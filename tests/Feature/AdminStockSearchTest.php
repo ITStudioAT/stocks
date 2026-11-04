@@ -20,7 +20,7 @@ class AdminStockSearchTest extends TestCase
         Http::preventStrayRequests();
     }
 
-    public function test_admin_can_search_stocks_with_eodhd(): void
+    public function test_paid_stock_search_is_disabled(): void
     {
         Cache::flush();
         config([
@@ -48,26 +48,15 @@ class AdminStockSearchTest extends TestCase
 
         $this->actingAs($admin)
             ->postJson('/admin/stocks/search', ['query' => 'Apple', 'source' => 'eodhd'])
-            ->assertOk()
-            ->assertJsonCount(10, 'results')
-            ->assertJsonPath('results.0.symbol', 'AAPL1')
-            ->assertJsonPath('results.0.name', 'Apple 1')
-            ->assertJsonPath('results.0.isin', 'US0378331001')
-            ->assertJsonPath('results.0.wkn', null)
-            ->assertJsonPath('results.0.exchange', 'NASDAQ')
-            ->assertJsonPath('results.0.mic_code', 'XNAS')
-            ->assertJsonPath('results.0.instrument_type', 'Common Stock')
-            ->assertJsonPath('results.0.country', 'USA')
-            ->assertJsonPath('results.0.currency', 'USD')
-            ->assertJsonPath('eodhd_api_usage.hour.used', 1)
-            ->assertJsonPath('eodhd_api_usage.hour.remaining', 999)
-            ->assertJsonPath('eodhd_api_usage.day.used', 1)
-            ->assertJsonPath('eodhd_api_usage.day.remaining', 99999);
+            ->assertUnprocessable()
+            ->assertJsonPath('message', 'EODHD search is disabled. Only free, saved or verified instruments are available.');
 
-        Http::assertSentCount(1);
+        Http::assertNothingSent();
+
+        Http::assertNothingSent();
     }
 
-    public function test_admin_can_search_by_isin_with_eodhd(): void
+    public function test_paid_isin_search_is_disabled(): void
     {
         Cache::flush();
         config([
@@ -93,18 +82,13 @@ class AdminStockSearchTest extends TestCase
 
         $this->actingAs($admin)
             ->postJson('/admin/stocks/search', ['query' => 'DE000A0D8Q23', 'source' => 'eodhd'])
-            ->assertOk()
-            ->assertJsonCount(1, 'results')
-            ->assertJsonPath('results.0.symbol', 'EXXX')
-            ->assertJsonPath('results.0.name', 'iShares ATX UCITS ETF (DE)')
-            ->assertJsonPath('results.0.isin', 'DE000A0D8Q23')
-            ->assertJsonPath('results.0.wkn', null)
-            ->assertJsonPath('results.0.exchange', 'XETRA')
-            ->assertJsonPath('results.0.mic_code', 'XETR')
-            ->assertJsonPath('results.0.currency', 'EUR');
+            ->assertUnprocessable()
+            ->assertJsonPath('message', 'EODHD search is disabled. Only free, saved or verified instruments are available.');
+
+        Http::assertNothingSent();
     }
 
-    public function test_admin_can_search_index_by_eodhd_code(): void
+    public function test_paid_index_search_is_disabled(): void
     {
         Cache::flush();
         config([
@@ -131,15 +115,10 @@ class AdminStockSearchTest extends TestCase
 
         $this->actingAs($admin)
             ->postJson('/admin/stocks/search', ['query' => 'ATX.INDX', 'source' => 'eodhd'])
-            ->assertOk()
-            ->assertJsonCount(1, 'results')
-            ->assertJsonPath('results.0.symbol', 'ATX')
-            ->assertJsonPath('results.0.name', 'Austrian Traded Index in EUR')
-            ->assertJsonPath('results.0.isin', 'AT0000999982')
-            ->assertJsonPath('results.0.exchange', 'INDX')
-            ->assertJsonPath('results.0.instrument_type', 'INDEX')
-            ->assertJsonPath('results.0.country', 'Austria')
-            ->assertJsonPath('results.0.currency', 'EUR');
+            ->assertUnprocessable()
+            ->assertJsonPath('message', 'EODHD search is disabled. Only free, saved or verified instruments are available.');
+
+        Http::assertNothingSent();
     }
 
     public function test_search_query_is_required(): void

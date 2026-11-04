@@ -1,32 +1,24 @@
 <script setup>
-defineProps({
+import { watch } from 'vue';
+
+const props = defineProps({
     modelValue: { type: String, default: 'free' },
     notice: { type: String, default: '' },
     catalogDate: { type: String, default: null },
     status: { type: String, default: '' },
 });
-defineEmits(['update:modelValue']);
+const emit = defineEmits(['update:modelValue']);
 
-const sources = [
-    { title: 'free first · EODHD fallback', value: 'free' },
-    { title: 'EODHD · existing account / quota', value: 'eodhd' },
-];
+watch(() => props.modelValue, (value) => {
+    if (value !== 'free') {
+        emit('update:modelValue', 'free');
+    }
+}, { immediate: true });
 </script>
 
 <template>
-    <v-select
-        :model-value="modelValue"
-        :items="sources"
-        label="Search source"
-        density="comfortable"
-        hide-details
-        class="mb-3"
-        @update:model-value="$emit('update:modelValue', $event)"
-    />
     <p class="text-caption text-medium-emphasis mb-3">
-        {{ modelValue === 'free'
-            ? 'Suitable free results have priority. If none are available, search uses EODHD.'
-            : 'Search uses the configured EODHD account and consumes its quota.' }}
+        Free search · Saved and verified instruments remain available. Missing free results stay unavailable; EODHD is disabled.
     </p>
     <v-alert v-if="notice" :type="['unavailable', 'stale'].includes(status) ? 'warning' : 'info'" variant="tonal" density="compact" class="mb-4">
         {{ notice }}

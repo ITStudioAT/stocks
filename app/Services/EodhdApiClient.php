@@ -18,7 +18,7 @@ class EodhdApiClient
 
     public function get(string $path, array $query = [], int $usageUnits = 1): Response
     {
-        if (! config('services.eodhd.enabled', true)) {
+        if (config('services.market_data.free_only', true) || ! config('services.eodhd.enabled', false)) {
             throw new RuntimeException('EODHD integration is disabled by configuration.');
         }
 
@@ -53,7 +53,7 @@ class EodhdApiClient
 
     public function configured(): bool
     {
-        if (! config('services.eodhd.enabled', true)) {
+        if (config('services.market_data.free_only', true) || ! config('services.eodhd.enabled', false)) {
             return false;
         }
 

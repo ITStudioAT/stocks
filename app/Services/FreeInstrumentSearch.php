@@ -45,9 +45,9 @@ class FreeInstrumentSearch
             )))
             ->sortBy(fn (array $instrument): int => in_array($needle, [$instrument['isin'] ?? null, $instrument['symbol'] ?? null, $instrument['wkn'] ?? null], true) ? 0 : 1)
             ->take(10)->values()->all();
-        $message = 'Free search covers Xetra shares/ETFs and saved or verified instruments. EODHD is used if no suitable result is available.';
+        $message = 'Free search covers Xetra shares/ETFs and saved or verified instruments. Missing instruments remain unavailable; no paid fallback is used.';
         if ($catalog['status'] === 'unavailable') {
-            $message = 'Xetra catalogue is currently unavailable. Saved or verified instruments are searched first, then EODHD if needed.';
+            $message = 'Xetra catalogue is currently unavailable. Only saved or verified instruments are available until the free catalogue recovers.';
         }
         if ($catalog['status'] === 'stale') {
             $message = 'Xetra catalogue refresh failed; dated cached reference data and saved instruments are shown.';

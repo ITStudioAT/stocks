@@ -14,12 +14,12 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 
-async function renderPage(path, width = 1440) {
+async function renderPage(path, width = 1440, transformResponse = (response) => response) {
     Object.defineProperty(window, 'innerWidth', { configurable: true, writable: true, value: width });
     Object.defineProperty(window.visualViewport, 'width', { configurable: true, writable: true, value: width });
     window.history.replaceState({}, '', path);
     vi.stubGlobal('fetch', vi.fn((requestPath) => Promise.resolve({
-        ok: true, json: () => Promise.resolve(provenanceResponse(requestPath)),
+        ok: true, json: () => Promise.resolve(transformResponse(structuredClone(provenanceResponse(requestPath)), requestPath)),
     })));
     wrapper = mount(App, { attachTo: document.body, global: { plugins: [createPinia(), createStocksVuetify()] } });
     await flushPromises();
@@ -33,6 +33,44 @@ function markers(element) {
 }
 
 describe('visible market data provenance across navigation', () => {
+    it.each([1440, 390])('keeps missing references empty and breaks performance lines at gaps at width %i', async (width) => {
+        await renderPage('/admin/menu/depot/overview', width, (response, path) => {
+            if (path === '/admin/depot-transactions') {
+                Object.assign(response.depot_holdings[0], {
+                    previous_day_price: null, previous_day_change_percent: null,
+                    previous_day_price_source_markers: [], previous_day_change_percent_source_markers: [],
+                });
+                for (const valuation of Object.values(response.depot_valuations)) {
+                    Object.assign(valuation, {
+                        previous_day_balance: null, previous_day_change_amount: null, previous_day_change_percent: null,
+                        previous_day_balance_source_markers: [], previous_day_change_amount_source_markers: [],
+                    });
+                }
+                response.depot_performance_series = [
+                    { date: '2026-11-01', account_balance: '1000', source_markers: ['free'] },
+                    { date: '2026-11-02', account_balance: null, source_markers: [] },
+                    { date: '2026-11-03', account_balance: '1112', source_markers: ['free'] },
+                ];
+            }
+
+            return response;
+        });
+
+        expect(wrapper.text()).toContain('- EUR');
+        expect(wrapper.text()).not.toContain('NaN');
+        expect(wrapper.get('.depot-performance-chart').findAll('.depot-performance-source-point')).toHaveLength(2);
+        expect(wrapper.get('.depot-performance-chart').findAll('.depot-performance-chart-line')).toHaveLength(2);
+        expect(wrapper.get('[aria-label="Free market data policy"]').text()).toContain('keinen garantierten Schlusskurs');
+    });
+
+    it('disables the paid sync action while preserving the individual free reload', async () => {
+        await renderPage('/admin/menu/stocks');
+        const sync = wrapper.findAll('button').find((button) => button.text() === 'EODHD Sync');
+
+        expect(sync.attributes('disabled')).toBeDefined();
+        expect(wrapper.text()).toContain('EODHD-Abrufe sind deaktiviert');
+    });
+
     it.each([1440, 390])('renders current, previous and calculated depot prices at width %i', async (width) => {
         await renderPage('/admin/menu/depot/overview', width);
         const desktop = wrapper.get('.desktop-depot-stocks-table tbody tr');

@@ -7,6 +7,21 @@ function mountHomepage() {
 }
 
 describe('Homepage', () => {
+    it('labels retained quotes as stored and shows their source time', async () => {
+        vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({ indexes: [{
+                symbol: 'DAX', currency: 'EUR', latest_price: '24000', latest_price_source: 'EODHD real-time',
+                quote_status: 'stored', latest_price_as_of: '2026-11-03T12:00:00Z', latest_price_source_markers: ['EODHD'],
+            }] }),
+        })));
+        const wrapper = mountHomepage();
+        await flushPromises();
+
+        expect(wrapper.get('.ticker-item').text()).toContain('Stored · 03.11.26, 13:00');
+        expect(wrapper.get('.ticker-item').text()).toContain('EODHD');
+    });
+
     it('renders the wordmark, eyebrow, and balanced headline', () => {
         const wrapper = mountHomepage();
 

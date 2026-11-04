@@ -29,7 +29,7 @@ class AdminDashboardPerformanceTest extends TestCase
                 'is_active' => true,
             ]);
             $holding = StockHolding::factory()->create([
-                'latest_price' => '130.000000',
+                'latest_price' => '130.000000', 'latest_price_source' => 'Yahoo Finance', 'exchange' => 'XETRA', 'mic_code' => 'XETR',
                 'currency' => 'EUR',
             ]);
 
@@ -57,15 +57,15 @@ class AdminDashboardPerformanceTest extends TestCase
                 ['date' => '2026-08-06', 'price' => '120.00000000'],
             ])->each(fn (array $price): StockPrice => StockPrice::factory()->create([
                 'instrument_key' => $instrumentKey,
-                'source_key' => 'eodhd_eod',
-                'price_type' => 'historical_eod',
+                'source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/',
+                'price_type' => 'observed_session_end',
                 'currency' => 'EUR',
                 'price' => $price['price'],
-                'as_of' => Carbon::parse("{$price['date']} 23:59:59", 'Europe/Vienna'),
-                'fetched_at' => Carbon::parse("{$price['date']} 23:59:59", 'Europe/Vienna'),
+                'as_of' => Carbon::parse("{$price['date']} 23:59:59", 'Europe/Vienna')->utc(),
+                'fetched_at' => Carbon::parse("{$price['date']} 23:59:59", 'Europe/Vienna')->utc(),
                 'freshness_status' => 'historical',
             ]));
-            $livePrice = StockRealtimePrice::factory()->create([
+            $livePrice = StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->create([
                 'stock_holding_id' => $holding->id,
                 'currency' => 'EUR',
                 'price' => '130.00000000',

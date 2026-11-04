@@ -4179,7 +4179,7 @@ describe('App', () => {
         wrapper.unmount();
     });
 
-    it('queues an index realtime update as soon as its next refresh time passes', async () => {
+    it('does not queue paid index updates when a stored refresh time passes', async () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date('2026-08-06T10:00:00+02:00'));
         window.history.pushState({}, '', '/admin/menu/indices');
@@ -4282,17 +4282,17 @@ describe('App', () => {
 
             await vi.advanceTimersByTimeAsync(2000);
             await flushPromises();
-            expect(realtimeDispatches).toBe(1);
-            expect(fetchMock).toHaveBeenCalledWith('/admin/v2/indices/realtime-sync', expect.objectContaining({
+            expect(realtimeDispatches).toBe(0);
+            expect(fetchMock).not.toHaveBeenCalledWith('/admin/v2/indices/realtime-sync', expect.objectContaining({
                 method: 'POST',
             }));
-            expect(wrapper.text()).toContain('Next 06.08.2026, 10:05');
+            expect(wrapper.text()).toContain('EODHD-Abrufe sind deaktiviert');
 
             await vi.advanceTimersByTimeAsync(5000);
             await flushPromises();
-            expect(realtimeDispatches).toBe(1);
-            expect(indexLoads).toBe(2);
-            expect(wrapper.text()).toContain('Latest 06.08.2026, 10:00');
+            expect(realtimeDispatches).toBe(0);
+            expect(indexLoads).toBe(1);
+
 
             wrapper.unmount();
         } finally {
@@ -5669,7 +5669,7 @@ describe('App', () => {
         const stocksAddButton = stocksDashboardButtons.find((button) => button.text() === 'Add stock');
         const stocksEditButton = stocksDashboardButtons.find((button) => button.text() === 'Edit stock');
         const stocksDeleteButton = stocksDashboardButtons.find((button) => button.text() === 'Delete stock');
-        expect(stockEodhdSyncButton.attributes('disabled')).toBeUndefined();
+        expect(stockEodhdSyncButton.attributes('disabled')).toBeDefined();
         expect(stocksAddButton.exists()).toBe(true);
         expect(stocksEditButton).toBeUndefined();
         expect(stocksDeleteButton.exists()).toBe(true);
@@ -5684,30 +5684,7 @@ describe('App', () => {
         await stockEodhdSyncButton.trigger('click');
         await flushPromises();
 
-        expect(fetchMock).toHaveBeenCalledWith('/admin/v2/stocks/eodhd-sync', expect.objectContaining({ method: 'POST' }));
-        expect(stocksDashboard.get('[aria-label="Stock EODHD synchronization status"]').text()).toContain('EOD-Daten');
-        expect(stocksDashboard.get('[aria-label="Stock EODHD synchronization status"]').text()).toContain('Intraday-Daten');
-        expect(stocksDashboard.get('[aria-label="Stock EODHD synchronization status"]').text()).toContain('Currently running: Synchronizing missing EOD data...');
-        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/data/realtime/sync')).toBe(false);
-
-        await wrapper.vm.pollStockEodhdSync('stock-eodhd-test');
-        await flushPromises();
-
-        const completedStockSync = stocksDashboard.get('[aria-label="Stock EODHD synchronization status"]');
-        expect(completedStockSync.text()).toContain('completed');
-        expect(completedStockSync.text()).toContain('EOD: 40 records');
-        expect(completedStockSync.text()).toContain('Intraday: 900 candles');
-
-        await completedStockSync.get('[aria-label="Close stock EODHD synchronization result"]').trigger('click');
-        await flushPromises();
-
-        expect(localStorage.getItem('stock_eodhd_sync_dismissed_refresh_id')).toBe('stock-eodhd-test');
-        expect(stocksDashboard.find('[aria-label="Stock EODHD synchronization status"]').exists()).toBe(false);
-
-        await wrapper.vm.restoreStockEodhdSync();
-        await flushPromises();
-
-        expect(stocksDashboard.find('[aria-label="Stock EODHD synchronization status"]').exists()).toBe(false);
+        expect(fetchMock).not.toHaveBeenCalledWith('/admin/v2/stocks/eodhd-sync', expect.objectContaining({ method: 'POST' }));
 
         const stocksTable = wrapper.get('.desktop-watch-list-table');
         expect(stocksTable.findAll('.watch-list-live-badge')).toHaveLength(1);
@@ -5863,10 +5840,10 @@ describe('App', () => {
         await appleStockRow.trigger('click');
         await flushPromises();
 
-        const automaticStockUpdates = wrapper.get('[aria-label="Automatic stock EODHD updates"]');
+        const automaticStockUpdates = wrapper.get('[aria-label="Automatic free stock updates"]');
         const stockRealtimeSchedule = automaticStockUpdates.get('[aria-label="Stock realtime schedule"]');
         const stockRealtimeScheduleClasses = stockRealtimeSchedule.attributes('class');
-        expect(stockRealtimeSchedule.get('.text-body-2.font-weight-bold').text()).toBe('Automatic EODHD updates');
+        expect(stockRealtimeSchedule.get('.text-body-2.font-weight-bold').text()).toBe('Automatic free updates');
         expect(stockRealtimeSchedule.text()).toContain('start 5 min before trading until 10 min after trading · 20 min · closed: off');
         const stockRefreshExchangeWindows = stockRealtimeSchedule.get('.stock-refresh-exchange-windows');
         expect(stockRefreshExchangeWindows.text()).toContain(
@@ -5909,7 +5886,7 @@ describe('App', () => {
         const stockLiveScheduleDialog = document.body.querySelector('.stock-live-schedule-dialog');
         expect(stockLiveScheduleDialog.textContent).toContain('Edit live/realtime update period');
         expect(stockLiveScheduleDialog.textContent).toContain(
-            'Refreshes each stock from EODHD around its stored trading hours.',
+            'Refreshes each stock from free sources around its stored trading hours.',
         );
         expect(stockLiveScheduleDialog.textContent).toContain('Every (minutes)');
         expect(stockLiveScheduleDialog.textContent).toContain('Start before (minutes)');
@@ -6052,53 +6029,8 @@ describe('App', () => {
         await eodhdSyncButton.trigger('click');
         await flushPromises();
 
-        expect(fetchMock).toHaveBeenCalledWith('/admin/v2/indices/eodhd-sync', expect.objectContaining({
-            method: 'POST',
-        }));
-        expect(wrapper.get('.index-eodhd-sync-card').text()).toContain('Check all indices');
-        expect(wrapper.get('.index-eodhd-sync-card').text()).toContain('Sync missing intraday data');
-        expect(wrapper.get('.index-eodhd-sync-checklist').text()).toContain('ATX');
-        expect(wrapper.get('.index-eodhd-sync-checklist').text()).toContain('GDAXI');
-        expect(wrapper.get('.index-eodhd-sync-checklist').text()).toContain('HTTP 404');
-        expect(wrapper.get('.index-eodhd-sync-checklist').text()).toContain('checking');
-        expect(wrapper.get('.index-eodhd-sync-card').text()).toContain('6 / 8 steps processed');
-        expect(wrapper.get('.index-eodhd-sync-card').text()).toContain('Estimated remaining: about 2 minutes');
-        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update schedule status"]').text()).toBe('Updating indices');
-        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update activity status"]').text()).toBe('Active');
-        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update activity status"]').classes()).toContain('text-success');
-
-        await wrapper.vm.pollIndexEodhdSync('index-eodhd-test');
-        await flushPromises();
-
-        const syncCard = wrapper.get('.index-eodhd-sync-card');
-        expect(fetchMock).toHaveBeenCalledWith('/admin/v2/indices/eodhd-sync/index-eodhd-test', expect.any(Object));
-        expect(syncCard.text()).toContain('Synchronization summary');
-        expect(syncCard.text()).toContain('completed with gaps');
-        expect(syncCard.text()).toContain('12 / 12 steps processed');
-        expect(syncCard.text()).toContain('8 successful · 0 waiting · 4 with gaps or errors');
-        expect(syncCard.text()).not.toContain('Estimated remaining: completed');
-        expect(syncCard.text()).toContain('EOD: 2 new rows');
-        expect(syncCard.text()).toContain('Intraday: 0 new candles');
-        expect(syncCard.text()).toContain('Stored intraday: 10000 candles');
-        expect(syncCard.text()).toContain('No EODHD data: 1');
-        expect(syncCard.text()).toContain('Deferred dates: 1');
-        expect(syncCard.text()).toContain('ATX');
-        expect(syncCard.text()).toContain('Timeout');
-        expect(syncCard.text()).toContain('EODHD intraday timed out after 3 attempts.');
-        expect(syncCard.text()).toContain('EODHD returned HTTP 200 but no intraday data.');
-        expect(syncCard.text()).toContain('Not run because the EOD check failed.');
-        expect(syncCard.text()).toContain('no EODHD data');
-        expect(syncCard.text()).toContain('ATX intraday blocks');
-        expect(syncCard.text()).toContain('Block 1/4: 2026-07-01 – 2026-07-30');
-        expect(syncCard.text()).toContain('3 attempt(s), 0 returned, 0 new');
-        expect(automaticUpdatesCard.text()).toContain('10:30');
-        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update schedule status"]').text()).toBe('Waiting');
-        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update activity status"]').text()).toBe('Inactive');
-
-        await wrapper.get('[aria-label="Close EODHD synchronization result"]').trigger('click');
-        await flushPromises();
-
-        expect(wrapper.find('.index-eodhd-sync-card').exists()).toBe(false);
+        expect(eodhdSyncButton.attributes('disabled')).toBeDefined();
+        expect(fetchMock).not.toHaveBeenCalledWith('/admin/v2/indices/eodhd-sync', expect.objectContaining({ method: 'POST' }));
 
         const addIndexButton = wrapper.findAll('button').find((button) => button.text() === 'Index hinzufügen');
         await addIndexButton.trigger('click');
@@ -9046,17 +8978,17 @@ describe('App', () => {
         const repairTradingTimesButton = healthSummary.findAll('button')
             .find((button) => button.text().includes('Repair with EODHD'));
         expect(repairTradingTimesButton.exists()).toBe(true);
+        expect(repairTradingTimesButton.attributes('disabled')).toBeDefined();
 
         await repairTradingTimesButton.trigger('click');
         await flushPromises();
 
-        expect(healthSummary.text()).toContain('2 stocks checked: 2 healthy, 0 missing, 0 broken.');
-        expect(healthSummary.text()).toContain('1 repaired, 0 failed.');
-        expect(healthSummary.findAll('button').some((button) => button.text().includes('Repair with EODHD'))).toBe(false);
+        expect(healthSummary.text()).toContain('2 stocks checked: 1 healthy, 1 missing, 0 broken.');
+        expect(healthSummary.text()).not.toContain('1 repaired, 0 failed.');
         expect(fetchMock).toHaveBeenCalledWith('/admin/data/health/stock-trading-times', expect.objectContaining({
             method: 'POST',
         }));
-        expect(fetchMock).toHaveBeenCalledWith('/admin/data/health/stock-trading-times/repair', expect.objectContaining({
+        expect(fetchMock).not.toHaveBeenCalledWith('/admin/data/health/stock-trading-times/repair', expect.objectContaining({
             method: 'POST',
         }));
         expect(window.location.pathname).toBe('/admin/menu/data/health/intraday-data');

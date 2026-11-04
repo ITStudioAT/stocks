@@ -408,7 +408,7 @@ class DeploymentWorkflowTest extends TestCase
 
         $this->assertTrue($deployed->isSuccessful(), $deployed->getErrorOutput());
         $this->assertDirectoryDoesNotExist("{$deploymentDirectory}/.git");
-        $this->assertFileExists("{$deploymentDirectory}/storage/framework/cloudways-api-checked");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-api-checked");
         $this->assertFileExists("{$deploymentDirectory}/storage/framework/cloudways-api-pulled");
         $this->assertDirectoryExists("{$deploymentDirectory}/public/build");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
@@ -420,6 +420,43 @@ class DeploymentWorkflowTest extends TestCase
         );
     }
 
+    public function test_local_gitdeploy_bootstrap_runs_the_new_pull_workflow_without_changing_old_live_scripts(): void
+    {
+        $directory = $this->createCloudwaysApiPullShellFixture();
+        $oldScript = file_get_contents("{$directory}/scripts/pdeploy_cloudways.sh");
+        $payload = new Process(['pwsh', '-NoProfile', '-NonInteractive', '-Command',
+            '. ./scripts/git_deploy_helpers.ps1; Get-StocksLiveDeploymentInput'], dirname(__DIR__, 2));
+        $payload->mustRun();
+        $source = str_repeat('b', 40);
+        $process = new Process([$this->bashExecutable(), '-lc',
+            'export PATH="$1/bin:$PATH"; tr -d "\r" | bash -s -- "$2"',
+            'stocks-bootstrap-test', $this->bashPath($directory), $source], $directory,
+            ['DEPLOY_NOTICE_SECONDS' => '0', 'STOCKS_TEST_PHP' => $this->bashPath(PHP_BINARY)]);
+        $process->setInput(str_replace("\n", "\r\n", $payload->getOutput()));
+        $process->run();
+
+        $this->assertTrue($process->isSuccessful(), $process->getOutput().$process->getErrorOutput());
+        $this->assertFileExists("{$directory}/storage/framework/cloudways-api-pulled");
+        $this->assertFileDoesNotExist("{$directory}/storage/framework/down");
+        $this->assertSame($oldScript, file_get_contents("{$directory}/scripts/pdeploy_cloudways.sh"));
+        $this->assertSame([], glob("{$directory}/storage/framework/.stocks-pull.*"));
+    }
+
+    public function test_staged_pull_entrypoint_loads_the_new_command_against_the_application_runtime(): void
+    {
+        $directory = $this->createCloudwaysShellFixture();
+        copy($this->projectPath('scripts/cloudways-pull.php'), "{$directory}/cloudways-pull.php");
+        copy($this->projectPath('app/Services/CloudwaysApiClient.php'), "{$directory}/CloudwaysApiClient.php");
+        copy($this->projectPath('app/Console/Commands/CloudwaysPullCommand.php'), "{$directory}/CloudwaysPullCommand.php");
+        $process = new Process([PHP_BINARY, "{$directory}/cloudways-pull.php", 'cloudways:pull', '--help'], dirname(__DIR__, 2),
+            ['APP_ENV' => 'testing', 'DB_CONNECTION' => 'sqlite', 'DB_DATABASE' => ':memory:', 'CACHE_STORE' => 'array']);
+        $process->run();
+
+        $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+        $this->assertStringContainsString('--prepare-deployment', $process->getOutput());
+        $this->assertStringContainsString('--source', $process->getOutput());
+    }
+
     public function test_cloudways_platform_pull_failure_keeps_the_application_online(): void
     {
         $deploymentDirectory = $this->createCloudwaysApiPullShellFixture();
@@ -429,17 +466,13 @@ class DeploymentWorkflowTest extends TestCase
 
         $this->assertFalse($failed->isSuccessful());
         $this->assertDirectoryDoesNotExist("{$deploymentDirectory}/.git");
-        $this->assertFileExists("{$deploymentDirectory}/storage/framework/cloudways-api-checked");
+        $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-api-checked");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-api-pulled");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/down");
         $this->assertFileDoesNotExist("{$deploymentDirectory}/storage/framework/cloudways-deploy-maintenance");
         $this->assertSame('idle', readStatus("{$deploymentDirectory}/storage/framework"));
         $this->assertStringContainsString(
-            'Cloudways did not complete the platform Pull; deployment was not started.',
-            $failed->getErrorOutput(),
-        );
-        $this->assertStringContainsString(
-            'restoring the application from maintenance mode',
+            'Cloudways Pull did not complete. Its persisted state will be checked',
             $failed->getErrorOutput(),
         );
     }
@@ -1263,7 +1296,7 @@ if [ "${1:-}" = "scripts/frontend-release.php" ]; then
     exit 0
 fi
 
-if [ "${1:-}" != "artisan" ]; then
+if [ "${1:-}" != "artisan" ] && [ "$(basename -- "${1:-}")" != "cloudways-pull.php" ]; then
     exit 0
 fi
 
@@ -1278,7 +1311,12 @@ case "${2:-}" in
             exit 1
         fi
 
+        [ "${3:-}" = "--prepare-deployment" ]
+        STOCKS_CLOUDWAYS_TERMINAL_PULL=true bash scripts/deploy_cloudways.sh --prepare
         touch storage/framework/cloudways-api-pulled
+        if [ -n "${STOCKS_EXPECTED_SOURCE_COMMIT:-}" ]; then
+            printf '%s\n' "$STOCKS_EXPECTED_SOURCE_COMMIT" > deployment/source-commit
+        fi
         ;;
     down)
         "$STOCKS_TEST_PHP" -r 'require "scripts/deployment-status.php"; echo Stocks\DeploymentStatus\readStatus("storage/framework");' > storage/framework/status-before-down

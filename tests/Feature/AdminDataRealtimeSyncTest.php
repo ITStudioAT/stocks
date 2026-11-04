@@ -16,11 +16,11 @@ class AdminDataRealtimeSyncTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_admin_can_sync_eodhd_realtime_quotes_in_one_batch_request(): void
+    public function test_admin_can_sync_free_realtime_quotes_in_one_batch_request(): void
     {
         $this->travelTo(Carbon::parse('2026-06-05 12:05:00', 'Europe/Vienna'));
-        $ames = StockHolding::factory()->create(['symbol' => 'AMES', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR', 'latest_price' => 10]);
-        $leer = StockHolding::factory()->create(['symbol' => 'LEER', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR', 'latest_price' => 20]);
+        $ames = StockHolding::factory()->create(['symbol' => 'AMES', 'isin' => 'FR0010655746', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR', 'latest_price' => 10]);
+        $leer = StockHolding::factory()->create(['symbol' => 'LEER', 'isin' => 'DE0007164600', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR', 'latest_price' => 20]);
         $this->fakeEuropeanTrades([['holding' => $ames, 'price' => 10.25, 'at' => '2026-06-05 09:45:00'], ['holding' => $leer, 'price' => 20.75, 'at' => '2026-06-05 09:45:00']]);
         $this->actingAs($this->adminUser())->postJson('/admin/data/realtime/sync')->assertOk()
             ->assertJsonPath('requested_count', 2)->assertJsonPath('stored_count', 2)->assertJsonPath('updated_count', 2)

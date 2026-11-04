@@ -72,6 +72,7 @@ const cashLedgerPageSize = 20;
 const indexRealtimeOverdueCheckIntervalMilliseconds = 1000;
 const activeItemRefreshIntervalMilliseconds = 60_000;
 const indexRealtimeDispatchRetryDelayMilliseconds = 5000;
+const EODHD_REQUESTS_ENABLED = false;
 const STOCK_EODHD_SYNC_DISMISSED_REFRESH_ID_KEY = 'stock_eodhd_sync_dismissed_refresh_id';
 const cashTransactionTypeOptions = [
     { title: 'Start balance', value: 'opening_balance' },
@@ -2651,6 +2652,10 @@ async function refreshActiveItemPage() {
 }
 
 async function checkForOverdueIndexRealtimeUpdate() {
+    if (!EODHD_REQUESTS_ENABLED) {
+        return;
+    }
+
     const realtimeSettings = indexEodhdSyncSettings.value?.realtime;
     const nextRefreshAt = Date.parse(realtimeSettings?.next_refresh_at ?? '');
 
@@ -6042,6 +6047,10 @@ async function restoreStockEodhdSync() {
 }
 
 async function startStockEodhdSync() {
+    if (!EODHD_REQUESTS_ENABLED) {
+        return;
+    }
+
     stockEodhdSyncError.value = '';
 
     try {
@@ -6097,6 +6106,10 @@ function closeStockEodhdSyncResult() {
 }
 
 async function startIndexEodhdSync() {
+    if (!EODHD_REQUESTS_ENABLED) {
+        return;
+    }
+
     indexEodhdSyncError.value = '';
 
     try {
@@ -6643,7 +6656,7 @@ async function syncLiveDataRealtime() {
 
     try {
         const data = await depotsStore.syncDataRealtime();
-        liveDataRealtimeSyncMessage.value = data.message ?? 'EODHD realtime sync finished.';
+        liveDataRealtimeSyncMessage.value = data.message ?? 'Free realtime sync finished.';
         await refreshVisibleApplicationData();
     } catch (err) {
         dataHistoricalPriceError.value = err.message;
@@ -6659,7 +6672,7 @@ async function syncHistoricalData() {
 
     try {
         const data = await depotsStore.syncDataHistorical();
-        historicalDataSyncMessage.value = data.message ?? 'EODHD historical sync finished.';
+        historicalDataSyncMessage.value = data.message ?? 'Free intraday sync finished.';
         await refreshVisibleApplicationData();
     } catch (err) {
         dataHistoricalPriceError.value = err.message;
@@ -6669,6 +6682,10 @@ async function syncHistoricalData() {
 }
 
 async function syncEndOfDayData() {
+    if (!EODHD_REQUESTS_ENABLED) {
+        return;
+    }
+
     endOfDayDataSyncMessage.value = '';
     dataHistoricalPriceError.value = '';
     isEndOfDayDataSyncing.value = true;
@@ -6685,6 +6702,10 @@ async function syncEndOfDayData() {
 }
 
 async function syncIndexData() {
+    if (!EODHD_REQUESTS_ENABLED) {
+        return;
+    }
+
     indexDataSyncMessage.value = '';
     dataHistoricalPriceError.value = '';
     isIndexDataSyncing.value = true;
@@ -6701,6 +6722,10 @@ async function syncIndexData() {
 }
 
 async function syncIndexHistoricalData() {
+    if (!EODHD_REQUESTS_ENABLED) {
+        return;
+    }
+
     indexHistoricalDataSyncMessage.value = '';
     dataHistoricalPriceError.value = '';
     isIndexHistoricalDataSyncing.value = true;
@@ -7802,6 +7827,10 @@ function formatCashDelta(value) {
 }
 
 function formatAccountBalance(value) {
+    if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) {
+        return '-';
+    }
+
     return new Intl.NumberFormat('en-US', {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
@@ -8082,8 +8111,12 @@ function selectedDepotValuation() {
     return depotValuations.value?.[depotPriceSource.value] ?? null;
 }
 
+function marketDataNumber(value) {
+    return value === null || value === undefined || value === '' ? Number.NaN : Number(value);
+}
+
 function depotValuationNumber(key) {
-    return Number(selectedDepotValuation()?.[key] ?? 0);
+    return marketDataNumber(selectedDepotValuation()?.[key]);
 }
 
 function formatDepotStockBalance() {
@@ -8103,7 +8136,9 @@ function formatDepotPreviousDayBalance() {
 }
 
 function hasDepotPreviousDayExternalCashFlow() {
-    return depotValuationNumber('previous_day_external_cash_flow_amount') !== 0;
+    const amount = depotValuationNumber('previous_day_external_cash_flow_amount');
+
+    return Number.isFinite(amount) && amount !== 0;
 }
 
 function formatDepotPreviousDayExternalCashFlowAmount() {
@@ -8124,7 +8159,7 @@ function formatDepotPreviousDayChangePercent() {
     const amount = depotValuationNumber('previous_day_change_percent');
     const sign = amount > 0 ? '+' : '';
 
-    return `${sign}${amount.toFixed(2)}%`;
+    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
 }
 
 function depotPreviousDayChangeClass() {
@@ -8180,7 +8215,7 @@ function formatDepotYearStockPosition(stock) {
 }
 
 function formatDepotYearStockChangePercent(stock) {
-    const percent = Number(stock?.change_percent);
+    const percent = marketDataNumber(stock?.change_percent);
 
     if (!Number.isFinite(percent)) {
         return '-';
@@ -8190,7 +8225,7 @@ function formatDepotYearStockChangePercent(stock) {
 }
 
 function formatDepotYearStockChangeAmount(stock) {
-    const amount = Number(stock?.change_amount);
+    const amount = marketDataNumber(stock?.change_amount);
 
     if (!Number.isFinite(amount)) {
         return '-';
@@ -8200,7 +8235,7 @@ function formatDepotYearStockChangeAmount(stock) {
 }
 
 function depotYearStockChangeClass(stock) {
-    const amount = Number(stock?.change_amount);
+    const amount = marketDataNumber(stock?.change_amount);
 
     return {
         'text-success': Number.isFinite(amount) && amount > 0,
@@ -8275,7 +8310,7 @@ function formatDepotBalanceChangePercent() {
     const amount = depotValuationNumber('balance_change_percent');
     const sign = amount > 0 ? '+' : '';
 
-    return `${sign}${amount.toFixed(2)}%`;
+    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
 }
 
 function formatDepotCorrectedBalanceChangePercent() {
@@ -8285,21 +8320,21 @@ function formatDepotCorrectedBalanceChangePercent() {
         : (depotAfterTaxBalanceChangeAmount() / yearStartBalance) * 100;
     const sign = amount > 0 ? '+' : '';
 
-    return `${sign}${amount.toFixed(2)}%`;
+    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
 }
 
 function formatDepotOneWeekChangePercent() {
     const amount = depotValuationNumber('one_week_change_percent');
     const sign = amount > 0 ? '+' : '';
 
-    return `${sign}${amount.toFixed(2)}%`;
+    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
 }
 
 function formatDepotMonthChangePercent() {
     const amount = depotValuationNumber('month_change_percent');
     const sign = amount > 0 ? '+' : '';
 
-    return `${sign}${amount.toFixed(2)}%`;
+    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
 }
 
 function formatDepotPerformanceBalance(value) {
@@ -8688,7 +8723,7 @@ function formatLatestPriceChangePercent(holding) {
 
     const sign = amount > 0 ? '+' : '';
 
-    return `${sign}${amount.toFixed(2)}%`;
+    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
 }
 
 function formatIndexPrice(indexItem) {
@@ -9028,6 +9063,7 @@ function buildIndexPriceChart(prices) {
             plot,
             points: [],
             linePoints: '',
+            lineSegments: [],
             horizontalGridLines: [],
             verticalGridLines: [],
             first: null,
@@ -9112,9 +9148,9 @@ function buildDepotPerformanceChart(series) {
     const chartPrices = [...series]
         .map((point) => ({
             ...point,
-            chart_price: Number(point.account_balance),
+            chart_price: marketDataNumber(point.account_balance),
         }))
-        .filter((point) => point.date && !Number.isNaN(point.chart_price))
+        .filter((point) => point.date && Number.isFinite(point.chart_price))
         .sort((first, second) => first.date.localeCompare(second.date));
 
     if (chartPrices.length === 0) {
@@ -9169,6 +9205,17 @@ function buildDepotPerformanceChart(series) {
             label: formatDepotPerformanceDate(point.date),
         };
     });
+    const segments = [];
+    for (const [index, point] of points.entries()) {
+        const previous = points[index - 1];
+        const distance = previous ? Date.parse(point.date) - Date.parse(previous.date) : 0;
+        if (!previous || distance > 24 * 60 * 60 * 1000) {
+            segments.push([]);
+        }
+        segments.at(-1).push(point);
+    }
+    const lineSegments = segments.map((segment) => segment.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' '));
+
     const highPoint = points.find((point) => point.chart_price === max);
     const lowPoint = points.find((point) => point.chart_price === min);
 
@@ -9177,16 +9224,17 @@ function buildDepotPerformanceChart(series) {
         height: chartHeight,
         plot,
         points,
+        lineSegments,
         linePoints: points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' '),
         horizontalGridLines,
         verticalGridLines: depotPerformanceMonthMarkers(domainYear, plot),
         first: points[0],
         latest: points[points.length - 1],
         firstLabel: chartEndpointLabel(points[0], plot, 'start', null, {
-            labelPrefix: '01.01',
+            labelPrefix: formatDepotPerformanceDate(points[0].date),
         }),
         latestLabel: chartEndpointLabel(points[points.length - 1], plot, 'end', points[0], {
-            labelPrefix: 'Now',
+            labelPrefix: formatDepotPerformanceDate(points[points.length - 1].date),
         }),
         highMarker: depotPerformanceExtremumMarker(highPoint, 'high', plot),
         lowMarker: depotPerformanceExtremumMarker(lowPoint, 'low', plot),
@@ -10804,7 +10852,7 @@ function formatAnalyzeIntradayCloseChangePercent(value, referenceValue) {
 
     const sign = amount > 0 ? '+' : '';
 
-    return `${sign}${amount.toFixed(2)}%`;
+    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
 }
 
 function formatAnalyzeIntradayCloseDevelopmentPercent(value, referenceValue) {
@@ -10978,7 +11026,7 @@ function formatIndexChangePercent(indexItem) {
 
     const sign = amount > 0 ? '+' : '';
 
-    return `${sign}${amount.toFixed(2)}%`;
+    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
 }
 
 function indexChangeClass(indexItem) {
@@ -11061,6 +11109,10 @@ function formatYearStartChangeAmount(holding) {
 }
 
 function depotHoldingsChangeAmountTotal() {
+    if (depotHoldings.value.some((holding) => hasPositionPieces(holding) && yearStartChangeAmount(holding) === null)) {
+        return null;
+    }
+
     return depotHoldings.value.reduce((sum, holding) => {
         const amount = yearStartChangeAmount(holding);
 
@@ -11098,7 +11150,7 @@ function formatYearStartChangePercent(holding) {
 
     const sign = amount > 0 ? '+' : '';
 
-    return `${sign}${amount.toFixed(2)}%`;
+    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
 }
 
 function yearStartChangeSymbol(holding) {
@@ -13049,6 +13101,11 @@ function formatIndexDataUpdateSchedule(settings) {
 
             <v-main>
                 <v-container class="py-8" :fluid="lgAndDown">
+                    <v-alert type="info" variant="tonal" density="compact" class="mb-4" aria-label="Free market data policy">
+                        Nur kostenlose Quellen. EODHD-Abrufe sind deaktiviert; Altdaten behalten ihre Herkunft.
+                        Last day zeigt den letzten beobachteten Free-Kurs des vorherigen Handelstags, keinen garantierten Schlusskurs.
+                        Fehlende Kurse und davon abhängige Werte bleiben leer. Für Indizes und vollständige Tageshistorien steht derzeit keine kostenlose Versorgung bereit.
+                    </v-alert>
                     <section v-if="['dashboard', 'indices', 'stocks'].includes(activeSection)">
                         <div v-if="activeSection === 'dashboard'" aria-label="Dashboard">
                             <v-tabs
@@ -13795,10 +13852,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                         class="dashboard-action-button"
                                         color="secondary"
                                         prepend-icon="mdi-cloud-sync-outline"
-                                        title="Synchronize EODHD daily history and free intraday observations."
-                                        type="button"
+                                        type="button" title="EODHD is disabled; no paid provider requests are made."
                                         variant="outlined"
-                                        :disabled="isStockEodhdSyncRunning"
+                                        disabled
                                         :loading="isStockEodhdSyncRunning"
                                         @click="startStockEodhdSync"
                                     >
@@ -13930,14 +13986,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                 </v-card-text>
                             </v-card>
 
-                            <v-card class="mb-6" variant="outlined" aria-label="Automatic stock EODHD updates">
+                            <v-card class="mb-6" variant="outlined" aria-label="Automatic free stock updates">
                                 <v-card-text>
                                     <div
                                         class="index-update-schedule-row d-flex flex-wrap align-center justify-space-between ga-3"
                                         aria-label="Stock realtime schedule"
                                     >
                                         <div class="flex-grow-1">
-                                            <div class="text-body-2 font-weight-bold">Automatic EODHD updates</div>
+                                            <div class="text-body-2 font-weight-bold">Automatic free updates</div>
                                             <div class="text-body-2">
                                                 {{ formatLiveDataUpdateSchedule(priceRefreshSettings) }}
                                             </div>
@@ -13985,7 +14041,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                 <v-card class="stock-live-schedule-dialog">
                                     <v-card-title>Edit live/realtime update period</v-card-title>
                                     <v-card-subtitle>
-                                        Refreshes each stock from EODHD around its stored trading hours.
+                                        Refreshes each stock from free sources around its stored trading hours.
                                     </v-card-subtitle>
                                     <v-form @submit.prevent="saveLiveDataUpdateSchedule">
                                         <v-card-text>
@@ -14086,9 +14142,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                         class="dashboard-action-button"
                                         color="secondary"
                                         prepend-icon="mdi-cloud-sync-outline"
-                                        type="button"
+                                        type="button" title="EODHD is disabled; no paid provider requests are made."
                                         variant="outlined"
-                                        :disabled="isIndexEodhdSyncRunning"
+                                        disabled
                                         :loading="isIndexEodhdSyncRunning"
                                         @click="startIndexEodhdSync"
                                     >
@@ -14127,6 +14183,7 @@ function formatIndexDataUpdateSchedule(settings) {
                             </v-alert>
 
                             <v-card class="mb-6" variant="outlined" aria-label="Automatic v2 index updates">
+                                <v-card-text v-if="!EODHD_REQUESTS_ENABLED">EODHD is disabled. Stored schedules do not run; retained prices are historical observations.</v-card-text>
                                 <v-card-text>
                                     <div
                                         class="index-update-schedule-row d-flex flex-wrap align-center justify-space-between ga-3"
@@ -14740,7 +14797,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </th>
                                     <th class="watch-list-content-cell">
                                         <span class="d-inline-flex flex-column">
-                                            <span>Last day</span>
+                                            <span title="Last observed free price of the previous trading day; not an official close. Missing observations stay unavailable.">Last day</span>
                                             <span class="text-caption text-medium-emphasis">
                                                 {{ sessionHeaderDates.lastDay }}
                                             </span>
@@ -18808,9 +18865,9 @@ function formatIndexDataUpdateSchedule(settings) {
                                             color="warning"
                                             prepend-icon="mdi-wrench-outline"
                                             size="small"
-                                            type="button"
+                                            type="button" title="EODHD is disabled; no paid provider requests are made."
                                             variant="outlined"
-                                            :disabled="stockTradingTimeHealthCheckLoading"
+                                            disabled
                                             :loading="stockTradingTimeRepairLoading"
                                             @click="repairStockTradingTimes"
                                         >
@@ -19494,15 +19551,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     </v-btn>
                                                     <v-btn
                                                         class="test-live-data-action-button"
-                                                        aria-label="Sync EODHD realtime data"
+                                                        aria-label="Sync free realtime data"
                                                         prepend-icon="mdi-cloud-sync-outline"
                                                         type="button"
                                                         variant="tonal"
                                                         :loading="isLiveDataRealtimeSyncing"
-                                                        :disabled="isLiveDataRealtimeSyncing"
-                                                        @click="syncLiveDataRealtime"
+                                                                        @click="syncLiveDataRealtime"
                                                     >
-                                                        EODHD-Sync
+                                                        Free sync
                                                     </v-btn>
                                                 </div>
                                             </div>
@@ -19659,15 +19715,14 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     </v-btn>
                                                     <v-btn
                                                         class="test-live-data-action-button"
-                                                        aria-label="Sync EODHD historical data"
+                                                        aria-label="Sync free historical data"
                                                         prepend-icon="mdi-cloud-sync-outline"
                                                         type="button"
                                                         variant="tonal"
                                                         :loading="isHistoricalDataSyncing"
-                                                        :disabled="isHistoricalDataSyncing"
-                                                        @click="syncHistoricalData"
+                                                                        @click="syncHistoricalData"
                                                     >
-                                                        EODHD-Sync
+                                                        Free sync
                                                     </v-btn>
                                                 </div>
                                             </div>
@@ -19835,10 +19890,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                                         class="test-live-data-action-button"
                                                         aria-label="Sync EODHD end-of-day data"
                                                         prepend-icon="mdi-cloud-sync-outline"
-                                                        type="button"
+                                                        type="button" title="EODHD is disabled; no paid provider requests are made."
                                                         variant="tonal"
                                                         :loading="isEndOfDayDataSyncing"
-                                                        :disabled="isEndOfDayDataSyncing"
+                                                        disabled
                                                         @click="syncEndOfDayData"
                                                     >
                                                         EODHD-Sync
@@ -19998,10 +20053,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                                             class="test-live-data-action-button"
                                                             aria-label="Sync EODHD realtime indices data"
                                                             prepend-icon="mdi-cloud-sync-outline"
-                                                            type="button"
+                                                            type="button" title="EODHD is disabled; no paid provider requests are made."
                                                             variant="tonal"
                                                             :loading="isIndexDataSyncing"
-                                                            :disabled="isIndexDataSyncing"
+                                                            disabled
                                                             @click="syncIndexData"
                                                         >
                                                             EODHD-Sync
@@ -20071,10 +20126,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                                             class="test-live-data-action-button"
                                                             aria-label="Sync EODHD historical indices data"
                                                             prepend-icon="mdi-cloud-sync-outline"
-                                                            type="button"
+                                                            type="button" title="EODHD is disabled; no paid provider requests are made."
                                                             variant="tonal"
                                                             :loading="isIndexHistoricalDataSyncing"
-                                                            :disabled="isIndexHistoricalDataSyncing"
+                                                            disabled
                                                             @click="syncIndexHistoricalData"
                                                         >
                                                             EODHD-Sync
@@ -21614,8 +21669,10 @@ function formatIndexDataUpdateSchedule(settings) {
                                         :y2="depotPerformanceChart.trendLine.y2"
                                     />
                                     <polyline
+                                        v-for="(segment, index) in depotPerformanceChart.lineSegments"
+                                        :key="`depot-performance-segment-${index}`"
                                         class="depot-performance-chart-line"
-                                        :points="depotPerformanceChart.linePoints"
+                                        :points="segment"
                                     />
                                     <circle
                                         class="depot-performance-source-point"

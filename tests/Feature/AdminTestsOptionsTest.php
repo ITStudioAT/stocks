@@ -23,6 +23,12 @@ class AdminTestsOptionsTest extends TestCase
         parent::tearDown();
     }
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_admin_can_list_test_options(): void
     {
         $admin = $this->adminUser();

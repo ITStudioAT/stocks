@@ -21,6 +21,12 @@ class AdminV2StockEodhdSyncTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_admin_can_queue_reuse_and_restore_a_stock_eodhd_sync(): void
     {
         Queue::fake();

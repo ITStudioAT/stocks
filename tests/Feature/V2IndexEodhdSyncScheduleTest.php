@@ -20,6 +20,12 @@ class V2IndexEodhdSyncScheduleTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_realtime_scheduler_uses_canonical_trading_times_without_mutating_stored_value(): void
     {
         $this->travelTo(Carbon::parse('2026-08-06 10:00:00', 'Europe/Vienna'));

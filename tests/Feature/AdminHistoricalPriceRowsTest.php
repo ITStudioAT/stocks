@@ -18,6 +18,12 @@ class AdminHistoricalPriceRowsTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_admin_can_check_analysis_row_coverage_without_downloading_prices(): void
     {
         $admin = $this->adminUser();

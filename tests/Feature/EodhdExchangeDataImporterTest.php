@@ -13,6 +13,12 @@ class EodhdExchangeDataImporterTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_exchange_detail_code_uses_operating_mic_from_exchange_list(): void
     {
         $importer = app(EodhdExchangeDataImporter::class);

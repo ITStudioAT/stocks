@@ -8,7 +8,6 @@ use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockRealtimePrice;
 use App\Services\WebMarketData\DTO\ParsedQuote;
 use App\Services\WebMarketData\DTO\ValidatedQuote;
-use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -187,20 +186,7 @@ class FreeIntradayMarketData
             throw new RuntimeException('Intraday start must precede end.');
         }
         $availableFrom = null;
-        try {
-            $records = $this->freeRecords($holding, $from, $until, $availableFrom);
-        } catch (RuntimeException $exception) {
-            if ($exception instanceof MarketDataSourceBusy || $exception instanceof QueryException || ! app(EodhdApiClient::class)->configured()) {
-                throw $exception;
-            }
-
-            return app(EodhdIntradayFallback::class)->records($holding, $from, $until);
-        }
-        if ($availableFrom !== null && $from->lt($availableFrom) && app(EodhdApiClient::class)->configured()) {
-            $older = app(EodhdIntradayFallback::class)->records($holding, $from, min($until, $availableFrom->copy()->subSecond()));
-
-            return [...$older, ...$records];
-        }
+        $records = $this->freeRecords($holding, $from, $until, $availableFrom);
 
         return $records;
     }
@@ -351,10 +337,8 @@ class FreeIntradayMarketData
         $errors = [];
         $coverage = [];
         $noTrades = 0;
-        $fallbackHoldings = collect();
         foreach ($holdings as $holding) {
             $hasCurrentQuote = false;
-            $freeQuoteResolved = false;
             try {
                 if ($reload) {
                     if (YahooFinanceMarketData::supports($this->identity($holding))) {
@@ -383,7 +367,6 @@ class FreeIntradayMarketData
                     continue;
                 }
                 $row = $this->latest($holding);
-                $freeQuoteResolved = true;
                 $isUs = YahooFinanceMarketData::supports($this->identity($holding));
                 $localNow = now($isUs ? 'America/New_York' : 'Europe/Berlin');
                 $isOpen = $localNow->isWeekday() && $localNow->format('H:i') >= ($isUs ? '09:30' : config('services.free_intraday.session_start'))
@@ -417,15 +400,6 @@ class FreeIntradayMarketData
                         ? [$holding->symbol.': incomplete Xetra files; inspect instrument coverage.'] : [])];
                 }
             } catch (Throwable $exception) {
-                if (! $freeQuoteResolved && ! ($exception instanceof QueryException) && ! ($exception instanceof MarketDataSourceBusy)
-                    && ! ($exception instanceof LockTimeoutException) && app(EodhdApiClient::class)->configured()) {
-                    $fallbackHoldings->push($holding);
-                    $coverage[$holding->symbol] = [...($coverage[$holding->symbol] ?? $this->identity($holding)),
-                        'status' => 'fallback_pending', 'coverage_complete' => false,
-                        'free_source_error' => app(EodhdErrorSanitizer::class)->message($exception->getMessage(), 255)];
-
-                    continue;
-                }
                 if (! $hasCurrentQuote) {
                     $holding->update(['price_status' => 'unavailable_now']);
                 }
@@ -436,21 +410,6 @@ class FreeIntradayMarketData
                 $coverage[$holding->symbol] ??= [...$this->identity($holding), 'status' => 'unavailable', 'coverage_complete' => false];
                 $coverage[$holding->symbol]['sync_error'] = $message;
                 $errors[] = $holding->symbol.': '.$message;
-            }
-        }
-
-        if ($fallbackHoldings->isNotEmpty()) {
-            $fallback = app(EodhdBatchRealtimePriceService::class)->syncHoldings($fallbackHoldings);
-            $stored += $fallback['stored_count'];
-            $updated += $fallback['updated_count'];
-            $unchanged += $fallback['unchanged_count'];
-            $failed += $fallback['failed_count'];
-            $errors = [...$errors, ...$fallback['errors']];
-            foreach ($fallbackHoldings as $holding) {
-                $coverage[$holding->symbol]['status'] = $fallback['failed_count'] === 0 ? 'fallback' : 'fallback_incomplete';
-                if ($fallback['failed_count'] === 0) {
-                    $coverage[$holding->symbol]['source_markers'] = ['EODHD'];
-                }
             }
         }
 

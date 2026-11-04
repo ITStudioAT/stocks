@@ -18,6 +18,12 @@ class AdminDataExchangeTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        config(['services.market_data.free_only' => false, 'services.eodhd.enabled' => true]);
+    }
+
     public function test_admin_can_list_stored_exchanges(): void
     {
         $admin = $this->adminUser();
