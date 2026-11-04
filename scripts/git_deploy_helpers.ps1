@@ -39,6 +39,7 @@ function Invoke-StocksLiveSsh {
 function Get-StocksLiveDeploymentInput {
     $payload = @'
 set -Eeuo pipefail
+deployment_umask="$(umask)"
 umask 077
 bootstrap_directory="$(mktemp -d storage/framework/.stocks-pull.XXXXXX)"
 trap 'rm -rf -- "$bootstrap_directory"' EXIT
@@ -65,6 +66,7 @@ trap 'rm -rf -- "$bootstrap_directory"' EXIT
 export STOCKS_DEPLOY_PROJECT_ROOT="$PWD"
 export STOCKS_CLOUDWAYS_PULL_LAUNCHER="$PWD/$bootstrap_directory/cloudways-pull.php"
 export STOCKS_EXPECTED_SOURCE_COMMIT="$1"
+umask "$deployment_umask"
 bash "$bootstrap_directory/pdeploy_cloudways.sh"
 test "$(tr -d '\r\n' < deployment/source-commit)" = "$1"
 '@

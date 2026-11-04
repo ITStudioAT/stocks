@@ -429,7 +429,7 @@ class DeploymentWorkflowTest extends TestCase
         $payload->mustRun();
         $source = str_repeat('b', 40);
         $process = new Process([$this->bashExecutable(), '-lc',
-            'export PATH="$1/bin:$PATH"; tr -d "\r" | bash -s -- "$2"',
+            'export PATH="$1/bin:$PATH"; umask 0022; tr -d "\r" | bash -s -- "$2"',
             'stocks-bootstrap-test', $this->bashPath($directory), $source], $directory,
             ['DEPLOY_NOTICE_SECONDS' => '0', 'STOCKS_TEST_PHP' => $this->bashPath(PHP_BINARY)]);
         $process->setInput(str_replace("\n", "\r\n", $payload->getOutput()));
@@ -440,6 +440,39 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertFileDoesNotExist("{$directory}/storage/framework/down");
         $this->assertSame($oldScript, file_get_contents("{$directory}/scripts/pdeploy_cloudways.sh"));
         $this->assertSame([], glob("{$directory}/storage/framework/.stocks-pull.*"));
+        $this->assertSame('0022', trim(file_get_contents("{$directory}/storage/framework/app-update-umask")));
+    }
+
+    public function test_cloudways_normalizes_public_asset_permissions_even_with_a_private_caller_umask(): void
+    {
+        $directory = $this->createCloudwaysApiPullShellFixture();
+        mkdir("{$directory}/artifact/assets");
+        file_put_contents("{$directory}/artifact/assets/app.js", 'window.freeRefreshReady = true;');
+        $archive = new Process(['tar', '-czf', "{$directory}/deployment/frontend-build.tar.gz", '-C', "{$directory}/artifact", '.']);
+        $archive->mustRun();
+        $this->writeExecutable("{$directory}/bin/chmod", <<<'BASH'
+#!/usr/bin/env bash
+set -e
+printf '%s\n' "$*" >> storage/framework/chmod-operations
+exec /usr/bin/chmod "$@"
+BASH);
+        $process = new Process([$this->bashExecutable(), '-lc',
+            'export PATH="$1/bin:$PATH"; umask 0077; bash "$1/scripts/pdeploy_cloudways.sh"',
+            'stocks-private-umask-test', $this->bashPath($directory)], $directory,
+            ['DEPLOY_NOTICE_SECONDS' => '0', 'STOCKS_TEST_PHP' => $this->bashPath(PHP_BINARY)]);
+        $process->run();
+
+        $this->assertTrue($process->isSuccessful(), $process->getOutput().$process->getErrorOutput());
+        $operations = file_get_contents("{$directory}/storage/framework/chmod-operations");
+        $this->assertMatchesRegularExpression('/0755 [^\r\n]*\/public\/\.stocks-build\./', $operations);
+        $this->assertMatchesRegularExpression('/0644 [^\r\n]*\/assets\/app\.js/', $operations);
+        $this->assertSame('window.freeRefreshReady = true;', file_get_contents("{$directory}/public/build/assets/app.js"));
+
+        if (PHP_OS_FAMILY !== 'Windows') {
+            $this->assertSame(0755, fileperms("{$directory}/public/build") & 0777);
+            $this->assertSame(0755, fileperms("{$directory}/public/build/assets") & 0777);
+            $this->assertSame(0644, fileperms("{$directory}/public/build/assets/app.js") & 0777);
+        }
     }
 
     public function test_staged_pull_entrypoint_loads_the_new_command_against_the_application_runtime(): void
@@ -1327,6 +1360,7 @@ case "${2:-}" in
         rm -f storage/framework/down
         ;;
     app:update)
+        umask > storage/framework/app-update-umask
         if [ -f storage/framework/fail-app-update ]; then
             exit 1
         fi

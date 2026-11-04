@@ -140,6 +140,10 @@ prepare_frontend_artifact() {
         return 1
     fi
 
+    # The verified public assets must be readable by the separate webserver user.
+    find "$frontend_artifact_directory" -type d -exec chmod 0755 {} +
+    find "$frontend_artifact_directory" -type f -exec chmod 0644 {} +
+
     echo "Frontend artifact verified for ${release_source_commit}."
 }
 
