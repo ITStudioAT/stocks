@@ -1143,6 +1143,9 @@ class AdminDepotTransactionController extends Controller
             ->groupBy('stock_holding_id');
         $holdings = StockHolding::query()->whereKey($stockTransactionsByHoldingId->keys()->all())->get()->keyBy('id');
         $this->historicalPrices->prime($holdings, $start->copy()->subDays(14), now());
+        $externalCashFlows = $transactions->filter(fn (DepotTransaction $transaction): bool => in_array($transaction->type, DepotTransaction::ExternalCashflowTypes, true)
+            && $transaction->booked_at?->gt($start->copy()->endOfDay()));
+        $totalExternalCashFlow = (float) $externalCashFlows->sum('cash_delta');
         $points = [];
 
         for ($date = $start->copy(); $date->lte($today); $date->addDay()) {
@@ -1161,16 +1164,17 @@ class AdminDepotTransactionController extends Controller
                     $pointSources,
                 );
 
+            $netExternalCashFlow = (float) $externalCashFlows->filter(fn (DepotTransaction $transaction): bool => $transaction->booked_at?->lte($cutoff))
+                ->sum('cash_delta');
+            $accountBalance = $stockBalance === null ? null : $cashBalance + $stockBalance;
             $points[] = [
                 'date' => $date->toDateString(),
                 'source_markers' => $stockBalance === null ? [] : $pointSources,
-                'net_external_cash_flow' => $this->decimal($transactions->filter(fn (DepotTransaction $transaction): bool => in_array($transaction->type, DepotTransaction::ExternalCashflowTypes, true)
-                    && $transaction->booked_at?->gt($start->copy()->endOfDay())
-                    && $transaction->booked_at?->lte($cutoff)
-                )->sum(fn (DepotTransaction $transaction): float => (float) $transaction->cash_delta), 2),
+                'net_external_cash_flow' => $this->decimal($netExternalCashFlow, 2),
+                'performance_balance' => $this->decimal($accountBalance === null ? null : $accountBalance + $totalExternalCashFlow - $netExternalCashFlow, 2),
                 'stock_balance' => $this->decimal($stockBalance, 2),
                 'cash_balance' => $this->decimal($cashBalance, 2),
-                'account_balance' => $this->decimal($stockBalance === null ? null : $cashBalance + $stockBalance, 2),
+                'account_balance' => $this->decimal($accountBalance, 2),
             ];
         }
 

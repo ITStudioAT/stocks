@@ -33,25 +33,50 @@ function markers(element) {
 }
 
 describe('visible market data provenance across navigation', () => {
-    it.each([1440, 390])('shows real balances and cashflow-adjusted gain with the actual endpoint origins at width %i', async (width) => {
+    it.each([1440, 390])('restores the cashflow-adjusted curve and shows actual account balances separately at width %i', async (width) => {
         await renderPage('/admin/menu/depot/overview', width, (response, path) => {
             if (path === '/admin/depot-transactions') {
                 response.depot_performance_series = [
-                    { date: '2026-01-01', account_balance: '1000', net_external_cash_flow: '0', source_markers: ['EODHD'] },
-                    { date: '2026-11-01', account_balance: null, net_external_cash_flow: '300', source_markers: [] },
-                    { date: '2026-11-04', account_balance: '1350', net_external_cash_flow: '300', source_markers: ['free'] },
+                    { date: '2026-01-01', account_balance: '1000', performance_balance: '1300', net_external_cash_flow: '0', source_markers: ['EODHD'] },
+                    { date: '2026-11-01', account_balance: '1000', performance_balance: '1300', net_external_cash_flow: '0', source_markers: ['EODHD'] },
+                    { date: '2026-11-02', account_balance: '1500', performance_balance: '1300', net_external_cash_flow: '500', source_markers: ['EODHD'] },
+                    { date: '2026-11-03', account_balance: '1300', performance_balance: '1300', net_external_cash_flow: '300', source_markers: ['EODHD'] },
+                    { date: '2026-11-04', account_balance: '1350', performance_balance: '1350', net_external_cash_flow: '300', source_markers: ['free'] },
                 ];
             }
 
             return response;
         });
         const card = wrapper.get('.depot-performance-card');
-        expect(card.text()).toContain('01.01.2026 1,000.00 EUR');
+        expect(card.text()).toContain('01.01.2026 1,300.00 EUR');
         expect(card.text()).toContain('04.11.2026 1,350.00 EUR');
+        expect(card.get('[aria-label="Actual depot account balances"]').text()).toContain('01.01.2026 1,000.00 EUR');
         expect(card.text()).toContain('+3.85% · +50.00 EUR');
         expect(markers(card.get('.font-weight-bold'))).toEqual(['free', 'EODHD']);
         expect(card.find('.index-price-chart-trend-line').exists()).toBe(false);
-        expect(card.get('[aria-label="Depot performance calculation"]').text()).toContain('Gain excludes deposits and withdrawals');
+        expect(card.get('[aria-label="Depot performance calculation"]').text()).toContain('Deposits and withdrawals do not create gains');
+        expect(card.text()).toContain('High 1,350.00 EUR');
+        expect(card.text()).toContain('Low 1,300.00 EUR');
+        const points = card.findAll('.depot-performance-source-point');
+        expect(new Set(points.slice(0, 4).map((point) => point.attributes('cy'))).size).toBe(1);
+        expect(points[4].attributes('cy')).not.toBe(points[0].attributes('cy'));
+    });
+
+    it.each([500, -200])('does not draw a gain or loss for an external cashflow of %i', async (cashflow) => {
+        await renderPage('/admin/menu/depot/overview', 1440, (response, path) => {
+            if (path === '/admin/depot-transactions') {
+                response.depot_performance_series = [
+                    { date: '2026-01-01', account_balance: '1000', net_external_cash_flow: '0', source_markers: [] },
+                    { date: '2026-01-02', account_balance: String(1000 + cashflow), net_external_cash_flow: String(cashflow), source_markers: [] },
+                ];
+            }
+
+            return response;
+        });
+        const card = wrapper.get('.depot-performance-card');
+        expect(card.get('.font-weight-bold').text()).toBe('0.00% · 0.00 EUR');
+        const coordinates = card.get('.depot-performance-chart-line').attributes('points').split(' ');
+        expect(coordinates[0].split(',')[1]).toBe(coordinates[1].split(',')[1]);
     });
 
     it.each(['opening', 'latest'])('does not substitute another observed endpoint when the %s valuation is missing', async (missing) => {

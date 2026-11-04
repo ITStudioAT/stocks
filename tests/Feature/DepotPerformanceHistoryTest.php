@@ -69,8 +69,10 @@ class DepotPerformanceHistoryTest extends TestCase
         $this->cash($depot, 'deposit', 500, '2026-11-02');
         $this->cash($depot, 'withdrawal', -200, '2026-11-03');
         $depot->update(['account_balance' => 1200]);
-        StockHoldingDailyPrice::factory()->create(['stock_holding_id' => $holding->id, 'currency' => 'EUR',
-            'trading_date' => '2026-10-30', 'close' => 50, 'adjusted_close' => 5, 'source_key' => 'eodhd_eod']);
+        foreach (['2026-10-30', '2026-11-02', '2026-11-03'] as $date) {
+            StockHoldingDailyPrice::factory()->create(['stock_holding_id' => $holding->id, 'currency' => 'EUR',
+                'trading_date' => $date, 'close' => 50, 'adjusted_close' => 5, 'source_key' => 'eodhd_eod']);
+        }
         $quote->update(['price' => 50]);
         $response = $this->getJson('/admin/depot-transactions')->assertOk();
         foreach (['balance', 'month', 'one_week'] as $period) {
@@ -82,6 +84,11 @@ class DepotPerformanceHistoryTest extends TestCase
         $this->assertSame('1000.00', $series['2026-11-01']['account_balance']);
         $this->assertSame('1300.00', $series['2026-11-04']['account_balance']);
         $this->assertSame('300.00', $series['2026-11-04']['net_external_cash_flow']);
+        foreach (['2026-01-01', '2026-10-30', '2026-11-01', '2026-11-02', '2026-11-03', '2026-11-04'] as $date) {
+            $this->assertSame('1300.00', $series[$date]['performance_balance']);
+        }
+        $this->assertSame('1500.00', $series['2026-11-02']['account_balance']);
+        $this->assertSame('1300.00', $series['2026-11-03']['account_balance']);
         $quote->update(['price' => 75]);
         $response = $this->getJson('/admin/depot-transactions')->assertOk();
         foreach (['balance', 'month', 'one_week'] as $period) {
@@ -90,6 +97,9 @@ class DepotPerformanceHistoryTest extends TestCase
         }
         $response->assertJsonPath('depot_valuations.latest.year_start_balance', '1000.00')
             ->assertJsonPath('depot_valuations.latest.month_start_balance', '1000.00');
+        $series = collect($response->json('depot_performance_series'))->keyBy('date');
+        $this->assertSame('1300.00', $series['2026-01-01']['performance_balance']);
+        $this->assertSame('1350.00', $series['2026-11-04']['performance_balance']);
         Http::assertNothingSent();
     }
 
@@ -103,6 +113,7 @@ class DepotPerformanceHistoryTest extends TestCase
         $response = $this->getJson('/admin/depot-transactions')->assertOk();
         $series = collect($response->json('depot_performance_series'))->keyBy('date');
         $this->assertNull($series['2026-11-01']['account_balance']);
+        $this->assertNull($series['2026-11-01']['performance_balance']);
         $this->assertSame([], $series['2026-11-01']['source_markers']);
         $response->assertJsonPath('depot_valuations.latest.month_start_balance', null)
             ->assertJsonPath('depot_valuations.latest.one_week_change_amount', null)

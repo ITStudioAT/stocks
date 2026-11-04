@@ -8353,6 +8353,10 @@ function formatDepotPerformanceEndpoint(point) {
     return formatDepotPerformanceBalance(point.chart_price);
 }
 
+function formatDepotAccountEndpoint(point) {
+    return formatDepotPerformanceBalance(point?.account_balance);
+}
+
 function depotPerformanceChangeClass() {
     const result = depotPerformanceResult();
 
@@ -9163,10 +9167,14 @@ function buildDepotPerformanceChart(series) {
     };
     const plotWidth = plot.right - plot.left;
     const plotHeight = plot.bottom - plot.top;
+    const latestPoint = [...series].sort((first, second) => first.date.localeCompare(second.date)).at(-1);
+    const totalExternalCashFlow = marketDataNumber(latestPoint?.net_external_cash_flow ?? 0);
     const chartPrices = [...series]
         .map((point) => ({
             ...point,
-            chart_price: marketDataNumber(point.account_balance),
+            chart_price: Object.hasOwn(point, 'performance_balance')
+                ? marketDataNumber(point.performance_balance)
+                : marketDataNumber(point.account_balance) + totalExternalCashFlow - marketDataNumber(point.net_external_cash_flow ?? 0),
         }))
         .filter((point) => point.date && Number.isFinite(point.chart_price))
         .sort((first, second) => first.date.localeCompare(second.date));
@@ -21605,6 +21613,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                     </div>
                                     <div class="text-right">
                                         <div class="text-caption text-medium-emphasis">
+                                            Cash-flow adjusted ·
                                             {{ formatDepotPerformanceDate(depotPerformanceChart.first?.date) }}
                                             {{ formatDepotPerformanceEndpoint(depotPerformanceChart.first) }} <DataSourceMarkers :markers="marketDataMarkers(depotPerformanceChart.first)" />
                                             -
@@ -21618,8 +21627,16 @@ function formatIndexDataUpdateSchedule(settings) {
                                 </div>
 
                                 <p class="text-caption text-medium-emphasis mb-2" aria-label="Depot performance calculation">
-                                    Historical account values. Gain excludes deposits and withdrawals; percentage uses net capital.
+                                    Cash-flow adjusted curve. Deposits and withdrawals do not create gains; percentage uses net capital.
                                     Stored history keeps its original source. Gaps indicate missing valuations.
+                                </p>
+                                <p class="text-caption text-medium-emphasis mb-2" aria-label="Actual depot account balances">
+                                    Actual account balances:
+                                    {{ formatDepotPerformanceDate(depotPerformanceChart.first?.date) }}
+                                    {{ formatDepotAccountEndpoint(depotPerformanceChart.first) }} <DataSourceMarkers :markers="marketDataMarkers(depotPerformanceChart.first)" />
+                                    –
+                                    {{ formatDepotPerformanceDate(depotPerformanceChart.latest?.date) }}
+                                    {{ formatDepotAccountEndpoint(depotPerformanceChart.latest) }} <DataSourceMarkers :markers="marketDataMarkers(depotPerformanceChart.latest)" />
                                 </p>
                                 <p v-if="!depotPerformanceResult()" class="text-caption text-medium-emphasis mb-2" aria-label="Missing depot performance baseline">
                                     Full-period gain unavailable: the opening or latest valuation is missing.
