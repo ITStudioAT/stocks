@@ -8314,10 +8314,10 @@ function formatDepotBalanceChangePercent() {
 }
 
 function formatDepotCorrectedBalanceChangePercent() {
-    const yearStartBalance = depotValuationNumber('year_start_balance');
-    const amount = yearStartBalance === 0
-        ? 0
-        : (depotAfterTaxBalanceChangeAmount() / yearStartBalance) * 100;
+    const netCapital = marketDataNumber(selectedDepotValuation()?.year_net_capital ?? selectedDepotValuation()?.year_start_balance);
+    const amount = netCapital <= 0
+        ? Number.NaN
+        : (depotAfterTaxBalanceChangeAmount() / netCapital) * 100;
     const sign = amount > 0 ? '+' : '';
 
     return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
@@ -8354,18 +8354,17 @@ function formatDepotPerformanceEndpoint(point) {
 }
 
 function depotPerformanceChangeClass() {
-    const first = depotPerformanceChart.value.first;
-    const latest = depotPerformanceChart.value.latest;
+    const result = depotPerformanceResult();
 
-    if (!first || !latest) {
+    if (!result) {
         return 'text-medium-emphasis';
     }
 
-    if (latest.chart_price > first.chart_price) {
+    if (result.amount > 0) {
         return 'text-success';
     }
 
-    if (latest.chart_price < first.chart_price) {
+    if (result.amount < 0) {
         return 'text-error';
     }
 
@@ -8373,31 +8372,50 @@ function depotPerformanceChangeClass() {
 }
 
 function formatDepotPerformanceChangeAmount() {
-    const first = depotPerformanceChart.value.first;
-    const latest = depotPerformanceChart.value.latest;
+    const result = depotPerformanceResult();
 
-    if (!first || !latest) {
-        return '0.00 EUR';
+    if (!result) {
+        return '- EUR';
     }
 
-    const amount = latest.chart_price - first.chart_price;
+    const amount = result.amount;
     const sign = amount > 0 ? '+' : '';
 
     return `${sign}${formatAccountBalance(amount)} EUR`;
 }
 
 function formatDepotPerformanceChangePercent() {
-    const first = depotPerformanceChart.value.first;
-    const latest = depotPerformanceChart.value.latest;
+    const result = depotPerformanceResult();
 
-    if (!first || !latest || first.chart_price === 0) {
-        return '0.00%';
+    if (!result || result.capital <= 0) {
+        return '-';
     }
 
-    const percent = ((latest.chart_price - first.chart_price) / Math.abs(first.chart_price)) * 100;
+    const percent = (result.amount / result.capital) * 100;
     const sign = percent > 0 ? '+' : '';
 
     return `${sign}${percent.toFixed(2)}%`;
+}
+
+function depotPerformanceResult() {
+    const series = [...(depotPerformanceSeries.value ?? [])].sort((first, second) => first.date.localeCompare(second.date));
+    const first = series[0];
+    const latest = series.at(-1);
+    const opening = marketDataNumber(first?.account_balance);
+    const closing = marketDataNumber(latest?.account_balance);
+    if (!first?.date?.endsWith('-01-01') || !Number.isFinite(opening) || !Number.isFinite(closing)) {
+        return null;
+    }
+    const flows = marketDataNumber(latest.net_external_cash_flow ?? 0) - marketDataNumber(first.net_external_cash_flow ?? 0);
+    if (!Number.isFinite(flows)) {
+        return null;
+    }
+
+    return {
+        amount: closing - opening - flows,
+        capital: opening + flows,
+        source_markers: marketDataMarkers([first, latest]),
+    };
 }
 
 function depotBalanceChangeClass() {
@@ -9238,7 +9256,7 @@ function buildDepotPerformanceChart(series) {
         }),
         highMarker: depotPerformanceExtremumMarker(highPoint, 'high', plot),
         lowMarker: depotPerformanceExtremumMarker(lowPoint, 'low', plot),
-        trendLine: chartRegressionLine(points, chartMin, chartRange, plot),
+        trendLine: segments.length === 1 ? chartRegressionLine(points, chartMin, chartRange, plot) : null,
     };
 }
 
@@ -21594,11 +21612,18 @@ function formatIndexDataUpdateSchedule(settings) {
                                             {{ formatDepotPerformanceEndpoint(depotPerformanceChart.latest) }} <DataSourceMarkers :markers="marketDataMarkers(depotPerformanceChart.latest)" />
                                         </div>
                                         <div class="font-weight-bold" :class="depotPerformanceChangeClass()">
-                                            {{ formatDepotPerformanceChangePercent() }} · {{ formatDepotPerformanceChangeAmount() }} <DataSourceMarkers :markers="marketDataMarkers([depotPerformanceChart.first, depotPerformanceChart.latest])" />
+                                            {{ formatDepotPerformanceChangePercent() }} · {{ formatDepotPerformanceChangeAmount() }} <DataSourceMarkers :markers="depotPerformanceResult()?.source_markers ?? []" />
                                         </div>
                                     </div>
                                 </div>
 
+                                <p class="text-caption text-medium-emphasis mb-2" aria-label="Depot performance calculation">
+                                    Historical account values. Gain excludes deposits and withdrawals; percentage uses net capital.
+                                    Stored history keeps its original source. Gaps indicate missing valuations.
+                                </p>
+                                <p v-if="!depotPerformanceResult()" class="text-caption text-medium-emphasis mb-2" aria-label="Missing depot performance baseline">
+                                    Full-period gain unavailable: the opening or latest valuation is missing.
+                                </p>
                                 <DataSourceMarkers :markers="marketDataMarkers(depotPerformanceChart.points)" />
 
                                 <svg

@@ -13,6 +13,7 @@ use App\Services\DepotTransactionBooker;
 use App\Services\MarketDataProvenance;
 use App\Services\StockPreviousCloseResolver;
 use App\Services\StockPriceCatalog;
+use App\Services\StoredHistoricalPriceResolver;
 use App\Services\UiPreferences;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -26,6 +27,7 @@ class AdminDepotTransactionController extends Controller
     public function __construct(
         private StockPreviousCloseResolver $stockPreviousCloseResolver,
         private StockPriceCatalog $stockPriceCatalog,
+        private StoredHistoricalPriceResolver $historicalPrices,
     ) {}
 
     public function index(Request $request, UiPreferences $uiPreferences): JsonResponse
@@ -496,8 +498,10 @@ class AdminDepotTransactionController extends Controller
         $cashBalance = (float) $depot->account_balance;
         $oneWeekStartCutoff = now()->startOfWeek()->subSecond();
         $monthStartCutoff = now()->startOfMonth()->subSecond();
-        $weekBalance = $this->performanceAccountBalanceAt($depot, $oneWeekStartCutoff, null, $weekSources);
-        $monthBalance = $this->performanceAccountBalanceAt($depot, $monthStartCutoff, null, $monthSources);
+        $yearStartCutoff = now()->startOfYear()->endOfDay();
+        $weekBalance = $this->performanceAccountBalanceAt($depot, $oneWeekStartCutoff, $weekSources);
+        $monthBalance = $this->performanceAccountBalanceAt($depot, $monthStartCutoff, $monthSources);
+        $yearBalance = $this->performanceAccountBalanceAt($depot, $yearStartCutoff, $yearSources);
 
         return [
             'cash_balance' => $cashBalance,
@@ -506,6 +510,14 @@ class AdminDepotTransactionController extends Controller
             'one_week_start_balance_source_markers' => $weekSources,
             'month_start_balance' => $monthBalance,
             'month_start_balance_source_markers' => $monthSources,
+            'year_start_balance' => $yearBalance,
+            'year_start_balance_source_markers' => $yearSources,
+            'one_week_external_cash_flow_amount' => $this->externalCashFlowAfter($depot, $oneWeekStartCutoff),
+            'month_external_cash_flow_amount' => $this->externalCashFlowAfter($depot, $monthStartCutoff),
+            'year_external_cash_flow_amount' => $this->externalCashFlowAfter($depot, $yearStartCutoff),
+            'year_broker_bonus_amount' => (float) DepotTransaction::query()->where('depot_id', $depot->id)
+                ->where('type', 'broker_bonus')->where('booked_at', '>', $yearStartCutoff)
+                ->where('booked_at', '<=', now()->endOfDay())->sum('cash_delta'),
             'open_buy_lot_cost' => $this->openBuyLotCostByHoldingId($depot, now()->endOfDay())->sum(),
         ];
     }
@@ -534,25 +546,25 @@ class AdminDepotTransactionController extends Controller
             ? null
             : ($previousDayChangeAmount / $previousDayPerformanceBaseline) * 100;
         $cashFlowSummary = $baselines['cash_flow_summary'];
-        $balanceChangeWithBrokerBonusAmount = $currentBalance
-            + $cashFlowSummary['total_withdrawals']
-            - $cashFlowSummary['total_deposits']
-            - $cashFlowSummary['opening_balance'];
-        $balanceChangeAmount = $balanceChangeWithBrokerBonusAmount - $cashFlowSummary['broker_bonus_amount'];
-        $yearStartBalance = $currentBalance - $balanceChangeWithBrokerBonusAmount;
+        $yearStartBalance = $baselines['year_start_balance'];
+        $yearCapital = $yearStartBalance === null ? null : $yearStartBalance + $baselines['year_external_cash_flow_amount'];
+        $balanceChangeWithBrokerBonusAmount = $currentBalance === null || $yearCapital === null ? null : $currentBalance - $yearCapital;
+        $balanceChangeAmount = $balanceChangeWithBrokerBonusAmount === null ? null : $balanceChangeWithBrokerBonusAmount - $baselines['year_broker_bonus_amount'];
         $oneWeekStartBalance = $baselines['one_week_start_balance'];
         $monthStartBalance = $baselines['month_start_balance'];
-        $balanceChangePercent = $yearStartBalance === 0.0
-            ? 0.0
-            : ($balanceChangeAmount / $yearStartBalance) * 100;
-        $monthChangeAmount = $monthStartBalance === null ? null : $currentBalance - $monthStartBalance;
-        $monthChangePercent = $monthStartBalance === null || $monthStartBalance === 0.0
+        $balanceChangePercent = $yearCapital === null || $yearCapital <= 0 || $balanceChangeAmount === null
             ? null
-            : ($monthChangeAmount / $monthStartBalance) * 100;
-        $oneWeekChangeAmount = $oneWeekStartBalance === null ? null : $currentBalance - $oneWeekStartBalance;
-        $oneWeekChangePercent = $oneWeekStartBalance === null || $oneWeekStartBalance === 0.0
+            : ($balanceChangeAmount / $yearCapital) * 100;
+        $monthCapital = $monthStartBalance === null ? null : $monthStartBalance + $baselines['month_external_cash_flow_amount'];
+        $weekCapital = $oneWeekStartBalance === null ? null : $oneWeekStartBalance + $baselines['one_week_external_cash_flow_amount'];
+        $monthChangeAmount = $monthCapital === null || $currentBalance === null ? null : $currentBalance - $monthCapital;
+        $monthChangePercent = $monthCapital === null || $monthCapital <= 0 || $monthChangeAmount === null
             ? null
-            : ($oneWeekChangeAmount / $oneWeekStartBalance) * 100;
+            : ($monthChangeAmount / $monthCapital) * 100;
+        $oneWeekChangeAmount = $weekCapital === null || $currentBalance === null ? null : $currentBalance - $weekCapital;
+        $oneWeekChangePercent = $weekCapital === null || $weekCapital <= 0 || $oneWeekChangeAmount === null
+            ? null
+            : ($oneWeekChangeAmount / $weekCapital) * 100;
         $taxableStockGainAmount = $this->taxableStockGainAmount(
             $depotHoldings,
             $source,
@@ -568,11 +580,12 @@ class AdminDepotTransactionController extends Controller
             'previous_day_change_amount' => $this->decimal($previousDayChangeAmount, 2),
             'previous_day_change_percent' => $this->decimal($previousDayChangePercent, 2),
             'year_start_balance' => $this->decimal($yearStartBalance, 2),
+            'year_net_capital' => $this->decimal($yearCapital, 2),
             'current_balance' => $this->decimal($currentBalance, 2),
             'balance_change_amount' => $this->decimal($balanceChangeAmount, 2),
             'balance_change_percent' => $this->decimal($balanceChangePercent, 2),
             'balance_change_with_broker_bonus_amount' => $this->decimal($balanceChangeWithBrokerBonusAmount, 2),
-            'balance_change_with_broker_bonus_percent' => $this->decimal($yearStartBalance === 0.0 ? 0.0 : ($balanceChangeWithBrokerBonusAmount / $yearStartBalance) * 100, 2),
+            'balance_change_with_broker_bonus_percent' => $this->decimal($yearCapital === null || $yearCapital <= 0 || $balanceChangeWithBrokerBonusAmount === null ? null : ($balanceChangeWithBrokerBonusAmount / $yearCapital) * 100, 2),
             'taxable_stock_gain_amount' => $this->decimal($taxableStockGainAmount, 2),
             'opening_balance' => $this->decimal($cashFlowSummary['opening_balance'], 2),
             'total_deposits' => $this->decimal($cashFlowSummary['total_deposits'], 2),
@@ -598,6 +611,10 @@ class AdminDepotTransactionController extends Controller
         $currentSources = $source === 'latest' ? $this->currentHoldingSources($depotHoldings) : [];
         foreach (['stock_balance', 'account_balance', 'current_balance', 'balance_change_amount', 'balance_change_percent', 'balance_change_with_broker_bonus_amount', 'balance_change_with_broker_bonus_percent', 'taxable_stock_gain_amount'] as $field) {
             $payload[$field.'_source_markers'] = $currentSources;
+        }
+        $payload['year_start_balance_source_markers'] = $baselines['year_start_balance_source_markers'];
+        foreach (['balance_change_amount', 'balance_change_percent', 'balance_change_with_broker_bonus_amount', 'balance_change_with_broker_bonus_percent'] as $field) {
+            $payload[$field.'_source_markers'] = MarketDataProvenance::merge($currentSources, $baselines['year_start_balance_source_markers']);
         }
         foreach (['previous_day', 'one_week', 'month'] as $period) {
             $balanceField = $period === 'previous_day' ? 'previous_day_balance' : $period.'_start_balance';
@@ -670,14 +687,14 @@ class AdminDepotTransactionController extends Controller
         $balances = $balanceDates->mapWithKeys(function (string $date) use ($currentBalance, $depot, $isLivePerformanceDate, $latestPerformanceDate, $currentSources, &$balanceSources): array {
             $balance = $isLivePerformanceDate && $date === $latestPerformanceDate
                 ? $currentBalance
-                : $this->performanceAccountBalanceAt($depot, Carbon::parse($date)->endOfDay(), null, $markers);
+                : $this->performanceAccountBalanceAt($depot, Carbon::parse($date)->endOfDay(), $markers);
             $balanceSources[$date] = $isLivePerformanceDate && $date === $latestPerformanceDate ? $currentSources : ($markers ?? []);
 
             return [$date => $balance];
         });
 
         return $performanceDates
-            ->map(function (string $date) use ($balances, $balanceSources, $isLivePerformanceDate, $latestPerformanceDate): array {
+            ->map(function (string $date) use ($depot, $balances, $balanceSources, $isLivePerformanceDate, $latestPerformanceDate): array {
                 if ($latestPerformanceDate === null || $date > $latestPerformanceDate) {
                     return [
                         'date' => $date,
@@ -692,10 +709,12 @@ class AdminDepotTransactionController extends Controller
                 $previousDate = Carbon::parse($date)->subDay()->toDateString();
                 $accountBalance = $balances->get($date);
                 $previousBalance = $balances->get($previousDate);
-                $changeAmount = $accountBalance === null || $previousBalance === null ? null : $accountBalance - $previousBalance;
-                $changePercent = $previousBalance === null || $previousBalance === 0.0 || $changeAmount === null
+                $flows = $this->externalCashFlowAfter($depot, Carbon::parse($previousDate)->endOfDay(), Carbon::parse($date)->endOfDay());
+                $capital = $previousBalance === null ? null : $previousBalance + $flows;
+                $changeAmount = $accountBalance === null || $capital === null ? null : $accountBalance - $capital;
+                $changePercent = $capital === null || $capital <= 0 || $changeAmount === null
                     ? null
-                    : ($changeAmount / $previousBalance) * 100;
+                    : ($changeAmount / $capital) * 100;
 
                 return [
                     'date' => $date,
@@ -704,8 +723,8 @@ class AdminDepotTransactionController extends Controller
                     'previous_balance' => $this->decimal($previousBalance, 2),
                     'account_balance_source_markers' => $balanceSources[$date] ?? [],
                     'previous_balance_source_markers' => $balanceSources[$previousDate] ?? [],
-                    'change_amount_source_markers' => MarketDataProvenance::merge($balanceSources[$date] ?? [], $balanceSources[$previousDate] ?? []),
-                    'change_percent_source_markers' => MarketDataProvenance::merge($balanceSources[$date] ?? [], $balanceSources[$previousDate] ?? []),
+                    'change_amount_source_markers' => $changeAmount === null ? [] : MarketDataProvenance::merge($balanceSources[$date] ?? [], $balanceSources[$previousDate] ?? []),
+                    'change_percent_source_markers' => $changePercent === null ? [] : MarketDataProvenance::merge($balanceSources[$date] ?? [], $balanceSources[$previousDate] ?? []),
                     'change_amount' => $this->decimal($changeAmount, 2),
                     'change_percent' => $changePercent === null ? null : $this->decimal($changePercent, 2),
                 ];
@@ -765,16 +784,18 @@ class AdminDepotTransactionController extends Controller
         Carbon $start,
         Carbon $end,
     ): array {
-        $previousBalance = $this->performanceAccountBalanceAt($depot, $start->copy()->subSecond(), $end, $previousSources);
-        $accountBalance = $this->performanceAccountBalanceAt($depot, $end, $end, $currentSources);
-        $changeAmount = $accountBalance === null || $previousBalance === null ? null : $accountBalance - $previousBalance;
-        $changePercent = $previousBalance === null || $previousBalance === 0.0 || $changeAmount === null
+        $previousBalance = $this->performanceAccountBalanceAt($depot, $start->copy()->subSecond(), $previousSources);
+        $accountBalance = $this->performanceAccountBalanceAt($depot, $end, $currentSources);
+        $flows = $this->externalCashFlowAfter($depot, $start->copy()->subSecond(), $end);
+        $capital = $previousBalance === null ? null : $previousBalance + $flows;
+        $changeAmount = $accountBalance === null || $capital === null ? null : $accountBalance - $capital;
+        $changePercent = $capital === null || $capital <= 0 || $changeAmount === null
             ? null
-            : ($changeAmount / $previousBalance) * 100;
+            : ($changeAmount / $capital) * 100;
 
         return [
             'period' => $period,
-            'source_markers' => MarketDataProvenance::merge($previousSources ?? [], $currentSources ?? []),
+            'source_markers' => $changeAmount === null ? [] : MarketDataProvenance::merge($previousSources ?? [], $currentSources ?? []),
             'change_amount' => $this->decimal($changeAmount, 2),
             'change_percent' => $this->decimal($changePercent, 2),
         ];
@@ -872,7 +893,7 @@ class AdminDepotTransactionController extends Controller
             ->exists();
     }
 
-    private function performanceAccountBalanceAt(Depot $depot, Carbon $cutoff, ?Carbon $cashFlowEnd = null, ?array &$sourceMarkers = null): ?float
+    private function performanceAccountBalanceAt(Depot $depot, Carbon $cutoff, ?array &$sourceMarkers = null): ?float
     {
         $stockBalance = $this->stockMarketBalanceAt($depot, $cutoff, $sourceMarkers);
 
@@ -880,9 +901,7 @@ class AdminDepotTransactionController extends Controller
             return null;
         }
 
-        return $this->cashBalanceAt($depot, $cutoff)
-            + $stockBalance
-            + $this->externalCashFlowAfter($depot, $cutoff, $cashFlowEnd);
+        return $this->cashBalanceAt($depot, $cutoff) + $stockBalance;
     }
 
     /**
@@ -916,6 +935,11 @@ class AdminDepotTransactionController extends Controller
 
     private function initialCashBalance(Depot $depot): float
     {
+        if (DepotTransaction::query()->where('depot_id', $depot->id)->where('type', 'opening_balance')
+            ->where('booked_at', '<=', now()->endOfDay())->exists()) {
+            return 0.0;
+        }
+
         $cashDelta = (float) DepotTransaction::query()
             ->where('depot_id', $depot->id)
             ->where('booked_at', '<=', now()->endOfDay())
@@ -1087,11 +1111,12 @@ class AdminDepotTransactionController extends Controller
         }
 
         $holdings = StockHolding::query()->whereKey($holdingIds->all())->get();
-        $this->stockPreviousCloseResolver->prime($holdings, $cutoff);
+        $this->historicalPrices->prime($holdings, $cutoff->copy()->subDays(14), $cutoff);
 
         return $holdings->mapWithKeys(function (StockHolding $holding) use ($cutoff, &$sources): array {
-            $price = $this->stockPreviousCloseResolver->priceAt($holding, $cutoff);
-            $sources[$holding->id] = $price === null ? [] : ['free'];
+            $observation = $this->historicalPrices->at($holding, $cutoff);
+            $price = $observation['price'] ?? null;
+            $sources[$holding->id] = $observation['source_markers'] ?? [];
 
             return [$holding->id => $price];
         });
@@ -1111,15 +1136,13 @@ class AdminDepotTransactionController extends Controller
             ->orderBy('booked_at')
             ->orderBy('id')
             ->get(['id', 'stock_holding_id', 'type', 'pieces', 'total_amount', 'cash_delta', 'balance_after', 'booked_at']);
-        $initialCashBalance = round((float) $depot->account_balance - $transactions->sum(
-            fn (DepotTransaction $transaction): float => (float) $transaction->cash_delta,
-        ), 2);
+        $initialCashBalance = $this->initialCashBalance($depot);
         $stockTransactionsByHoldingId = $transactions
             ->whereNotNull('stock_holding_id')
             ->whereIn('type', DepotTransaction::StockTypes)
             ->groupBy('stock_holding_id');
         $holdings = StockHolding::query()->whereKey($stockTransactionsByHoldingId->keys()->all())->get()->keyBy('id');
-        $this->stockPreviousCloseResolver->prime($holdings, now(), $start->copy()->subDays(14));
+        $this->historicalPrices->prime($holdings, $start->copy()->subDays(14), now());
         $points = [];
 
         for ($date = $start->copy(); $date->lte($today); $date->addDay()) {
@@ -1128,7 +1151,6 @@ class AdminDepotTransactionController extends Controller
             $cashBalance = $isToday
                 ? (float) $depot->account_balance
                 : $this->cashBalanceFromTransactions($transactions, $cutoff, $initialCashBalance);
-            $cashBalance += $this->externalCashFlowFromTransactionsAfter($transactions, $cutoff);
             $pointSources = $this->currentHoldingSources($currentDepotHoldings);
             $stockBalance = $isToday
                 ? $this->currentStockBalance($currentDepotHoldings)
@@ -1141,7 +1163,11 @@ class AdminDepotTransactionController extends Controller
 
             $points[] = [
                 'date' => $date->toDateString(),
-                'source_markers' => $pointSources,
+                'source_markers' => $stockBalance === null ? [] : $pointSources,
+                'net_external_cash_flow' => $this->decimal($transactions->filter(fn (DepotTransaction $transaction): bool => in_array($transaction->type, DepotTransaction::ExternalCashflowTypes, true)
+                    && $transaction->booked_at?->gt($start->copy()->endOfDay())
+                    && $transaction->booked_at?->lte($cutoff)
+                )->sum(fn (DepotTransaction $transaction): float => (float) $transaction->cash_delta), 2),
                 'stock_balance' => $this->decimal($stockBalance, 2),
                 'cash_balance' => $this->decimal($cashBalance, 2),
                 'account_balance' => $this->decimal($stockBalance === null ? null : $cashBalance + $stockBalance, 2),
@@ -1152,34 +1178,12 @@ class AdminDepotTransactionController extends Controller
     }
 
     /**
-     * @param  Collection<int, int|string>  $holdingIds
-     * @return Collection<int, Collection<int, StockHoldingDailyPrice>>
-     */
-    /**
-     * @param  Collection<int, int|string>  $holdingIds
-     * @return Collection<int, Collection<int, StockRealtimePrice>>
-     */
-    /**
      * @param  Collection<int, DepotTransaction>  $transactions
      */
     private function cashBalanceFromTransactions(Collection $transactions, Carbon $cutoff, float $initialCashBalance = 0.0): float
     {
         return $initialCashBalance + (float) $transactions
             ->filter(fn (DepotTransaction $transaction): bool => $transaction->booked_at?->lte($cutoff) ?? false)
-            ->sum(fn (DepotTransaction $transaction): float => (float) $transaction->cash_delta);
-    }
-
-    /**
-     * @param  Collection<int, DepotTransaction>  $transactions
-     */
-    private function externalCashFlowFromTransactionsAfter(Collection $transactions, Carbon $cutoff): float
-    {
-        return (float) $transactions
-            ->filter(fn (DepotTransaction $transaction): bool => (
-                in_array($transaction->type, DepotTransaction::ExternalCashflowTypes, true)
-                && ($transaction->booked_at?->gt($cutoff) ?? false)
-                && ($transaction->booked_at?->lte(now()->endOfDay()) ?? false)
-            ))
             ->sum(fn (DepotTransaction $transaction): float => (float) $transaction->cash_delta);
     }
 
@@ -1206,8 +1210,7 @@ class AdminDepotTransactionController extends Controller
 
     /**
      * @param  Collection<int, Collection<int, DepotTransaction>>  $stockTransactionsByHoldingId
-     * @param  Collection<int, Collection<int, StockHoldingDailyPrice>>  $dailyPricesByHoldingId
-     * @param  Collection<int, Collection<int, StockRealtimePrice>>  $realtimePricesByHoldingId
+     * @param  Collection<int, StockHolding>  $holdings
      */
     private function stockMarketBalanceFromCollections(
         Collection $stockTransactionsByHoldingId,
@@ -1227,13 +1230,14 @@ class AdminDepotTransactionController extends Controller
             }
 
             $holding = $holdings->get($holdingId);
-            $price = $holding === null ? null : $this->stockPreviousCloseResolver->priceAt($holding, $cutoff);
+            $observation = $holding === null ? null : $this->historicalPrices->at($holding, $cutoff);
+            $price = $observation['price'] ?? null;
 
             if ($price === null) {
                 return null;
             }
 
-            $sourceMarkers = ['free'];
+            $sourceMarkers = MarketDataProvenance::merge($sourceMarkers, $observation['source_markers']);
             $balance += $pieces * (float) $price;
         }
 

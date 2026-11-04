@@ -33,6 +33,45 @@ function markers(element) {
 }
 
 describe('visible market data provenance across navigation', () => {
+    it.each([1440, 390])('shows real balances and cashflow-adjusted gain with the actual endpoint origins at width %i', async (width) => {
+        await renderPage('/admin/menu/depot/overview', width, (response, path) => {
+            if (path === '/admin/depot-transactions') {
+                response.depot_performance_series = [
+                    { date: '2026-01-01', account_balance: '1000', net_external_cash_flow: '0', source_markers: ['EODHD'] },
+                    { date: '2026-11-01', account_balance: null, net_external_cash_flow: '300', source_markers: [] },
+                    { date: '2026-11-04', account_balance: '1350', net_external_cash_flow: '300', source_markers: ['free'] },
+                ];
+            }
+
+            return response;
+        });
+        const card = wrapper.get('.depot-performance-card');
+        expect(card.text()).toContain('01.01.2026 1,000.00 EUR');
+        expect(card.text()).toContain('04.11.2026 1,350.00 EUR');
+        expect(card.text()).toContain('+3.85% · +50.00 EUR');
+        expect(markers(card.get('.font-weight-bold'))).toEqual(['free', 'EODHD']);
+        expect(card.find('.index-price-chart-trend-line').exists()).toBe(false);
+        expect(card.get('[aria-label="Depot performance calculation"]').text()).toContain('Gain excludes deposits and withdrawals');
+    });
+
+    it.each(['opening', 'latest'])('does not substitute another observed endpoint when the %s valuation is missing', async (missing) => {
+        await renderPage('/admin/menu/depot/overview', 1440, (response, path) => {
+            if (path === '/admin/depot-transactions') {
+                response.depot_performance_series = [
+                    { date: '2026-01-01', account_balance: missing === 'opening' ? null : '1000', source_markers: ['EODHD'] },
+                    { date: '2026-11-03', account_balance: '1100', source_markers: ['free'] },
+                    { date: '2026-11-04', account_balance: missing === 'latest' ? null : '1200', source_markers: ['free'] },
+                ];
+            }
+
+            return response;
+        });
+        const card = wrapper.get('.depot-performance-card');
+        expect(card.get('.font-weight-bold').text()).toBe('- · - EUR');
+        expect(markers(card.get('.font-weight-bold'))).toEqual([]);
+        expect(card.get('[aria-label="Missing depot performance baseline"]').exists()).toBe(true);
+    });
+
     it.each([1440, 390])('keeps missing references empty and breaks performance lines at gaps at width %i', async (width) => {
         await renderPage('/admin/menu/depot/overview', width, (response, path) => {
             if (path === '/admin/depot-transactions') {

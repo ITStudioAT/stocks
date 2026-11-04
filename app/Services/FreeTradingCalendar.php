@@ -51,6 +51,15 @@ class FreeTradingCalendar
             return null;
         }
 
+        return $this->previousDayInTimezone($timezone, $reference);
+    }
+
+    public function previousDayInTimezone(string $timezone, Carbon $reference): ?Carbon
+    {
+        if (! in_array($timezone, ['America/New_York', 'Europe/Berlin'], true)) {
+            return null;
+        }
+
         $date = $reference->copy()->setTimezone($timezone)->startOfDay()->subDay();
         $calendar = $timezone === 'America/New_York' ? self::UsHolidays : self::GermanHolidays;
 

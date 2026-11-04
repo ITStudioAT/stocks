@@ -20,7 +20,7 @@ class DepotTransactionTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_missing_free_reference_stays_missing_in_holdings_sums_and_chart_points(): void
+    public function test_missing_free_previous_day_stays_missing_while_owned_history_remains_available_in_the_chart(): void
     {
         $this->travelTo(Carbon::parse('2026-11-04 15:00:00', 'UTC'));
         Http::preventStrayRequests();
@@ -45,7 +45,8 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('depot_valuations.latest.previous_day_change_amount', null)
             ->assertJsonPath('depot_valuations.latest.previous_day_change_percent', null);
         $series = collect($response->json('depot_performance_series'));
-        $this->assertNull($series->firstWhere('date', '2026-11-03')['account_balance']);
+        $this->assertSame('2098.00', $series->firstWhere('date', '2026-11-03')['account_balance']);
+        $this->assertSame(['EODHD'], $series->firstWhere('date', '2026-11-03')['source_markers']);
         $this->assertSame('140.00', $series->last()['account_balance']);
         $this->assertSame(['free'], $response->json('depot_holdings.0.latest_price_source_markers'));
         Http::assertNothingSent();
@@ -697,15 +698,15 @@ class DepotTransactionTest extends TestCase
                 ->assertJsonPath('depot_valuations.latest.month_start_balance', '83236.56')
                 ->assertJsonPath('depot_valuations.latest.month_change_amount', '-25980.00')
                 ->assertJsonPath('depot_valuations.latest.month_change_percent', '-31.21')
-                ->assertJsonPath('depot_valuations.latest.one_week_start_balance', null)
-                ->assertJsonPath('depot_valuations.latest.one_week_change_amount', null)
-                ->assertJsonPath('depot_valuations.latest.one_week_change_percent', null);
+                ->assertJsonPath('depot_valuations.latest.one_week_start_balance', '57236.56')
+                ->assertJsonPath('depot_valuations.latest.one_week_change_amount', '20.00')
+                ->assertJsonPath('depot_valuations.latest.one_week_change_percent', '0.03');
         } finally {
             Carbon::setTestNow();
         }
     }
 
-    public function test_cash_only_movements_adjust_the_year_start_balance(): void
+    public function test_cash_only_movements_preserve_the_actual_year_start_balance(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-15 12:00:00', 'UTC'));
 
@@ -754,17 +755,17 @@ class DepotTransactionTest extends TestCase
                 ->getJson('/admin/depot-transactions')
                 ->assertOk()
                 ->assertJsonCount(0, 'depot_holdings')
-                ->assertJsonPath('depot_valuations.latest.year_start_balance', '84464.35')
+                ->assertJsonPath('depot_valuations.latest.year_start_balance', '83236.56')
                 ->assertJsonPath('depot_valuations.latest.current_balance', '84464.35')
                 ->assertJsonPath('depot_valuations.latest.balance_change_amount', '0.00')
                 ->assertJsonPath('depot_valuations.latest.balance_change_percent', '0.00')
                 ->assertJsonPath('depot_valuations.latest.opening_balance', '83236.56')
                 ->assertJsonPath('depot_valuations.latest.total_deposits', '1427.79')
                 ->assertJsonPath('depot_valuations.latest.total_withdrawals', '200.00')
-                ->assertJsonPath('depot_valuations.latest.month_start_balance', '84464.35')
+                ->assertJsonPath('depot_valuations.latest.month_start_balance', '83236.56')
                 ->assertJsonPath('depot_valuations.latest.month_change_amount', '0.00')
                 ->assertJsonPath('depot_valuations.latest.month_change_percent', '0.00')
-                ->assertJsonPath('depot_valuations.latest.one_week_start_balance', '84464.35')
+                ->assertJsonPath('depot_valuations.latest.one_week_start_balance', '83236.56')
                 ->assertJsonPath('depot_valuations.latest.one_week_change_amount', '0.00')
                 ->assertJsonPath('depot_valuations.latest.one_week_change_percent', '0.00')
                 ->assertJsonPath('depot_valuations.latest.taxable_stock_gain_amount', '0.00');
@@ -772,8 +773,8 @@ class DepotTransactionTest extends TestCase
             $firstPerformancePoint = collect($response->json('depot_performance_series'))->first();
 
             $this->assertSame('2026-01-01', $firstPerformancePoint['date']);
-            $this->assertSame('84464.35', $firstPerformancePoint['cash_balance']);
-            $this->assertSame('84464.35', $firstPerformancePoint['account_balance']);
+            $this->assertSame('83236.56', $firstPerformancePoint['cash_balance']);
+            $this->assertSame('83236.56', $firstPerformancePoint['account_balance']);
         } finally {
             Carbon::setTestNow();
         }
@@ -867,7 +868,7 @@ class DepotTransactionTest extends TestCase
         }
     }
 
-    public function test_one_week_balance_remains_missing_without_free_previous_week_close(): void
+    public function test_one_week_balance_uses_owned_previous_week_close_with_positions_at_the_cutoff(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-07-03 12:00:00', 'Europe/Vienna'));
 
@@ -933,9 +934,9 @@ class DepotTransactionTest extends TestCase
                 ->getJson('/admin/depot-transactions')
                 ->assertOk()
                 ->assertJsonPath('depot_valuations.latest.current_balance', '1060.00')
-                ->assertJsonPath('depot_valuations.latest.one_week_start_balance', null)
-                ->assertJsonPath('depot_valuations.latest.one_week_change_amount', null)
-                ->assertJsonPath('depot_valuations.latest.one_week_change_percent', null);
+                ->assertJsonPath('depot_valuations.latest.one_week_start_balance', '970.00')
+                ->assertJsonPath('depot_valuations.latest.one_week_change_amount', '90.00')
+                ->assertJsonPath('depot_valuations.latest.one_week_change_percent', '9.28');
         } finally {
             Carbon::setTestNow();
         }
@@ -1001,8 +1002,8 @@ class DepotTransactionTest extends TestCase
                 ->getJson('/admin/depot-transactions')
                 ->assertOk()
                 ->assertJsonPath('depot_performance_series.0.date', '2026-01-01')
-                ->assertJsonPath('depot_performance_series.0.cash_balance', '1155.00')
-                ->assertJsonPath('depot_performance_series.0.account_balance', '1155.00');
+                ->assertJsonPath('depot_performance_series.0.cash_balance', '1000.00')
+                ->assertJsonPath('depot_performance_series.0.account_balance', '1000.00');
 
             $series = collect($response->json('depot_performance_series'));
             $februaryFirstPoint = $series->firstWhere('date', '2026-02-01');
@@ -1010,7 +1011,7 @@ class DepotTransactionTest extends TestCase
             $latestPoint = $series->last();
 
             $this->assertNull($februaryFirstPoint['stock_balance']);
-            $this->assertSame('955.00', $februaryFirstPoint['cash_balance']);
+            $this->assertSame('800.00', $februaryFirstPoint['cash_balance']);
             $this->assertNull($februaryFirstPoint['account_balance']);
             $this->assertSame('955.00', $juneTenthPoint['cash_balance']);
             $this->assertNull($juneTenthPoint['account_balance']);
