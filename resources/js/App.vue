@@ -9,6 +9,7 @@ import { useUserStore } from './stores/users';
 import { formatAdaptiveNumber, formatPriceValue } from './utils/numberFormatters';
 import DashboardMarketDataTests from './DashboardMarketDataTests.vue';
 import FreeIntradayCoverage from './FreeIntradayCoverage.vue';
+import HoldingPriceReload from './HoldingPriceReload.vue';
 import {
     calculateAnalyzeTrendV2BuyOnceEmergencyPortfolio,
     calculateAnalyzeTrendV2BuyOncePortfolio,
@@ -14617,6 +14618,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                             </span>
                                         </span>
                                     </div>
+                                    <HoldingPriceReload :holding="holding" />
                                     <div v-if="analyzeTrendV2Signals(holding).length" class="mobile-stock-signal-row">
                                         <span
                                             v-for="signal in analyzeTrendV2Signals(holding)"
@@ -14800,6 +14802,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     </span>
                                                 </span>
                                             </span>
+                                            <HoldingPriceReload :holding="holding" />
                                         </td>
                                         <td v-else class="watch-list-content-cell">
                                             <span class="latest-price-value d-inline-flex flex-column" :class="watchListLatestPriceClass(holding)">
@@ -14827,6 +14830,7 @@ function formatIndexDataUpdateSchedule(settings) {
                                                     {{ formatLatestPriceChangePercent(holding) }}
                                                 </span>
                                             </span>
+                                            <HoldingPriceReload v-if="isCompactWatchListTable" :holding="holding" />
                                         </td>
                                         <td class="watch-list-content-cell">
                                             <span>{{ formatSessionPrice(holding.start_price, holding) }}</span>
@@ -14839,7 +14843,8 @@ function formatIndexDataUpdateSchedule(settings) {
                                             </span>
                                         </td>
                                         <td v-if="!isCompactWatchListTable" class="watch-list-source-time-cell">
-                                            <div>{{ formatSourceDateTime(holding.latest_price_as_of) }}</div>
+                                            <div title="Time of the last reported trade or source observation, independently of when it was checked.">{{ formatSourceDateTime(holding.latest_price_as_of) }}</div>
+                                            <HoldingPriceReload :holding="holding" />
                                             <div
                                                 v-if="activeSection === 'stocks'"
                                                 class="stock-holding-refresh-statuses d-flex flex-wrap align-center ga-1"

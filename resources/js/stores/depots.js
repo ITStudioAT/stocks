@@ -734,6 +734,15 @@ export const useDepotStore = defineStore('depots', {
                 this.holdingsLoading = false;
             }
         },
+        async reloadHoldingPrice(id) {
+            const data = await request(`/admin/watchlist/holdings/${id}/price/reload`, { method: 'POST' });
+            if (data.holding) {
+                this.holdings = this.holdings.map(holding => holding.id === id ? { ...holding, ...data.holding } : holding);
+                this.depotHoldings = this.depotHoldings.map(holding => holding.id === id ? { ...holding, ...data.holding } : holding);
+            }
+
+            return data;
+        },
         async createIndexWatchItem(payload) {
             this.holdingsLoading = true;
             this.holdingsError = '';

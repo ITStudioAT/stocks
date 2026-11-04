@@ -27,7 +27,7 @@ class XetraIntradayCollector
     private ?array $result = null;
 
     /** @return array<string, mixed> */
-    public function collect(bool $advance = false): array
+    public function collect(bool $advance = false, bool $refreshCatalog = false): array
     {
         app(PreviewIsolation::class)->assertIntegrationAllowed();
         if ($this->result !== null && ! $advance) {
@@ -46,14 +46,14 @@ class XetraIntradayCollector
         }
 
         try {
-            return $this->result = $this->collectLocked($holdings);
+            return $this->result = $this->collectLocked($holdings, $refreshCatalog);
         } finally {
             $lock->release();
         }
     }
 
     /** @param Collection<int, StockHolding> $holdings @return array<string, mixed> */
-    private function collectLocked(Collection $holdings): array
+    private function collectLocked(Collection $holdings, bool $refreshCatalog = false): array
     {
         $identities = $holdings->map(fn (StockHolding $holding): array => $holding->only(['id', 'isin', 'symbol', 'exchange', 'mic_code', 'currency']))->values()->all();
         $universe = hash('sha256', json_encode($identities, JSON_THROW_ON_ERROR));
@@ -67,7 +67,7 @@ class XetraIntradayCollector
             if (Cache::has('free-intraday.cooldown.deutsche-boerse')) {
                 throw new RuntimeException('Xetra provider cooldown after HTTP 429/403; no paid fallback.');
             }
-            $catalog = Cache::remember('free-intraday.xetra.catalog.v1', now()->addSeconds(30), function (): array {
+            $loadCatalog = function (): array {
                 $this->throttle();
                 $response = Http::connectTimeout(4)->timeout(10)->withOptions(['allow_redirects' => false])->get(self::CatalogUrl);
                 $this->checkStatus($response->status(), $response->header('Retry-After'));
@@ -80,7 +80,9 @@ class XetraIntradayCollector
                 }
 
                 return $catalog;
-            });
+            };
+            $catalog = $refreshCatalog ? $loadCatalog()
+                : Cache::remember('free-intraday.xetra.catalog.v1', now()->addSeconds(30), $loadCatalog);
             $state['catalog'] = $this->catalogFiles($catalog['CurrentFiles']);
             $state['catalog_checked_at'] = now()->toIso8601String();
             $state['catalog_generated_at'] = $catalog['GenerationDatetime'] ?? null;

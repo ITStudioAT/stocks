@@ -37,6 +37,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -521,6 +522,45 @@ class AdminDepotHoldingController extends Controller
         ], 202);
     }
 
+    public function reloadPrice(StockHolding $holding, FreeIntradayMarketData $marketData): JsonResponse
+    {
+        $response = Cache::lock('free-intraday.reload.'.$holding->id, 90)->get(function () use ($holding, $marketData): JsonResponse {
+            $holding->refresh();
+            $depot = $this->activeDepot();
+            $before = $this->holdingPayload($holding, $depot);
+            $result = $marketData->syncHolding($holding);
+            $payload = $this->holdingPayload($holding->fresh(), $depot);
+            unset($payload['daily_prices'], $payload['intraday_prices'], $payload['intraday_candles'],
+                $payload['depot_transactions'], $payload['historical_prices_fetching'], $payload['intraday_refresh']);
+            $updated = $payload['latest_price_as_of'] !== $before['latest_price_as_of']
+                || $payload['latest_price'] !== $before['latest_price'];
+            $incomplete = $result['failed_count'] > 0;
+            $failed = $incomplete && $result['stored_count'] === 0 && $result['unchanged_count'] === 0;
+            $status = match (true) {
+                $failed => 'error',
+                $incomplete => 'incomplete',
+                $updated => 'updated',
+                default => 'unchanged',
+            };
+            $message = match ($status) {
+                'error' => 'The free source could not be checked. The last stored price is retained.',
+                'incomplete' => 'Free source checked with incomplete coverage. Further data may still be missing.',
+                'updated' => 'Newer source data loaded.',
+                default => 'No newer source data available.',
+            };
+
+            return response()->json([
+                'holding' => $payload,
+                'status' => $status,
+                'message' => $message,
+                'checked_at' => now()->toIso8601String(),
+                'warnings' => $result['errors'],
+            ]);
+        });
+
+        return $response ?: response()->json(['message' => 'A reload for this stock is already running.'], 409);
+    }
+
     public function refreshPriceStatus(string $refreshId, DepotHoldingPriceRefreshProgress $refreshProgress): JsonResponse
     {
         $progress = $refreshProgress->getStored($refreshId);
@@ -773,7 +813,16 @@ class AdminDepotHoldingController extends Controller
             : Carbon::parse($latestIntradayDate)->toDateString();
         $realtimeDate = $this->latestRealtimeTradingDate($holding);
 
-        if ($realtimeDate !== null && ($intradayDate === null || $realtimeDate > $intradayDate)) {
+        $realtimeIsNewer = false;
+        if ($realtimeDate !== null && $realtimeDate === $intradayDate) {
+            $realtime = $this->realtimeSessionPrices($holding, $realtimeDate)['latest_price'];
+            $intraday = $this->intradayCandleSessionPrices($holding, $intradayDate)['latest_price'];
+            $realtimeAt = $realtime === null ? null : $this->storedStockPriceDateTime($realtime, 'as_of');
+            $intradayAt = $intraday === null ? null : $this->storedIntradayCandleDateTime($intraday);
+            $realtimeIsNewer = $realtimeAt !== null && ($intradayAt === null || $realtimeAt->greaterThan($intradayAt));
+        }
+
+        if ($realtimeDate !== null && ($intradayDate === null || $realtimeDate > $intradayDate || $realtimeIsNewer)) {
             return [
                 'source' => 'realtime',
                 'date' => $realtimeDate,

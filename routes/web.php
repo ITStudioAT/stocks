@@ -167,6 +167,9 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
         ->whereIn('kind', ['samples', 'detail'])
         ->name('admin.watchlist.holdings.intraday-refresh');
     Route::get('/admin/watchlist/holdings/{holding}/realtime-prices/latest', [AdminDepotHoldingController::class, 'latestRealtimePrices'])->name('admin.watchlist.holdings.realtime-prices.latest');
+    Route::post('/admin/watchlist/holdings/{holding}/price/reload', [AdminDepotHoldingController::class, 'reloadPrice'])
+        ->middleware('throttle:admin.costly-operation')
+        ->name('admin.watchlist.holdings.price.reload');
     Route::get('/admin/watchlist/holdings/{holding}/intraday-candles/latest-days', [AdminDepotHoldingController::class, 'latestIntradayCandles'])->name('admin.watchlist.holdings.intraday-candles.latest-days');
     Route::get('/admin/watchlist/holdings/{holding}/end-of-day-prices/latest-days', [AdminDepotHoldingController::class, 'latestEndOfDayPrices'])->name('admin.watchlist.holdings.end-of-day-prices.latest-days');
     Route::post('/admin/watchlist/holdings/{holding}/intraday-candles', [AdminDepotHoldingController::class, 'intradayCandles'])

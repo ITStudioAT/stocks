@@ -994,6 +994,8 @@ class AdminDepotHoldingTest extends TestCase
             ->getJson('/admin/watchlist/holdings')
             ->assertOk()
             ->assertJsonPath('holdings.0.end_price', '102.250000')
+            ->assertJsonPath('holdings.0.latest_price', '102.250000')
+            ->assertJsonPath('holdings.0.latest_price_as_of', '2026-06-04T08:05:00+00:00')
             ->assertJsonPath('holdings.0.end_price_date', '2026-06-04');
     }
 

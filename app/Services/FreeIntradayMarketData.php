@@ -10,6 +10,7 @@ use App\Services\WebMarketData\DTO\ParsedQuote;
 use App\Services\WebMarketData\DTO\ValidatedQuote;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use RuntimeException;
 use Throwable;
@@ -43,15 +44,15 @@ class FreeIntradayMarketData
     }
 
     /** @return array<string, mixed> */
-    private function usResult(StockHolding $holding): array
+    private function usResult(StockHolding $holding, bool $reload = false): array
     {
         $key = 'free-intraday.us.'.hash('sha256', json_encode($this->identity($holding)));
 
-        return $this->cached($key, 'yahoo', fn (): array => $this->us->run(collect([$this->identity($holding)]), includeSeries: true));
+        return $this->cached($key, 'yahoo', fn (): array => $this->us->run(collect([$this->identity($holding)]), includeSeries: true), $reload);
     }
 
     /** @return array<string, mixed> */
-    public function yahooSupplement(StockHolding $holding): array
+    public function yahooSupplement(StockHolding $holding, bool $reload = false): array
     {
         $identity = $this->identity($holding);
         if (! YahooFinanceMarketData::supportsXetra($identity)) {
@@ -59,18 +60,20 @@ class FreeIntradayMarketData
         }
 
         return $this->cached('free-intraday.xetra-yahoo.'.hash('sha256', json_encode($identity)), 'yahoo',
-            fn (): array => $this->us->runXetra($identity));
+            fn (): array => $this->us->runXetra($identity), $reload);
     }
 
     /** @return array<string, mixed> */
-    private function europeanResult(): array
+    private function europeanResult(StockHolding $holding): array
     {
         $result = $this->europe->collect();
         foreach ($result['unresolved_corrections'] ?? [] as $isin) {
             StockHoldingIntradayCandle::withoutGlobalScopes()->whereIn('source_key', ['xetra_posttrade', 'deutsche_boerse_trade'])
+                ->where('stock_holding_id', $holding->id)
                 ->whereIn('stock_holding_id', StockHolding::query()->select('id')->where('isin', $isin))
                 ->whereIn('trading_date', array_keys($result['days']))->update(['raw_payload->quarantined' => true]);
             StockRealtimePrice::withoutGlobalScopes()->whereIn('source_key', ['xetra_posttrade', 'deutsche_boerse_trade'])
+                ->where('stock_holding_id', $holding->id)
                 ->whereIn('stock_holding_id', StockHolding::query()->select('id')->where('isin', $isin))
                 ->where('as_of', '>=', min(array_keys($result['days'])))->update(['raw_payload->quarantined' => true]);
         }
@@ -91,7 +94,7 @@ class FreeIntradayMarketData
                 'quote_age_minutes' => isset($row['trade_at']) ? (int) Carbon::parse($row['trade_at'])->diffInMinutes(now(), absolute: true) : null,
                 'warnings' => $result['warnings'], 'days' => []];
         }
-        $result = $this->europeanResult();
+        $result = $this->europeanResult($holding);
 
         return collect($result['instruments'])->firstWhere('isin', $holding->isin)
             ?? ['isin' => $holding->isin, 'symbol' => $holding->symbol, 'status' => 'unsupported_market',
@@ -128,15 +131,21 @@ class FreeIntradayMarketData
     }
 
     /** @return array<string, mixed> */
-    private function cached(string $key, string $family, callable $load): array
+    private function cached(string $key, string $family, callable $load, bool $reload = false): array
     {
         if (Cache::has('free-intraday.cooldown.'.$family)) {
             throw new RuntimeException("{$family}: provider cooldown after rate limit/block; try later.");
         }
-        if (Cache::has($key)) {
+        if (! $reload && Cache::has($key)) {
             return Cache::get($key);
         }
-        $result = Cache::lock('free-intraday.lock.'.$family, 40)->get(fn (): array => Cache::remember($key, now()->addMinutes(2), $load));
+        $result = Cache::lock('free-intraday.lock.'.$family, 40)->get(function () use ($key, $load, $reload): array {
+            if ($reload) {
+                Cache::forget($key);
+            }
+
+            return Cache::remember($key, now()->addMinutes(2), $load);
+        });
         if (! is_array($result)) {
             throw new RuntimeException("{$family}: another source request is in progress.");
         }
@@ -150,7 +159,7 @@ class FreeIntradayMarketData
     /** @return array<string, mixed> */
     private function latest(StockHolding $holding): array
     {
-        $result = YahooFinanceMarketData::supports($this->identity($holding)) ? $this->usResult($holding) : $this->europeanResult();
+        $result = YahooFinanceMarketData::supports($this->identity($holding)) ? $this->usResult($holding) : $this->europeanResult($holding);
         $row = collect($result['instruments'])->firstWhere('isin', $holding->isin);
         if (($row['price'] ?? null) === null && ($row['status'] ?? null) !== 'unresolved_corrections' && YahooFinanceMarketData::supportsXetra($this->identity($holding))) {
             $result = $this->yahooSupplement($holding);
@@ -181,7 +190,7 @@ class FreeIntradayMarketData
             $row = $this->latest($holding);
             $records = $row['series'] ?? [];
         } else {
-            $result = $this->europeanResult();
+            $result = $this->europeanResult($holding);
             $records = $result['series'][$holding->isin] ?? [];
             $coverage = $this->coverage($holding);
             $firstDay = min(array_keys($result['days']) ?: [now('Europe/Berlin')->toDateString()]);
@@ -286,7 +295,20 @@ class FreeIntradayMarketData
     /** @return array<string, mixed> */
     public function syncAll(): array
     {
-        $holdings = StockHolding::query()->orderBy('name')->get();
+        return $this->syncHoldings(StockHolding::query()->orderBy('name')->get());
+    }
+
+    /** @return array<string, mixed> */
+    public function syncHolding(StockHolding $holding): array
+    {
+        app(PreviewIsolation::class)->assertIntegrationAllowed();
+
+        return $this->syncHoldings(collect([$holding]), reload: true);
+    }
+
+    /** @param Collection<int, StockHolding> $holdings @return array<string, mixed> */
+    private function syncHoldings(Collection $holdings, bool $reload = false): array
+    {
         $stored = 0;
         $updated = 0;
         $unchanged = 0;
@@ -297,6 +319,19 @@ class FreeIntradayMarketData
         foreach ($holdings as $holding) {
             $hasCurrentQuote = false;
             try {
+                if ($reload) {
+                    if (YahooFinanceMarketData::supports($this->identity($holding))) {
+                        $this->usResult($holding, reload: true);
+                    } else {
+                        $source = $this->europe->collect(advance: true, refreshCatalog: true);
+                        $instrument = collect($source['instruments'])->firstWhere('isin', $holding->isin);
+                        if (($instrument['price'] ?? null) === null && ! ($instrument['coverage_complete'] ?? false)
+                            && ($instrument['status'] ?? null) !== 'unresolved_corrections'
+                            && YahooFinanceMarketData::supportsXetra($this->identity($holding))) {
+                            $this->yahooSupplement($holding, reload: true);
+                        }
+                    }
+                }
                 $coverage[$holding->symbol] = $this->coverage($holding);
                 if ($coverage[$holding->symbol]['collector_busy'] ?? false) {
                     $failed++;
@@ -363,7 +398,9 @@ class FreeIntradayMarketData
             'requested_count' => $holdings->count(), 'stored_count' => $stored, 'coverage' => array_values($coverage),
             'coverage_complete_count' => $completeCount, 'no_trade_count' => $noTrades,
             'unchanged_count' => $unchanged, 'updated_count' => $updated, 'failed_count' => $failed, 'errors' => array_values(array_unique($errors))];
-        AppConfig::query()->updateOrCreate(['key' => 'free_intraday.sync.coverage.v1'], ['value' => ['checked_at' => now()->toIso8601String(), ...$result]]);
+        if (! $reload) {
+            AppConfig::query()->updateOrCreate(['key' => 'free_intraday.sync.coverage.v1'], ['value' => ['checked_at' => now()->toIso8601String(), ...$result]]);
+        }
 
         return $result;
     }

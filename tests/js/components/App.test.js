@@ -856,6 +856,8 @@ describe('App', () => {
         expect(firstRowCells[2].text()).toContain('306.32');
         expect(firstRowCells[2].text()).toContain('03.06. 17:35');
         expect(wrapper.get('.mobile-stock-price-row').text()).toContain('03.06. 17:35');
+        expect(wrapper.get('.mobile-watch-list').find('[aria-label="Reload AAPL price"]').exists()).toBe(true);
+        expect(firstRowCells[2].find('[aria-label="Reload AAPL price"]').exists()).toBe(true);
 
         setViewportSize(852, 393);
         await flushPromises();
@@ -874,7 +876,22 @@ describe('App', () => {
         expect(appleCells[2].text()).toContain('+2.28% · 299.50');
         expect(appleCells[2].find('[aria-label="Day indicator: Price increased"]').exists()).toBe(true);
         expect(appleCells[2].find('.recent-price-trend-dot--day').classes()).toContain('recent-price-trend-dot-up');
-        expect(microsoftCells[2].text()).toBe('-');
+        expect(microsoftCells[2].text()).toContain('-');
+        expect(microsoftCells[2].find('[aria-label="Reload MSFT price"]').exists()).toBe(true);
+
+        fetchMock.mockImplementationOnce((path, options) => {
+            expect(path).toBe('/admin/watchlist/holdings/1/price/reload');
+            expect(options.method).toBe('POST');
+            return Promise.resolve(jsonResponse({
+                status: 'updated', message: 'Newer source data loaded.',
+                holding: { id: 1, latest_price: '307.320010', latest_price_as_of: '2026-06-03T15:36:00+00:00' },
+            }));
+        });
+        await wrapper.get('.mobile-watch-list').get('[aria-label="Reload AAPL price"]').trigger('click');
+        await flushPromises();
+        expect(wrapper.get('.mobile-stock-price-row').text()).toContain('307.32');
+        expect(wrapper.get('.mobile-stock-price-row').text()).toContain('03.06. 17:36');
+        expect(wrapper.get('.mobile-watch-list').text()).toContain('Newer source data loaded.');
     });
 
     it('renders the depots menu section with paginated depot data', async () => {
@@ -5360,6 +5377,7 @@ describe('App', () => {
         expect(dashboardHeaders[7]).toBe('Actions');
         expect(wrapper.find('thead th.watch-list-content-cell').exists()).toBe(true);
         expect(wrapper.find('thead th.watch-list-source-time-cell').exists()).toBe(true);
+        expect(wrapper.get('td.watch-list-source-time-cell').find('[aria-label^="Reload "]').exists()).toBe(true);
         expect(wrapper.find('thead th.watch-list-actions-cell').exists()).toBe(true);
         expect(wrapper.get('.app-bar-row').text()).not.toContain('Stocks Last:');
         expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);

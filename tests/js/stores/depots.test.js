@@ -16,6 +16,23 @@ describe('useDepotStore', () => {
         setActivePinia(createPinia());
     });
 
+    it('reloads only the selected stock and merges its new quote into both visible lists', async () => {
+        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
+            status: 'updated', holding: { id: 34, latest_price: '17.64', latest_price_as_of: '2026-11-04T09:04:40+01:00' },
+        }));
+        vi.stubGlobal('fetch', fetchMock);
+        const depots = useDepotStore();
+        depots.holdings = [{ id: 34, daily_prices: [{ price: '17' }] }, { id: 13, latest_price: '2.3165' }];
+        depots.depotHoldings = [{ id: 34, position_pieces: '5' }, { id: 13, latest_price: '2.3165' }];
+        expect((await depots.reloadHoldingPrice(34)).status).toBe('updated');
+        expect(fetchMock).toHaveBeenCalledExactlyOnceWith('/admin/watchlist/holdings/34/price/reload', expect.objectContaining({ method: 'POST' }));
+        expect(depots.holdings[0].latest_price).toBe('17.64');
+        expect(depots.holdings[0].daily_prices).toEqual([{ price: '17' }]);
+        expect(depots.depotHoldings[0].position_pieces).toBe('5');
+        expect(depots.holdings[1]).toEqual({ id: 13, latest_price: '2.3165' });
+        expect(depots.depotHoldings[1]).toEqual({ id: 13, latest_price: '2.3165' });
+    });
+
     it('keeps stored candles visible while a queued refresh runs and reloads them after completion', async () => {
         vi.useFakeTimers();
         const stored = { intraday: { rows: [{ close: '100' }] }, refresh: { status: 'queued' } };
