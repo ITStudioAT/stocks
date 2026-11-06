@@ -112,7 +112,7 @@ class StockHoldingPriceReadBatch
         $sourceName = $json ? "json_extract(provenance, '$.source_name')" : "JSON_UNQUOTE(JSON_EXTRACT(provenance, '$.source_name'))";
         $sourceUrl = $json ? "json_extract(provenance, '$.source_url')" : "JSON_UNQUOTE(JSON_EXTRACT(provenance, '$.source_url'))";
         $rows = $from === null ? collect() : (clone $base)->where('trading_date', '>=', Carbon::parse($from)->subDays(7)->toDateString())
-            ->select(['id', 'market_listing_id', 'trading_date', 'source_key', 'reported_mic', 'currency', 'record_kind', 'interval_code', 'price_type', 'price', 'close', 'observed_at', 'effective_at', 'fetched_at'])
+            ->select(['id', 'market_listing_id', 'trading_date', 'source_key', 'reported_mic', 'currency', 'record_kind', 'interval_code', 'price_type', 'price', 'close', 'observed_at', 'effective_at', 'fetched_at', 'adjustment_basis'])
             ->selectRaw($sourceName.' as source_name, '.$sourceUrl.' as source_url')->orderBy('effective_at')->orderBy('id')->get()->groupBy('market_listing_id');
         $this->previousCloseResolver->prime($holdings);
         foreach ($holdings as $holding) {
@@ -128,6 +128,8 @@ class StockHoldingPriceReadBatch
             $candleRows = $records->filter(fn ($row) => in_array($row->interval_code, ['1s', '5m'], true) && $row->trading_date === $day);
             $candleRows = $candleRows->isEmpty() ? collect() : collect([$candleRows->first()])->concat($candleRows->take(-2))->unique('id')->sortBy('observed_at')->values();
             $fields = fn ($row): array => ['id' => $row->id, 'stock_holding_id' => $holding->id, 'source_key' => $row->source_key,
+                'trading_date' => $row->trading_date, 'record_kind' => $row->record_kind, 'interval_code' => $row->interval_code,
+                'adjustment_basis' => $row->adjustment_basis,
                 'source_name' => $row->source_name, 'source_url' => $row->source_url, 'currency' => $row->currency,
                 'price_type' => $row->price_type, 'fetched_at' => $row->fetched_at, 'validation_status' => 'valid',
                 'freshness_status' => 'delayed', 'trading_times' => $holding->trading_times, 'mic' => $row->reported_mic, 'venue' => $holding->exchange];

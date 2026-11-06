@@ -11,6 +11,7 @@ use App\Models\StockPrice;
 use App\Models\StockRealtimePrice;
 use App\Services\DepotTransactionBooker;
 use App\Services\MarketDataProvenance;
+use App\Services\MarketPriceStore;
 use App\Services\StockPreviousCloseResolver;
 use App\Services\StockPriceCatalog;
 use App\Services\StoredHistoricalPriceResolver;
@@ -372,8 +373,8 @@ class AdminDepotTransactionController extends Controller
     ): array {
         $latestStoredPrice = $this->latestStoredPrice($holding);
         $latestPrice = $latestStoredPrice?->price ?? (MarketDataProvenance::markers($holding->latest_price_source) === ['free'] ? $holding->latest_price : null);
-        $previousCloses = $this->stockPreviousCloseResolver->resolve($holding);
-        $changeReference = $this->stockPreviousCloseResolver->comparisonReference($holding, $latestStoredPrice?->getRawOriginal('as_of') ?? $holding->latest_price_as_of, $previousCloses['previous_close'], $previousCloses['previous_close_date']);
+        $previousCloses = $this->stockPreviousCloseResolver->forObservation($holding, $latestStoredPrice);
+        $changeReference = $this->stockPreviousCloseResolver->comparisonReference($holding, $latestStoredPrice ?? $holding->latest_price_as_of, $previousCloses['previous_close'], $previousCloses['previous_close_date']);
 
         $previousDayChange = $this->priceChangePercent($latestPrice, $changeReference);
 
@@ -640,8 +641,10 @@ class AdminDepotTransactionController extends Controller
         $complete = true;
         $holdings = StockHolding::query()->whereKey($openPiecesByHoldingId->keys()->all())->get();
         $this->stockPreviousCloseResolver->prime($holdings);
-        $stockBalance = $holdings->sum(function (StockHolding $holding) use ($openPiecesByHoldingId, &$sourceMarkers, &$complete): float {
-            $previousClose = $this->stockPreviousCloseResolver->resolve($holding);
+        $stockBalance = $holdings->sum(function (StockHolding $holding) use ($openPiecesByHoldingId, $previousDayCutoff, &$sourceMarkers, &$complete): float {
+            $previousClose = MarketPriceStore::enabled()
+                ? ['previous_close' => $this->stockPreviousCloseResolver->priceAt($holding, $previousDayCutoff), 'previous_close_source_markers' => ['free']]
+                : $this->stockPreviousCloseResolver->resolve($holding);
             $markers = $previousClose['previous_close_source_markers'];
             $previousClose = $previousClose['previous_close'];
 

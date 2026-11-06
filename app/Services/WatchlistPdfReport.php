@@ -111,12 +111,15 @@ class WatchlistPdfReport
             ? $this->storedStockPriceTimestamp($latestStockPrice, 'as_of')
             : $holding->latest_price_as_of;
         $tradingTimes = $latestStockPrice?->trading_times ?? $holding->trading_times;
-        $previousCloses = app(StockPreviousCloseResolver::class)->resolve($holding);
+        $previousCloses = app(StockPreviousCloseResolver::class)->forObservation($holding, $latestStockPrice);
         $end24Price = $this->pricePayload($previousCloses['previous_close']);
-        $changeReference = app(StockPreviousCloseResolver::class)->comparisonReference($holding, $latestStockPrice?->getRawOriginal('as_of') ?? $latestPriceAsOf, $end24Price, $previousCloses['previous_close_date']);
-        $tradingDate = $latestPriceAsOf === null ? null : Carbon::parse($latestPriceAsOf)->setTimezone(config('app.timezone'))->toDateString();
+        $changeReference = app(StockPreviousCloseResolver::class)->comparisonReference($holding, $latestStockPrice ?? $latestPriceAsOf, $end24Price, $previousCloses['previous_close_date']);
+        $central = MarketPriceStore::enabled();
+        $tradingDate = $central ? app(StockPreviousCloseResolver::class)->tradingDateOf($holding, $latestStockPrice)
+            : ($latestPriceAsOf === null ? null : Carbon::parse($latestPriceAsOf)->setTimezone(config('app.timezone'))->toDateString());
         $startRecord = $holding->readRealtimePrices->concat($holding->readIntradayCandles)
-            ->filter(fn (Model $price): bool => Carbon::parse($price->getRawOriginal('as_of'), 'UTC')->setTimezone(config('app.timezone'))->toDateString() === $tradingDate)
+            ->filter(fn (Model $price): bool => $central ? app(StockPreviousCloseResolver::class)->tradingDateOf($holding, $price) === $tradingDate
+                : Carbon::parse($price->getRawOriginal('as_of'), 'UTC')->setTimezone(config('app.timezone'))->toDateString() === $tradingDate)
             ->sortBy(fn (Model $price): string => $price->getRawOriginal('as_of'))->first();
         $startPrice = $this->pricePayload($startRecord?->price ?? $startRecord?->close);
         $endPrice = $latestPrice ?? $endPrice;

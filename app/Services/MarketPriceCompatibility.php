@@ -19,7 +19,7 @@ class MarketPriceCompatibility
         $versions = DB::table('market_listings')->where('status', 'verified')->orderBy('id')->pluck('data_version', 'id')->all();
         $cacheFrom = min($from->toDateString(), now()->startOfYear()->subDays(14)->toDateString());
         $cacheUntil = max($until->toDateString(), now()->toDateString());
-        $key = 'market-data.history.v4.'.hash('sha256', json_encode([app(MarketDataMode::class)->signature(), $versions, $cacheFrom, $cacheUntil, $freeOnly]));
+        $key = 'market-data.history.v5.'.hash('sha256', json_encode([app(MarketDataMode::class)->signature(), $versions, $cacheFrom, $cacheUntil, $freeOnly]));
 
         $history = Cache::remember($key, 3600, function () use ($versions, $cacheFrom, $cacheUntil, $freeOnly): array {
             $ranked = DB::table('market_prices')->whereIn('market_listing_id', array_keys($versions))
@@ -27,14 +27,19 @@ class MarketPriceCompatibility
                 ->whereBetween('trading_date', [$cacheFrom, $cacheUntil])
                 ->whereNotIn('price_type', ['indicative', 'nav'])
                 ->when($freeOnly, fn ($q) => $q->whereIn('source_key', StockPreviousCloseResolver::FreeSources))
-                ->select(['market_listing_id', 'trading_date', 'price', 'close', 'source_key', 'effective_at', 'interval_code'])
-                ->selectRaw("ROW_NUMBER() OVER (PARTITION BY market_listing_id, trading_date ORDER BY CASE WHEN interval_code = '1d' THEN 0 ELSE 1 END, CASE WHEN interval_code = '5m' THEN period_start_at ELSE effective_at END DESC, CASE WHEN record_kind = 'bar' THEN 1 ELSE 0 END, id DESC) AS observation_rank");
+                ->when($freeOnly, fn ($q) => $q->join('market_listings as currency_listing', fn ($join) => $join
+                    ->on('currency_listing.id', '=', 'market_prices.market_listing_id')->on('currency_listing.currency', '=', 'market_prices.currency'))
+                    ->where('market_prices.adjustment_basis', 'unadjusted'))
+                ->select(['market_listing_id', 'trading_date', 'price', 'close', 'source_key', 'effective_at', 'interval_code', 'market_prices.currency', 'adjustment_basis', 'observed_at', 'record_kind'])
+                ->selectRaw("ROW_NUMBER() OVER (PARTITION BY market_listing_id, trading_date ORDER BY CASE WHEN interval_code = '1d' THEN 0 ELSE 1 END, CASE WHEN interval_code = '5m' THEN period_start_at ELSE effective_at END DESC, CASE WHEN record_kind = 'bar' THEN 1 ELSE 0 END, market_prices.id DESC) AS observation_rank");
             $result = [];
             foreach (DB::query()->fromSub($ranked, 'daily_market_prices')->where('observation_rank', 1)->get() as $row) {
                 $value = $row->interval_code === '1d' ? $row->close : ($row->price ?? $row->close);
                 if (is_numeric($value) && (float) $value > 0) {
                     $result[$row->market_listing_id][$row->trading_date] = ['price' => (string) $value,
                         'source_key' => $row->source_key, 'source_markers' => MarketDataProvenance::markers($row->source_key), 'as_of' => $row->effective_at,
+                        'trading_date' => $row->trading_date, 'currency' => $row->currency, 'adjustment_basis' => $row->adjustment_basis,
+                        'observed_at' => $row->observed_at, 'interval_code' => $row->interval_code, 'record_kind' => $row->record_kind,
                         'is_close' => $row->interval_code === '1d'];
                 }
             }
@@ -94,6 +99,6 @@ class MarketPriceCompatibility
             CASE WHEN p.interval_code = '1s' THEN 'xtrade' ELSE p.interval_code END as ".DB::connection()->getQueryGrammar()->wrap('interval').",
             $timestamp as timestamp, NULL as gmtoffset, p.observed_at as datetime,
             NULL as legacy_stock_price_id, NULL as source_stock_price_id, NULL as sample_index,
-            p.created_at,p.updated_at");
+            p.adjustment_basis, p.record_kind, p.interval_code, p.created_at,p.updated_at");
     }
 }

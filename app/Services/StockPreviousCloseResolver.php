@@ -20,11 +20,12 @@ class StockPreviousCloseResolver
     public function prime(Collection $holdings, ?Carbon $reference = null, ?Carbon $from = null): void
     {
         if (MarketPriceStore::enabled()) {
-            $history = app(MarketPriceCompatibility::class)->history($holdings, $from ?? now()->subDays(14), $reference ?? now(), freeOnly: true);
+            $from = $from ?? now()->subDays(14);
+            $until = $reference ?? now();
+            $history = app(MarketPriceCompatibility::class)->history($holdings, $from, $until, freeOnly: true);
             foreach ($holdings as $holding) {
-                $rows = collect($history[$holding->market_listing_id] ?? [])->map(fn ($row) => (new StockRealtimePrice)->newFromBuilder([
-                    'price' => $row['price'], 'as_of' => $row['as_of'], 'source_key' => $row['source_key'], 'currency' => $holding->currency, 'validation_status' => 'valid']));
-                $holding->setRelation('readPreviousCloseObservations', $rows);
+                $holding->setRelation('readPreviousCloseObservations', $this->centralObservations($history[$holding->market_listing_id] ?? []));
+                $holding->setRelation('readPreviousCloseWindow', ['from' => $from->toDateString(), 'until' => $until->toDateString()]);
             }
 
             return;
@@ -52,9 +53,47 @@ class StockPreviousCloseResolver
      */
     public function resolve(StockHolding $holding): array
     {
+        if (MarketPriceStore::enabled()) {
+            return $this->forObservation($holding, $this->latestObservation($holding));
+        }
         $timezone = $this->calendar->timezone($holding);
         $reference = now($timezone ?? 'Europe/Vienna')->startOfDay();
-        $previousDay = $this->calendar->previousDay($holding, $reference);
+
+        return $this->beforeDay($holding, $reference);
+    }
+
+    /** @return array{previous_close: ?string, previous_close_date: ?string, previous_close_source_markers: array<int, string>, earlier_close: ?string, earlier_close_date: ?string, earlier_close_source_markers: array<int, string>} */
+    public function forObservation(StockHolding $holding, StockPrice|StockRealtimePrice|StockHoldingIntradayCandle|null $observation): array
+    {
+        if (! MarketPriceStore::enabled()) {
+            return $this->resolve($holding);
+        }
+        $day = $this->tradingDateOf($holding, $observation);
+        $timezone = $this->calendar->timezone($holding);
+        $reference = $day === null || $timezone === null || $observation?->adjustment_basis !== 'unadjusted'
+            ? null : Carbon::parse($day, $timezone)->startOfDay();
+
+        return $this->beforeDay($holding, $reference);
+    }
+
+    public function tradingDateOf(StockHolding $holding, StockPrice|StockRealtimePrice|StockHoldingIntradayCandle|null $observation): ?string
+    {
+        if ($observation === null) {
+            return null;
+        }
+        if (MarketPriceStore::enabled() && $observation->getRawOriginal('trading_date') !== null) {
+            return substr($observation->getRawOriginal('trading_date'), 0, 10);
+        }
+        $timezone = $this->calendar->timezone($holding);
+        $asOf = $observation->getRawOriginal('as_of');
+
+        return $timezone === null || $asOf === null ? null : Carbon::parse($asOf, 'UTC')->setTimezone($timezone)->toDateString();
+    }
+
+    /** @return array{previous_close: ?string, previous_close_date: ?string, previous_close_source_markers: array<int, string>, earlier_close: ?string, earlier_close_date: ?string, earlier_close_source_markers: array<int, string>} */
+    private function beforeDay(StockHolding $holding, ?Carbon $reference): array
+    {
+        $previousDay = $reference === null ? null : $this->calendar->previousDay($holding, $reference);
         $earlierDay = $previousDay === null ? null : $this->calendar->previousDay($holding, $previousDay);
         $observations = $previousDay === null ? collect() : $this->observations($holding, $earlierDay ?? $previousDay, $reference);
         $previous = $previousDay === null ? null : $this->lastObservation($holding, $observations, $previousDay);
@@ -70,7 +109,7 @@ class StockPreviousCloseResolver
         ];
     }
 
-    public function comparisonReference(StockHolding $holding, Carbon|string|null $asOf, ?string $previousPrice, ?string $previousDate): ?string
+    public function comparisonReference(StockHolding $holding, Carbon|string|StockPrice|StockRealtimePrice|StockHoldingIntradayCandle|null $asOf, ?string $previousPrice, ?string $previousDate): ?string
     {
         $timezone = $this->calendar->timezone($holding);
 
@@ -78,9 +117,10 @@ class StockPreviousCloseResolver
             return null;
         }
 
-        $date = Carbon::parse($asOf, 'UTC')->setTimezone($timezone)->toDateString();
+        $date = $asOf instanceof StockPrice || $asOf instanceof StockRealtimePrice || $asOf instanceof StockHoldingIntradayCandle
+            ? $this->tradingDateOf($holding, $asOf) : Carbon::parse($asOf, 'UTC')->setTimezone($timezone)->toDateString();
 
-        return $date > $previousDate && $date <= now($timezone)->toDateString() ? $previousPrice : null;
+        return $date !== null && $date > $previousDate && $date <= now($timezone)->toDateString() ? $previousPrice : null;
     }
 
     public function latestObservation(StockHolding $holding): StockPrice|StockRealtimePrice|StockHoldingIntradayCandle|null
@@ -162,6 +202,15 @@ class StockPreviousCloseResolver
     /** @return Collection<int, StockPrice|StockRealtimePrice|StockHoldingIntradayCandle> */
     private function observations(StockHolding $holding, Carbon $from, Carbon $until): Collection
     {
+        if (MarketPriceStore::enabled()) {
+            $window = $holding->relationLoaded('readPreviousCloseWindow') ? $holding->readPreviousCloseWindow : null;
+            if ($window !== null && $from->toDateString() >= $window['from'] && $until->toDateString() <= $window['until']) {
+                return $holding->readPreviousCloseObservations;
+            }
+            $history = app(MarketPriceCompatibility::class)->history(collect([$holding]), $from, $until, freeOnly: true);
+
+            return $this->centralObservations($history[$holding->market_listing_id] ?? []);
+        }
         if ($holding->relationLoaded('readPreviousCloseObservations')) {
             return $holding->readPreviousCloseObservations;
         }
@@ -183,11 +232,16 @@ class StockPreviousCloseResolver
     {
         $from = $day->copy()->utc()->toDateTimeString();
         $until = $day->copy()->addDay()->utc()->toDateTimeString();
-        $observation = $observations->filter(function ($record) use ($holding, $from, $until): bool {
+        $central = MarketPriceStore::enabled();
+        $observation = $observations->filter(function ($record) use ($holding, $from, $until, $day, $central): bool {
             $asOf = $record->getRawOriginal('as_of');
             $price = $record instanceof StockHoldingIntradayCandle ? $record->close : $record->price;
 
-            return $asOf !== null && $asOf >= $from && $asOf < $until
+            $matchesDay = $central
+                ? $record->getRawOriginal('trading_date') === $day->toDateString() && $record->adjustment_basis === 'unadjusted'
+                : $asOf !== null && $asOf >= $from && $asOf < $until;
+
+            return $matchesDay
                 && is_numeric($price) && (float) $price > 0 && $record->currency === $holding->currency
                 && in_array($record->source_key, self::FreeSources, true)
                 && ! ($record->raw_payload['quarantined'] ?? false)
@@ -195,5 +249,16 @@ class StockPreviousCloseResolver
         })->sortByDesc(fn ($record): string => $record->getRawOriginal('as_of').'|'.($record->getRawOriginal('fetched_at') ?? ''))->first();
 
         return $observation === null ? null : (string) ($observation instanceof StockHoldingIntradayCandle ? $observation->close : $observation->price);
+    }
+
+    /** @param array<string, array<string, mixed>> $history
+     * @return Collection<int, StockRealtimePrice>
+     */
+    private function centralObservations(array $history): Collection
+    {
+        return collect($history)->map(fn (array $row) => (new StockRealtimePrice)->newFromBuilder([
+            'price' => $row['price'], 'as_of' => $row['as_of'], 'source_key' => $row['source_key'], 'currency' => $row['currency'],
+            'trading_date' => $row['trading_date'], 'adjustment_basis' => $row['adjustment_basis'], 'interval_code' => $row['interval_code'],
+            'record_kind' => $row['record_kind'], 'validation_status' => 'valid']))->values();
     }
 }

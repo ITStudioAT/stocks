@@ -697,11 +697,11 @@ class AdminDepotHoldingController extends Controller
         $startPrice = $this->pricePayload($this->dashboardPriceValue($dashboardSessionPrices['start_price']));
         $latestEndPrice = $this->latestEndPrice($holding);
         $endPrice = $this->pricePayload($latestEndPrice['price'] ?? null);
-        $endOfDaySessionPrices = $this->endOfDaySessionPrices($holding);
+        $endOfDaySessionPrices = $this->endOfDaySessionPrices($holding, $latestStoredPrice);
         $end24Price = $endOfDaySessionPrices['end_price_24'];
         $sessionPriceDates = $this->sessionPriceDates($holding);
         $latestPriceAsOf = $this->dashboardPriceTimestamp($latestStoredPrice);
-        $changeReference = $this->stockPreviousCloseResolver->comparisonReference($holding, $latestPriceAsOf, $end24Price, $endOfDaySessionPrices['end_price_24_date']);
+        $changeReference = $this->stockPreviousCloseResolver->comparisonReference($holding, $latestStoredPrice ?? $latestPriceAsOf, $end24Price, $endOfDaySessionPrices['end_price_24_date']);
         $tradingTimes = $latestStoredPrice instanceof StockRealtimePrice
             ? $latestStoredPrice->trading_times ?? $holding->trading_times
             : $holding->trading_times;
@@ -805,9 +805,9 @@ class AdminDepotHoldingController extends Controller
     /**
      * @return array{end_price_24: ?string, end_price_48: ?string, end_price_24_date: ?string, end_price_48_date: ?string}
      */
-    private function endOfDaySessionPrices(StockHolding $holding): array
+    private function endOfDaySessionPrices(StockHolding $holding, StockPrice|StockRealtimePrice|StockHoldingIntradayCandle|null $latest): array
     {
-        $previousCloses = $this->stockPreviousCloseResolver->resolve($holding);
+        $previousCloses = $this->stockPreviousCloseResolver->forObservation($holding, $latest);
 
         return [
             'end_price_24' => $this->pricePayload($previousCloses['previous_close']),
@@ -902,9 +902,9 @@ class AdminDepotHoldingController extends Controller
         }
 
         if ($latestIntradayCandle === null) {
-            $latestRealtimeDate = $this->storedStockPriceDateTime($latestRealtimePrice, 'as_of')
-                ?->setTimezone(config('app.timezone'))
-                ->toDateString();
+            $latestRealtimeDate = MarketPriceStore::enabled()
+                ? $this->stockPreviousCloseResolver->tradingDateOf($holding, $latestRealtimePrice)
+                : $this->storedStockPriceDateTime($latestRealtimePrice, 'as_of')?->setTimezone(config('app.timezone'))->toDateString();
 
             return [
                 'price' => (string) $latestRealtimePrice->price,
@@ -927,7 +927,8 @@ class AdminDepotHoldingController extends Controller
         return [
             'price' => (string) $latestRealtimePrice->price,
             'source_markers' => MarketDataProvenance::forRecord($latestRealtimePrice),
-            'date' => $latestRealtimeAsOf?->setTimezone(config('app.timezone'))->toDateString(),
+            'date' => MarketPriceStore::enabled() ? $this->stockPreviousCloseResolver->tradingDateOf($holding, $latestRealtimePrice)
+                : $latestRealtimeAsOf?->setTimezone(config('app.timezone'))->toDateString(),
         ];
     }
 
@@ -945,8 +946,11 @@ class AdminDepotHoldingController extends Controller
 
         $dayStart = Carbon::parse($relevantTradingDate, config('app.timezone'))->startOfDay()->utc();
         $dayEnd = Carbon::parse($relevantTradingDate, config('app.timezone'))->endOfDay()->utc();
+        $central = MarketPriceStore::enabled();
         $prices = $holding->relationLoaded('readRealtimePrices')
-            ? $holding->readRealtimePrices->filter(fn (StockRealtimePrice $price): bool => $this->storedStockPriceDateTime($price, 'as_of')?->betweenIncluded($dayStart, $dayEnd) === true)
+            ? $holding->readRealtimePrices->filter(fn (StockRealtimePrice $price): bool => $central
+                ? $price->getRawOriginal('trading_date') === $relevantTradingDate
+                : $this->storedStockPriceDateTime($price, 'as_of')?->betweenIncluded($dayStart, $dayEnd) === true)
             : $holding->realtimePrices()->whereIn('source_key', StockPreviousCloseResolver::FreeSources)
                 ->whereNotNull('price')
                 ->whereNotNull('as_of')
@@ -2074,6 +2078,14 @@ class AdminDepotHoldingController extends Controller
 
     private function latestRealtimeTradingDate(StockHolding $holding): ?string
     {
+        if (MarketPriceStore::enabled()) {
+            $latest = $holding->relationLoaded('readRealtimePrices') ? $holding->readRealtimePrices->last()
+                : $holding->realtimePrices()->whereIn('source_key', StockPreviousCloseResolver::FreeSources)
+                    ->whereNotNull('price')->whereNotNull('as_of')->where('as_of', '<=', now()->utc())
+                    ->latest('as_of')->first();
+
+            return $this->stockPreviousCloseResolver->tradingDateOf($holding, $latest);
+        }
         $latestTradingDay = $holding->relationLoaded('readRealtimePrices')
             ? $holding->readRealtimePrices->last()?->getRawOriginal('as_of')
             : $holding->realtimePrices()->whereIn('source_key', StockPreviousCloseResolver::FreeSources)
