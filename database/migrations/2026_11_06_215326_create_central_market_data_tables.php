@@ -73,7 +73,7 @@ return new class extends Migration
             $table->unsignedInteger('revision');
             $table->boolean('is_current')->default(false);
             $table->foreignId('supersedes_id')->nullable()->constrained('market_prices')->restrictOnDelete();
-            $table->char('current_key', 64)->nullable()->storedAs('CASE WHEN is_current = 1 THEN observation_key ELSE NULL END')->unique();
+            $table->char('current_key', 64)->nullable()->storedAs('CASE WHEN is_current = 1 THEN RTRIM(observation_key) ELSE NULL END')->unique();
             $table->json('provenance');
             $table->json('raw_payload')->nullable();
             $table->timestamps(6);

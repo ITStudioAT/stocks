@@ -6,6 +6,7 @@ use App\Models\MarketPrice;
 use App\Models\StockHolding;
 use App\Models\StockRealtimePrice;
 use App\Services\MarketDataUpgrade;
+use App\Services\MarketIdentityRegistry;
 use App\Services\MarketPriceLegacyImporter;
 use App\Services\MarketPriceStore;
 use Illuminate\Database\QueryException;
@@ -148,6 +149,67 @@ class MarketDataUpgradeMysqlTest extends TestCase
         $this->assertSame(1, MarketPrice::count());
         $this->assertTrue(Schema::hasIndex('market_prices', 'market_prices_current_key_unique'));
         $this->assertTrue(collect(Schema::getForeignKeys('market_prices'))->contains('name', 'market_prices_market_listing_id_foreign'));
+    }
+
+    public function test_generated_current_key_stays_unique_across_revisions_and_character_padding_modes(): void
+    {
+        $price = MarketPrice::factory()->create();
+        $attributes = $price->getAttributes();
+        unset($attributes['id'], $attributes['current_key']);
+        $mode = DB::selectOne('SELECT @@SESSION.sql_mode AS sql_mode')->sql_mode;
+        $modes = [$mode];
+        if (DB::connection()->isMaria()) {
+            $modes[] = $mode.',PAD_CHAR_TO_FULL_LENGTH';
+        }
+        try {
+            foreach ($modes as $currentMode) {
+                DB::statement('SET SESSION sql_mode = ?', [$currentMode]);
+                $this->assertSame($price->observation_key, $price->fresh()->current_key);
+                $attributes['revision']++;
+                $attributes['is_current'] = false;
+                $historical = MarketPrice::create($attributes);
+                $this->assertNull($historical->current_key);
+                try {
+                    DB::table('market_prices')->where('id', $historical->id)->update(['is_current' => true]);
+                    $this->fail('The database must reject a second current revision even outside the price store.');
+                } catch (QueryException $exception) {
+                    $this->assertSame('23000', $exception->errorInfo[0]);
+                }
+                DB::transaction(function () use ($price, $historical): void {
+                    DB::table('market_prices')->where('id', $price->id)->update(['is_current' => false]);
+                    DB::table('market_prices')->where('id', $historical->id)->update(['is_current' => true]);
+                });
+                $price = $historical->fresh();
+                $this->assertSame(1, MarketPrice::where('is_current', true)->count());
+                $this->assertSame($price->observation_key, $price->current_key);
+            }
+        } finally {
+            DB::statement('SET SESSION sql_mode = ?', [$mode]);
+        }
+    }
+
+    public function test_concurrent_collectors_keep_one_current_observation_in_the_native_database(): void
+    {
+        $holding = StockHolding::factory()->create(['isin' => 'US8740541094', 'symbol' => 'TKE', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
+        $listing = app(MarketIdentityRegistry::class)->listing($holding);
+        $config = DB::connection()->getConfig();
+        $environment = ['APP_ENV' => 'testing', 'DB_CONNECTION' => 'mysql', 'DB_HOST' => $config['host'], 'DB_PORT' => (string) $config['port'],
+            'DB_DATABASE' => $config['database'], 'DB_USERNAME' => $config['username'], 'DB_PASSWORD' => $config['password'] ?? '', 'CACHE_STORE' => 'array'];
+        $code = 'app(App\\Services\\LocalMarketDataDatabase::class)->assertLocal(); if (! str_starts_with(Illuminate\\Support\\Facades\\DB::connection()->getDatabaseName(), "stocks_v2_test_")) { throw new RuntimeException("Unsafe test target"); } '
+            .'for ($index=0; $index<10; $index++) { app(App\\Services\\MarketPriceStore::class)->store('.$listing->id.', ["source_key"=>"yahoo_intraday", "currency"=>"EUR", "price"=>"193.1234567890", "observed_at"=>"2026-11-06 12:00:00", "effective_at"=>"2026-11-06 12:00:00"]); }';
+        $workers = [];
+        foreach (range(1, 2) as $worker) {
+            $process = new \Symfony\Component\Process\Process([PHP_BINARY, 'artisan', 'tinker', '--execute', $code], base_path(), $environment, timeout: 60);
+            $process->start();
+            $workers[] = $process;
+        }
+        foreach ($workers as $process) {
+            $process->wait();
+            $this->assertTrue($process->isSuccessful(), $process->getOutput().$process->getErrorOutput());
+        }
+        $this->assertSame(1, MarketPrice::count());
+        $this->assertSame(1, MarketPrice::where('is_current', true)->count());
+        $this->assertSame('193.1234567890', (string) MarketPrice::first()->price);
     }
 
     public function test_mariadb_native_clients_are_supported_without_mysql_only_dump_flags(): void
