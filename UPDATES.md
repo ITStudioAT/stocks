@@ -1,3 +1,18 @@
+
+## 2.0.0 !!!
+
+### System
+
+- Main Update
+
+- Zentrale Kursablage in `market_prices`, gemeinsame Instrument-/Börsenplatz-Zuordnung und nachvollziehbare Kurskorrekturen ohne Verlust der Altdaten.
+- Koordinierte kostenlose Kursabrufe alle fünf Minuten nach Börsenkalender und Zeitzone; bekannte Verzögerungen und Abrufpausen bleiben sichtbar.
+- Kostenlose Tageshistorie über geprüfte Yahoo-Zuordnungen, einschließlich Take-Two auf Xetra in EUR. Neue und vorhandene Kurse verwenden dieselbe Ablage.
+- Vorbereitete historische Leser, gebündelte Watchlist-Abfragen und passende Leseindizes; Cashflow-Bereinigung der Depotkurve bleibt erhalten.
+- `gitdeploy` bereitet die Datenumstellung im Wartungsmodus vor: private MySQL-Sicherung mit Prüfsumme, Schreibsperren für alte Queue-Arbeiten, wiederaufnehmbare Übernahme und vollständige Mengen-/Wertprüfung vor der dauerhaften Aktivierung.
+- Alte Kurstabellen bleiben für den Rückfall erhalten. Bei Fehlern wird nicht auf einen unvollständigen zentralen Bestand umgeschaltet. `gitsave` pusht auf `main` nach GitHub; lokale Datenbank und `.env` werden nicht hochgeladen.
+- Wiederherstellung ist über den gesicherten Upgrade-Manifestpfad und die ausdrückliche Bestätigung des Datenbanknamens möglich; laufende Queue-Arbeiten verhindern den Restore.
+
 ## 1.2.1
 
 ### System

@@ -61,4 +61,27 @@ describe('holding price reload', () => {
         expect(wrapper.text()).not.toContain('The source is unavailable.');
         wrapper.unmount();
     });
+
+    it('loads annual daily history only when the saved listing supports it', async () => {
+        const history = vi.spyOn(useDepotStore(), 'loadHoldingDailyHistory').mockResolvedValue({
+            status: 'partial', message: 'Daily history loaded; gaps remain visible.',
+        });
+        const wrapper = mountReload();
+        expect(wrapper.find('[aria-label="Load UN9 daily history"]').exists()).toBe(false);
+        await wrapper.setProps({ holding: { id: 34, symbol: 'UN9', daily_history_available: true } });
+        await wrapper.get('[aria-label="Load UN9 daily history"]').trigger('click');
+        await flushPromises();
+        expect(history).toHaveBeenCalledExactlyOnceWith(34);
+        expect(wrapper.text()).toContain('gaps remain visible');
+        wrapper.unmount();
+    });
+
+    it('identifies the displayed time of a candle as an interval end', () => {
+        const wrapper = mount(HoldingPriceReload, {
+            props: { holding: { id: 34, symbol: 'UN9', latest_price_time_basis: 'interval_end', latest_price_interval: '5m' } },
+            global: { plugins: [pinia, createStocksVuetify()] },
+        });
+        expect(wrapper.text()).toContain('5m OHLC · time shown is interval end.');
+        wrapper.unmount();
+    });
 });

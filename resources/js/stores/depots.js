@@ -739,6 +739,13 @@ export const useDepotStore = defineStore('depots', {
                 this.holdingsLoading = false;
             }
         },
+        async loadHoldingDailyHistory(id) {
+            const data = await request(`/admin/watchlist/holdings/${id}/daily-history`, { method: 'POST' });
+            if (['complete', 'partial'].includes(data.status)) {
+                await this.loadWatchlistHoldings(1, { includeCharts: true, chartStockId: id, chartRange: 'year' });
+            }
+            return data;
+        },
         async reloadHoldingPrice(id) {
             const data = await request(`/admin/watchlist/holdings/${id}/price/reload`, { method: 'POST' });
             if (data.holding) {

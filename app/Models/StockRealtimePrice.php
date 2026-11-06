@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Services\IntradayMarketIdentity;
+use App\Services\MarketPriceCompatibility;
 use Database\Factories\StockRealtimePriceFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
@@ -21,6 +22,11 @@ class StockRealtimePrice extends Model
 
     /** @use HasFactory<StockRealtimePriceFactory> */
     use HasFactory;
+
+    public function newModelQuery(): Builder
+    {
+        return app(MarketPriceCompatibility::class)->apply(parent::newModelQuery(), $this);
+    }
 
     /**
      * @return array<string, string>

@@ -10,6 +10,7 @@ return [
         'session_end' => '22:01',
         // Verified against issuer listings and Xetra ISIN/EUR trade events on 2026-11-02.
         'yahoo_xetra_symbols' => [
+            'US8740541094' => 'TKE.DE',
             'BGCZPX003174' => 'CZX.DE',
             'IE00B53L4X51' => 'SXRY.DE',
             'FR0007056841' => 'DJAM.DE',
@@ -87,7 +88,7 @@ return [
             'deploy_path' => env('CLOUDWAYS_DEPLOY_PATH'),
             'connect_timeout' => env('CLOUDWAYS_API_CONNECT_TIMEOUT', 5),
             'timeout' => env('CLOUDWAYS_API_TIMEOUT', 20),
-            'operation_timeout' => env('CLOUDWAYS_DEPLOY_OPERATION_TIMEOUT', 600),
+            'operation_timeout' => env('CLOUDWAYS_DEPLOY_OPERATION_TIMEOUT', 7200),
             'poll_interval' => env('CLOUDWAYS_DEPLOY_POLL_INTERVAL', 3),
         ],
     ],
@@ -104,6 +105,10 @@ return [
 
     'market_data' => [
         'free_only' => true,
+        'central_enabled' => env('MARKET_DATA_CENTRAL_ENABLED', false),
+        'mysqldump_binary' => env('STOCKS_MYSQLDUMP_BINARY', 'mysqldump'),
+        'mysql_binary' => env('STOCKS_MYSQL_BINARY', 'mysql'),
+        'session_overrides' => ['XETRA' => ['2026-12-30' => '14:10']],
     ],
 
     'eodhd' => [

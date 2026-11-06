@@ -16,7 +16,7 @@ class MarketDataProvenance
             if ($source === 'eodhd' || str_starts_with($source, 'eodhd_') || str_starts_with($source, 'eodhd ')
                 || parse_url($source, PHP_URL_HOST) === 'eodhd.com') {
                 $markers[] = 'EODHD';
-            } elseif (in_array($source, ['free', 'xetra_instruments', 'xetra_posttrade', 'deutsche_boerse_trade', 'yahoo_intraday', 'yahoo_xetra_intraday'], true)
+            } elseif (in_array($source, ['free', 'xetra_instruments', 'xetra_posttrade', 'deutsche_boerse_trade', 'yahoo_intraday', 'yahoo_xetra_intraday', 'yahoo_daily'], true)
                 || str_starts_with($source, 'yahoo finance') || str_starts_with($source, 'deutsche börse')) {
                 $markers[] = 'free';
             }

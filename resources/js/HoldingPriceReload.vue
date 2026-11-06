@@ -24,6 +24,22 @@ async function reload() {
     }
 }
 
+async function loadHistory() {
+    if (loading.value) {
+        return;
+    }
+    loading.value = true;
+    result.value = null;
+    error.value = '';
+    try {
+        result.value = await depots.loadHoldingDailyHistory(props.holding.id);
+    } catch (failure) {
+        error.value = failure.message || 'History import failed.';
+    } finally {
+        loading.value = false;
+    }
+}
+
 function checkedAt(value) {
     return new Intl.DateTimeFormat('de-AT', {
         timeZone: 'Europe/Vienna', hour: '2-digit', minute: '2-digit', second: '2-digit',
@@ -44,6 +60,13 @@ function checkedAt(value) {
             @click="reload"
         >
             {{ loading ? 'Loading…' : 'Reload' }}
+        </v-btn>
+        <span v-if="holding.latest_price_time_basis === 'interval_end'" class="text-caption">
+            {{ holding.latest_price_interval }} OHLC · time shown is interval end.
+        </span>
+        <v-btn v-if="holding.daily_history_available" size="x-small" variant="text" :loading="loading" :disabled="loading"
+            :aria-label="`Load ${holding.symbol || holding.name} daily history`" @click="loadHistory">
+            Load 1 year
         </v-btn>
         <span
             role="status"

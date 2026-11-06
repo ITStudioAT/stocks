@@ -33,6 +33,10 @@ class PriceRefreshScheduler
 
     private function readSettings(): array
     {
+        if (MarketPriceStore::enabled()) {
+            return [...$this->defaultSettings(), 'trading_interval_minutes' => 5,
+                'next_refresh_at' => now()->startOfMinute()->addMinutes(5 - now()->minute % 5)->toIso8601String()];
+        }
         $config = AppConfig::query()->firstOrCreate(
             ['key' => self::ConfigKey],
             ['value' => $this->defaultSettings()],

@@ -12,13 +12,23 @@ use Illuminate\Support\Collection;
 
 class StockPreviousCloseResolver
 {
-    public const FreeSources = ['deutsche_boerse_trade', 'xetra_posttrade', 'yahoo_intraday', 'yahoo_xetra_intraday'];
+    public const FreeSources = ['deutsche_boerse_trade', 'xetra_posttrade', 'yahoo_intraday', 'yahoo_xetra_intraday', 'yahoo_daily'];
 
     public function __construct(private StockPriceCatalog $stockPriceCatalog, private FreeTradingCalendar $calendar) {}
 
     /** @param Collection<int, StockHolding> $holdings */
     public function prime(Collection $holdings, ?Carbon $reference = null, ?Carbon $from = null): void
     {
+        if (MarketPriceStore::enabled()) {
+            $history = app(MarketPriceCompatibility::class)->history($holdings, $from ?? now()->subDays(14), $reference ?? now(), freeOnly: true);
+            foreach ($holdings as $holding) {
+                $rows = collect($history[$holding->market_listing_id] ?? [])->map(fn ($row) => (new StockRealtimePrice)->newFromBuilder([
+                    'price' => $row['price'], 'as_of' => $row['as_of'], 'source_key' => $row['source_key'], 'currency' => $holding->currency, 'validation_status' => 'valid']));
+                $holding->setRelation('readPreviousCloseObservations', $rows);
+            }
+
+            return;
+        }
         $from = ($from ?? ($reference ?? now())->copy()->subDays(14))->copy()->utc();
         $until = ($reference ?? now())->copy()->addDay()->utc();
         $prices = $this->dailyRecords(StockPrice::query()->whereIn('instrument_key', $holdings->map(fn (StockHolding $holding): string => $this->stockPriceCatalog->instrumentKeyForHolding($holding)))

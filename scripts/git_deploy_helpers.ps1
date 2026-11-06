@@ -26,10 +26,10 @@ function Invoke-StocksLiveSsh {
     param([string]$Destination, [string]$Command, [string]$InputText)
     $executable = Get-StocksLiveSshExecutable
     if ($InputText) {
-        $InputText | & $executable -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 $Destination $Command
+        $InputText | & $executable -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=480 $Destination $Command
     }
     else {
-        & $executable -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 $Destination $Command
+        & $executable -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=480 $Destination $Command
     }
     if ($LASTEXITCODE -ne 0) {
         throw 'Live deployment or exact source verification failed. Inspect Cloudways before retrying.'

@@ -10,6 +10,7 @@ use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockPrice;
 use App\Models\StockRealtimePrice;
 use App\Models\User;
+use App\Services\MarketPriceLegacyImporter;
 use App\Services\StockPriceCatalog;
 use App\Services\StoredHistoricalPriceResolver;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -204,6 +205,25 @@ class DepotPerformanceHistoryTest extends TestCase
     }
 
     /** @return array{Depot, StockHolding, StockRealtimePrice} */
+    public function test_central_history_preserves_cashflow_adjusted_performance_and_source_markers(): void
+    {
+        [$depot, $holding] = $this->portfolio();
+        $this->cash($depot, 'deposit', 500, '2026-11-02');
+        $this->cash($depot, 'withdrawal', -200, '2026-11-03');
+        $depot->update(['account_balance' => 1200]);
+        foreach (['2026-10-30', '2026-11-02', '2026-11-03'] as $day) {
+            StockHoldingDailyPrice::factory()->create(['stock_holding_id' => $holding->id, 'currency' => 'EUR',
+                'trading_date' => $day, 'close' => 50, 'adjusted_close' => 5, 'source_key' => 'eodhd_eod']);
+        }
+        $before = $this->getJson('/admin/depot-transactions')->assertOk();
+        app(MarketPriceLegacyImporter::class)->run();
+        config(['services.market_data.central_enabled' => true]);
+        $after = $this->getJson('/admin/depot-transactions')->assertOk();
+        $this->assertSame($before->json('depot_performance_series'), $after->json('depot_performance_series'));
+        $this->assertSame($before->json('depot_valuations.latest.one_week_change_amount'), $after->json('depot_valuations.latest.one_week_change_amount'));
+        Http::assertNothingSent();
+    }
+
     private function portfolio(): array
     {
         $depot = Depot::factory()->create(['is_active' => true, 'account_balance' => 900]);
@@ -213,6 +233,7 @@ class DepotPerformanceHistoryTest extends TestCase
         DepotTransaction::factory()->create(['depot_id' => $depot->id, 'stock_holding_id' => $holding->id,
             'type' => 'buy', 'pieces' => 2, 'total_amount' => 100, 'cash_delta' => -100, 'currency' => 'EUR', 'booked_at' => '2026-10-01']);
         $quote = StockRealtimePrice::factory()->create(['stock_holding_id' => $holding->id, 'currency' => 'EUR',
+            'isin' => $holding->isin,
             'source_key' => 'yahoo_xetra_intraday', 'source_name' => 'Yahoo Finance Xetra', 'mic' => 'XETR',
             'price' => 75, 'as_of' => '2026-11-04 14:00:00', 'fetched_at' => '2026-11-04 14:01:00']);
 

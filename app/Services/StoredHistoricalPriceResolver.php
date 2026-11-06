@@ -18,6 +18,14 @@ class StoredHistoricalPriceResolver
     /** @param Collection<int, StockHolding> $holdings */
     public function prime(Collection $holdings, Carbon $from, Carbon $until): void
     {
+        if (MarketPriceStore::enabled()) {
+            $history = app(MarketPriceCompatibility::class)->history($holdings, $from, $until);
+            foreach ($holdings as $holding) {
+                $holding->setRelation('readHistoricalMarketPrices', collect($history[$holding->market_listing_id] ?? []));
+            }
+
+            return;
+        }
         $byId = $holdings->keyBy('id');
         $byInstrument = $holdings->groupBy(fn (StockHolding $holding): string => $this->catalog->instrumentKeyForHolding($holding));
         $prices = [];

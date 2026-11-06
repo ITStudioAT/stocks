@@ -2,8 +2,10 @@
 
 namespace App\Models;
 
+use App\Services\MarketPriceCompatibility;
 use Database\Factories\StockHoldingDailyPriceFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -13,6 +15,11 @@ class StockHoldingDailyPrice extends Model
 {
     /** @use HasFactory<StockHoldingDailyPriceFactory> */
     use HasFactory;
+
+    public function newModelQuery(): Builder
+    {
+        return app(MarketPriceCompatibility::class)->apply(parent::newModelQuery(), $this);
+    }
 
     /**
      * @return array<string, string>

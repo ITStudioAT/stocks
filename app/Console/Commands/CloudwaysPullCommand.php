@@ -250,6 +250,9 @@ class CloudwaysPullCommand extends Command
     private function waitForDeployment(CloudwaysApiClient $cloudways, array $baselineIdentities): int
     {
         $operationTimeout = max(1, (int) config('services.cloudways.deployment.operation_timeout', 600));
+        if ($this->option('prepare-deployment') && getenv('STOCKS_EXPECTED_SOURCE_COMMIT')) {
+            $operationTimeout = max(7200, $operationTimeout);
+        }
         $pollInterval = max(1, (int) config('services.cloudways.deployment.poll_interval', 3));
         $deadline = now()->addSeconds($operationTimeout);
         $lastMessage = null;

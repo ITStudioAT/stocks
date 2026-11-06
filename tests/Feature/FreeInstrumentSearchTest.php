@@ -60,6 +60,7 @@ class FreeInstrumentSearchTest extends TestCase
 
     public function test_market_and_currency_variants_are_not_merged_and_existing_names_are_not_changed(): void
     {
+        config(['services.market_data.central_enabled' => true]);
         $holding = StockHolding::factory()->create(['symbol' => 'UN9', 'name' => 'My saved label', 'isin' => 'AT0000821103', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
         $body = $this->catalog()."Active;Active;UNIQA USD;AT0000821103;000928900;UN9U;XETR;CS;USD\n"
             ."Active;Active;Other venue;AT0000821103;000928900;UN9F;XFRA;CS;EUR\n";

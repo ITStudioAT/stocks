@@ -3,6 +3,8 @@
 namespace App\Jobs;
 
 use App\Services\FreeIntradayMarketData;
+use App\Services\MarketDataCoordinator;
+use App\Services\MarketPriceStore;
 use DateTimeInterface;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -25,6 +27,11 @@ class CollectFreeIntradayData implements ShouldBeUnique, ShouldQueue
 
     public function handle(FreeIntradayMarketData $marketData): void
     {
+        if (MarketPriceStore::enabled()) {
+            app(MarketDataCoordinator::class)->collect();
+
+            return;
+        }
         $coverage = $marketData->xetraCoverage(advance: true);
         if ($coverage['collector_busy'] ?? false) {
             $this->release(5);

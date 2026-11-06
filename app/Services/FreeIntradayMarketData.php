@@ -84,6 +84,9 @@ class FreeIntradayMarketData
     /** @return array<string, mixed> */
     public function coverage(StockHolding $holding): array
     {
+        if (MarketPriceStore::enabled()) {
+            return self::storedCoverage($holding)['instruments'][0] ?? ['status' => 'stored', 'coverage_complete' => false];
+        }
         if (YahooFinanceMarketData::supports($this->identity($holding))) {
             $result = $this->usResult($holding);
             $row = collect($result['instruments'])->firstWhere('isin', $holding->isin);
@@ -104,6 +107,10 @@ class FreeIntradayMarketData
     /** @return array<string, mixed> */
     public function xetraCoverage(bool $advance = false): array
     {
+        if (MarketPriceStore::enabled()) {
+            return AppConfig::query()->where('key', XetraIntradayCollector::ReportKey)->value('value') ?? ['pending_files' => 0, 'warnings' => [], 'instruments' => [], 'series' => [], 'days' => []];
+        }
+
         return $this->europe->collect($advance);
     }
 
@@ -194,6 +201,12 @@ class FreeIntradayMarketData
     /** @return array<int, array<string, mixed>> */
     private function freeRecords(StockHolding $holding, Carbon $from, Carbon $until, ?Carbon &$availableFrom = null): array
     {
+        if (app(MarketDataMode::class)->paused()) {
+            throw new MarketDataSourceBusy('Market-data deployment upgrade is in progress.');
+        }
+        if (MarketPriceStore::enabled()) {
+            return StockHoldingIntradayCandle::query()->where('stock_holding_id', $holding->id)->whereBetween('as_of', [$from->copy()->utc(), $until->copy()->utc()])->get()->toArray();
+        }
         $isUs = YahooFinanceMarketData::supports($this->identity($holding));
         if ($from->greaterThan($until) || $from->lessThan(now()->subDays($isUs ? 7 : 60))) {
             throw new RuntimeException('Requested intraday history is outside free source retention; existing data preserved, gap cannot be recovered.');
@@ -246,6 +259,9 @@ class FreeIntradayMarketData
     /** @param array<int, array<string, mixed>> $records */
     private function persistRecords(StockHolding $holding, array $records): int
     {
+        if (MarketPriceStore::enabled()) {
+            return app(MarketDataCoordinator::class)->persist($holding, $records);
+        }
         $official = array_values(array_filter($records, fn (array $record): bool => $record['source_key'] === 'xetra_posttrade'));
         if ($official !== [] && count($official) !== count($records)) {
             return $this->persistRecords($holding, $official)
@@ -316,12 +332,25 @@ class FreeIntradayMarketData
     /** @return array<string, mixed> */
     public function syncAll(): array
     {
+        if (app(MarketDataMode::class)->paused()) {
+            return app(MarketDataCoordinator::class)->collect();
+        }
+        if (MarketPriceStore::enabled()) {
+            return app(MarketDataCoordinator::class)->collect();
+        }
+
         return $this->syncHoldings(StockHolding::query()->orderBy('name')->get());
     }
 
     /** @return array<string, mixed> */
     public function syncHolding(StockHolding $holding): array
     {
+        if (app(MarketDataMode::class)->paused()) {
+            return app(MarketDataCoordinator::class)->collect($holding);
+        }
+        if (MarketPriceStore::enabled()) {
+            return app(MarketDataCoordinator::class)->collect($holding);
+        }
         app(PreviewIsolation::class)->assertIntegrationAllowed();
 
         return $this->syncHoldings(collect([$holding]), reload: true);

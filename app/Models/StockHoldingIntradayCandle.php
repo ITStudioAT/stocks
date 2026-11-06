@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Services\IntradayMarketIdentity;
+use App\Services\MarketPriceCompatibility;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -14,6 +15,11 @@ class StockHoldingIntradayCandle extends Model
     protected static function booted(): void
     {
         static::addGlobalScope('configured-market', fn (Builder $query) => IntradayMarketIdentity::constrain($query));
+    }
+
+    public function newModelQuery(): Builder
+    {
+        return app(MarketPriceCompatibility::class)->apply(parent::newModelQuery(), $this);
     }
 
     /**

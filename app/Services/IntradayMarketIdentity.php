@@ -17,6 +17,9 @@ class IntradayMarketIdentity
 
     public static function constrain(Builder $query, bool $quote = false): void
     {
+        if (MarketPriceStore::enabled()) {
+            return;
+        }
         $table = $query->getModel()->getTable();
         $mic = $quote ? "{$table}.mic" : "{$table}.raw_payload->mic";
         $query->where(function (Builder $query) use ($table, $mic): void {

@@ -5,15 +5,35 @@ namespace Tests;
 use App\Models\StockHolding;
 use App\Models\User;
 use App\Services\AdminSessionManager;
+use App\Services\LocalMarketDataDatabase;
 use Illuminate\Contracts\Auth\Authenticatable as UserContract;
+use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Testing\TestCase as BaseTestCase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 
 abstract class TestCase extends BaseTestCase
 {
+    public function createApplication(): Application
+    {
+        $app = parent::createApplication();
+        $connection = DB::connection();
+        $config = $connection->getConfig();
+        $memory = $config['driver'] === 'sqlite' && $config['database'] === ':memory:';
+        $isolatedMysql = $config['driver'] === 'mysql' && preg_match('/^stocks_v2_test_[a-z0-9_]+$/D', $config['database']);
+        if (! $memory && ! $isolatedMysql) {
+            throw new RuntimeException('Tests require SQLite :memory: or a verified local stocks_v2_test_* database.');
+        }
+        if ($isolatedMysql) {
+            app(LocalMarketDataDatabase::class)->assertLocal();
+        }
+
+        return $app;
+    }
+
     protected function setUp(): void
     {
         if (file_exists(dirname(__DIR__).'/bootstrap/cache/config.php')) {

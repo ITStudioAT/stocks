@@ -27,8 +27,11 @@ class XetraIntradayCollector
     private ?array $result = null;
 
     /** @return array<string, mixed> */
-    public function collect(bool $advance = false, bool $refreshCatalog = false): array
+    public function collect(bool $advance = false, bool $refreshCatalog = false, bool $coordinated = false): array
     {
+        if (app(MarketDataMode::class)->paused()) {
+            throw new MarketDataSourceBusy('Market-data deployment upgrade is in progress.');
+        }
         app(PreviewIsolation::class)->assertIntegrationAllowed();
         if ($this->result !== null && ! $advance) {
             return $this->result;
@@ -39,6 +42,10 @@ class XetraIntradayCollector
         if ($holdings->isEmpty()) {
             return $this->result = ['checked_at' => now()->toIso8601String(), 'instruments' => [], 'series' => [], 'days' => [],
                 'pending_files' => 0, 'complete' => true, 'warnings' => []];
+        }
+        if (MarketPriceStore::enabled() && ! $coordinated && (! $holdings->contains(fn (StockHolding $holding): bool => app(FreeTradingCalendar::class)->shouldCollect($holding))
+            || ! app(MarketDataCoordinator::class)->reserve('xetra'))) {
+            return $this->unavailable($holdings, 'Coordinated five-minute interval or market closure; no provider request.');
         }
         $lock = Cache::lock('free-intraday.xetra.collector.v1', 150);
         if (! $lock->get()) {
@@ -125,7 +132,7 @@ class XetraIntradayCollector
                 }
                 $attempts = ($entry['attempts'] ?? 0) + 1;
                 $state['files'][$filename] = ['status' => 'failed', 'error' => $this->safeError($exception), 'attempts' => $attempts,
-                    'retry_at' => now()->addSeconds(min(600, 15 * (2 ** min(5, $attempts))))->timestamp];
+                    'retry_at' => now()->addSeconds(max(MarketPriceStore::enabled() ? 300 : 0, min(3600, 15 * (2 ** min(8, $attempts)))))->timestamp];
                 if (in_array($exception->getCode(), [403, 429], true)) {
                     $error = $state['files'][$filename]['error'];
                 }

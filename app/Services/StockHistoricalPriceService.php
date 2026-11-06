@@ -8,6 +8,7 @@ use App\Models\StockPrice;
 use App\Models\StockRealtimePrice;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 class StockHistoricalPriceService
 {
@@ -18,6 +19,15 @@ class StockHistoricalPriceService
 
     public function hasOutdatedEndOfDayStocks(): bool
     {
+        if (MarketPriceStore::enabled()) {
+            $holdings = StockHolding::query()->get(['id', 'market_listing_id']);
+            $latest = DB::table('market_prices')->whereIn('market_listing_id', $holdings->pluck('market_listing_id'))
+                ->where('is_current', true)->where('validation_status', 'valid')->where('interval_code', '1d')
+                ->selectRaw('market_listing_id, MAX(trading_date) as trading_date')->groupBy('market_listing_id')->pluck('trading_date', 'market_listing_id');
+            $expected = $this->completedTradingDay->date()->toDateString();
+
+            return $holdings->contains(fn (StockHolding $holding): bool => $latest->get($holding->market_listing_id) !== $expected);
+        }
         $holdings = StockHolding::query()->get(['id', 'isin', 'wkn', 'symbol', 'mic_code', 'exchange']);
         $keys = $holdings->map(fn (StockHolding $holding): string => $this->stockPriceCatalog->instrumentKeyForHolding($holding));
         $latestDates = StockPrice::query()->whereIn('instrument_key', $keys)

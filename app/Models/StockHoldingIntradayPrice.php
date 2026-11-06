@@ -2,7 +2,9 @@
 
 namespace App\Models;
 
+use App\Services\MarketPriceCompatibility;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -15,6 +17,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 #[Fillable(['stock_holding_id', 'trading_date', 'sample_index', 'source_stock_price_id', 'price', 'currency', 'as_of', 'source_name', 'price_type'])]
 class StockHoldingIntradayPrice extends Model
 {
+    public function newModelQuery(): Builder
+    {
+        return app(MarketPriceCompatibility::class)->apply(parent::newModelQuery(), $this);
+    }
+
     /**
      * @return array<string, string>
      */

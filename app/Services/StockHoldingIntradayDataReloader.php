@@ -77,6 +77,13 @@ class StockHoldingIntradayDataReloader
 
     public function reloadToday(StockHolding $holding): StockHoldingIntradayReloadRun
     {
+        if (MarketPriceStore::enabled()) {
+            $run = $this->createRun();
+            $run->update(['stock_holding_id' => $holding->id]);
+            $this->importCentral($run->id, $holding);
+
+            return $run->refresh();
+        }
         $day = $this->todayOverviewDay($holding);
         $run = StockHoldingIntradayReloadRun::query()->create([
             'id' => 'intraday-today-'.Str::uuid()->toString(),
@@ -202,6 +209,9 @@ class StockHoldingIntradayDataReloader
      */
     private function adoptStoredIntradayPricesForMissingCandleDays(StockHolding $holding, Collection $days): void
     {
+        if (MarketPriceStore::enabled()) {
+            return;
+        }
         $days
             ->filter(fn (array $day): bool => $day['is_trading_day'])
             ->each(function (array $day) use ($holding): void {
@@ -451,6 +461,13 @@ class StockHoldingIntradayDataReloader
 
     public function reload(StockHolding $holding): StockHoldingIntradayReloadRun
     {
+        if (MarketPriceStore::enabled()) {
+            $run = $this->createRun();
+            $run->update(['stock_holding_id' => $holding->id]);
+            $this->importCentral($run->id, $holding);
+
+            return $run->refresh();
+        }
         $days = $this->lastOverviewDays($holding);
 
         if ($days === []) {
@@ -491,8 +508,27 @@ class StockHoldingIntradayDataReloader
         return $run->refresh();
     }
 
+    private function importCentral(string $runId, ?StockHolding $holding = null): void
+    {
+        $run = StockHoldingIntradayReloadRun::query()->find($runId);
+        if ($run === null) {
+            return;
+        }
+        $result = app(MarketDataCoordinator::class)->collect($holding);
+        $run->update(['status' => $result['failed_count'] ? 'partial' : 'finished', 'stored_count' => $result['stored_count'],
+            'total_count' => $result['requested_count'], 'processed_count' => $result['requested_count'],
+            'success_count' => max(0, $result['requested_count'] - $result['failed_count']), 'failed_count' => $result['failed_count'],
+            'error_summary' => ['message' => implode(' ', $result['errors'])], 'message' => $result['message'],
+            'started_at' => $run->started_at ?? now(), 'finished_at' => now(), 'current' => null]);
+    }
+
     public function import(string $runId): void
     {
+        if (MarketPriceStore::enabled()) {
+            $this->importCentral($runId);
+
+            return;
+        }
         $run = StockHoldingIntradayReloadRun::query()->find($runId);
 
         if (! $run) {
@@ -559,6 +595,11 @@ class StockHoldingIntradayDataReloader
 
     private function importMissing(string $runId, bool $recentOnly = false): void
     {
+        if (MarketPriceStore::enabled()) {
+            $this->importCentral($runId);
+
+            return;
+        }
         $run = StockHoldingIntradayReloadRun::query()->find($runId);
 
         if (! $run) {
@@ -634,6 +675,11 @@ class StockHoldingIntradayDataReloader
 
     public function importLatestMissing(string $runId): void
     {
+        if (MarketPriceStore::enabled()) {
+            $this->importCentral($runId);
+
+            return;
+        }
         $run = StockHoldingIntradayReloadRun::query()->find($runId);
 
         if (! $run) {

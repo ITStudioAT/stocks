@@ -16,6 +16,9 @@ class ChartDataRefresh
     /** @return array{status: string, error: ?string} */
     public function request(StockHolding $holding, string $kind): array
     {
+        if (MarketPriceStore::enabled()) {
+            return ['status' => 'finished', 'error' => null];
+        }
         $key = $this->key($holding, $kind);
         if (Cache::add($key, ['status' => 'queued', 'error' => null], now()->addMinutes(10))) {
             $connection = (string) config('queue.default');

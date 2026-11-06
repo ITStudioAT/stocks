@@ -72,11 +72,19 @@ class UpdateApplicationCommand extends Command
             });
 
             if (! $successful) {
+                if ($this->option('production') && ! $this->option('skip-migrate')) {
+                    $this->runShellCommand('php artisan market-data:upgrade --deployment --rollback-if-pending --no-interaction');
+                }
+
                 return self::FAILURE;
             }
 
             if ($label === self::MIGRATION_STEP) {
                 if (! $this->ensureProtectedAdminUser()) {
+                    if ($this->option('production')) {
+                        $this->runShellCommand('php artisan market-data:upgrade --deployment --rollback-if-pending --no-interaction');
+                    }
+
                     return self::FAILURE;
                 }
 
@@ -118,14 +126,14 @@ class UpdateApplicationCommand extends Command
 
         if ($this->option('production')) {
             $commands['Validating production security configuration'] = 'php artisan security:preflight --no-interaction';
+            $commands['Redacting stored EODHD error secrets'] = 'php artisan security:redact-eodhd-errors --no-interaction';
         }
 
         if (! $this->option('skip-migrate')) {
+            if ($this->option('production')) {
+                $commands['Backing up and freezing legacy market data'] = 'php artisan market-data:upgrade --deployment --prepare --no-interaction';
+            }
             $commands[self::MIGRATION_STEP] = 'php artisan migrate --force --no-interaction';
-        }
-
-        if ($this->option('production')) {
-            $commands['Redacting stored EODHD error secrets'] = 'php artisan security:redact-eodhd-errors --no-interaction';
         }
 
         if (! $this->option('skip-npm')) {
@@ -138,6 +146,9 @@ class UpdateApplicationCommand extends Command
         }
 
         $commands['Caching Laravel optimized files'] = 'php artisan optimize';
+        if ($this->option('production') && ! $this->option('skip-migrate')) {
+            $commands['Verifying and activating central market data'] = 'php artisan market-data:upgrade --deployment --finish --no-interaction';
+        }
         $commands['Restarting queue workers'] = 'php artisan queue:restart';
 
         return $commands;

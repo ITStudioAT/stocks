@@ -24,6 +24,7 @@ use App\Services\IndexDataUpdateScheduler;
 use App\Services\IndexPriceRefreshSettings;
 use App\Services\KnownInstrumentMetadataCorrections;
 use App\Services\MarketDataProvenance;
+use App\Services\MarketPriceStore;
 use App\Services\PriceRefreshScheduler;
 use App\Services\StockHistoricalPriceService;
 use App\Services\StockHoldingPriceReadBatch;
@@ -33,6 +34,7 @@ use App\Services\StockPriceFreshness;
 use App\Services\TradingSessionPriceResolver;
 use App\Services\UiPreferences;
 use App\Services\WatchlistPdfReport;
+use App\Services\YahooFinanceMarketData;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -739,6 +741,8 @@ class AdminDepotHoldingController extends Controller
             'end_price_24_date' => $endOfDaySessionPrices['end_price_24_date'],
             'end_price_48_date' => $endOfDaySessionPrices['end_price_48_date'],
             'historical_prices_fetching' => in_array($intradayRefresh['status'] ?? null, ['queued', 'running'], true),
+            'daily_history_available' => MarketPriceStore::enabled()
+                && (YahooFinanceMarketData::supports($holding->toArray()) || YahooFinanceMarketData::supportsXetra($holding->toArray())),
             'intraday_refresh' => $intradayRefresh,
             'position_pieces' => $activeDepot
                 ? $this->depotTransactionBooker->positionPieces($activeDepot, $holding)
@@ -754,6 +758,12 @@ class AdminDepotHoldingController extends Controller
             'latest_price_source' => $this->dashboardPriceSourceName($latestStoredPrice),
             'latest_price_source_url' => $this->dashboardPriceSourceUrl($latestStoredPrice),
             'latest_price_as_of' => $this->sourceDateTimePayload($latestPriceAsOf, $latestStoredPrice !== null),
+            'market_listing_id' => $holding->market_listing_id,
+            'latest_price_checked_at' => $holding->relationLoaded('readMarketSelection') && $holding->readMarketSelection?->checked_at
+                ? Carbon::parse($holding->readMarketSelection->checked_at, 'UTC')->toIso8601String() : null,
+            'latest_price_delay_seconds' => in_array($latestStoredPrice?->source_key, ['xetra_posttrade', 'yahoo_xetra_intraday'], true) ? 900 : null,
+            'latest_price_time_basis' => $holding->relationLoaded('readMarketSelection') ? $holding->readMarketSelection?->time_basis : null,
+            'latest_price_interval' => $holding->relationLoaded('readMarketSelection') ? $holding->readMarketSelection?->interval_code : null,
             'trading_times' => $tradingTimes,
             'venue' => $latestStoredPrice instanceof StockRealtimePrice ? $latestStoredPrice->venue : null,
             'price_type' => $latestStoredPrice instanceof StockRealtimePrice ? $latestStoredPrice->price_type : ($latestStoredPrice ? 'intraday' : null),

@@ -3,6 +3,7 @@
 use App\Console\Commands\RedactEodhdErrors;
 use App\Models\AdminLoginCode;
 use App\Services\EodhdApiClient;
+use App\Services\MarketPriceStore;
 use App\Services\PreviewBackgroundState;
 use App\Services\PreviewIsolation;
 use Illuminate\Foundation\Inspiring;
@@ -22,22 +23,27 @@ if ($preview && config('security.preview.control_enabled') !== true) {
 $canRun = static fn (): bool => ! $preview || app(PreviewBackgroundState::class)->enabled();
 $canRunEodhd = static fn (): bool => $canRun() && app(EodhdApiClient::class)->configured();
 
+Schedule::command('market-data:collect')->everyFiveMinutes()
+    ->when(static fn (): bool => ! $preview && MarketPriceStore::enabled())->withoutOverlapping(5);
+Schedule::command('market-data:daily --limit=3')->hourly()
+    ->when(static fn (): bool => ! $preview && MarketPriceStore::enabled())->withoutOverlapping(10);
+
 Schedule::command('intraday:collect-free --queue')
     ->everyMinute()
     ->weekdays()
     ->timezone('Europe/Vienna')
     ->between('08:15', '23:00')
-    ->when(static fn (): bool => ! $preview)
+    ->when(static fn (): bool => ! $preview && ! MarketPriceStore::enabled())
     ->withoutOverlapping(2);
 
 Schedule::command('price-refresh:dispatch-due')
     ->everyMinute()
-    ->when($canRun)
+    ->when(static fn (): bool => $canRun() && ! MarketPriceStore::enabled())
     ->withoutOverlapping(10);
 
 Schedule::command('intraday-candles:dispatch-due')
     ->everyMinute()
-    ->when($canRun)
+    ->when(static fn (): bool => $canRun() && ! MarketPriceStore::enabled())
     ->withoutOverlapping(10);
 
 Schedule::command('end-of-day-data:dispatch-due')

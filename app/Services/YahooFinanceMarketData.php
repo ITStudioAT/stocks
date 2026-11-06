@@ -32,18 +32,21 @@ class YahooFinanceMarketData
     }
 
     /** @param array<string, mixed> $item @return array<string, mixed> */
-    public function runXetra(array $item): array
+    public function runXetra(array $item, bool $coordinated = false): array
     {
         if (! self::supportsXetra($item)) {
             throw new RuntimeException('No verified Yahoo Xetra ISIN/symbol/currency mapping.');
         }
 
-        return $this->run(collect([$item]), includeSeries: true, xetra: true);
+        return $this->run(collect([$item]), includeSeries: true, xetra: true, coordinated: $coordinated);
     }
 
     /** @param Collection<int, array<string, mixed>> $instruments @return array<string, mixed> */
-    public function run(Collection $instruments, bool $includeSeries = false, bool $xetra = false): array
+    public function run(Collection $instruments, bool $includeSeries = false, bool $xetra = false, bool $coordinated = false): array
     {
+        if (app(MarketDataMode::class)->paused()) {
+            throw new MarketDataSourceBusy('Market-data deployment upgrade is in progress.');
+        }
         app(PreviewIsolation::class)->assertIntegrationAllowed();
         $started = hrtime(true) / 1e9;
         $deadline = $started + 6;
@@ -58,7 +61,8 @@ class YahooFinanceMarketData
                 'us_instrument' => self::supports($item)];
             if ($xetra ? self::supportsXetra($item) : self::supports($item)) {
                 $row['state'] = 'not_found';
-                if ($requests >= 3 || hrtime(true) / 1e9 >= $deadline || $blocked) {
+                $gated = MarketPriceStore::enabled() && ! $coordinated && ! Cache::add('market-data.poll.yahoo-symbol:'.$item['symbol'].($xetra ? '.DE' : ''), true, now()->addSeconds(300));
+                if ($requests >= 3 || hrtime(true) / 1e9 >= $deadline || $blocked || $gated) {
                     $row['quote_note'] = 'Nicht abgerufen: Anfrage-, Zeitlimit oder Anbietersperre.';
                     if (! $blocked) {
                         $warnings[] = 'Yahoo Finance: Anfrage- oder Zeitlimit erreicht; weitere US-Instrumente wurden nicht geprüft.';

@@ -63,11 +63,50 @@ class UpdateApplicationCommandTest extends TestCase
             ->assertSuccessful();
     }
 
+    public function test_production_upgrade_prepares_before_migrations_and_activates_after_optimized_files(): void
+    {
+        $this->markCurrentMigrationsAsRanExcept([]);
+        $this->createProtectedAdminTables();
+        $commands = [];
+        Process::preventStrayProcesses();
+        Process::fake(function ($process) use (&$commands) {
+            $commands[] = $process->command;
+
+            return Process::result();
+        });
+        $this->artisan('app:update --production --skip-composer --skip-npm --skip-build')->assertSuccessful();
+        $prepare = array_search('php artisan market-data:upgrade --deployment --prepare --no-interaction', $commands, true);
+        $redact = array_search('php artisan security:redact-eodhd-errors --no-interaction', $commands, true);
+        $migrate = array_search('php artisan migrate --force --no-interaction', $commands, true);
+        $cache = array_search('php artisan optimize', $commands, true);
+        $finish = array_search('php artisan market-data:upgrade --deployment --finish --no-interaction', $commands, true);
+        $restart = array_search('php artisan queue:restart', $commands, true);
+        $this->assertIsInt($prepare);
+        $this->assertIsInt($finish);
+        $this->assertLessThan($prepare, $redact);
+        $this->assertLessThan($migrate, $prepare);
+        $this->assertLessThan($finish, $cache);
+        $this->assertLessThan($restart, $finish);
+    }
+
     public function test_update_command_uses_production_composer_mode_by_default(): void
     {
         $this->artisan('app:update --dry-run')
             ->expectsOutputToContain('Would run: composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader')
             ->assertSuccessful();
+    }
+
+    public function test_failed_production_migration_rolls_back_pending_upgrade_and_stops(): void
+    {
+        $this->markCurrentMigrationsAsRanExcept([]);
+        $this->createProtectedAdminTables();
+        Process::preventStrayProcesses();
+        Process::fake(fn ($process) => Process::result(exitCode: $process->command === 'php artisan migrate --force --no-interaction' ? 1 : 0));
+        $this->artisan('app:update --production --skip-composer --skip-npm --skip-build')->assertFailed();
+        Process::assertRan('php artisan market-data:upgrade --deployment --prepare --no-interaction');
+        Process::assertRan('php artisan market-data:upgrade --deployment --rollback-if-pending --no-interaction');
+        Process::assertDidntRun('php artisan market-data:upgrade --deployment --finish --no-interaction');
+        Process::assertDidntRun('php artisan queue:restart');
     }
 
     public function test_update_command_can_force_dev_composer_packages(): void
