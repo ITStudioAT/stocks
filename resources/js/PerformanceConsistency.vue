@@ -17,6 +17,12 @@ const statusText = computed(() => {
     if (run.value.unavailable || run.value.missing || run.value.incorrect) return 'Prüfung mit Hinweisen';
     return 'Werte stimmen überein';
 });
+const statusIcon = computed(() => {
+    if (running.value) return 'mdi-progress-clock';
+    if (!run.value) return 'mdi-clipboard-search-outline';
+    if (run.value.status === 'failed' || run.value.unavailable || run.value.missing || run.value.incorrect) return 'mdi-alert-circle-outline';
+    return 'mdi-check-decagram-outline';
+});
 let timer;
 
 function formatDate(date) {
@@ -73,7 +79,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
                     <h2>Datenkonsistenz</h2>
                     <p class="consistency-intro">Abgeschlossene Wochen, Monate und Jahre werden mit den vorhandenen Buchungen und Kursen verglichen.</p>
                 </div>
-                <span class="consistency-status"><v-icon size="18" :icon="running ? 'mdi-progress-clock' : 'mdi-check-decagram-outline'" /> {{ statusText }}</span>
+                <span class="consistency-status"><v-icon size="18" :icon="statusIcon" /> {{ statusText }}</span>
             </div>
 
             <v-alert v-if="error" type="error" class="mt-4">{{ error }}</v-alert>
@@ -109,7 +115,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
                     <p class="consistency-muted">Abweichend bedeutet, dass Betrag, Prozentwert oder Quellenangabe vom neu berechneten Ergebnis abweichen.</p>
                     <div class="consistency-issues">
                         <div v-for="(issue, index) in run.issues" :key="index" class="consistency-issue">
-                            <div><strong>{{ issue.depot }} · {{ periodLabels[issue.period] }} bis {{ formatDate(issue.end_date) }}</strong><br><span>{{ reasons[issue.reason] }}</span></div>
+                            <div><strong>{{ issue.depot }} · {{ periodLabels[issue.period] }} bis {{ formatDate(issue.end_date) }}</strong><br><span>{{ reasons[issue.reason] }}<template v-if="issue.reason === 'incorrect' && issue.differences?.length">: {{ issue.differences.join(', ') }}</template></span></div>
                             <div v-if="issue.reason === 'incorrect'" class="consistency-amounts">
                                 Gespeichert {{ formatValue(issue.saved_amount, ' €') }} / {{ formatValue(issue.saved_percent, ' %') }}<br>
                                 Berechnet {{ formatValue(issue.calculated_amount, ' €') }} / {{ formatValue(issue.calculated_percent, ' %') }}

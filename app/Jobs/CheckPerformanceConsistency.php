@@ -37,6 +37,8 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
         if (($run['id'] ?? null) !== $this->runId) {
             return;
         }
+        $run['issues'] ??= [];
+        $run['periods'] ??= [];
         $run['status'] = 'running';
         $run['step'] = 'Depots werden geprüft';
         $this->save($run);
@@ -81,6 +83,12 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
                         $run['periods'][$period]['incorrect'] += (int) $incorrect;
                         $run['periods'][$period]['unavailable'] += (int) ($fresh['change_amount'] === null);
                         if (($missing || $incorrect || $fresh['change_amount'] === null) && count($run['issues']) < 100) {
+                            $differences = [];
+                            foreach (['change_amount' => 'Betrag', 'change_percent' => 'Prozentwert', 'source_markers' => 'Quellenangabe'] as $field => $description) {
+                                if (! is_array($actual) || ! array_key_exists($field, $actual) || $actual[$field] !== $fresh[$field]) {
+                                    $differences[] = $description;
+                                }
+                            }
                             $run['issues'][] = [
                                 'depot' => $locked->name,
                                 'period' => $period,
@@ -90,6 +98,7 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
                                 'calculated_amount' => $fresh['change_amount'],
                                 'saved_percent' => $actual['change_percent'] ?? null,
                                 'calculated_percent' => $fresh['change_percent'],
+                                'differences' => $differences,
                             ];
                         }
                         if ($run['repair'] && ($missing || $incorrect) && $fresh['change_amount'] === null) {
