@@ -7,6 +7,7 @@ use App\Models\StockAiResearch;
 use App\Models\StockAiResearchSource;
 use App\Models\StockHolding;
 use App\Models\User;
+use App\Services\DashboardPerformanceSnapshots;
 use App\Services\PreviewOriginalSchema;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
 use Illuminate\Support\Facades\DB;
@@ -30,7 +31,8 @@ class PreviewOriginalSchemaTest extends TestCase
         $this->assertSame(':memory:', config('database.connections.sqlite.database'));
         $schema = new PreviewOriginalSchema;
         $actualTables = array_map(fn (string $table): string => str_replace('main.', '', $table), Schema::getTableListing());
-        $actualTables = array_values(array_diff($actualTables, self::Excluded, PreviewOriginalSchema::CentralTables));
+        $this->assertTrue(Schema::hasTable(DashboardPerformanceSnapshots::Table));
+        $actualTables = array_values(array_diff($actualTables, self::Excluded, PreviewOriginalSchema::CentralTables, [DashboardPerformanceSnapshots::Table]));
         foreach (PreviewOriginalSchema::CentralTables as $table) {
             $this->assertTrue(Schema::hasTable($table));
         }

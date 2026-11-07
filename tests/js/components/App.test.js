@@ -3980,8 +3980,6 @@ describe('App', () => {
         '/admin/menu/data/indices/live-data',
         '/admin/menu/data/stocks/intraday-data',
         '/admin/menu/data/health',
-        '/admin/menu/data/cloudways',
-        '/admin/menu/cloudways',
         '/admin/menu/data/repair',
     ])('shows the Data overview for %s', async (path) => {
         window.history.pushState({}, '', path);
@@ -3993,10 +3991,20 @@ describe('App', () => {
 
         expect(window.location.pathname).toBe('/admin/menu/data/overview');
         const data = wrapper.get('section[aria-label="Data"]');
-        expect(data.findAll('[role="tab"]').map((tab) => tab.text())).toEqual(['Overview']);
-        expect(data.text()).toBe('Overview');
+        expect(data.findAll('[role="tab"]').map((tab) => tab.text())).toEqual(['Overview', 'Cloudways']);
         expect(wrapper.find('[aria-label="Datenkonsistenz"]').exists()).toBe(true);
-        expect(fetchMock.mock.calls.map(([url]) => url).sort()).toEqual(['/admin/data/performance-consistency', '/admin/depots/active', '/admin/me']);
+        expect(fetchMock.mock.calls.map(([url]) => url).sort()).toEqual(['/admin/cloudways/operation', '/admin/data/performance-consistency', '/admin/depots/active', '/admin/me']);
+    });
+
+    it.each(['/admin/menu/data/cloudways', '/admin/menu/cloudways'])('opens Cloudways from %s', async (path) => {
+        window.history.pushState({}, '', path);
+        vi.stubGlobal('fetch', vi.fn((requestPath) => Promise.resolve(jsonResponse(requestPath === '/admin/me'
+            ? { user: { id: 1, roles: ['super_admin'] } } : {}))));
+        const wrapper = mountApp();
+        await flushPromises();
+        expect(window.location.pathname).toBe('/admin/menu/data/cloudways');
+        expect(wrapper.get('[aria-label="Cloudways Synchronisation"]').isVisible()).toBe(true);
+        expect(wrapper.find('[aria-label="Datenkonsistenz"]').exists()).toBe(false);
     });
 
     it('does not show the watch-list PDF export on the dashboard', async () => {

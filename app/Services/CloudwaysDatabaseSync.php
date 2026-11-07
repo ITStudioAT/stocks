@@ -699,6 +699,9 @@ class CloudwaysDatabaseSync
         $hasSchemaDifferences = $cloudwaysOnlyColumns !== [] || $localOnlyColumns !== [];
         $hasContentDifferences = $cloudways['rows'] !== $local['rows'] || $cloudways['hash'] !== $local['hash'];
         $isIdentical = ! $hasSchemaDifferences && ! $hasContentDifferences;
+        $rowDifferences = $hasContentDifferences
+            ? $this->countRowDifferences($sourceConnectionName, $targetConnectionName, $table, $matchingColumns, $jsonColumns, $sourceColumnDefinitions, $targetColumnDefinitions)
+            : ['changed' => 0, 'source_only' => 0, 'local_only' => 0];
 
         return [
             'name' => $table,
@@ -707,6 +710,7 @@ class CloudwaysDatabaseSync
             'local_rows' => $local['rows'],
             'cloudways_hash' => $cloudways['hash'],
             'local_hash' => $local['hash'],
+            'row_differences' => $rowDifferences,
             'cloudways_only_columns' => $cloudwaysOnlyColumns,
             'local_only_columns' => $localOnlyColumns,
             'message' => $this->comparisonMessage(
@@ -718,6 +722,77 @@ class CloudwaysDatabaseSync
                 $localOnlyColumns,
             ),
         ];
+    }
+
+    private function countRowDifferences(string $source, string $target, string $table, array $columns, array $jsonColumns, array $sourceDefinitions, array $targetDefinitions): ?array
+    {
+        $sourcePrimary = collect(Schema::connection($source)->getIndexes($table))->first(fn (array $index): bool => ($index['primary'] ?? false) === true);
+        $targetPrimary = collect(Schema::connection($target)->getIndexes($table))->first(fn (array $index): bool => ($index['primary'] ?? false) === true);
+        $primary = $sourcePrimary['columns'] ?? [];
+        if (count($primary) !== 1 || $primary !== ($targetPrimary['columns'] ?? []) || ! in_array($primary[0], $columns, true)) {
+            return null;
+        }
+        $key = $primary[0];
+        $sourceType = collect($sourceDefinitions)->firstWhere('name', $key)['type_name'] ?? '';
+        $targetType = collect($targetDefinitions)->firstWhere('name', $key)['type_name'] ?? '';
+        if (! in_array(strtolower($sourceType), ['integer', 'int', 'bigint', 'smallint', 'mediumint', 'tinyint'], true)
+            || ! in_array(strtolower($targetType), ['integer', 'int', 'bigint', 'smallint', 'mediumint', 'tinyint'], true)) {
+            return null;
+        }
+
+        $sourceRows = $this->scopedTableQuery($source, $table)->select($columns)->lazyById(500, $key)->getIterator();
+        $targetRows = $this->scopedTableQuery($target, $table)->select($columns)->lazyById(500, $key)->getIterator();
+        $sourceRows->rewind();
+        $targetRows->rewind();
+        $counts = ['changed' => 0, 'source_only' => 0, 'local_only' => 0];
+        $jsonLookup = array_fill_keys($jsonColumns, true);
+
+        while ($sourceRows->valid() || $targetRows->valid()) {
+            if (! $targetRows->valid()) {
+                $counts['source_only']++;
+                $sourceRows->next();
+
+                continue;
+            }
+            if (! $sourceRows->valid()) {
+                $counts['local_only']++;
+                $targetRows->next();
+
+                continue;
+            }
+            $sourceRow = $sourceRows->current();
+            $targetRow = $targetRows->current();
+            $sourceId = (string) $sourceRow->{$key};
+            $targetId = (string) $targetRow->{$key};
+            if (! ctype_digit($sourceId) || ! ctype_digit($targetId)) {
+                return null;
+            }
+            $sourceId = ltrim($sourceId, '0') ?: '0';
+            $targetId = ltrim($targetId, '0') ?: '0';
+            $order = strlen($sourceId) <=> strlen($targetId) ?: strcmp($sourceId, $targetId);
+            if ($order < 0) {
+                $counts['source_only']++;
+                $sourceRows->next();
+
+                continue;
+            }
+            if ($order > 0) {
+                $counts['local_only']++;
+                $targetRows->next();
+
+                continue;
+            }
+            foreach ($columns as $column) {
+                if ($this->encodedComparisonValue($sourceRow->{$column}, isset($jsonLookup[$column])) !== $this->encodedComparisonValue($targetRow->{$column}, isset($jsonLookup[$column]))) {
+                    $counts['changed']++;
+                    break;
+                }
+            }
+            $sourceRows->next();
+            $targetRows->next();
+        }
+
+        return $counts;
     }
 
     /**

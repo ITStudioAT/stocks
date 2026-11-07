@@ -11,6 +11,7 @@ import HoldingPriceReload from './HoldingPriceReload.vue';
 import InstrumentSearchSource from './InstrumentSearchSource.vue';
 import DataSourceMarkers from './DataSourceMarkers.vue';
 import PerformanceConsistency from './PerformanceConsistency.vue';
+import CloudwaysSynchronization from './CloudwaysSynchronization.vue';
 import { marketDataMarkers, marketDataSourceText, mergeMarketDataMarkers } from './utils/marketDataProvenance';
 const logoMarkUrl = '/images/gkstocks-logo-mark.png';
 const displayTimeZone = 'Europe/Vienna';
@@ -130,6 +131,7 @@ const loginPassword = ref('');
 const loginMode = ref('password');
 const localError = ref('');
 const activeSection = ref('dashboard');
+const activeDataSubsection = ref('overview');
 const infoTables = ref([]);
 const infoMethods = ref([]);
 const infoTablesLoading = ref(false);
@@ -1425,6 +1427,9 @@ function applyRouteFromPath() {
 
         if (normalizedSection === 'data' || normalizedSection === 'cloudways') {
             activeSection.value = canManageDashboardAdmin.value ? 'data' : 'dashboard';
+            activeDataSubsection.value = (normalizedSection === 'cloudways' || subsectionSegment === 'cloudways') && canManageUsers.value
+                ? 'cloudways'
+                : 'overview';
             updateUrlPath({ replace: true });
 
             return;
@@ -1472,7 +1477,7 @@ function updateUrlPath(options = {}) {
         : activeSection.value === 'profile'
             ? '/admin/profile'
             : activeSection.value === 'data'
-                ? '/admin/menu/data/overview'
+                ? `/admin/menu/data/${activeDataSubsection.value}`
                 : activeSection.value === 'infos'
                     ? `/admin/menu/infos/${activeInfoSubsection.value}`
                     : activeSection.value === 'depot'
@@ -8877,11 +8882,13 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                     </v-tabs>
 
                     <section v-if="activeSection === 'data' && canManageDashboardAdmin" aria-label="Data">
-                        <v-tabs model-value="overview" color="primary" aria-label="Data sections">
+                        <v-tabs :model-value="activeDataSubsection" color="primary" aria-label="Data sections" @update:model-value="(value) => { activeDataSubsection = value; updateUrlPath(); }">
                             <v-tab value="overview" prepend-icon="mdi-view-dashboard-outline">Overview</v-tab>
+                            <v-tab v-if="canManageUsers" value="cloudways" prepend-icon="mdi-cloud-sync-outline">Cloudways</v-tab>
                         </v-tabs>
                     </section>
-                    <PerformanceConsistency v-if="canManageDashboardAdmin" :show-card="activeSection === 'data'" />
+                    <PerformanceConsistency v-if="canManageDashboardAdmin" :show-card="activeSection === 'data' && activeDataSubsection === 'overview'" />
+                    <CloudwaysSynchronization v-if="canManageUsers" :show-card="activeSection === 'data' && activeDataSubsection === 'cloudways'" />
 
                     <section
                         v-if="activeSection === 'infos' && canManageDashboardAdmin"

@@ -39,6 +39,7 @@ class AdminCloudwaysController extends Controller
         AdminCloudwaysSyncRequest $request,
         CloudwaysDatabaseSync $cloudwaysDatabaseSync,
     ): JsonResponse|StreamedResponse {
+        abort_unless(app()->environment(['local', 'testing']), 403, 'Cloudways synchronization is available only in the local environment.');
         $checkedDifferentTables = $request->validated('tables');
 
         $this->audit($request, 'sync_requested', [

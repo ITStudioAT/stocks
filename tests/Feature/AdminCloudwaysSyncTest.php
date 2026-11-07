@@ -11,6 +11,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\DatabaseManager;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\DB;
@@ -351,6 +352,26 @@ class AdminCloudwaysSyncTest extends TestCase
         $this
             ->postJson('/admin/cloudways/check')
             ->assertForbidden();
+    }
+
+    public function test_comparison_counts_changed_and_side_only_rows(): void
+    {
+        $this->configureCloudwaysTestingConnection();
+        $this->createCloudItemsTable();
+        $this->createCloudItemsTable('cloudways_testing');
+        DB::table('cloud_items')->insert([
+            ['id' => 1, 'name' => 'local', 'quantity' => 1],
+            ['id' => 2, 'name' => 'local only', 'quantity' => 1],
+            ['id' => 10, 'name' => 'same', 'quantity' => 1],
+        ]);
+        DB::connection('cloudways_testing')->table('cloud_items')->insert([
+            ['id' => 1, 'name' => 'cloud', 'quantity' => 1],
+            ['id' => 3, 'name' => 'cloud only', 'quantity' => 1],
+            ['id' => 10, 'name' => 'same', 'quantity' => 1],
+        ]);
+        $tables = $this->actingAs($this->superAdminUser())->postJson('/admin/cloudways/check')->assertOk()->json('comparison.tables');
+        $table = collect($tables)->firstWhere('name', 'cloud_items');
+        $this->assertSame(['changed' => 1, 'source_only' => 1, 'local_only' => 1], $table['row_differences']);
     }
 
     public function test_super_admin_can_stream_detailed_cloudways_comparison_progress(): void
@@ -1206,6 +1227,17 @@ class AdminCloudwaysSyncTest extends TestCase
     public function test_guest_cannot_sync_cloudways_tables(): void
     {
         $this->postJson('/admin/cloudways/sync')->assertUnauthorized();
+    }
+
+    public function test_cloudways_sync_is_blocked_outside_local_environment(): void
+    {
+        $admin = $this->superAdminUser();
+        $this->withoutMiddleware(PreventRequestForgery::class);
+        $this->app['env'] = 'production';
+        $this->actingAs($admin)->postJson('/admin/cloudways/sync', [
+            'tables' => [config('services.cloudways.sync_tables')[0]],
+        ])->assertForbidden();
+        $this->app['env'] = 'testing';
     }
 
     public function test_cloudways_dynamic_connection_requires_and_uses_verified_tls(): void

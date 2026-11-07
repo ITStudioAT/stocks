@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminCloudwaysController;
+use App\Http\Controllers\AdminCloudwaysOperationController;
 use App\Http\Controllers\AdminDashboardMarketDataTestController;
 use App\Http\Controllers\AdminDashboardVersionController;
 use App\Http\Controllers\AdminDataController;
@@ -318,6 +319,8 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
             ->middleware('throttle:6,1')
             ->name('admin.preview.control');
         Route::get('/admin/cloudways/status', [AdminCloudwaysController::class, 'status'])->name('admin.cloudways.status');
+        Route::get('/admin/cloudways/operation', [AdminCloudwaysOperationController::class, 'show'])->name('admin.cloudways.operation.show');
+        Route::post('/admin/cloudways/operation', [AdminCloudwaysOperationController::class, 'store'])->name('admin.cloudways.operation.store');
         Route::post('/admin/cloudways/check', [AdminCloudwaysController::class, 'show'])
             ->middleware('throttle:admin.costly-operation')
             ->name('admin.cloudways.show');
