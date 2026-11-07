@@ -154,19 +154,64 @@ class AdminDepotTransactionController extends Controller
         if (in_array($status, ['queued', 'running'], true)) {
             return response()->json(['status' => $status, 'run_id' => $run['id']]);
         }
+        if ($status === 'waiting') {
+            return response()->json(['status' => $status, 'run_id' => $run['id'], ...$this->performanceRepairPause($run)]);
+        }
         if ($status === 'in_progress') {
             return response()->json(['status' => $status, 'message' => 'Für dieses Depot läuft bereits eine Reparatur.']);
         }
 
         $payload = $this->performancePayload($depot);
         $card = isset($run['target']) ? $this->performanceCard($payload, $run['target']) : null;
-        if (($card['change_amount'] ?? null) !== null) {
+        $samePeriod = $card !== null && (isset($run['target']['date'])
+            || $this->performanceRepairDates($run['target'], $card)[0] === $run['dates']);
+        if ($samePeriod && $card['change_amount'] !== null) {
             return response()->json(['status' => 'repaired', 'message' => 'Depotentwicklung neu berechnet.', ...$payload]);
         }
+        if ($status === 'paused') {
+            return response()->json(['status' => $status, ...$this->performanceRepairPause($run), ...$payload]);
+        }
+        if ($status === 'failed') {
+            $reason = $run['failure_reason'] ?? null;
+            $httpStatus = $run['provider_http_status'] ?? null;
+            $message = match ($reason) {
+                'download' => 'Der Download bei Yahoo Finance ist fehlgeschlagen'.($httpStatus === null ? '.' : ' (HTTP '.$httpStatus.').'),
+                'validation' => 'Die Antwort von Yahoo Finance hat die Kursprüfung nicht bestanden.',
+                default => 'Die Reparatur konnte nicht abgeschlossen werden.',
+            };
 
-        return $status === 'failed'
-            ? response()->json(['status' => 'failed', 'message' => 'Der kostenlose Kursabruf ist fehlgeschlagen oder pausiert. Bitte später erneut versuchen.', ...$payload])
-            : response()->json(['status' => 'unavailable', 'message' => 'Für diese Karte fehlen weiterhin verwendbare Kurse aus kostenlosen Quellen.', ...$payload]);
+            return response()->json(['status' => $status, 'message' => $message,
+                'failure_reason' => $reason, 'provider_http_status' => $httpStatus, ...$payload]);
+        }
+        if (! $samePeriod) {
+            return response()->json(['status' => 'period_changed', 'message' => 'Der Reparaturauftrag ist abgeschlossen. Der ursprüngliche Zeitraum liegt außerhalb der aktuellen Ansicht.', ...$payload]);
+        }
+
+        return response()->json(['status' => 'unavailable', 'message' => 'Für diese Karte fehlen weiterhin verwendbare Kurse aus kostenlosen Quellen.', ...$payload]);
+    }
+
+    private function performanceRepairPause(array $run): array
+    {
+        $reason = $run['pause_reason'];
+        $httpStatus = $run['provider_http_status'] ?? null;
+        $message = match ($reason) {
+            'provider' => $httpStatus === null
+                ? 'Für Yahoo Finance ist eine Abrufpause aktiv.'
+                : 'Yahoo Finance hat den Kursabruf pausiert (HTTP '.$httpStatus.').',
+            'symbol' => $run['status'] === 'waiting'
+                ? 'Die Reparatur wartet auf das nächste freie Abruffenster.'
+                : 'Das Abruffenster für das Symbol ist noch belegt.',
+            'market_data_upgrade' => 'Die Kursdatenverarbeitung ist wegen einer Aktualisierung pausiert.',
+        };
+        $retryAt = isset($run['retry_at']) ? Carbon::createFromTimestamp($run['retry_at'], config('app.timezone')) : null;
+        if ($retryAt?->isFuture()) {
+            $message .= ' Nächster Versuch frühestens am '.$retryAt->format('d.m.Y').' um '.$retryAt->format('H:i:s').' Uhr.';
+        }
+        if ($run['status'] === 'waiting' && $reason === 'provider') {
+            $message .= ' Die Reparatur wird automatisch fortgesetzt.';
+        }
+
+        return ['pause_reason' => $reason, 'provider_http_status' => $httpStatus, 'retry_at' => $retryAt?->toIso8601String(), 'message' => $message];
     }
 
     public function storeCash(Request $request, DepotTransactionBooker $booker): JsonResponse
@@ -596,9 +641,9 @@ class AdminDepotTransactionController extends Controller
         $oneWeekStartCutoff = now()->startOfWeek()->subSecond();
         $monthStartCutoff = now()->startOfMonth()->subSecond();
         $yearStartCutoff = now()->startOfYear()->endOfDay();
-        $weekBalance = $this->balanceHistory->performanceAccountBalanceAt($depot, $oneWeekStartCutoff, $weekSources);
-        $monthBalance = $this->balanceHistory->performanceAccountBalanceAt($depot, $monthStartCutoff, $monthSources);
-        $yearBalance = $this->balanceHistory->performanceAccountBalanceAt($depot, $yearStartCutoff, $yearSources);
+        $weekBalance = $this->balanceHistory->performanceAccountBalanceAt($depot, $oneWeekStartCutoff, $weekSources, freeOnly: false);
+        $monthBalance = $this->balanceHistory->performanceAccountBalanceAt($depot, $monthStartCutoff, $monthSources, freeOnly: false);
+        $yearBalance = $this->balanceHistory->performanceAccountBalanceAt($depot, $yearStartCutoff, $yearSources, freeOnly: false);
 
         return [
             'cash_balance' => $cashBalance,
@@ -1065,7 +1110,7 @@ class AdminDepotTransactionController extends Controller
             ->whereIn('type', DepotTransaction::StockTypes)
             ->groupBy('stock_holding_id');
         $holdings = StockHolding::query()->whereKey($stockTransactionsByHoldingId->keys()->all())->get()->keyBy('id');
-        $this->historicalPrices->prime($holdings, $start->copy()->subDays(14), now());
+        $this->historicalPrices->prime($holdings, $start->copy()->subDays(14), now(), freeOnly: false);
         $externalCashFlows = $transactions->filter(fn (DepotTransaction $transaction): bool => in_array($transaction->type, DepotTransaction::ExternalCashflowTypes, true)
             && $transaction->booked_at?->gt($start->copy()->endOfDay()));
         $totalExternalCashFlow = (float) $externalCashFlows->sum('cash_delta');

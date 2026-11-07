@@ -41,11 +41,11 @@ class FreeDailyMarketData
      * @param  list<string>  $tradingDates
      * @return array<string, mixed>
      */
-    public function import(StockHolding $holding, ?int $days = null, bool $fillGaps = false, array $tradingDates = []): array
+    public function import(StockHolding $holding, ?int $days = null, bool $fillGaps = false, array $tradingDates = [], bool $prioritizeRepair = false): array
     {
         $fillGaps = $fillGaps || $tradingDates !== [];
         if (app(MarketDataMode::class)->paused()) {
-            return ['status' => 'cooldown', 'stored_count' => 0];
+            return ['status' => 'cooldown', 'stored_count' => 0, 'pause_reason' => 'market_data_upgrade'];
         }
         app(PreviewIsolation::class)->assertIntegrationAllowed();
         $listing = $this->identities->listing($holding);
@@ -78,14 +78,25 @@ class FreeDailyMarketData
                 return ['status' => 'up_to_date', 'stored_count' => 0];
             }
         }
-        if (Cache::has('free-intraday.cooldown.yahoo') || ! $this->coordinator->reserve('yahoo-symbol:'.$mapping->symbol)) {
-            return ['status' => 'cooldown', 'stored_count' => 0];
+        if (! $this->coordinator->reserveYahoo($mapping->symbol, $prioritizeRepair)) {
+            $providerPause = Cache::get(YahooFinanceMarketData::CooldownKey);
+            $retryAt = $providerPause ?? $this->coordinator->yahooReservationEndsAt($mapping->symbol);
+            $result = ['status' => 'cooldown', 'stored_count' => 0, 'pause_reason' => $providerPause === null ? 'symbol' : 'provider',
+                'retry_at' => is_int($retryAt) ? $retryAt : null];
+            if ($tradingDates !== []) {
+                $this->coordinator->record('yahoo_daily', $listing->id, $result['status'], $result);
+            }
+
+            return $result;
         }
         $xetra = $listing->calendar_key === 'XETRA';
         $stored = 0;
         $skipped = 0;
         $firstHistoricalChange = null;
         $today = now()->toDateString();
+        $pause = [];
+        $failureReason = 'download';
+        $httpStatus = null;
         try {
             $response = Http::connectTimeout(4)->timeout(15)->withOptions(['allow_redirects' => false,
                 'progress' => static function (float $total, float $received): void {
@@ -94,19 +105,16 @@ class FreeDailyMarketData
                     }
                 }])->get('https://query1.finance.yahoo.com/v8/finance/chart/'.rawurlencode($mapping->symbol),
                     ['period1' => $from->timestamp, 'period2' => $until->timestamp, 'interval' => '1d', 'includePrePost' => 'false', 'events' => 'div,splits']);
-            if (in_array($response->status(), [403, 429], true)) {
-                $retry = $response->header('Retry-After');
-                try {
-                    $seconds = ctype_digit((string) $retry) ? (int) $retry : (int) now()->diffInSeconds(Carbon::parse($retry), false);
-                } catch (Throwable) {
-                    $seconds = 300;
-                }
-                Cache::put('free-intraday.cooldown.yahoo', true, now()->addSeconds(max(300, min(86400, $seconds))));
-                throw new RuntimeException('Yahoo daily rate limit/block; no paid fallback.');
+            $httpStatus = $response->status();
+            if (in_array($httpStatus, [403, 429], true)) {
+                $pause = ['pause_reason' => 'provider', 'retry_at' => YahooFinanceMarketData::pauseAfter($response->header('Retry-After')),
+                    'provider_http_status' => $httpStatus];
+                throw new RuntimeException('Yahoo daily rate limit/block (HTTP '.$httpStatus.').');
             }
             if (! $response->successful() || strlen($response->body()) > 4194304) {
                 throw new RuntimeException('Daily download failed or exceeded size limit.');
             }
+            $failureReason = 'validation';
             $chart = $response->json('chart.result.0');
             $meta = $chart['meta'] ?? [];
             if (($meta['symbol'] ?? null) !== $mapping->symbol || ($meta['currency'] ?? null) !== $listing->currency
@@ -116,6 +124,7 @@ class FreeDailyMarketData
                 || ! in_array($meta['instrumentType'] ?? '', ['ETF', 'EQUITY'], true)) {
                 throw new RuntimeException('Daily identity/currency/venue mismatch.');
             }
+            $failureReason = 'processing';
             $prices = $chart['indicators']['quote'][0] ?? [];
             foreach ($chart['timestamp'] ?? [] as $index => $timestamp) {
                 if (! is_int($timestamp)) {
@@ -172,8 +181,9 @@ class FreeDailyMarketData
             $result = ['status' => $skipped > 0 || $coverage['missing_count'] > 0 ? 'partial' : 'complete',
                 'stored_count' => $stored, 'skipped_count' => $skipped, ...$coverage];
         } catch (Throwable $exception) {
-            $result = ['status' => 'failed', 'stored_count' => $stored, 'error' => $exception->getMessage()];
-            if ($tradingDates === [] && $fillGaps && ! Cache::has('free-intraday.cooldown.yahoo')) {
+            $result = ['status' => 'failed', 'stored_count' => $stored, 'error' => $exception->getMessage(),
+                'failure_reason' => $failureReason, 'provider_http_status' => $httpStatus, ...$pause];
+            if ($tradingDates === [] && $fillGaps && ! Cache::has(YahooFinanceMarketData::CooldownKey)) {
                 Cache::put('market-data.daily.checked.'.$listing->id, true, now()->addHours(6));
             }
         }

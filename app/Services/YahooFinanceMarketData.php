@@ -12,7 +12,32 @@ use Throwable;
 
 class YahooFinanceMarketData
 {
+    public const CooldownKey = 'free-intraday.cooldown.yahoo';
+
     private const MaxBytes = 524288;
+
+    private const MaxRetryTimestamp = 4294967295;
+
+    public static function pauseAfter(string $retryAfter, int $minimumSeconds = 300): int
+    {
+        $now = now()->timestamp;
+        try {
+            $seconds = ctype_digit($retryAfter) ? (int) $retryAfter
+                : CarbonImmutable::parse($retryAfter)->timestamp - $now;
+        } catch (Throwable) {
+            $seconds = $minimumSeconds;
+        }
+
+        $retryAt = $now + min(self::MaxRetryTimestamp - $now, max($minimumSeconds, $seconds));
+
+        return Cache::lock(self::CooldownKey.':lock', 5)->block(5, function () use ($retryAt): int {
+            $previous = Cache::get(self::CooldownKey);
+            $expires = is_int($previous) ? max($previous, $retryAt) : $retryAt;
+            Cache::put(self::CooldownKey, $expires, CarbonImmutable::createFromTimestamp($expires));
+
+            return $expires;
+        });
+    }
 
     /** @param array<string, mixed> $item */
     public static function supports(array $item): bool
@@ -51,7 +76,7 @@ class YahooFinanceMarketData
         $started = hrtime(true) / 1e9;
         $deadline = $started + 6;
         $requests = 0;
-        $warnings = Cache::has('free-intraday.cooldown.yahoo') ? ['Yahoo Finance: Anbietersperre/Abrufpause aktiv; bitte später erneut versuchen.'] : [];
+        $warnings = Cache::has(self::CooldownKey) ? ['Yahoo Finance: Anbietersperre/Abrufpause aktiv; bitte später erneut versuchen.'] : [];
         $rateLimited = false;
         $blocked = $warnings !== [];
         $rows = [];
@@ -61,8 +86,9 @@ class YahooFinanceMarketData
                 'us_instrument' => self::supports($item)];
             if ($xetra ? self::supportsXetra($item) : self::supports($item)) {
                 $row['state'] = 'not_found';
-                $gated = MarketPriceStore::enabled() && ! $coordinated && ! Cache::add('market-data.poll.yahoo-symbol:'.$item['symbol'].($xetra ? '.DE' : ''), true, now()->addSeconds(300));
-                if ($requests >= 3 || hrtime(true) / 1e9 >= $deadline || $blocked || $gated) {
+                if ($requests >= 3 || hrtime(true) / 1e9 >= $deadline || $blocked
+                    || (MarketPriceStore::enabled() && ! $coordinated
+                        && ! app(MarketDataCoordinator::class)->reserveYahoo($item['symbol'].($xetra ? '.DE' : '')))) {
                     $row['quote_note'] = 'Nicht abgerufen: Anfrage-, Zeitlimit oder Anbietersperre.';
                     if (! $blocked) {
                         $warnings[] = 'Yahoo Finance: Anfrage- oder Zeitlimit erreicht; weitere US-Instrumente wurden nicht geprüft.';
@@ -88,13 +114,7 @@ class YahooFinanceMarketData
                         if (in_array($response->status(), [403, 429], true)) {
                             $rateLimited = $response->status() === 429;
                             $blocked = true;
-                            $retry = $response->header('Retry-After');
-                            try {
-                                $seconds = ctype_digit($retry) ? (int) $retry : (int) now()->diffInSeconds(CarbonImmutable::parse($retry), false);
-                            } catch (Throwable) {
-                                $seconds = 300;
-                            }
-                            Cache::put('free-intraday.cooldown.yahoo', true, now()->addSeconds(max(300, min(86400, $seconds))));
+                            self::pauseAfter($response->header('Retry-After'));
                             throw new RuntimeException('Yahoo Finance blockiert oder begrenzt den Abruf (HTTP '.$response->status().'). Keine weiteren Versuche; bitte später erneut versuchen.');
                         }
                         if (! $response->successful() || strlen($response->body()) > self::MaxBytes) {

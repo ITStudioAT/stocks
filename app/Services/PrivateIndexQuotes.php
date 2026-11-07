@@ -99,7 +99,7 @@ class PrivateIndexQuotes
         }
         foreach (IndexWatchItem::query()->orderBy('id')->cursor() as $item) {
             $mapping = $this->mapping($item);
-            if ($mapping === null || Cache::has('free-intraday.cooldown.yahoo')) {
+            if ($mapping === null || Cache::has(YahooFinanceMarketData::CooldownKey)) {
                 continue;
             }
             $record = AppConfig::query()->where('key', self::Prefix.$item->id)->first();
@@ -110,7 +110,7 @@ class PrivateIndexQuotes
                 $response = Http::connectTimeout(3)->timeout(8)->withOptions(['allow_redirects' => false])
                     ->get('https://query1.finance.yahoo.com/v8/finance/chart/'.rawurlencode($mapping[0]), ['interval' => '1d', 'range' => '5d']);
                 if (in_array($response->status(), [403, 429], true)) {
-                    Cache::put('free-intraday.cooldown.yahoo', true, now()->addMinutes(30));
+                    YahooFinanceMarketData::pauseAfter($response->header('Retry-After'), minimumSeconds: 1800);
                     break;
                 }
                 if (! $response->successful()) {

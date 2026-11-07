@@ -3044,7 +3044,9 @@ async function repairDashboardPerformanceCard(card) {
 
     try {
         const target = card.performance.date ? { date: card.performance.date } : { period: card.performance.period };
-        const result = await depotsStore.repairDashboardPerformance(target);
+        const result = await depotsStore.repairDashboardPerformance(target, (message) => {
+            dashboardPerformanceRepairFeedback.value.message = message;
+        });
         dashboardPerformanceRepairFeedback.value = {
             label: card.label,
             message: result.message,

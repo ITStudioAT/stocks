@@ -119,7 +119,7 @@ class CentralMarketDataTest extends TestCase
         $listing = $registry->listing($holding);
         $registry->listing($second);
         $store = app(MarketPriceStore::class);
-        $store->store($listing->id, $this->quote(['price' => '193.12345678']));
+        $store->store($listing->id, $this->quote(['price' => '193.12345678', 'adjustment_basis' => 'unadjusted']));
         $store->selectLatest($listing->id);
         config(['services.market_data.central_enabled' => true]);
         $this->assertSame('193.12345678', $holding->refresh()->latestRealtimePrice->price);

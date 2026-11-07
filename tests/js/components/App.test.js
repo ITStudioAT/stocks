@@ -3475,6 +3475,7 @@ describe('App', () => {
             { date: '2026-11-04', change_amount: null, change_percent: null, repairable: false },
         ];
         const sums = [{ period: 'last_month', change_amount: null, change_percent: null, repairable: true }];
+        let mondayStatusChecks = 0;
         const fetchMock = vi.fn((path, options) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({ user: { id: 1, name: 'Admin', roles: ['admin'] } }));
@@ -3495,6 +3496,14 @@ describe('App', () => {
                 }));
             }
             if (path === `${repairPath}/monday-run`) {
+                if (++mondayStatusChecks === 1) {
+                    return Promise.resolve(jsonResponse({
+                        status: 'waiting',
+                        run_id: 'monday-run',
+                        retry_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+                        message: 'Yahoo Finance hat den Kursabruf pausiert. Die Reparatur wird automatisch fortgesetzt.',
+                    }));
+                }
                 return Promise.resolve(jsonResponse({
                     status: 'unavailable',
                     message: 'Für diese Karte fehlen weiterhin verwendbare Kurse aus kostenlosen Quellen.',
@@ -3530,6 +3539,14 @@ describe('App', () => {
             await vi.advanceTimersByTimeAsync(2000);
             await flushPromises();
             expect(fetchMock.mock.calls.filter(([path]) => path === `${repairPath}/monday-run`)).toHaveLength(1);
+            expect(wrapper.get('.dashboard-performance-repair-feedback').text()).toContain('Die Reparatur wird automatisch fortgesetzt');
+            expect(wrapper.get('[aria-label="Repair Montag"]').classes()).toContain('v-btn--loading');
+
+            await vi.advanceTimersByTimeAsync(29 * 60 * 1000);
+            expect(fetchMock.mock.calls.filter(([path]) => path === `${repairPath}/monday-run`)).toHaveLength(1);
+            await vi.advanceTimersByTimeAsync(60 * 1000);
+            await flushPromises();
+            expect(fetchMock.mock.calls.filter(([path]) => path === `${repairPath}/monday-run`)).toHaveLength(2);
             expect(wrapper.get('.dashboard-performance-repair-feedback').text()).toContain('fehlen weiterhin verwendbare Kurse');
             expect(wrapper.get('[aria-label="Repair Montag"]').attributes('disabled')).toBeUndefined();
 

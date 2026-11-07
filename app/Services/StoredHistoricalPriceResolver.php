@@ -16,10 +16,11 @@ class StoredHistoricalPriceResolver
     public function __construct(private StockPriceCatalog $catalog, private FreeTradingCalendar $calendar) {}
 
     /** @param Collection<int, StockHolding> $holdings */
-    public function prime(Collection $holdings, Carbon $from, Carbon $until): void
+    public function prime(Collection $holdings, Carbon $from, Carbon $until, ?bool $freeOnly = null): void
     {
+        $freeOnly ??= config('services.market_data.free_only', true);
         if (MarketPriceStore::enabled()) {
-            $history = app(MarketPriceCompatibility::class)->history($holdings, $from, $until, freeOnly: config('services.market_data.free_only', true));
+            $history = app(MarketPriceCompatibility::class)->history($holdings, $from, $until, freeOnly: $freeOnly);
             foreach ($holdings as $holding) {
                 $holding->setRelation('readHistoricalMarketPrices', collect($history[$holding->market_listing_id] ?? []));
             }
@@ -29,7 +30,7 @@ class StoredHistoricalPriceResolver
         $byId = $holdings->keyBy('id');
         $byInstrument = $holdings->groupBy(fn (StockHolding $holding): string => $this->catalog->instrumentKeyForHolding($holding));
         $prices = [];
-        $sources = config('services.market_data.free_only', true)
+        $sources = $freeOnly
             ? StockPreviousCloseResolver::FreeSources
             : [...StockPreviousCloseResolver::FreeSources, 'eodhd_eod', 'eodhd_realtime', 'eodhd_intraday'];
 

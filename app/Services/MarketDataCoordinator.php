@@ -9,6 +9,8 @@ use Throwable;
 
 class MarketDataCoordinator
 {
+    public const PollSeconds = 300;
+
     public function __construct(private MarketIdentityRegistry $identities, private MarketPriceLegacyImporter $normalizer,
         private MarketPriceStore $store, private FreeTradingCalendar $calendar, private XetraIntradayCollector $xetra, private YahooFinanceMarketData $yahoo) {}
 
@@ -63,7 +65,7 @@ class MarketDataCoordinator
             $us = YahooFinanceMarketData::supports($holding->toArray());
             $supplement = YahooFinanceMarketData::supportsXetra($holding->toArray());
             $symbol = $us ? $holding->symbol : config('services.free_intraday.yahoo_xetra_symbols.'.$holding->isin);
-            if ((! $us && ! $supplement) || ! $this->reserve('yahoo-symbol:'.$symbol) || Cache::has('free-intraday.cooldown.yahoo')) {
+            if ((! $us && ! $supplement) || ! $this->reserveYahoo($symbol)) {
                 continue;
             }
             try {
@@ -105,7 +107,39 @@ class MarketDataCoordinator
 
     public function reserve(string $key): bool
     {
-        return Cache::add('market-data.poll.'.$key, true, now()->addSeconds(300));
+        $expires = now()->addSeconds(self::PollSeconds);
+
+        return Cache::add('market-data.poll.'.$key, $expires->timestamp, $expires);
+    }
+
+    public function reserveYahoo(string $symbol, bool $prioritizeRepair = false): bool
+    {
+        $key = 'yahoo-symbol:'.$symbol;
+        $priority = 'market-data.repair-priority.'.$key;
+
+        return Cache::lock('market-data.poll-lock.'.$key, 5)->get(function () use ($key, $priority, $prioritizeRepair): bool {
+            if (Cache::has(YahooFinanceMarketData::CooldownKey) || (! $prioritizeRepair && Cache::has($priority))) {
+                return false;
+            }
+
+            $reserved = $this->reserve($key);
+            if ($prioritizeRepair) {
+                if ($reserved) {
+                    Cache::forget($priority);
+                } else {
+                    Cache::put($priority, true, now()->addSeconds(self::PollSeconds + 60));
+                }
+            }
+
+            return $reserved;
+        }) ?? false;
+    }
+
+    public function yahooReservationEndsAt(string $symbol): ?int
+    {
+        $expires = Cache::get('market-data.poll.yahoo-symbol:'.$symbol);
+
+        return is_int($expires) ? $expires : null;
     }
 
     /** @param array<int, array<string, mixed>> $rows */

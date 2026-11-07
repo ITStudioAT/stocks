@@ -149,14 +149,25 @@ export const useDepotStore = defineStore('depots', {
                 }
             }
         },
-        async repairDashboardPerformance(target) {
+        async repairDashboardPerformance(target, onProgress) {
             const path = '/admin/dashboard/performance/repair';
             let result = await request(path, { method: 'POST', body: JSON.stringify(target) });
-            for (let attempt = 0; ['queued', 'running'].includes(result.status); attempt += 1) {
-                if (!result.run_id || attempt >= 180) {
-                    throw new Error('Die Reparatur ist noch nicht abgeschlossen. Bitte später erneut prüfen.');
+            const statusTimeout = 10 * 60 * 1000;
+            const maxTimerDelay = 2 ** 31 - 1;
+            let statusDeadline = Date.now() + statusTimeout;
+            while (['queued', 'running', 'waiting'].includes(result.status)) {
+                const waiting = result.status === 'waiting';
+                const now = Date.now();
+                const retryAt = waiting ? Date.parse(result.retry_at) : NaN;
+                if (retryAt > now) {
+                    statusDeadline = Math.max(statusDeadline, retryAt + statusTimeout);
                 }
-                await new Promise(resolve => window.setTimeout(resolve, 2000));
+                if (!result.run_id || now >= statusDeadline) {
+                    throw new Error('Die Reparatur ist noch nicht abgeschlossen.');
+                }
+                onProgress?.(waiting ? result.message : 'Reparatur läuft …');
+                const nextCheckIn = retryAt > now ? retryAt - now : (waiting ? 5000 : 2000);
+                await new Promise(resolve => window.setTimeout(resolve, Math.min(nextCheckIn, maxTimerDelay)));
                 result = await request(`${path}/${encodeURIComponent(result.run_id)}`);
             }
 
