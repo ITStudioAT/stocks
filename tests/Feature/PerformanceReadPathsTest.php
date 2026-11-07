@@ -155,22 +155,13 @@ class PerformanceReadPathsTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_only_global_range_statistics_are_cached_for_at_most_five_seconds(): void
+    public function test_retired_data_range_does_not_query_intraday_prices(): void
     {
         $this->signIn();
-        $this->travelTo(Carbon::parse('2026-06-05 14:00:00', 'Europe/Vienna'));
-        $holding = StockHolding::factory()->create();
-        StockHoldingIntradayCandle::query()->create(['stock_holding_id' => $holding->id, 'trading_date' => '2026-06-03', 'interval' => '5m', 'source_key' => 'yahoo_intraday', 'as_of' => '2026-06-03 10:00:00', 'close' => 100]);
-        $path = '/admin/data/stocks/intraday-data/date-range';
-        $this->getJson($path)->assertOk()->assertJsonPath('range.row_count', 1);
-        StockHoldingIntradayCandle::query()->create(['stock_holding_id' => $holding->id, 'trading_date' => '2026-06-04', 'interval' => '5m', 'source_key' => 'yahoo_intraday', 'as_of' => '2026-06-04 10:00:00', 'close' => 100]);
         DB::enableQueryLog();
         DB::flushQueryLog();
-        $this->getJson($path)->assertOk()->assertJsonPath('range.row_count', 1);
-        $this->assertEmpty(collect(DB::getQueryLog())->filter(fn (array $query): bool => str_contains($query['query'], 'MIN(trading_date)')));
-        $this->getJson("/admin/data/stocks/{$holding->id}/intraday-data/date-range")->assertOk()->assertJsonPath('range.row_count', 2);
-        $this->travel(5)->seconds();
-        $this->getJson($path)->assertOk()->assertJsonPath('range.row_count', 2)->assertJsonPath('range.date_to', '2026-06-04');
+        $this->getJson('/admin/data/stocks/intraday-data/date-range')->assertNotFound();
+        $this->assertEmpty(collect(DB::getQueryLog())->filter(fn (array $query): bool => str_contains($query['query'], 'stock_holding_intraday_candles')));
         DB::disableQueryLog();
     }
 

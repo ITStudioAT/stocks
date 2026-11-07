@@ -82,7 +82,7 @@ class IntradayMarketIdentityTest extends TestCase
         Http::assertSentCount(1);
     }
 
-    public function test_admin_range_exposes_pending_files_and_excluded_legacy_rows_without_external_requests(): void
+    public function test_intraday_status_exposes_pending_files_and_excluded_legacy_rows_without_external_requests(): void
     {
         $user = User::factory()->create();
         $user->assignRole(Role::findOrCreate('admin', 'web'));
@@ -92,10 +92,11 @@ class IntradayMarketIdentityTest extends TestCase
         AppConfig::query()->create(['key' => XetraIntradayCollector::ReportKey, 'value' => ['checked_at' => '2026-11-02T12:00:00Z', 'pending_files' => 1,
             'instruments' => [['isin' => $holding->isin, 'symbol' => 'CZX', 'status' => 'incomplete', 'coverage_complete' => false]], 'days' => []]]);
         Http::preventStrayRequests();
-        $this->actingAs($user)->getJson('/admin/data/stocks/'.$holding->id.'/intraday-data/date-range')->assertOk()
-            ->assertJsonPath('range.row_count', 0)->assertJsonPath('range.free_intraday.excluded_legacy_rows', 1)
-            ->assertJsonPath('range.free_intraday.pending_files', 1)->assertJsonPath('range.free_intraday.instruments.0.status', 'incomplete');
+        $this->actingAs($user)->getJson('/admin/data/intraday?stock='.$holding->id)->assertOk()
+            ->assertJsonPath('free_intraday.excluded_legacy_rows', 1)
+            ->assertJsonPath('free_intraday.pending_files', 1)->assertJsonPath('free_intraday.instruments.0.status', 'incomplete');
         Http::assertNothingSent();
+        $this->assertSame(0, $holding->intradayCandles()->count());
         $this->assertSame(1, StockHoldingIntradayCandle::withoutGlobalScopes()->count());
     }
 }

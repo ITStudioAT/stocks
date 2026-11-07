@@ -106,13 +106,40 @@ class DashboardPerformanceSnapshots
         }, attempts: 3);
     }
 
-    private function periodEnd(Carbon $date, string $period): Carbon
+    public function periodEnd(Carbon $date, string $period): Carbon
     {
         return match ($period) {
             'week' => $date->copy()->endOfWeek(Carbon::SUNDAY),
             'month' => $date->copy()->endOfMonth(),
             'year' => $date->copy()->endOfYear(),
         };
+    }
+
+    /** @return array{period: string, source_markers: list<string>, change_amount: ?string, change_percent: ?string} */
+    public function calculatePeriodFresh(Depot $depot, string $period, Carbon $end): array
+    {
+        $start = match ($period) {
+            'week' => $end->copy()->startOfWeek(Carbon::MONDAY)->subDay(),
+            'month' => $end->copy()->startOfMonth()->subDay(),
+            'year' => $end->copy()->startOfYear(),
+        };
+        $cutoff = $start->copy()->endOfDay();
+        $opening = $this->history->performanceAccountBalanceAt($depot, $cutoff, $openingSources);
+        $closing = $this->history->performanceAccountBalanceAt($depot, $end->copy()->endOfDay(), $closingSources);
+        $capital = $opening === null ? null : $opening + $this->history->externalCashFlowAfter($depot, $cutoff, $end->copy()->endOfDay());
+        $change = $closing === null || $capital === null ? null : $closing - $capital;
+
+        if ($period === 'year' && $change !== null) {
+            $change -= (float) $depot->transactions()->where('type', 'broker_bonus')
+                ->where('booked_at', '>', $cutoff)->where('booked_at', '<=', $end->copy()->endOfDay())->sum('cash_delta');
+        }
+
+        return [
+            'period' => $period,
+            'source_markers' => $change === null ? [] : MarketDataProvenance::merge($openingSources ?? [], $closingSources ?? []),
+            'change_amount' => $change === null ? null : number_format($change, 2, '.', ''),
+            'change_percent' => $change === null || $capital <= 0 ? null : number_format($change / $capital * 100, 2, '.', ''),
+        ];
     }
 
     /**

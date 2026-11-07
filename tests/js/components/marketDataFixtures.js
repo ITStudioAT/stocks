@@ -44,9 +44,6 @@ export const provenanceIndex = {
     realtime_prices: [{ trading_date: '2026-11-04', price: '24000', as_of: '2026-11-04T10:00:00Z', source_markers: ['EODHD'] }],
 };
 export function provenanceResponse(path) {
-    if (path.endsWith('/date-range')) {
-        return { range: { date_from: '2026-11-03', date_to: '2026-11-04', row_count: 2, source_markers: ['free', 'EODHD'] } };
-    }
     if (path === '/admin/me') {
         return { user: { id: 1, name: 'Preview Admin', roles: ['admin'] } };
     }

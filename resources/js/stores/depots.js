@@ -54,14 +54,6 @@ export const useDepotStore = defineStore('depots', {
         indexDataUpdateSettings: null,
         intradayBackfillRefresh: null,
         queueStatus: null,
-        dataExchanges: [],
-        dataExchangeRefresh: null,
-        dataIntradayStocks: [],
-        dataIntradaySelectedStockId: null,
-        dataIntradayDays: [],
-        dataIntradayRefresh: null,
-        dataRepairSummary: null,
-        stockHistoricalPriceCoverage: null,
         holdingIntradayCandles: {},
         holdingIntradayCandlesLoading: {},
         holdingIntradayCandlesErrors: {},
@@ -97,11 +89,6 @@ export const useDepotStore = defineStore('depots', {
         depotStockPeriodLoading: false,
         exchangeTradingTimesLoading: false,
         queueStatusLoading: false,
-        dataExchangesLoading: false,
-        dataExchangeReloadLoading: false,
-        dataIntradayLoading: false,
-        dataIntradayReloadLoading: false,
-        dataRepairLoading: false,
         stockSearchLoading: false,
         error: '',
         holdingsError: '',
@@ -110,9 +97,6 @@ export const useDepotStore = defineStore('depots', {
         depotStockPeriodError: '',
         exchangeTradingTimesError: '',
         queueStatusError: '',
-        dataExchangesError: '',
-        dataIntradayError: '',
-        dataRepairError: '',
         stockSearchError: '',
     }),
     actions: {
@@ -302,244 +286,6 @@ export const useDepotStore = defineStore('depots', {
                 throw error;
             } finally {
                 this.queueStatusLoading = false;
-            }
-        },
-        async loadDataExchanges() {
-            this.dataExchangesLoading = true;
-            this.dataExchangesError = '';
-
-            try {
-                const data = await request('/admin/data/exchanges');
-                this.dataExchanges = data.exchanges ?? [];
-                this.dataExchangeRefresh = data.refresh ?? this.dataExchangeRefresh;
-                this.indexDataUpdateSettings = data.index_data_update_settings ?? this.indexDataUpdateSettings;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.dataExchangesError = error.message;
-                throw error;
-            } finally {
-                this.dataExchangesLoading = false;
-            }
-        },
-        async reloadDataExchanges() {
-            this.dataExchangeReloadLoading = true;
-            this.dataExchangesError = '';
-
-            try {
-                const data = await request('/admin/data/exchanges/reload', {
-                    method: 'POST',
-                });
-                this.dataExchanges = data.exchanges ?? this.dataExchanges;
-                this.dataExchangeRefresh = data.refresh ?? null;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.dataExchangesError = error.message;
-                throw error;
-            } finally {
-                this.dataExchangeReloadLoading = false;
-            }
-        },
-        async loadDataExchangeRefresh(refreshId) {
-            this.dataExchangesError = '';
-
-            try {
-                const data = await request(`/admin/data/exchanges/reload/${refreshId}`);
-                this.dataExchanges = data.exchanges ?? this.dataExchanges;
-                this.dataExchangeRefresh = data.refresh ?? null;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.dataExchangesError = error.message;
-                throw error;
-            }
-        },
-        async loadDataIntraday(stockId = null) {
-            this.dataIntradayLoading = true;
-            this.dataIntradayError = '';
-
-            try {
-                const query = stockId ? `?stock=${encodeURIComponent(String(stockId))}` : '';
-                const data = await request(`/admin/data/intraday${query}`);
-                this.dataIntradayStocks = data.stocks ?? [];
-                this.dataIntradaySelectedStockId = data.selected_stock_id ?? null;
-                this.dataIntradayDays = data.days ?? [];
-                this.dataIntradayRefresh = data.refresh ?? null;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.dataIntradayError = error.message;
-                throw error;
-            } finally {
-                this.dataIntradayLoading = false;
-            }
-        },
-        async reloadDataIntraday(stockId) {
-            this.dataIntradayReloadLoading = true;
-            this.dataIntradayError = '';
-
-            try {
-                const data = await request('/admin/data/intraday/reload', {
-                    method: 'POST',
-                    body: JSON.stringify({ selected_stock_id: stockId }),
-                });
-                this.dataIntradayStocks = data.stocks ?? this.dataIntradayStocks;
-                this.dataIntradaySelectedStockId = data.selected_stock_id ?? stockId;
-                this.dataIntradayDays = data.days ?? [];
-                this.dataIntradayRefresh = data.refresh ?? null;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.dataIntradayError = error.message;
-                throw error;
-            } finally {
-                this.dataIntradayReloadLoading = false;
-            }
-        },
-        async syncDataRealtime() {
-            this.holdingsError = '';
-
-            try {
-                const data = await request('/admin/data/realtime/sync', {
-                    method: 'POST',
-                });
-                this.priceRefreshSettings = data.price_refresh_settings ?? this.priceRefreshSettings;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.holdingsError = error.message;
-                throw error;
-            }
-        },
-        async syncDataHistorical() {
-            this.holdingsError = '';
-
-            try {
-                const data = await request('/admin/data/historical/sync', {
-                    method: 'POST',
-                });
-                this.intradayBackfillSettings = data.intraday_backfill_settings ?? this.intradayBackfillSettings;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.holdingsError = error.message;
-                throw error;
-            }
-        },
-        async loadDataIntradayRefresh(refreshId, stockId = null) {
-            this.dataIntradayError = '';
-
-            try {
-                const query = stockId ? `?stock=${encodeURIComponent(String(stockId))}` : '';
-                const data = await request(`/admin/data/intraday/reload/${refreshId}${query}`);
-                this.dataIntradayStocks = data.stocks ?? this.dataIntradayStocks;
-                this.dataIntradaySelectedStockId = data.selected_stock_id ?? this.dataIntradaySelectedStockId;
-                this.dataIntradayDays = data.days ?? this.dataIntradayDays;
-                this.dataIntradayRefresh = data.refresh ?? null;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.dataIntradayError = error.message;
-                throw error;
-            }
-        },
-        async loadDataRepair() {
-            this.dataRepairLoading = true;
-            this.dataRepairError = '';
-
-            try {
-                const data = await request('/admin/data/repair');
-                this.dataRepairSummary = data;
-
-                return data;
-            } catch (error) {
-                this.dataRepairError = error.message;
-                throw error;
-            } finally {
-                this.dataRepairLoading = false;
-            }
-        },
-        async repairEndOfDayData() {
-            this.dataRepairLoading = true;
-            this.dataRepairError = '';
-
-            try {
-                const data = await request('/admin/data/repair/end-of-day', {
-                    method: 'POST',
-                });
-                this.dataRepairSummary = {
-                    ...(this.dataRepairSummary ?? {}),
-                    ...(data.repair ?? {}),
-                };
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.dataRepairError = error.message;
-                throw error;
-            } finally {
-                this.dataRepairLoading = false;
-            }
-        },
-        async repairEndOfDayStock(stockId) {
-            this.dataRepairError = '';
-
-            try {
-                const data = await request(`/admin/data/repair/end-of-day/${stockId}`, {
-                    method: 'POST',
-                });
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.dataRepairError = error.message;
-                throw error;
-            }
-        },
-        async repairHistoricalData() {
-            this.dataRepairLoading = true;
-            this.dataRepairError = '';
-
-            try {
-                const data = await request('/admin/data/repair/historical-data', {
-                    method: 'POST',
-                });
-                this.dataRepairSummary = {
-                    ...(this.dataRepairSummary ?? {}),
-                    ...(data.repair ?? {}),
-                };
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.dataRepairError = error.message;
-                throw error;
-            } finally {
-                this.dataRepairLoading = false;
-            }
-        },
-        async repairHistoricalDataStock(stockId) {
-            this.dataRepairError = '';
-
-            try {
-                const data = await request(`/admin/data/repair/historical-data/${stockId}`, {
-                    method: 'POST',
-                });
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.dataRepairError = error.message;
-                throw error;
             }
         },
         async loadIndexWatchItems() {
@@ -919,37 +665,6 @@ export const useDepotStore = defineStore('depots', {
         clearPriceRefresh() {
             this.priceRefresh = null;
         },
-        async loadStockHistoricalPriceCoverage() {
-            this.holdingsError = '';
-
-            try {
-                const data = await request('/admin/watchlist/holdings/historical-prices/coverage');
-                this.stockHistoricalPriceCoverage = data.coverage;
-                this.indexDataUpdateSettings = data.index_data_update_settings ?? this.indexDataUpdateSettings;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.holdingsError = error.message;
-                throw error;
-            }
-        },
-        async ensureStockHistoricalPrices() {
-            this.holdingsError = '';
-
-            try {
-                const data = await request('/admin/watchlist/holdings/historical-prices/ensure', {
-                    method: 'POST',
-                });
-                this.stockHistoricalPriceCoverage = data.coverage;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.holdingsError = error.message;
-                throw error;
-            }
-        },
         async loadExpandedHoldingIntradayCandles(id) {
             const requestVersion = this.intradayRequestVersion;
             this.holdingIntradayCandlesLoading = {
@@ -1101,56 +816,6 @@ export const useDepotStore = defineStore('depots', {
                 });
                 this.indexDataUpdateSettings = data.index_data_update_settings;
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.holdingsError = error.message;
-                throw error;
-            }
-        },
-        async syncDataEndOfDay() {
-            this.holdingsError = '';
-
-            try {
-                const data = await request('/admin/data/end-of-day/sync', {
-                    method: 'POST',
-                });
-                this.endOfDayDataUpdateSettings = data.end_of_day_data_update_settings ?? this.endOfDayDataUpdateSettings;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.holdingsError = error.message;
-                throw error;
-            }
-        },
-        async syncDataIndices() {
-            this.holdingsError = '';
-
-            try {
-                const data = await request('/admin/data/indices/sync', {
-                    method: 'POST',
-                });
-                this.indexPriceRefreshSettings = data.index_price_refresh_settings ?? this.indexPriceRefreshSettings;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-                await this.loadIndexWatchItems();
-
-                return data;
-            } catch (error) {
-                this.holdingsError = error.message;
-                throw error;
-            }
-        },
-        async syncDataIndexHistorical() {
-            this.holdingsError = '';
-
-            try {
-                const data = await request('/admin/data/indices/historical/sync', {
-                    method: 'POST',
-                });
-                this.indexDataUpdateSettings = data.index_data_update_settings ?? this.indexDataUpdateSettings;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-                await this.loadIndexWatchItems();
 
                 return data;
             } catch (error) {

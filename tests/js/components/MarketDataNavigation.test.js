@@ -174,7 +174,6 @@ describe('visible market data provenance across navigation', () => {
     it.each([
         ['/admin/menu/stocks', '.watch-list-section', 'free'],
         ['/admin/menu/indices', '.index-watch-card', 'EODHD'],
-        ['/admin/menu/data/stocks/live-data', '[aria-label="Stored data date range"]', 'free'],
         ['/admin/menu/dashboard/overview', '.dashboard-performance-day-card', 'free'],
     ])('renders provenance in %s', async (path, selector, expected) => {
         await renderPage(path);

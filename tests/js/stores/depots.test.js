@@ -306,49 +306,4 @@ describe('useDepotStore', () => {
             expect.objectContaining({ method: 'POST' }),
         );
     });
-
-    it('merges end-of-day repair results without dropping historical data info', async () => {
-        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-            repair: {
-                end_of_day: {
-                    missing_stocks_count: 0,
-                    covered_stocks_count: 2,
-                },
-            },
-            eodhd_api_usage: {
-                credits_limit: 100000,
-                credits_used: 42,
-            },
-        }));
-        vi.stubGlobal('fetch', fetchMock);
-
-        const depots = useDepotStore();
-        depots.dataRepairSummary = {
-            historical_data: {
-                missing_stocks_count: 1,
-                covered_stocks_count: 4,
-            },
-            end_of_day: {
-                missing_stocks_count: 2,
-                covered_stocks_count: 0,
-            },
-        };
-
-        await depots.repairEndOfDayData();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/data/repair/end-of-day', expect.objectContaining({
-            method: 'POST',
-        }));
-        expect(depots.dataRepairSummary).toEqual({
-            historical_data: {
-                missing_stocks_count: 1,
-                covered_stocks_count: 4,
-            },
-            end_of_day: {
-                missing_stocks_count: 0,
-                covered_stocks_count: 2,
-            },
-        });
-        expect(depots.eodhdApiUsage.credits_used).toBe(42);
-    });
 });

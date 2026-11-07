@@ -47,10 +47,6 @@ class MarketDataPresentationTest extends TestCase
             ->assertJsonPath('entries.0.source_markers', ['free']);
         $this->getJson("/admin/watchlist/holdings/{$holding->id}/end-of-day-prices/latest-days")->assertOk()
             ->assertJsonPath('entries.0.source_markers', ['EODHD']);
-        $this->getJson("/admin/data/stocks/{$holding->id}/live-data/date-range")->assertOk()
-            ->assertJsonPath('range.source_markers', ['free']);
-        $this->getJson("/admin/data/stocks/{$holding->id}/eod-data/date-range")->assertOk()
-            ->assertJsonPath('range.source_markers', ['EODHD']);
         Http::assertNothingSent();
     }
 

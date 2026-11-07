@@ -5,7 +5,6 @@ use App\Http\Controllers\AdminCloudwaysController;
 use App\Http\Controllers\AdminDashboardMarketDataTestController;
 use App\Http\Controllers\AdminDashboardVersionController;
 use App\Http\Controllers\AdminDataController;
-use App\Http\Controllers\AdminDataRangeController;
 use App\Http\Controllers\AdminDepotController;
 use App\Http\Controllers\AdminDepotHoldingController;
 use App\Http\Controllers\AdminDepotStockPeriodController;
@@ -14,6 +13,7 @@ use App\Http\Controllers\AdminHistoricalPriceRowsController;
 use App\Http\Controllers\AdminIndexWatchItemController;
 use App\Http\Controllers\AdminInfoController;
 use App\Http\Controllers\AdminMarketDailyHistoryController;
+use App\Http\Controllers\AdminPerformanceConsistencyController;
 use App\Http\Controllers\AdminPreviewControlController;
 use App\Http\Controllers\AdminPriceRefreshSettingsController;
 use App\Http\Controllers\AdminProfileController;
@@ -96,6 +96,8 @@ Route::post('/preview/control', [PreviewControlController::class, 'update'])
     ->name('preview.control.update');
 
 Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(function (): void {
+    Route::get('/admin/data/performance-consistency', [AdminPerformanceConsistencyController::class, 'show']);
+    Route::post('/admin/data/performance-consistency', [AdminPerformanceConsistencyController::class, 'store']);
     Route::post('/admin/dashboard/tests/deutsche-boerse', [AdminDashboardMarketDataTestController::class, 'store'])
         ->middleware(['throttle:admin.costly-operation', 'throttle:10,1'])
         ->name('admin.dashboard.tests.deutscheBoerse');
@@ -239,10 +241,6 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
         ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.data.health.stockTradingTimes.repair');
-    Route::get('/admin/data/indices/{dataType}/date-range', [AdminDataRangeController::class, 'allIndices'])->name('admin.data.indices.dateRange.all');
-    Route::get('/admin/data/indices/{indexWatchItem}/{dataType}/date-range', [AdminDataRangeController::class, 'index'])->name('admin.data.indices.dateRange');
-    Route::get('/admin/data/stocks/{dataType}/date-range', [AdminDataRangeController::class, 'allStocks'])->name('admin.data.stocks.dateRange.all');
-    Route::get('/admin/data/stocks/{holding}/{dataType}/date-range', [AdminDataRangeController::class, 'stock'])->name('admin.data.stocks.dateRange');
     Route::post('/admin/data/realtime/sync', [AdminDataController::class, 'syncRealtime'])
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.data.realtime.sync');
