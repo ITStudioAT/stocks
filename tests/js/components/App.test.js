@@ -3993,7 +3993,7 @@ describe('App', () => {
         const data = wrapper.get('section[aria-label="Data"]');
         expect(data.findAll('[role="tab"]').map((tab) => tab.text())).toEqual(['Overview', 'Cloudways']);
         expect(wrapper.find('[aria-label="Datenkonsistenz"]').exists()).toBe(true);
-        expect(fetchMock.mock.calls.map(([url]) => url).sort()).toEqual(['/admin/cloudways/operation', '/admin/data/performance-consistency', '/admin/depots/active', '/admin/me']);
+        expect(fetchMock.mock.calls.map(([url]) => url).sort()).toEqual(['/admin/cloudways/operation', '/admin/cloudways/status', '/admin/data/performance-consistency', '/admin/depots/active', '/admin/me']);
     });
 
     it.each(['/admin/menu/data/cloudways', '/admin/menu/cloudways'])('opens Cloudways from %s', async (path) => {

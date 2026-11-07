@@ -8,6 +8,8 @@ const run = ref(null);
 const error = ref('');
 const starting = ref(false);
 const confirming = ref(false);
+const lastCheckedAt = ref(null);
+const lastCheckStatusLoaded = ref(false);
 const running = computed(() => ['queued', 'running'].includes(run.value?.status));
 const busy = computed(() => starting.value || running.value);
 const comparison = computed(() => run.value?.action === 'check' && run.value.status === 'finished' ? run.value.comparison : null);
@@ -20,8 +22,33 @@ const countedDifferences = computed(() => differentTables.value.reduce((total, t
 }, 0));
 const uncountedTables = computed(() => differentTables.value.filter((table) => !table.row_differences).length);
 const tableStatus = (status) => ({ identical: 'Übereinstimmend', missing_local: 'Lokal nicht vorhanden', missing_cloudways: 'Auf Cloudways nicht vorhanden' }[status] ?? 'Unterschiedlich');
+const lastCheckedLabel = computed(() => {
+    if (!lastCheckStatusLoaded.value) return 'Nicht verfügbar';
+    if (!lastCheckedAt.value) return 'Noch keine Prüfung';
+    return new Intl.DateTimeFormat('de-AT', {
+        dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Vienna',
+    }).format(new Date(lastCheckedAt.value));
+});
 let timer;
 let requestGeneration = 0;
+
+function updateLastChecked(value) {
+    if (!value || Number.isNaN(Date.parse(value))) return;
+    if (!lastCheckedAt.value || Date.parse(value) > Date.parse(lastCheckedAt.value)) {
+        lastCheckedAt.value = value;
+    }
+    lastCheckStatusLoaded.value = true;
+}
+
+async function loadExecutionStatus() {
+    try {
+        const result = await request('/admin/cloudways/status');
+        lastCheckStatusLoaded.value = true;
+        updateLastChecked(result.execution_status?.last_checked_at);
+    } catch {
+        if (!lastCheckedAt.value) lastCheckStatusLoaded.value = false;
+    }
+}
 
 async function refresh() {
     const generation = requestGeneration;
@@ -29,6 +56,7 @@ async function refresh() {
         const result = await request('/admin/cloudways/operation');
         if (generation !== requestGeneration || starting.value) return;
         run.value = result.run;
+        updateLastChecked(result.run?.comparison?.checked_at);
         error.value = '';
     } catch (exception) {
         error.value = exception.message;
@@ -45,6 +73,7 @@ async function start(action) {
             body: JSON.stringify({ action }),
         });
         run.value = result.run;
+        updateLastChecked(result.run?.comparison?.checked_at);
     } catch (exception) {
         error.value = exception.message;
     } finally {
@@ -58,6 +87,7 @@ function synchronize() {
 }
 
 onMounted(() => {
+    loadExecutionStatus();
     refresh();
     timer = window.setInterval(refresh, 3000);
 });
@@ -73,6 +103,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
             <div class="cloudways-eyebrow">CLOUDWAYS → LOKAL</div>
             <h2>Datensynchronisation</h2>
             <p class="cloudways-intro">Vergleiche die Datenbanken und übernimm anschließend abweichende Tabellen von Cloudways in die lokale Datenbank.</p>
+            <p class="cloudways-muted mt-2">Letzte Prüfung: {{ lastCheckedLabel }}</p>
             <v-alert v-if="error || run?.error" type="error" class="mt-4">{{ error || run.error }}</v-alert>
             <div v-if="busy" class="cloudways-progress" aria-live="polite">
                 <v-progress-linear indeterminate color="primary" class="mb-3" />
