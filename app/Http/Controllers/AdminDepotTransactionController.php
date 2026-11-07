@@ -9,9 +9,11 @@ use App\Models\StockHoldingDailyPrice;
 use App\Models\StockHoldingIntradayCandle;
 use App\Models\StockPrice;
 use App\Models\StockRealtimePrice;
+use App\Services\DashboardPerformanceRepair;
 use App\Services\DashboardPerformanceSnapshots;
 use App\Services\DepotBalanceHistory;
 use App\Services\DepotTransactionBooker;
+use App\Services\FreeTradingCalendar;
 use App\Services\MarketDataProvenance;
 use App\Services\MarketPriceStore;
 use App\Services\StockPreviousCloseResolver;
@@ -28,6 +30,8 @@ use Illuminate\Validation\ValidationException;
 
 class AdminDepotTransactionController extends Controller
 {
+    private const PerformancePeriods = ['week', 'last_week', 'month', 'last_month', 'year'];
+
     public function __construct(
         private StockPreviousCloseResolver $stockPreviousCloseResolver,
         private StockPriceCatalog $stockPriceCatalog,
@@ -63,13 +67,40 @@ class AdminDepotTransactionController extends Controller
 
     public function dailyPerformance(): JsonResponse
     {
-        $depot = $this->activeDepot();
+        return response()->json($this->performancePayload($this->activeDepot()));
+    }
 
+    public function repairPerformance(Request $request, DashboardPerformanceRepair $repair): JsonResponse
+    {
+        $target = $request->validate([
+            'date' => ['required_without:period', 'prohibits:period', 'date_format:Y-m-d'],
+            'period' => ['required_without:date', 'prohibits:date', Rule::in(self::PerformancePeriods)],
+        ]);
+        $depot = $this->activeDepotOrFail();
+        $payload = $this->performancePayload($depot);
+        $card = $this->performanceCard($payload, $target);
+        if (! ($card['repairable'] ?? false)) {
+            return response()->json(['status' => 'not_needed', 'message' => 'Für diese Karte ist keine Reparatur nötig.', ...$payload]);
+        }
+
+        [$dates, $completedPeriod] = $this->performanceRepairDates($target, $card);
+
+        return $this->performanceRepairResponse($depot, $repair->start($depot, $target, $dates, $completedPeriod));
+    }
+
+    public function performanceRepairStatus(string $runId, DashboardPerformanceRepair $repair): JsonResponse
+    {
+        $depot = $this->activeDepotOrFail();
+        $run = $repair->find($depot->id, $runId);
+        abort_if($run === null, 404, 'Dieser Reparaturauftrag ist abgelaufen oder gehört zu einem anderen Depot.');
+
+        return $this->performanceRepairResponse($depot, $run);
+    }
+
+    private function performancePayload(?Depot $depot): array
+    {
         if (! $depot) {
-            return response()->json([
-                'days' => [],
-                'sums' => [],
-            ]);
+            return ['days' => [], 'sums' => []];
         }
 
         $depotHoldings = $this->dashboardHoldings($depot);
@@ -79,10 +110,63 @@ class AdminDepotTransactionController extends Controller
             'source_markers' => $this->currentHoldingSources($depotHoldings),
         ];
 
-        return response()->json([
+        return [
             'days' => $this->dailyPerformancePayloads($depot, $depotHoldings, $closing),
             'sums' => $this->dashboardPerformanceSumPayloads($depot, $closing),
-        ]);
+        ];
+    }
+
+    private function performanceCard(array $payload, array $target): ?array
+    {
+        $key = array_key_first($target);
+
+        return collect($payload[$key === 'date' ? 'days' : 'sums'])->firstWhere($key, $target[$key]);
+    }
+
+    private function performanceRepairDates(array $target, array $card): array
+    {
+        if (isset($target['date'])) {
+            $date = Carbon::parse($target['date']);
+            $dates = [$date->copy()->subDay()->toDateString()];
+            if (! $card['is_live']) {
+                $dates[] = $date->toDateString();
+            }
+
+            return [$dates, null];
+        }
+
+        $period = $target['period'];
+        $today = now()->startOfDay();
+        $completedPeriod = str_starts_with($period, 'last_');
+        $period = $completedPeriod ? substr($period, 5) : $period;
+        $end = $completedPeriod ? $this->performanceSnapshots->periodOpening($period, $today) : $today;
+        $dates = [$this->performanceSnapshots->periodOpening($period, $end)->toDateString()];
+        if ($completedPeriod) {
+            $dates[] = $end->toDateString();
+        }
+
+        return [$dates, $completedPeriod ? $period : null];
+    }
+
+    private function performanceRepairResponse(Depot $depot, array $run): JsonResponse
+    {
+        $status = $run['status'];
+        if (in_array($status, ['queued', 'running'], true)) {
+            return response()->json(['status' => $status, 'run_id' => $run['id']]);
+        }
+        if ($status === 'in_progress') {
+            return response()->json(['status' => $status, 'message' => 'Für dieses Depot läuft bereits eine Reparatur.']);
+        }
+
+        $payload = $this->performancePayload($depot);
+        $card = isset($run['target']) ? $this->performanceCard($payload, $run['target']) : null;
+        if (($card['change_amount'] ?? null) !== null) {
+            return response()->json(['status' => 'repaired', 'message' => 'Depotentwicklung neu berechnet.', ...$payload]);
+        }
+
+        return $status === 'failed'
+            ? response()->json(['status' => 'failed', 'message' => 'Der kostenlose Kursabruf ist fehlgeschlagen oder pausiert. Bitte später erneut versuchen.', ...$payload])
+            : response()->json(['status' => 'unavailable', 'message' => 'Für diese Karte fehlen weiterhin verwendbare Kurse aus kostenlosen Quellen.', ...$payload]);
     }
 
     public function storeCash(Request $request, DepotTransactionBooker $booker): JsonResponse
@@ -688,10 +772,14 @@ class AdminDepotTransactionController extends Controller
         }
 
         $performanceDates = $this->currentWeekPerformanceDates();
-        $latestPerformanceDate = $this->latestDailyPerformanceDate($holdingIds);
+        $holdings = StockHolding::query()->whereKey($holdingIds->all())
+            ->get(['id', 'isin', 'wkn', 'symbol', 'mic_code', 'exchange', 'currency']);
+        $latestPerformanceDate = $this->latestDailyPerformanceDate($holdings);
 
         $isLivePerformanceDate = $latestPerformanceDate !== null
             && $this->isLivePerformanceDate($holdingIds, $latestPerformanceDate);
+        $today = now()->toDateString();
+        $calendar = app(FreeTradingCalendar::class);
         $balanceDates = collect([$performanceDates->first()])
             ->map(fn (string $date): string => Carbon::parse($date)->subDay()->toDateString())
             ->merge($performanceDates)
@@ -703,8 +791,8 @@ class AdminDepotTransactionController extends Controller
         ]);
 
         return $performanceDates
-            ->map(function (string $date) use ($depot, $balances, $isLivePerformanceDate, $latestPerformanceDate): array {
-                if ($latestPerformanceDate === null || $date > $latestPerformanceDate) {
+            ->map(function (string $date) use ($depot, $balances, $isLivePerformanceDate, $latestPerformanceDate, $today, $calendar, $holdings): array {
+                if ($date > $today || $latestPerformanceDate === null || $date > $latestPerformanceDate) {
                     return [
                         'date' => $date,
                         'is_live' => false,
@@ -712,6 +800,8 @@ class AdminDepotTransactionController extends Controller
                         'previous_balance' => null,
                         'change_amount' => null,
                         'change_percent' => null,
+                        'repairable' => $date <= $today
+                            && $holdings->contains(fn (StockHolding $holding): bool => $calendar->sessionHasSettled($holding, $date)),
                     ];
                 }
 
@@ -738,6 +828,7 @@ class AdminDepotTransactionController extends Controller
                     'change_percent_source_markers' => $changePercent === null ? [] : MarketDataProvenance::merge($accountSources, $previousSources),
                     'change_amount' => $this->decimal($changeAmount, 2),
                     'change_percent' => $changePercent === null ? null : $this->decimal($changePercent, 2),
+                    'repairable' => $changeAmount === null,
                 ];
             })
             ->all();
@@ -750,17 +841,17 @@ class AdminDepotTransactionController extends Controller
     private function dashboardPerformanceSumPayloads(Depot $depot, array $closing): array
     {
         $today = now()->startOfDay();
-        $weekOpening = $today->copy()->startOfWeek(Carbon::MONDAY)->subDay();
-        $monthOpening = $today->copy()->startOfMonth()->subDay();
-        $yearOpening = $today->copy()->startOfYear();
+        $weekOpening = $this->performanceSnapshots->periodOpening('week', $today);
+        $monthOpening = $this->performanceSnapshots->periodOpening('month', $today);
+        $yearOpening = $this->performanceSnapshots->periodOpening('year', $today);
 
-        return [
+        return array_map(fn (array $card): array => [...$card, 'repairable' => $card['change_amount'] === null], [
             $this->performanceSnapshots->periodPerformance($depot, 'week', $weekOpening, $today, $closing),
             [...$this->performanceSnapshots->completedPeriod($depot, 'week', $weekOpening), 'period' => 'last_week'],
             $this->performanceSnapshots->periodPerformance($depot, 'month', $monthOpening, $today, $closing),
             [...$this->performanceSnapshots->completedPeriod($depot, 'month', $monthOpening), 'period' => 'last_month'],
             $this->performanceSnapshots->periodPerformance($depot, 'year', $yearOpening, $today, $closing),
-        ];
+        ]);
     }
 
     /**
@@ -775,15 +866,14 @@ class AdminDepotTransactionController extends Controller
     }
 
     /**
-     * @param  Collection<int, int|string>  $holdingIds
+     * @param  Collection<int, StockHolding>  $holdings
      */
-    private function latestDailyPerformanceDate(Collection $holdingIds): ?string
+    private function latestDailyPerformanceDate(Collection $holdings): ?string
     {
         $from = now()->startOfWeek(Carbon::MONDAY)->subDay()->startOfDay();
         $until = now()->endOfDay();
-        $instrumentKeys = StockHolding::query()
-            ->whereKey($holdingIds->all())
-            ->get(['id', 'isin', 'wkn', 'symbol', 'mic_code', 'exchange'])
+        $holdingIds = $holdings->pluck('id');
+        $instrumentKeys = $holdings
             ->map(fn (StockHolding $holding): string => $this->stockPriceCatalog->instrumentKeyForHolding($holding))
             ->unique()
             ->values();

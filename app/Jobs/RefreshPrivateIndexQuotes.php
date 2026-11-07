@@ -3,12 +3,11 @@
 namespace App\Jobs;
 
 use App\Services\PrivateIndexQuotes;
-use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
 
-class RefreshPrivateIndexQuotes implements ShouldBeUnique, ShouldQueue
+class RefreshPrivateIndexQuotes implements ShouldQueue
 {
     use Queueable;
 
@@ -16,22 +15,27 @@ class RefreshPrivateIndexQuotes implements ShouldBeUnique, ShouldQueue
 
     public int $tries = 1;
 
-    public int $uniqueFor = 300;
-
-    public function __construct(public bool $force = false) {}
-
-    public function uniqueId(): string
-    {
-        return 'private-index-quotes';
-    }
+    public function __construct(public bool $force = false, public ?string $runId = null) {}
 
     public function handle(PrivateIndexQuotes $quotes): void
     {
-        $quotes->refresh($this->force);
+        $id = $quotes->beginRefresh($this->runId ?? null);
+        if ($id === null) {
+            return;
+        }
+
+        try {
+            $quotes->refresh($this->force);
+        } finally {
+            $quotes->finishRefresh($id);
+        }
     }
 
     public function failed(?Throwable $exception): void
     {
+        if (isset($this->runId)) {
+            app(PrivateIndexQuotes::class)->finishRefresh($this->runId);
+        }
         if ($exception) {
             report($exception);
         }

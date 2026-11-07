@@ -96,12 +96,18 @@ class StoredHistoricalPriceResolver
     /** @return array{price: string, source_markers: array<int, string>, as_of: string, is_close: bool}|null */
     public function at(StockHolding $holding, Carbon $cutoff): ?array
     {
+        $price = $holding->readHistoricalMarketPrices->get($this->tradingDate($holding, $cutoff));
+
+        return $price !== null && $price['as_of'] <= $cutoff->copy()->utc()->toDateTimeString() ? $price : null;
+    }
+
+    public function tradingDate(StockHolding $holding, Carbon $cutoff): string
+    {
         $timezone = $this->timezone($holding);
         $localDay = $cutoff->copy()->setTimezone($timezone)->startOfDay();
         $day = $this->calendar->previousDayInTimezone($timezone, $localDay->copy()->addDay());
-        $price = $holding->readHistoricalMarketPrices->get(($day ?? $localDay)->toDateString());
 
-        return $price !== null && $price['as_of'] <= $cutoff->copy()->utc()->toDateTimeString() ? $price : null;
+        return ($day ?? $localDay)->toDateString();
     }
 
     private function timezone(StockHolding $holding): string

@@ -2,16 +2,20 @@
 
 namespace App\Services;
 
+use App\Jobs\RefreshPrivateIndexQuotes;
 use App\Models\AppConfig;
 use App\Models\IndexWatchItem;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
 use Throwable;
 
 class PrivateIndexQuotes
 {
     private const Prefix = 'private_index.yahoo.';
+
+    private const RefreshState = 'private-index-quotes.operation';
 
     private const Mappings = [
         'ATX' => ['^ATX', 'INDX', 'EUR', 'INDEX', 'AT0000999982', 'VIE'],
@@ -28,6 +32,64 @@ class PrivateIndexQuotes
     ];
 
     public function __construct(private IndexMarketHours $marketHours) {}
+
+    public function withRefreshLock(callable $operation): mixed
+    {
+        return Cache::lock(self::RefreshState.'.lock', 10)->block(5, $operation);
+    }
+
+    public function refreshStatus(): string
+    {
+        return Cache::get(self::RefreshState)['status'] ?? 'idle';
+    }
+
+    public function queueRefresh(bool $force = false): string
+    {
+        return $this->withRefreshLock(function () use ($force): string {
+            $status = $this->refreshStatus();
+            if ($status !== 'idle') {
+                return $status;
+            }
+
+            $id = (string) Str::uuid();
+            Cache::put(self::RefreshState, ['id' => $id, 'status' => 'queued'], now()->addDay());
+            try {
+                RefreshPrivateIndexQuotes::dispatch($force, $id);
+            } catch (Throwable $exception) {
+                Cache::forget(self::RefreshState);
+                throw $exception;
+            }
+
+            return 'queued';
+        });
+    }
+
+    public function beginRefresh(?string $id): ?string
+    {
+        return $this->withRefreshLock(function () use ($id): ?string {
+            $operation = Cache::get(self::RefreshState);
+            if ($id === null && $operation !== null) {
+                return null;
+            }
+            if ($id !== null && (($operation['id'] ?? null) !== $id || $operation['status'] !== 'queued')) {
+                return null;
+            }
+
+            $id ??= (string) Str::uuid();
+            Cache::put(self::RefreshState, ['id' => $id, 'status' => 'running'], now()->addMinutes(5));
+
+            return $id;
+        });
+    }
+
+    public function finishRefresh(string $id): void
+    {
+        $this->withRefreshLock(function () use ($id): void {
+            if ((Cache::get(self::RefreshState)['id'] ?? null) === $id) {
+                Cache::forget(self::RefreshState);
+            }
+        });
+    }
 
     public function refresh(bool $force = false): void
     {

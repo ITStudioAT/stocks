@@ -1241,6 +1241,10 @@ describe('App', () => {
                 return Promise.resolve(jsonResponse({ indexes: [] }));
             }
 
+            if (path === '/admin/index-watch-items/refresh-free') {
+                return Promise.resolve(jsonResponse({ status: 'idle' }));
+            }
+
             if (path === '/admin/v2/indices/eodhd-sync-settings') {
                 if (realtimeDispatches > 0 && currentSettings.realtime.status === 'updating') {
                     currentSettings = {
@@ -1306,6 +1310,51 @@ describe('App', () => {
 
 
             wrapper.unmount();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('keeps index actions disabled while a queued refresh is running across menu changes', async () => {
+        vi.useFakeTimers();
+        window.history.pushState({}, '', '/admin/menu/indices');
+        let status = 'idle';
+        const fetchMock = vi.fn((path, options) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({ user: { id: 1, roles: ['admin'] } }));
+            }
+            if (path === '/admin/index-watch-items/refresh-free') {
+                if (options?.method === 'POST') status = 'queued';
+                return Promise.resolve(jsonResponse({ status }));
+            }
+            return Promise.resolve(jsonResponse({}));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        const button = (wrapper, label) => wrapper.findAll('button').find(candidate => candidate.text() === label);
+        const labels = ['Kurse aktualisieren', 'Index hinzufügen'];
+
+        try {
+            const wrapper = mountApp();
+            await flushPromises();
+            for (const label of labels) expect(button(wrapper, label).element.disabled).toBe(false);
+            await button(wrapper, labels[0]).trigger('click');
+            await flushPromises();
+            for (const label of labels) expect(button(wrapper, label).element.disabled).toBe(true);
+            expect(wrapper.text()).toContain('Kursaktualisierung wartet in der Queue.');
+
+            wrapper.vm.navigateSection('dashboard');
+            await flushPromises();
+            status = 'running';
+            wrapper.vm.navigateSection('indices');
+            await flushPromises();
+            for (const label of labels) expect(button(wrapper, label).element.disabled).toBe(true);
+            expect(wrapper.text()).toContain('Kursaktualisierung läuft im Hintergrund.');
+
+            status = 'idle';
+            await vi.advanceTimersByTimeAsync(3000);
+            await flushPromises();
+            for (const label of labels) expect(button(wrapper, label).element.disabled).toBe(false);
+            expect(wrapper.text()).not.toContain('Kursaktualisierung läuft im Hintergrund.');
         } finally {
             vi.useRealTimers();
         }
@@ -1841,6 +1890,10 @@ describe('App', () => {
                         validation_errors: [],
                     },
                 }));
+            }
+
+            if (path === '/admin/index-watch-items/refresh-free') {
+                return Promise.resolve(jsonResponse({ status: 'idle' }));
             }
 
             if (path === '/admin/index-watch-items' && (!options?.method || options.method === 'GET')) {
@@ -3010,6 +3063,7 @@ describe('App', () => {
             '2026-08-06T15:30:00Z', '2026-08-06T15:45:00Z',
         ]);
         expect(indexWatchStrip.text()).not.toContain('EODHD');
+        expect(indexWatchStrip.text()).not.toContain('free');
         wrapper.vm.indexEodhdSyncSettings.realtime.closed_refresh_enabled = false;
         wrapper.vm.liveDataStatusNow = Date.parse('2026-08-06T18:40:00+02:00');
         wrapper.vm.indexWatchItems.push({
@@ -3408,6 +3462,89 @@ describe('App', () => {
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/index-watch-items')).toHaveLength(0);
         expect(fetchMock.mock.calls.some(([path]) => String(path).includes('/sync'))).toBe(false);
 
+    });
+
+    it('repairs only eligible dashboard cards and polls only after a click', async () => {
+        vi.useFakeTimers();
+        window.history.pushState({}, '', '/admin/dashboard');
+
+        const repairPath = '/admin/dashboard/performance/repair';
+        const days = [
+            { date: '2026-11-02', change_amount: null, change_percent: null, repairable: true },
+            { date: '2026-11-03', change_amount: '0.00', change_percent: null, repairable: false },
+            { date: '2026-11-04', change_amount: null, change_percent: null, repairable: false },
+        ];
+        const sums = [{ period: 'last_month', change_amount: null, change_percent: null, repairable: true }];
+        const fetchMock = vi.fn((path, options) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({ user: { id: 1, name: 'Admin', roles: ['admin'] } }));
+            }
+            if (path === '/admin/dashboard/performance') {
+                return Promise.resolve(jsonResponse({ days, sums }));
+            }
+            if (path === repairPath) {
+                const target = JSON.parse(options.body);
+                if (target.date) {
+                    return Promise.resolve(jsonResponse({ status: 'queued', run_id: 'monday-run' }));
+                }
+                return Promise.resolve(jsonResponse({
+                    status: 'repaired',
+                    message: 'Depotentwicklung neu berechnet.',
+                    days,
+                    sums: [{ ...sums[0], change_amount: '10.00', change_percent: '1.00', repairable: false }],
+                }));
+            }
+            if (path === `${repairPath}/monday-run`) {
+                return Promise.resolve(jsonResponse({
+                    status: 'unavailable',
+                    message: 'Für diese Karte fehlen weiterhin verwendbare Kurse aus kostenlosen Quellen.',
+                    days,
+                    sums,
+                }));
+            }
+            return Promise.resolve(jsonResponse({}));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        try {
+            const wrapper = mountApp();
+            await flushPromises();
+
+            expect(wrapper.findAll('.dashboard-performance-repair')).toHaveLength(2);
+            expect(wrapper.get('[aria-label="Repair Montag"]').text()).toBe('Repair');
+            expect(wrapper.find('[aria-label="Repair Dienstag"]').exists()).toBe(false);
+            expect(wrapper.find('[aria-label="Repair Mittwoch"]').exists()).toBe(false);
+            expect(fetchMock.mock.calls.some(([path]) => path.startsWith(repairPath))).toBe(false);
+
+            await wrapper.get('[aria-label="Repair Montag"]').trigger('click');
+            await flushPromises();
+            expect(wrapper.get('[aria-label="Repair Montag"]').classes()).toContain('v-btn--loading');
+            expect(wrapper.get('[aria-label="Repair Last Month"]').attributes('disabled')).toBeDefined();
+            await wrapper.get('[aria-label="Repair Last Month"]').trigger('click');
+            expect(fetchMock.mock.calls.filter(([path]) => path === repairPath)).toHaveLength(1);
+            expect(fetchMock).toHaveBeenCalledWith(repairPath, expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({ date: '2026-11-02' }),
+            }));
+
+            await vi.advanceTimersByTimeAsync(2000);
+            await flushPromises();
+            expect(fetchMock.mock.calls.filter(([path]) => path === `${repairPath}/monday-run`)).toHaveLength(1);
+            expect(wrapper.get('.dashboard-performance-repair-feedback').text()).toContain('fehlen weiterhin verwendbare Kurse');
+            expect(wrapper.get('[aria-label="Repair Montag"]').attributes('disabled')).toBeUndefined();
+
+            await wrapper.get('[aria-label="Repair Last Month"]').trigger('click');
+            await flushPromises();
+            expect(fetchMock).toHaveBeenCalledWith(repairPath, expect.objectContaining({
+                method: 'POST',
+                body: JSON.stringify({ period: 'last_month' }),
+            }));
+            expect(wrapper.find('[aria-label="Repair Last Month"]').exists()).toBe(false);
+            expect(wrapper.findAll('.dashboard-performance-sum-card')[3].text()).toContain('+10.00 EUR');
+            expect(wrapper.get('.dashboard-performance-repair-feedback').text()).toContain('Depotentwicklung neu berechnet.');
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('opens the overview for a retired Dashboard KI bookmark without loading research', async () => {

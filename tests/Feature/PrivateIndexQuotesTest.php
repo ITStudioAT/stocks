@@ -84,16 +84,33 @@ class PrivateIndexQuotesTest extends TestCase
         Http::assertSentCount(2);
     }
 
-    public function test_admin_can_queue_refresh_without_fetching_during_request(): void
+    public function test_queued_and_running_refreshes_block_duplicates_and_adding_indexes_until_finished(): void
     {
         config(['queue.default' => 'database']);
         Queue::fake();
-        Http::fake();
+        $this->atx();
+        $quotes = app(PrivateIndexQuotes::class);
         $user = User::factory()->create();
         $user->assignRole(Role::findOrCreate('admin'));
-        $this->actingAs($user)->postJson('/admin/index-watch-items/refresh-free', ['force' => true])->assertOk();
+        $this->actingAs($user)->postJson('/admin/index-watch-items/refresh-free', ['force' => true])
+            ->assertOk()->assertJsonPath('status', 'queued');
+        $this->getJson('/admin/index-watch-items/refresh-free')->assertOk()->assertJsonPath('status', 'queued');
+        $newIndex = ['symbol' => 'DJI', 'name' => 'Dow Jones', 'instrument_type' => 'INDEX'];
+        $this->postJson('/admin/index-watch-items', $newIndex)->assertConflict();
+        $this->assertSame('queued', $quotes->queueRefresh());
         Queue::assertPushed(RefreshPrivateIndexQuotes::class, fn ($job): bool => $job->force === true);
+        Queue::assertPushed(RefreshPrivateIndexQuotes::class, 1);
         Http::assertNothingSent();
+
+        Http::fake(['query1.finance.yahoo.com/*' => function () use ($newIndex) {
+            $this->getJson('/admin/index-watch-items/refresh-free')->assertOk()->assertJsonPath('status', 'running');
+            $this->postJson('/admin/index-watch-items', $newIndex)->assertConflict();
+
+            return Http::response($this->response());
+        }]);
+        Queue::pushed(RefreshPrivateIndexQuotes::class)->sole()->handle($quotes);
+        $this->getJson('/admin/index-watch-items/refresh-free')->assertOk()->assertJsonPath('status', 'idle');
+        Http::assertSentCount(1);
     }
 
     public function test_refresh_refuses_synchronous_queue(): void

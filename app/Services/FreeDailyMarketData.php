@@ -37,9 +37,13 @@ class FreeDailyMarketData
         return ['status' => $status, ...$coverage];
     }
 
-    /** @return array<string, mixed> */
-    public function import(StockHolding $holding, ?int $days = null): array
+    /**
+     * @param  list<string>  $tradingDates
+     * @return array<string, mixed>
+     */
+    public function import(StockHolding $holding, ?int $days = null, bool $fillGaps = false, array $tradingDates = []): array
     {
+        $fillGaps = $fillGaps || $tradingDates !== [];
         if (app(MarketDataMode::class)->paused()) {
             return ['status' => 'cooldown', 'stored_count' => 0];
         }
@@ -49,10 +53,34 @@ class FreeDailyMarketData
         if ($mapping === null || $listing->status !== 'verified') {
             return ['status' => 'unsupported', 'stored_count' => 0];
         }
+        if ($tradingDates === []) {
+            [$from, $until, $expectedDays] = $this->historyWindow($holding, $listing->timezone, $days);
+        } else {
+            $from = Carbon::parse(min($tradingDates), $listing->timezone)->startOfDay();
+            $until = Carbon::parse(max($tradingDates), $listing->timezone)->startOfDay()->addDay();
+            $expectedDays = array_fill_keys(array_filter(
+                $tradingDates,
+                fn (string $date): bool => $this->calendar->sessionHasSettled($holding, $date),
+            ), true);
+            if ($expectedDays === []) {
+                return ['status' => 'unavailable', 'stored_count' => 0];
+            }
+        }
+        $importDays = $expectedDays;
+        if ($fillGaps) {
+            $history = app(MarketPriceCompatibility::class)->history(collect([$holding]), $from, $until, freeOnly: true)[$listing->id] ?? [];
+            $importDays = array_filter($expectedDays, function (string $day) use ($history): bool {
+                $price = $history[$day] ?? null;
+
+                return $price === null || $price['as_of'] > Carbon::parse($day)->endOfDay()->utc()->toDateTimeString();
+            }, ARRAY_FILTER_USE_KEY);
+            if ($importDays === []) {
+                return ['status' => 'up_to_date', 'stored_count' => 0];
+            }
+        }
         if (Cache::has('free-intraday.cooldown.yahoo') || ! $this->coordinator->reserve('yahoo-symbol:'.$mapping->symbol)) {
             return ['status' => 'cooldown', 'stored_count' => 0];
         }
-        [$from, $until, $expectedDays] = $this->historyWindow($holding, $listing->timezone, $days);
         $xetra = $listing->calendar_key === 'XETRA';
         $stored = 0;
         $skipped = 0;
@@ -101,6 +129,9 @@ class FreeDailyMarketData
 
                     continue;
                 }
+                if (! isset($importDays[$date])) {
+                    continue;
+                }
                 $row = ['interval' => '1d', 'trading_date' => $date, 'currency' => $listing->currency,
                     'source_key' => 'yahoo_daily', 'source_name' => 'Yahoo Finance daily OHLC · unofficial',
                     'source_url' => 'https://finance.yahoo.com/quote/'.rawurlencode($mapping->symbol).'/history/', 'fetched_at' => now()->utc()->toDateTimeString(),
@@ -131,18 +162,27 @@ class FreeDailyMarketData
                     $firstHistoricalChange = $row['trading_date'];
                 }
             }
-            Cache::put('market-data.daily.checked.'.$listing->id, true, now()->addHours(6));
-            if ($stored > 0) {
-                $this->coordinator->prepareReads();
+            if ($tradingDates === []) {
+                Cache::put('market-data.daily.checked.'.$listing->id, true, now()->addHours($fillGaps ? 24 : 6));
+                if ($stored > 0) {
+                    $this->coordinator->prepareReads();
+                }
             }
-            $coverage = $this->countCoverage($listing->id, $listing->currency, $from, $until, $expectedDays);
+            $coverage = $this->countCoverage($listing->id, $listing->currency, $from, $until, $importDays);
             $result = ['status' => $skipped > 0 || $coverage['missing_count'] > 0 ? 'partial' : 'complete',
                 'stored_count' => $stored, 'skipped_count' => $skipped, ...$coverage];
         } catch (Throwable $exception) {
             $result = ['status' => 'failed', 'stored_count' => $stored, 'error' => $exception->getMessage()];
+            if ($tradingDates === [] && $fillGaps && ! Cache::has('free-intraday.cooldown.yahoo')) {
+                Cache::put('market-data.daily.checked.'.$listing->id, true, now()->addHours(6));
+            }
         }
-        if ($firstHistoricalChange !== null) {
-            $this->performanceSnapshots->invalidate(from: Carbon::parse($firstHistoricalChange));
+        if ($firstHistoricalChange !== null && $tradingDates === []) {
+            if ($fillGaps) {
+                $this->performanceSnapshots->expireIncompleteFrom(Carbon::parse($firstHistoricalChange));
+            } else {
+                $this->performanceSnapshots->invalidate(from: Carbon::parse($firstHistoricalChange));
+            }
         }
         $this->coordinator->record('yahoo_daily', $listing->id, $result['status'], $result);
 

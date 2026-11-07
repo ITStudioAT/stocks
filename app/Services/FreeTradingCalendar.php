@@ -65,6 +65,18 @@ class FreeTradingCalendar
         return $session !== null && $at->betweenIncluded($session['open'], $session['close']->copy()->addMinutes(30));
     }
 
+    public function sessionHasSettled(StockHolding $holding, string $tradingDate): bool
+    {
+        $timezone = $this->timezone($holding);
+        if ($timezone === null) {
+            return false;
+        }
+        $session = $this->session($holding, Carbon::parse($tradingDate, $timezone));
+        $delayMinutes = $timezone === 'America/New_York' ? 30 : 20;
+
+        return $session !== null && $session['close']->addMinutes($delayMinutes)->lte(now());
+    }
+
     public function timezone(StockHolding $holding): ?string
     {
         $identity = $holding->only(['isin', 'symbol', 'exchange', 'mic_code', 'currency']);

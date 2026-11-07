@@ -1,12 +1,12 @@
 <?php
 
 use App\Console\Commands\RedactEodhdErrors;
-use App\Jobs\RefreshPrivateIndexQuotes;
 use App\Models\AdminLoginCode;
 use App\Services\EodhdApiClient;
 use App\Services\MarketPriceStore;
 use App\Services\PreviewBackgroundState;
 use App\Services\PreviewIsolation;
+use App\Services\PrivateIndexQuotes;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
@@ -27,13 +27,11 @@ $canRunEodhd = static fn (): bool => $canRun() && ! config('services.market_data
 Schedule::command('dashboard:backfill-performance')->dailyAt('00:20')
     ->when($canRun)->withoutOverlapping(120);
 
-Schedule::job(new RefreshPrivateIndexQuotes)->everyFifteenMinutes()
+Schedule::call(fn () => app(PrivateIndexQuotes::class)->queueRefresh())->name('private-index-quotes')->everyFifteenMinutes()
     ->when(static fn (): bool => ! $preview && config('queue.default') !== 'sync');
 
 Schedule::command('market-data:collect')->everyFiveMinutes()
     ->when(static fn (): bool => ! $preview && MarketPriceStore::enabled())->withoutOverlapping(5);
-Schedule::command('market-data:daily --days=7 --limit=3 --initialized-only')->hourly()
-    ->when(static fn (): bool => ! $preview && MarketPriceStore::enabled())->withoutOverlapping(10);
 
 Schedule::command('intraday:collect-free --queue')
     ->everyMinute()

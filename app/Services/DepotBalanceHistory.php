@@ -149,11 +149,30 @@ class DepotBalanceHistory
             ->filter(fn (float $pieces): bool => $pieces > 0);
     }
 
+    /** @return Collection<int, StockHolding> */
+    public function missingHoldingsAt(Depot $depot, Carbon $cutoff): Collection
+    {
+        return $this->historicalHoldings($this->openPiecesByHoldingIdAt($depot, $cutoff)->keys(), $cutoff)
+            ->filter(fn (StockHolding $holding): bool => $this->historicalPrices->at($holding, $cutoff) === null);
+    }
+
     /**
      * @param  Collection<int, int|string>  $holdingIds
      * @return Collection<int, string>
      */
     private function historicalMarketPriceByHoldingId(Collection $holdingIds, Carbon $cutoff, ?array &$sources = null): Collection
+    {
+        return $this->historicalHoldings($holdingIds, $cutoff)->mapWithKeys(function (StockHolding $holding) use ($cutoff, &$sources): array {
+            $observation = $this->historicalPrices->at($holding, $cutoff);
+            $price = $observation['price'] ?? null;
+            $sources[$holding->id] = $observation['source_markers'] ?? [];
+
+            return [$holding->id => $price];
+        });
+    }
+
+    /** @return Collection<int, StockHolding> */
+    private function historicalHoldings(Collection $holdingIds, Carbon $cutoff): Collection
     {
         if ($holdingIds->isEmpty()) {
             return collect();
@@ -162,12 +181,6 @@ class DepotBalanceHistory
         $holdings = StockHolding::query()->whereKey($holdingIds->all())->get();
         $this->historicalPrices->prime($holdings, $cutoff->copy()->subDays(14), $cutoff);
 
-        return $holdings->mapWithKeys(function (StockHolding $holding) use ($cutoff, &$sources): array {
-            $observation = $this->historicalPrices->at($holding, $cutoff);
-            $price = $observation['price'] ?? null;
-            $sources[$holding->id] = $observation['source_markers'] ?? [];
-
-            return [$holding->id => $price];
-        });
+        return $holdings;
     }
 }

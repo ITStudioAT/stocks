@@ -132,6 +132,9 @@ const loginMode = ref('password');
 const localError = ref('');
 const activeSection = ref('dashboard');
 let privateIndexRefreshTimer = null;
+let privateIndexQuotesTimer = null;
+let privateIndexStatusVersion = 0;
+let privateIndexStatusRequest = false;
 const activeDataSubsection = ref('overview');
 const infoTables = ref([]);
 const infoMethods = ref([]);
@@ -207,9 +210,16 @@ const dashboardVersions = ref(null);
 const dashboardVersionsLoading = ref(false);
 const dashboardVersionsError = ref('');
 const isDashboardReloading = ref(false);
+const dashboardPerformanceRepairKey = ref(null);
+const dashboardPerformanceRepairFeedback = ref(null);
 const isDashboardVersionDetailsVisible = ref(false);
 const indexMessage = ref('');
 const indexError = ref('');
+const privateIndexRefreshStatus = ref(null);
+const privateIndexRefreshPending = ref(false);
+const privateIndexRefreshActive = computed(() => ['queued', 'running'].includes(privateIndexRefreshStatus.value));
+const privateIndexActionsDisabled = computed(() => privateIndexRefreshStatus.value === null
+    || privateIndexRefreshPending.value || privateIndexRefreshActive.value);
 const indexPriceChartError = ref('');
 const indexEodhdSyncError = ref('');
 const stockEodhdSyncError = ref('');
@@ -802,12 +812,20 @@ watch(activeSection, () => depotsStore.cancelIntradayRefreshes(), { flush: 'sync
 
 watch(activeSection, (section) => {
     window.clearInterval(privateIndexRefreshTimer);
-    if (section === 'indices') {
-        request('/admin/index-watch-items/refresh-free', { method: 'POST', body: JSON.stringify({ force: false }) }).catch(() => {});
+    window.clearInterval(privateIndexQuotesTimer);
+    privateIndexStatusVersion++;
+    if (section !== 'indices') {
+        return;
     }
-    privateIndexRefreshTimer = section === 'indices' ? window.setInterval(() => {
+
+    privateIndexRefreshStatus.value = null;
+    pollPrivateIndexRefresh();
+    privateIndexRefreshTimer = window.setInterval(() => {
+        if (!document.hidden) pollPrivateIndexRefresh();
+    }, 3000);
+    privateIndexQuotesTimer = window.setInterval(() => {
         if (!document.hidden) depotsStore.loadIndexWatchItems().catch(() => {});
-    }, 30000) : null;
+    }, 30000);
 });
 
 watch(
@@ -913,6 +931,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
     window.clearInterval(privateIndexRefreshTimer);
+    window.clearInterval(privateIndexQuotesTimer);
     depotsStore.cancelIntradayRefreshes();
     stopPriceRefreshPolling();
     stopIntradayBackfillPolling();
@@ -1164,13 +1183,49 @@ function navigateSection(section) {
 
 }
 
-async function refreshPrivateIndexQuotes() {
-    indexError.value = '';
+async function pollPrivateIndexRefresh() {
+    if (privateIndexRefreshPending.value || privateIndexStatusRequest) {
+        return;
+    }
+
+    const version = ++privateIndexStatusVersion;
+    privateIndexStatusRequest = true;
     try {
-        const result = await request('/admin/index-watch-items/refresh-free', { method: 'POST', body: JSON.stringify({ force: true }) });
-        indexMessage.value = result.message;
+        const { status } = await request('/admin/index-watch-items/refresh-free');
+        if (version !== privateIndexStatusVersion || activeSection.value !== 'indices') {
+            return;
+        }
+
+        const wasActive = privateIndexRefreshActive.value;
+        privateIndexRefreshStatus.value = status ?? 'idle';
+        if (wasActive && privateIndexRefreshStatus.value === 'idle') {
+            await depotsStore.loadIndexWatchItems();
+        }
+    } catch {
+        // The next poll retries without clearing an active refresh.
+    } finally {
+        privateIndexStatusRequest = false;
+    }
+}
+
+async function refreshPrivateIndexQuotes() {
+    if (privateIndexActionsDisabled.value) {
+        return;
+    }
+
+    indexError.value = '';
+    indexMessage.value = '';
+    privateIndexStatusVersion++;
+    privateIndexRefreshPending.value = true;
+    try {
+        const { status } = await request('/admin/index-watch-items/refresh-free', { method: 'POST', body: JSON.stringify({ force: true }) });
+        privateIndexRefreshStatus.value = status;
     } catch (error) {
         indexError.value = error.message;
+        privateIndexRefreshStatus.value = null;
+    } finally {
+        privateIndexRefreshPending.value = false;
+        if (activeSection.value === 'indices') pollPrivateIndexRefresh();
     }
 }
 
@@ -1882,6 +1937,10 @@ function abortHoldingDialog() {
 }
 
 function openIndexDialog() {
+    if (privateIndexActionsDisabled.value) {
+        return;
+    }
+
     indexSearchQuery.value = '';
     depotsStore.stockSearchResults = [];
     depotsStore.stockSearchError = '';
@@ -2373,6 +2432,10 @@ async function saveEditedHolding() {
 }
 
 async function saveIndexWatchItem(result) {
+    if (privateIndexActionsDisabled.value) {
+        return;
+    }
+
     indexError.value = '';
     indexMessage.value = '';
 
@@ -2965,6 +3028,33 @@ function dashboardPerformanceAmount(performance) {
     const sign = amount > 0 ? '+' : '';
 
     return `${sign}${formatAccountBalance(amount)} EUR`;
+}
+
+async function repairDashboardPerformanceCard(card) {
+    if (dashboardPerformanceRepairKey.value !== null || !card.performance?.repairable) {
+        return;
+    }
+
+    dashboardPerformanceRepairKey.value = card.key;
+    dashboardPerformanceRepairFeedback.value = {
+        label: card.label,
+        message: 'Reparatur läuft …',
+        type: 'info',
+    };
+
+    try {
+        const target = card.performance.date ? { date: card.performance.date } : { period: card.performance.period };
+        const result = await depotsStore.repairDashboardPerformance(target);
+        dashboardPerformanceRepairFeedback.value = {
+            label: card.label,
+            message: result.message,
+            type: result.status === 'repaired' ? 'success' : result.status === 'failed' ? 'error' : 'info',
+        };
+    } catch (error) {
+        dashboardPerformanceRepairFeedback.value = { label: card.label, message: error.message, type: 'error' };
+    } finally {
+        dashboardPerformanceRepairKey.value = null;
+    }
 }
 
 function dashboardPerformancePercent(performance) {
@@ -6444,6 +6534,17 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     {{ dashboardDailyPerformanceError }}
                                 </v-alert>
 
+                                <v-alert
+                                    v-if="dashboardPerformanceRepairFeedback"
+                                    class="mb-3 dashboard-performance-repair-feedback"
+                                    density="compact"
+                                    :type="dashboardPerformanceRepairFeedback.type"
+                                    variant="tonal"
+                                    role="status"
+                                >
+                                    {{ dashboardPerformanceRepairFeedback.label }} · {{ dashboardPerformanceRepairFeedback.message }}
+                                </v-alert>
+
                                 <div class="dashboard-performance-grid">
                                     <v-card
                                         v-for="card in dashboardPerformanceCards"
@@ -6479,6 +6580,18 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             >
                                                 {{ dashboardPerformancePercent(card.performance) }}
                                             </div>
+                                            <v-btn
+                                                v-if="card.performance?.repairable"
+                                                class="mt-2 dashboard-performance-repair"
+                                                variant="tonal"
+                                                color="primary"
+                                                size="x-small"
+                                                :aria-label="`Repair ${card.label}`"
+                                                :aria-busy="dashboardPerformanceRepairKey === card.key"
+                                                :loading="dashboardPerformanceRepairKey === card.key"
+                                                :disabled="dashboardPerformanceRepairKey !== null"
+                                                @click="repairDashboardPerformanceCard(card)"
+                                            >Repair</v-btn>
                                         </v-card-text>
                                     </v-card>
                                 </div>
@@ -6516,6 +6629,18 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             >
                                                 {{ dashboardPerformancePercent(card.performance) }}
                                             </div>
+                                            <v-btn
+                                                v-if="card.performance?.repairable"
+                                                class="mt-2 dashboard-performance-repair"
+                                                variant="tonal"
+                                                color="primary"
+                                                size="x-small"
+                                                :aria-label="`Repair ${card.label}`"
+                                                :aria-busy="dashboardPerformanceRepairKey === card.key"
+                                                :loading="dashboardPerformanceRepairKey === card.key"
+                                                :disabled="dashboardPerformanceRepairKey !== null"
+                                                @click="repairDashboardPerformanceCard(card)"
+                                            >Repair</v-btn>
                                         </v-card-text>
                                     </v-card>
                                 </div>
@@ -6832,6 +6957,8 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         color="secondary"
                                         prepend-icon="mdi-refresh"
                                         variant="outlined"
+                                        :disabled="privateIndexActionsDisabled"
+                                        :loading="privateIndexRefreshPending"
                                         @click="refreshPrivateIndexQuotes"
                                     >
                                         Kurse aktualisieren
@@ -6841,6 +6968,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         color="primary"
                                         prepend-icon="mdi-plus"
                                         variant="flat"
+                                        :disabled="privateIndexActionsDisabled"
                                         @click="openIndexDialog"
                                     >
                                         Index hinzufügen
@@ -6861,7 +6989,10 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 
 
 
-                            <v-alert v-if="indexMessage" type="success" variant="tonal" density="compact" class="mb-4">
+                            <v-alert v-if="privateIndexRefreshActive" type="info" variant="tonal" density="compact" class="mb-4" aria-live="polite">
+                                {{ privateIndexRefreshStatus === 'running' ? 'Kursaktualisierung läuft im Hintergrund.' : 'Kursaktualisierung wartet in der Queue.' }}
+                            </v-alert>
+                            <v-alert v-else-if="indexMessage" type="success" variant="tonal" density="compact" class="mb-4">
                                 {{ indexMessage }}
                             </v-alert>
                             <v-alert v-if="indexError || holdingsError" type="error" variant="tonal" density="compact" class="mb-4">
@@ -6900,7 +7031,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             <span v-if="formatIndexChangePercent(indexItem)">
                                                 {{ formatIndexChangePercent(indexItem) }}
                                             </span>
-                                            <span>{{ formatIndexPrice(indexItem) }} <DataSourceMarkers :markers="marketDataMarkers(indexItem, 'latest_price')" /></span>
+                                            <span>{{ formatIndexPrice(indexItem) }} <DataSourceMarkers :markers="marketDataMarkers(indexItem, 'latest_price').filter(marker => marker !== 'free')" /></span>
                                         </span>
                                         <span v-if="indexItem.latest_price_as_of" class="index-watch-card-quote-meta">
                                             <span v-if="indexItem.private_quote">
@@ -8109,6 +8240,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                         color="primary"
                                                         variant="text"
                                                         :loading="holdingsLoading"
+                                                        :disabled="privateIndexActionsDisabled"
                                                         @click="saveIndexWatchItem(result)"
                                                     >
                                                         Add

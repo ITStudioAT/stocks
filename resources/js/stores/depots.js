@@ -38,6 +38,7 @@ export const useDepotStore = defineStore('depots', {
         depotPerformanceSeries: [],
         dashboardDailyPerformance: null,
         dashboardPerformanceSums: [],
+        dashboardPerformanceRequestId: 0,
         depotStockPeriodStocks: [],
         depotStockPeriod: null,
         depotStockPeriodLabel: '',
@@ -125,21 +126,49 @@ export const useDepotStore = defineStore('depots', {
             }
         },
         async loadDashboardDailyPerformance() {
+            const requestId = ++this.dashboardPerformanceRequestId;
             this.dashboardDailyPerformanceLoading = true;
             this.dashboardDailyPerformanceError = '';
 
             try {
                 const data = await request('/admin/dashboard/performance');
-                this.dashboardDailyPerformance = data.days ?? [];
-                this.dashboardPerformanceSums = data.sums ?? [];
+                if (requestId === this.dashboardPerformanceRequestId) {
+                    this.dashboardDailyPerformance = data.days ?? [];
+                    this.dashboardPerformanceSums = data.sums ?? [];
+                }
 
                 return data;
             } catch (error) {
-                this.dashboardDailyPerformanceError = error.message;
+                if (requestId === this.dashboardPerformanceRequestId) {
+                    this.dashboardDailyPerformanceError = error.message;
+                }
                 throw error;
             } finally {
-                this.dashboardDailyPerformanceLoading = false;
+                if (requestId === this.dashboardPerformanceRequestId) {
+                    this.dashboardDailyPerformanceLoading = false;
+                }
             }
+        },
+        async repairDashboardPerformance(target) {
+            const path = '/admin/dashboard/performance/repair';
+            let result = await request(path, { method: 'POST', body: JSON.stringify(target) });
+            for (let attempt = 0; ['queued', 'running'].includes(result.status); attempt += 1) {
+                if (!result.run_id || attempt >= 180) {
+                    throw new Error('Die Reparatur ist noch nicht abgeschlossen. Bitte später erneut prüfen.');
+                }
+                await new Promise(resolve => window.setTimeout(resolve, 2000));
+                result = await request(`${path}/${encodeURIComponent(result.run_id)}`);
+            }
+
+            if (Array.isArray(result.days) && Array.isArray(result.sums)) {
+                this.dashboardPerformanceRequestId += 1;
+                this.dashboardDailyPerformance = result.days;
+                this.dashboardPerformanceSums = result.sums;
+                this.dashboardDailyPerformanceLoading = false;
+                this.dashboardDailyPerformanceError = '';
+            }
+
+            return result;
         },
         async loadDepots(page = 1) {
             this.loading = true;

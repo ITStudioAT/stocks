@@ -125,6 +125,10 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
     Route::get('/admin/me', [AdminAuthController::class, 'me'])->name('admin.me');
     Route::get('/admin/dashboard/version', [AdminDashboardVersionController::class, 'show'])->name('admin.dashboard.version.show');
     Route::get('/admin/dashboard/performance', [AdminDepotTransactionController::class, 'dailyPerformance'])->name('admin.dashboard.performance.show');
+    Route::post('/admin/dashboard/performance/repair', [AdminDepotTransactionController::class, 'repairPerformance'])
+        ->middleware('throttle:admin.costly-operation')->name('admin.dashboard.performance.repair');
+    Route::get('/admin/dashboard/performance/repair/{runId}', [AdminDepotTransactionController::class, 'performanceRepairStatus'])
+        ->whereUuid('runId')->name('admin.dashboard.performance.repair.status');
     Route::get('/admin/dashboard/ai/stock-researches', [AdminStockAiResearchController::class, 'index'])->name('admin.dashboard.ai.stockResearches.index');
     Route::post('/admin/dashboard/ai/stock-researches', [AdminStockAiResearchBatchController::class, 'store'])
         ->middleware('throttle:admin.costly-operation')
@@ -182,6 +186,7 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
     Route::get('/admin/watchlist/exchange-trading-times', [AdminDepotHoldingController::class, 'exchangeTradingTimes'])->name('admin.watchlist.exchange-trading-times');
     Route::get('/admin/watchlist/holdings/pdf', [AdminDepotHoldingController::class, 'exportPdf'])->name('admin.watchlist.holdings.pdf');
     Route::get('/admin/index-watch-items', [AdminIndexWatchItemController::class, 'index'])->name('admin.index-watch-items.index');
+    Route::get('/admin/index-watch-items/refresh-free', [AdminIndexWatchItemController::class, 'refreshFreeStatus'])->name('admin.index-watch-items.refresh-free.status');
     Route::post('/admin/index-watch-items/refresh-free', [AdminIndexWatchItemController::class, 'refreshFree'])
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.index-watch-items.refresh-free');

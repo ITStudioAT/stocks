@@ -33,13 +33,7 @@ class DashboardPerformanceSnapshots
     public function completedPeriod(Depot $depot, string $period, Carbon $end): array
     {
         return $this->remember($depot, $period, $end, 'change_amount', function (Depot $lockedDepot) use ($period, $end): array {
-            $start = match ($period) {
-                'week' => $end->copy()->startOfWeek(Carbon::MONDAY)->subDay(),
-                'month' => $end->copy()->startOfMonth()->subDay(),
-                'year' => $end->copy()->startOfYear(),
-            };
-
-            return $this->periodPerformance($lockedDepot, $period, $start, $end, $this->closingBalance($lockedDepot, $end));
+            return $this->periodPerformance($lockedDepot, $period, $this->periodOpening($period, $end), $end, $this->closingBalance($lockedDepot, $end));
         });
     }
 
@@ -106,6 +100,20 @@ class DashboardPerformanceSnapshots
         }, attempts: 3);
     }
 
+    public function expireIncompleteFrom(Carbon $from): void
+    {
+        $now = now();
+
+        DB::transaction(function () use ($from, $now): void {
+            Depot::query()->orderBy('id')->lockForUpdate()->get(['id']);
+
+            DB::table(self::Table)
+                ->where('end_date', '>=', $from->toDateString())
+                ->where('expires_at', '>', $now)
+                ->update(['expires_at' => $now]);
+        }, attempts: 3);
+    }
+
     public function periodEnd(Carbon $date, string $period): Carbon
     {
         return match ($period) {
@@ -115,14 +123,43 @@ class DashboardPerformanceSnapshots
         };
     }
 
-    /** @return array{period: string, source_markers: list<string>, change_amount: ?string, change_percent: ?string} */
-    public function calculatePeriodFresh(Depot $depot, string $period, Carbon $end): array
+    public function periodOpening(string $period, Carbon $end): Carbon
     {
-        $start = match ($period) {
+        return match ($period) {
             'week' => $end->copy()->startOfWeek(Carbon::MONDAY)->subDay(),
             'month' => $end->copy()->startOfMonth()->subDay(),
             'year' => $end->copy()->startOfYear(),
         };
+    }
+
+    /** @param non-empty-list<string> $dates */
+    public function retryIncomplete(Depot $depot, array $dates, ?string $completedPeriod): void
+    {
+        $end = max($dates);
+
+        DB::transaction(function () use ($depot, $dates, $end, $completedPeriod): void {
+            Depot::query()->lockForUpdate()->findOrFail($depot->id);
+            DB::table(self::Table)->where('depot_id', $depot->id)->where('expires_at', '>', now())
+                ->where(function (Builder $query) use ($dates, $end, $completedPeriod): void {
+                    $query->where(fn (Builder $day) => $day->where('period', 'day')->whereIn('end_date', $dates));
+                    if ($completedPeriod !== null) {
+                        $query->orWhere(fn (Builder $period) => $period->where('period', $completedPeriod)->where('end_date', $end));
+                    }
+                })->update(['expires_at' => now()]);
+        }, attempts: 3);
+
+        foreach ($dates as $date) {
+            $this->closingBalance($depot, Carbon::parse($date));
+        }
+        if ($completedPeriod !== null) {
+            $this->completedPeriod($depot, $completedPeriod, Carbon::parse($end));
+        }
+    }
+
+    /** @return array{period: string, source_markers: list<string>, change_amount: ?string, change_percent: ?string} */
+    public function calculatePeriodFresh(Depot $depot, string $period, Carbon $end): array
+    {
+        $start = $this->periodOpening($period, $end);
         $cutoff = $start->copy()->endOfDay();
         $opening = $this->history->performanceAccountBalanceAt($depot, $cutoff, $openingSources);
         $closing = $this->history->performanceAccountBalanceAt($depot, $end->copy()->endOfDay(), $closingSources);

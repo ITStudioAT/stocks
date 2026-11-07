@@ -11,7 +11,7 @@ use Illuminate\Support\Facades\Cache;
 
 class BackfillDailyMarketPrices extends Command
 {
-    protected $signature = 'market-data:daily {holding? : Optional saved holding ID} {--days= : Override the default one-year window} {--limit=3} {--initialized-only : Only refresh listings with stored free daily history}';
+    protected $signature = 'market-data:daily {holding? : Optional saved holding ID} {--days= : Override the default one-year window} {--limit=3} {--initialized-only : Only refresh listings with stored free daily history} {--fill-gaps : Only import days without a usable free price}';
 
     protected $description = 'Load free daily history into central prices using verified mappings and provider cooldowns';
 
@@ -31,16 +31,17 @@ class BackfillDailyMarketPrices extends Command
         $attempts = 0;
         $failed = false;
         $days = $this->option('days');
+        $fillGaps = (bool) $this->option('fill-gaps');
         foreach ($holdings as $holding) {
             $listing = $identities->listing($holding);
             if (isset($checked[$listing->id]) || (! $this->argument('holding') && Cache::has('market-data.daily.checked.'.$listing->id))) {
                 continue;
             }
             $checked[$listing->id] = true;
-            $result = $daily->import($holding, $days === null ? null : (int) $days);
+            $result = $daily->import($holding, $days === null ? null : (int) $days, $fillGaps);
             $this->line($holding->symbol.' '.json_encode($result, JSON_THROW_ON_ERROR));
             $failed = $failed || $result['status'] === 'failed';
-            if (! in_array($result['status'], ['unsupported', 'cooldown'], true) && ++$attempts >= max(1, (int) $this->option('limit'))) {
+            if (! in_array($result['status'], ['unsupported', 'cooldown', 'up_to_date'], true) && ++$attempts >= max(1, (int) $this->option('limit'))) {
                 break;
             }
         }

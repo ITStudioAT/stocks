@@ -19,6 +19,16 @@ return [
             'IE00BKWQ0P07' => 'SPYU.DE',
             'IE00BMH5Y327' => 'V9N.DE',
             'AT0000821103' => 'UN9.DE',
+            // ISIN and ticker verified against the Xetra instrument reference file.
+            'AT0000606306' => 'RAW.DE',
+            'DE000A0D8Q23' => 'EXXX.DE',
+            'FR0010405431' => 'LYMH.DE',
+            'FR0010655746' => 'AMES.DE',
+            'IE0002Y8CX98' => 'EUDF.DE',
+            'IE000M7V94E1' => 'NUKL.DE',
+            'IE00B3RBWM25' => 'VGWL.DE',
+            'IE00BKWQ0F09' => 'SPYN.DE',
+            'IE00BYPLS672' => 'USPY.DE',
         ],
     ],
 

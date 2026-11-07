@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Jobs\RefreshPrivateIndexQuotes;
 use App\Models\IndexWatchItem;
 use App\Models\IndexWatchItemPrice;
 use App\Models\IndexWatchItemRealtimePrice;
@@ -20,7 +19,6 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -84,34 +82,39 @@ class AdminIndexWatchItemController extends Controller
         if (config('queue.default') === 'sync') {
             return response()->json(['message' => 'Für die Aktualisierung muss eine Hintergrund-Queue eingerichtet sein.'], 503);
         }
-        if (! Cache::add('private-index-quotes.dispatch', true, now()->addMinute())) {
-            return response()->json(['message' => 'Die Aktualisierung wurde vor Kurzem gestartet.']);
-        }
-        RefreshPrivateIndexQuotes::dispatch($validated['force'] ?? false);
 
-        return response()->json(['message' => 'Die Aktualisierung läuft im Hintergrund.']);
+        return response()->json(['status' => $this->privateIndexQuotes->queueRefresh($validated['force'] ?? false)]);
+    }
+
+    public function refreshFreeStatus(): JsonResponse
+    {
+        return response()->json(['status' => $this->privateIndexQuotes->refreshStatus()]);
     }
 
     public function store(Request $request): JsonResponse
     {
         $validated = $this->validatedIndexWatchItemData($request);
 
-        $item = IndexWatchItem::query()->create([
-            ...$validated,
-            'trading_times' => $this->indexMarketHours->canonicalTradingTimesForSymbol($validated['symbol']),
-            'raw_payload' => Arr::only($request->all(), [
-                'symbol',
-                'name',
-                'isin',
-                'wkn',
-                'valor',
-                'exchange',
-                'mic_code',
-                'instrument_type',
-                'country',
-                'currency',
-            ]),
-        ]);
+        $item = $this->privateIndexQuotes->withRefreshLock(function () use ($request, $validated): IndexWatchItem {
+            abort_if($this->privateIndexQuotes->refreshStatus() !== 'idle', 409, 'Die Kursaktualisierung läuft im Hintergrund.');
+
+            return IndexWatchItem::query()->create([
+                ...$validated,
+                'trading_times' => $this->indexMarketHours->canonicalTradingTimesForSymbol($validated['symbol']),
+                'raw_payload' => Arr::only($request->all(), [
+                    'symbol',
+                    'name',
+                    'isin',
+                    'wkn',
+                    'valor',
+                    'exchange',
+                    'mic_code',
+                    'instrument_type',
+                    'country',
+                    'currency',
+                ]),
+            ]);
+        });
 
         $this->priceRefresher->refresh($item);
         $item->refresh();

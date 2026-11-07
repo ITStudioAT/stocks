@@ -4,14 +4,20 @@ namespace Tests\Feature;
 
 use App\Models\Depot;
 use App\Models\DepotTransaction;
+use App\Models\MarketPrice;
 use App\Models\StockHolding;
 use App\Models\StockPrice;
 use App\Models\StockRealtimePrice;
 use App\Models\User;
+use App\Services\MarketDataCoordinator;
+use App\Services\MarketPriceStore;
 use App\Services\StockPriceCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Facades\Schedule;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -317,6 +323,192 @@ class AdminDashboardPerformanceTest extends TestCase
     public function test_guest_cannot_view_dashboard_performance(): void
     {
         $this->getJson('/admin/dashboard/performance')->assertUnauthorized();
+        $this->postJson('/admin/dashboard/performance/repair', ['period' => 'last_week'])->assertUnauthorized();
+    }
+
+    public function test_admin_can_repair_only_the_missing_references_for_last_week(): void
+    {
+        $this->travelTo(Carbon::parse('2026-11-07 12:00:00', 'Europe/Vienna'));
+        $this->depotWithStoredNovemberPrices();
+        $this->fakeDailyRepairPrices([
+            '2026-09-30' => 92,
+            '2026-10-23' => 96,
+            '2026-10-27' => 97,
+            '2026-10-30' => 100,
+            '2026-11-05' => 999,
+        ]);
+
+        $this->actingAs($this->adminUser())->getJson('/admin/dashboard/performance')
+            ->assertOk()
+            ->assertJsonPath('days.0.change_amount', null)
+            ->assertJsonPath('days.0.repairable', true)
+            ->assertJsonPath('days.1.change_amount', '0.00')
+            ->assertJsonPath('days.1.repairable', false)
+            ->assertJsonPath('sums.1.change_amount', null)
+            ->assertJsonPath('sums.1.repairable', true);
+        Http::assertNothingSent();
+
+        $this->postJson('/admin/dashboard/performance/repair', ['period' => 'last_week'])
+            ->assertOk()
+            ->assertJsonPath('status', 'repaired')
+            ->assertJsonPath('days.0.change_amount', '10.00')
+            ->assertJsonPath('days.3.change_amount', '1.00')
+            ->assertJsonPath('sums.1.change_amount', '4.00')
+            ->assertJsonPath('sums.1.repairable', false)
+            ->assertJsonPath('sums.3.change_amount', null);
+
+        Http::assertSentCount(1);
+        Http::assertSent(fn ($request): bool => (int) $request['period1'] === Carbon::parse('2026-10-23', 'Europe/Berlin')->timestamp
+            && (int) $request['period2'] === Carbon::parse('2026-10-31', 'Europe/Berlin')->timestamp
+            && $request['interval'] === '1d');
+        $this->assertSame(
+            ['2026-10-23', '2026-10-30'],
+            MarketPrice::query()->where('source_key', 'yahoo_daily')->orderBy('trading_date')->pluck('trading_date')->all(),
+        );
+        $this->postJson('/admin/dashboard/performance/repair', ['period' => 'last_week'])
+            ->assertOk()
+            ->assertJsonPath('status', 'not_needed');
+        Http::assertSentCount(1);
+    }
+
+    public function test_day_repair_keeps_a_gap_when_the_provider_has_no_matching_price(): void
+    {
+        $this->travelTo(Carbon::parse('2026-11-03 19:00:00', 'Europe/Vienna'));
+        $this->depotWithStoredNovemberPrices();
+        $this->fakeDailyRepairPrices(['2026-10-29' => 99, '2026-11-02' => 999]);
+
+        $this->actingAs($this->adminUser())->getJson('/admin/dashboard/performance')
+            ->assertOk()
+            ->assertJsonPath('days.0.repairable', true)
+            ->assertJsonPath('days.2.change_amount', null)
+            ->assertJsonPath('days.2.repairable', false);
+
+        $this->postJson('/admin/dashboard/performance/repair', ['date' => '2026-11-04'])
+            ->assertOk()
+            ->assertJsonPath('status', 'not_needed');
+        $this->postJson('/admin/dashboard/performance/repair', ['date' => '2026-11-02', 'period' => 'last_week'])
+            ->assertUnprocessable();
+        Http::assertNothingSent();
+
+        $this->postJson('/admin/dashboard/performance/repair', ['date' => '2026-11-02'])
+            ->assertOk()
+            ->assertJsonPath('status', 'unavailable')
+            ->assertJsonPath('days.0.change_amount', null)
+            ->assertJsonPath('days.1.change_amount', '0.00');
+
+        Http::assertSentCount(1);
+        $this->assertSame(0, MarketPrice::query()->where('source_key', 'yahoo_daily')->count());
+    }
+
+    public function test_market_collection_stays_scheduled_without_recurring_daily_history_imports(): void
+    {
+        $events = collect(Schedule::events());
+
+        $this->assertFalse($events->contains(fn ($event): bool => str_contains($event->command ?? '', 'market-data:daily')));
+        $this->assertSame('*/5 * * * *', $events->first(fn ($event): bool => str_contains($event->command ?? '', 'market-data:collect'))?->expression);
+    }
+
+    public function test_card_repair_reports_a_failed_provider_request_and_leaves_the_gap_open(): void
+    {
+        $this->travelTo(Carbon::parse('2026-11-07 12:00:00', 'Europe/Vienna'));
+        $this->depotWithStoredNovemberPrices();
+        Http::fake(['query1.finance.yahoo.com/*' => Http::response([], 503)]);
+
+        $this->actingAs($this->adminUser())->postJson('/admin/dashboard/performance/repair', ['period' => 'last_month'])
+            ->assertOk()
+            ->assertJsonPath('status', 'failed')
+            ->assertJsonPath('sums.3.change_amount', null)
+            ->assertJsonPath('sums.3.repairable', true);
+
+        Http::assertSentCount(1);
+        $this->assertSame(0, MarketPrice::query()->where('source_key', 'yahoo_daily')->count());
+    }
+
+    public function test_queued_dashboard_repair_deduplicates_requests_and_reports_the_updated_cards(): void
+    {
+        config(['queue.default' => 'database']);
+        $this->travelTo(Carbon::parse('2026-11-07 12:00:00', 'Europe/Vienna'));
+        $this->depotWithStoredNovemberPrices();
+        $this->fakeDailyRepairPrices(['2026-10-30' => 100]);
+
+        $target = ['date' => '2026-11-02'];
+        $runId = $this->actingAs($this->adminUser())->postJson('/admin/dashboard/performance/repair', $target)
+            ->assertSuccessful()
+            ->assertJsonPath('status', 'queued')
+            ->assertJsonStructure(['run_id'])
+            ->json('run_id');
+
+        $this->postJson('/admin/dashboard/performance/repair', $target)
+            ->assertSuccessful()
+            ->assertJsonPath('status', 'queued')
+            ->assertJsonPath('run_id', $runId);
+        $this->postJson('/admin/dashboard/performance/repair', ['period' => 'last_week'])
+            ->assertJsonPath('status', 'in_progress')
+            ->assertJsonMissingPath('run_id');
+        $this->getJson('/admin/dashboard/performance/repair/'.$runId)
+            ->assertSuccessful()
+            ->assertJsonPath('status', 'queued');
+
+        Http::assertNothingSent();
+        $this->assertSame(1, Queue::size());
+        Queue::pop()->fire();
+
+        $this->getJson('/admin/dashboard/performance/repair/'.$runId)
+            ->assertOk()
+            ->assertJsonPath('status', 'repaired')
+            ->assertJsonPath('days.0.change_amount', '10.00')
+            ->assertJsonPath('days.0.repairable', false)
+            ->assertJsonPath('sums.1.change_amount', null);
+        Http::assertSentCount(1);
+    }
+
+    private function depotWithStoredNovemberPrices(): void
+    {
+        config(['services.market_data.central_enabled' => true]);
+        $holding = StockHolding::factory()->create([
+            'isin' => 'US8740541094',
+            'symbol' => 'TKE',
+            'exchange' => 'XETRA',
+            'mic_code' => 'XETR',
+            'currency' => 'EUR',
+        ]);
+        $depot = Depot::factory()->create(['is_active' => true, 'account_balance' => 900]);
+        DepotTransaction::factory()->for($depot)->create([
+            'stock_holding_id' => $holding->id,
+            'booked_at' => '2026-09-01 00:00:00',
+            'type' => 'buy',
+            'pieces' => 1,
+            'cash_delta' => -100,
+            'balance_after' => 900,
+        ]);
+
+        $quotes = collect(['2026-11-02' => 110, '2026-11-03' => 110, '2026-11-04' => 112, '2026-11-05' => 113, '2026-11-06' => 114])
+            ->map(fn (int $price, string $date): array => [
+                'source_key' => 'xetra_posttrade',
+                'currency' => 'EUR',
+                'price' => $price,
+                'as_of' => $date.' 16:20:00',
+            ])->values()->all();
+        app(MarketDataCoordinator::class)->persist($holding, $quotes);
+        app(MarketPriceStore::class)->selectLatest($holding->market_listing_id);
+    }
+
+    /** @param array<string, int> $prices */
+    private function fakeDailyRepairPrices(array $prices): void
+    {
+        Http::fake(['query1.finance.yahoo.com/*' => Http::response(['chart' => ['result' => [[
+            'meta' => [
+                'symbol' => 'TKE.DE',
+                'currency' => 'EUR',
+                'exchangeName' => 'GER',
+                'fullExchangeName' => 'XETRA',
+                'exchangeTimezoneName' => 'Europe/Berlin',
+                'instrumentType' => 'EQUITY',
+                'dataGranularity' => '1d',
+            ],
+            'timestamp' => array_map(fn (string $date): int => Carbon::parse($date.' 08:00:00', 'UTC')->timestamp, array_keys($prices)),
+            'indicators' => ['quote' => [array_fill_keys(['open', 'high', 'low', 'close'], array_values($prices))]],
+        ]]]])]);
     }
 
     private function adminUser(): User
