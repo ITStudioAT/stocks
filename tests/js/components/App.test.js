@@ -3984,7 +3984,7 @@ describe('App', () => {
     ])('shows the Data overview for %s', async (path) => {
         window.history.pushState({}, '', path);
         const fetchMock = vi.fn((requestPath) => Promise.resolve(jsonResponse(requestPath === '/admin/me'
-            ? { user: { id: 1, name: 'Admin', roles: ['super_admin', 'admin'] } } : {})));
+            ? { user: { id: 1, name: 'Admin', roles: ['super_admin', 'admin'], cloudways_available: true } } : {})));
         vi.stubGlobal('fetch', fetchMock);
         const wrapper = mountApp();
         await flushPromises();
@@ -3999,12 +3999,25 @@ describe('App', () => {
     it.each(['/admin/menu/data/cloudways', '/admin/menu/cloudways'])('opens Cloudways from %s', async (path) => {
         window.history.pushState({}, '', path);
         vi.stubGlobal('fetch', vi.fn((requestPath) => Promise.resolve(jsonResponse(requestPath === '/admin/me'
-            ? { user: { id: 1, roles: ['super_admin'] } } : {}))));
+            ? { user: { id: 1, roles: ['super_admin'], cloudways_available: true } } : {}))));
         const wrapper = mountApp();
         await flushPromises();
         expect(window.location.pathname).toBe('/admin/menu/data/cloudways');
         expect(wrapper.get('[aria-label="Cloudways Synchronisation"]').isVisible()).toBe(true);
         expect(wrapper.find('[aria-label="Datenkonsistenz"]').exists()).toBe(false);
+    });
+
+    it('hides Cloudways online and redirects its old link to Data overview', async () => {
+        window.history.pushState({}, '', '/admin/menu/data/cloudways');
+        const fetchMock = vi.fn((path) => Promise.resolve(jsonResponse(path === '/admin/me'
+            ? { user: { id: 1, roles: ['super_admin'], cloudways_available: false } } : {})));
+        vi.stubGlobal('fetch', fetchMock);
+        const wrapper = mountApp();
+        await flushPromises();
+        expect(window.location.pathname).toBe('/admin/menu/data/overview');
+        expect(wrapper.get('section[aria-label="Data"]').findAll('[role="tab"]').map((tab) => tab.text())).toEqual(['Overview']);
+        expect(wrapper.find('[aria-label="Cloudways Synchronisation"]').exists()).toBe(false);
+        expect(fetchMock.mock.calls.some(([path]) => path.startsWith('/admin/cloudways/'))).toBe(false);
     });
 
     it('does not show the watch-list PDF export on the dashboard', async () => {

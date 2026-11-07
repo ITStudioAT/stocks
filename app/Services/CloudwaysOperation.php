@@ -40,7 +40,7 @@ class CloudwaysOperation
                     throw new RuntimeException('Es gibt keine abweichenden Tabellen zur Synchronisation.');
                 }
             }
-            $run = ['id' => (string) Str::uuid(), 'action' => $action, 'status' => 'queued', 'progress' => null, 'comparison' => $previous['comparison'] ?? null, 'sync' => null, 'error' => null];
+            $run = ['id' => (string) Str::uuid(), 'action' => $action, 'status' => 'queued', 'progress' => null, 'checked_tables' => [], 'comparison' => $previous['comparison'] ?? null, 'sync' => null, 'error' => null];
             $this->save($run);
             try {
                 RunCloudwaysOperation::dispatch($run['id'], $action, $tables);

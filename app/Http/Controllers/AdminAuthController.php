@@ -145,6 +145,7 @@ class AdminAuthController extends Controller
      *     email: string,
      *     roles: array<int, string>,
      *     can_initialize_password: bool,
+     *     cloudways_available: bool,
      * }
      */
     private function userPayload(User $user, bool $canInitializePassword): array
@@ -156,6 +157,7 @@ class AdminAuthController extends Controller
             'email' => $user->email,
             'roles' => $user->getRoleNames()->values()->all(),
             'can_initialize_password' => $canInitializePassword,
+            'cloudways_available' => app()->environment('local'),
         ];
     }
 

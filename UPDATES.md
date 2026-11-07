@@ -5,6 +5,7 @@
 
 - Main Update
 
+- Cloudways unter Data ist ausschließlich lokal für Super-Administratoren verfügbar. Online sind der Menüpunkt und die zugehörigen Zugriffe gesperrt.
 - Zentrale Kursablage in `market_prices`, gemeinsame Instrument-/Börsenplatz-Zuordnung und nachvollziehbare Kurskorrekturen ohne Verlust der Altdaten.
 - Koordinierte kostenlose Kursabrufe alle fünf Minuten nach Börsenkalender und Zeitzone; bekannte Verzögerungen und Abrufpausen bleiben sichtbar.
 - Kostenlose Tageshistorie über geprüfte Yahoo-Zuordnungen, einschließlich Take-Two auf Xetra in EUR. Neue und vorhandene Kurse verwenden dieselbe Ablage.

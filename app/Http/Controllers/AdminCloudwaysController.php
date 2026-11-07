@@ -14,6 +14,8 @@ class AdminCloudwaysController extends Controller
 {
     public function status(CloudwaysDatabaseSync $cloudwaysDatabaseSync): JsonResponse
     {
+        abort_unless(app()->environment(['local', 'testing']), 403);
+
         return response()->json([
             'execution_status' => $cloudwaysDatabaseSync->executionStatus(),
         ]);
@@ -21,6 +23,7 @@ class AdminCloudwaysController extends Controller
 
     public function show(Request $request, CloudwaysDatabaseSync $cloudwaysDatabaseSync): JsonResponse|StreamedResponse
     {
+        abort_unless(app()->environment(['local', 'testing']), 403);
         $this->audit($request, 'check_requested');
 
         if ($this->wantsStreamedResponse($request)) {

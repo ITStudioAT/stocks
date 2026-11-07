@@ -12,6 +12,8 @@ class AdminCloudwaysOperationController extends Controller
 {
     public function show(CloudwaysOperation $operations): JsonResponse
     {
+        abort_unless(app()->environment(['local', 'testing']), 403);
+
         return response()->json(['run' => $operations->current()]);
     }
 

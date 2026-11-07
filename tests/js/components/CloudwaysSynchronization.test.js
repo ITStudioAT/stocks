@@ -7,6 +7,28 @@ afterEach(() => {
     vi.restoreAllMocks();
 });
 
+it('keeps completed tables visible while the next table is being checked', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ run: {
+        action: 'check', status: 'running', progress: { table: 'prices', completed: 2, total: 3 },
+        checked_tables: [{ name: 'depots', status: 'identical' }, { name: 'stocks', status: 'different' }],
+    } }) })));
+    const wrapper = mount(CloudwaysSynchronization, {
+        props: { showCard: true },
+        global: { stubs: {
+            VCard: { template: '<div><slot /></div>' }, VCardText: { template: '<div><slot /></div>' },
+            VCardTitle: { template: '<div><slot /></div>' }, VCardActions: { template: '<div><slot /></div>' },
+            VDialog: { template: '<div><slot /></div>' }, VBtn: true, VAlert: true, VSpacer: true, VProgressLinear: true,
+        } },
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain('Tabelle prices');
+    expect(wrapper.text()).toContain('depots');
+    expect(wrapper.text()).toContain('stocks');
+    expect(wrapper.text()).toContain('Übereinstimmend');
+    expect(wrapper.text()).toContain('Unterschiedlich');
+    wrapper.unmount();
+});
+
 it('queues the reviewed synchronization after confirmation and keeps progress visible when leaving Data', async () => {
     const comparison = { total_tables: 2, identical_tables: 1, different_tables: 1, tables: [
         { name: 'depots', status: 'different', cloudways_rows: 4, local_rows: 3, row_differences: { changed: 2, source_only: 1, local_only: 0 } },

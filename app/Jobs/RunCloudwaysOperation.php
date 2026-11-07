@@ -32,7 +32,14 @@ class RunCloudwaysOperation implements ShouldQueue
             $operations->save($run);
         };
         if ($this->action === 'check') {
-            $run['comparison'] = $sync->compareAllTables(onProgress: $onProgress);
+            $run['checked_tables'] ??= [];
+            $run['comparison'] = $sync->compareAllTables(
+                onTableCompared: function (array $table) use (&$run, $operations): void {
+                    $run['checked_tables'][] = ['name' => $table['name'], 'status' => $table['status']];
+                    $operations->save($run);
+                },
+                onProgress: $onProgress,
+            );
         } else {
             $run['sync'] = $sync->syncAllTables(checkedDifferentTables: $this->tables, onProgress: $onProgress);
         }

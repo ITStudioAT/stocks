@@ -259,6 +259,7 @@ const depotPriceSource = ref('latest');
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
+const canUseCloudways = computed(() => canManageUsers.value && user.value?.cloudways_available === true);
 const canManageDashboardAdmin = computed(() => user.value?.roles?.some((role) => ['admin', 'super_admin'].includes(role)) ?? false);
 const canInitializePassword = computed(() => user.value?.can_initialize_password === true);
 const profileDisplayName = computed(() => user.value?.name || 'Loading...');
@@ -1427,7 +1428,7 @@ function applyRouteFromPath() {
 
         if (normalizedSection === 'data' || normalizedSection === 'cloudways') {
             activeSection.value = canManageDashboardAdmin.value ? 'data' : 'dashboard';
-            activeDataSubsection.value = (normalizedSection === 'cloudways' || subsectionSegment === 'cloudways') && canManageUsers.value
+            activeDataSubsection.value = (normalizedSection === 'cloudways' || subsectionSegment === 'cloudways') && canUseCloudways.value
                 ? 'cloudways'
                 : 'overview';
             updateUrlPath({ replace: true });
@@ -8884,11 +8885,11 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                     <section v-if="activeSection === 'data' && canManageDashboardAdmin" aria-label="Data">
                         <v-tabs :model-value="activeDataSubsection" color="primary" aria-label="Data sections" @update:model-value="(value) => { activeDataSubsection = value; updateUrlPath(); }">
                             <v-tab value="overview" prepend-icon="mdi-view-dashboard-outline">Overview</v-tab>
-                            <v-tab v-if="canManageUsers" value="cloudways" prepend-icon="mdi-cloud-sync-outline">Cloudways</v-tab>
+                            <v-tab v-if="canUseCloudways" value="cloudways" prepend-icon="mdi-cloud-sync-outline">Cloudways</v-tab>
                         </v-tabs>
                     </section>
                     <PerformanceConsistency v-if="canManageDashboardAdmin" :show-card="activeSection === 'data' && activeDataSubsection === 'overview'" />
-                    <CloudwaysSynchronization v-if="canManageUsers" :show-card="activeSection === 'data' && activeDataSubsection === 'cloudways'" />
+                    <CloudwaysSynchronization v-if="canUseCloudways" :show-card="activeSection === 'data' && activeDataSubsection === 'cloudways'" />
 
                     <section
                         v-if="activeSection === 'infos' && canManageDashboardAdmin"

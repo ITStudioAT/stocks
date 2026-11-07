@@ -19,6 +19,7 @@ const countedDifferences = computed(() => differentTables.value.reduce((total, t
     return total + (rows ? rows.changed + rows.source_only + rows.local_only : 0);
 }, 0));
 const uncountedTables = computed(() => differentTables.value.filter((table) => !table.row_differences).length);
+const tableStatus = (status) => ({ identical: 'Übereinstimmend', missing_local: 'Lokal nicht vorhanden', missing_cloudways: 'Auf Cloudways nicht vorhanden' }[status] ?? 'Unterschiedlich');
 let timer;
 let requestGeneration = 0;
 
@@ -78,6 +79,12 @@ onBeforeUnmount(() => window.clearInterval(timer));
                 <strong>{{ run?.status === 'queued' ? 'Wartet in der Queue' : progress?.table ? `Tabelle ${progress.table}` : 'Vorgang wird vorbereitet' }}</strong>
                 <span v-if="progress?.total"> · {{ progress.completed ?? 0 }} von {{ progress.total }} Tabellen abgeschlossen</span>
             </div>
+            <div v-if="run?.action === 'check' && run.status !== 'finished' && run.checked_tables?.length" class="mt-5" aria-live="polite">
+                <h3>Bereits geprüft</h3>
+                <ul class="cloudways-checked">
+                    <li v-for="table in run.checked_tables" :key="table.name"><strong>{{ table.name }}</strong><span>{{ tableStatus(table.status) }}</span></li>
+                </ul>
+            </div>
             <div v-if="comparison" class="cloudways-summary" aria-live="polite">
                 <div><strong>{{ comparison.total_tables }}</strong><span>Tabellen geprüft</span></div>
                 <div><strong>{{ comparison.identical_tables }}</strong><span>stimmen überein</span></div>
@@ -94,7 +101,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
                         <tbody>
                             <tr v-for="table in comparison.tables" :key="table.name">
                                 <td>{{ table.name }}</td><td>{{ table.cloudways_rows ?? '–' }}</td><td>{{ table.local_rows ?? '–' }}</td>
-                                <td>{{ table.status === 'identical' ? 'Übereinstimmend' : table.status === 'missing_local' ? 'Lokal nicht vorhanden' : table.status === 'missing_cloudways' ? 'Auf Cloudways nicht vorhanden' : 'Unterschiedlich' }}</td>
+                                <td>{{ tableStatus(table.status) }}</td>
                                 <td v-if="table.row_differences">{{ table.row_differences.changed }} geändert · {{ table.row_differences.source_only }} nur Cloudways · {{ table.row_differences.local_only }} nur lokal</td>
                                 <td v-else>Einzeln nicht ermittelbar</td>
                             </tr>
@@ -128,6 +135,9 @@ onBeforeUnmount(() => window.clearInterval(timer));
 .cloudways-content h2 { font-size: 1.35rem; }
 .cloudways-intro, .cloudways-muted { color: rgba(var(--v-theme-on-surface), .7); margin-top: 6px; }
 .cloudways-progress { margin-top: 22px; }
+.cloudways-checked { list-style: none; padding: 0; margin-top: 10px; max-height: 240px; overflow-y: auto; }
+.cloudways-checked li { display: flex; gap: 12px; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); }
+.cloudways-checked span { color: rgba(var(--v-theme-on-surface), .7); }
 .cloudways-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 22px; }
 .cloudways-summary > div { display: flex; flex-direction: column; padding: 15px; border-radius: 12px; background: rgba(var(--v-theme-on-surface), .045); }
 .cloudways-summary strong { font-size: 1.65rem; }
