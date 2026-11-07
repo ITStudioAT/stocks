@@ -7,6 +7,7 @@ use App\Models\StockAiResearch;
 use App\Models\StockHolding;
 use App\Models\User;
 use App\Services\AdminPasswordAuthenticator;
+use App\Services\DashboardPerformanceSnapshots;
 use App\Services\PreviewOriginalPolicy;
 use App\Services\PreviewOriginalSchema;
 use App\Services\PreviewSnapshotArchive;
@@ -73,6 +74,22 @@ class PreviewSnapshotDatabaseTest extends TestCase
             $this->assertSame('Changed', User::findOrFail(1)->first_name);
             $this->assertSame(0, Depot::count());
         }
+    }
+
+    public function test_replacing_depots_discards_derived_dashboard_snapshots(): void
+    {
+        [$database, $original] = $this->fixtures();
+        $depot = Depot::factory()->create();
+        app(DashboardPerformanceSnapshots::class)->closingBalance($depot, now()->subDay());
+        $beforeDigest = $database->digest($database->read());
+        $protectedDigest = $database->protectedDigest();
+
+        $database->import($original, $beforeDigest, rehearsal: true);
+        $this->assertDatabaseCount('depot_performance_snapshots', 1);
+
+        $database->import($original, $beforeDigest);
+        $this->assertDatabaseCount('depot_performance_snapshots', 0);
+        $this->assertSame($protectedDigest, $database->protectedDigest());
     }
 
     public function test_active_central_market_data_is_refused_instead_of_silently_omitted_from_original_snapshot(): void

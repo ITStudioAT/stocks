@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\StockPriceCatalog;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -114,9 +115,106 @@ class AdminDashboardPerformanceTest extends TestCase
                 ->assertJsonPath('sums.4.period', 'year')
                 ->assertJsonPath('sums.4.change_amount', '30.00')
                 ->assertJsonPath('sums.4.change_percent', '3.00');
+
+            $this->assertDatabaseHas('depot_performance_snapshots', [
+                'depot_id' => $depot->id,
+                'period' => 'week',
+                'end_date' => '2026-08-02',
+                'expires_at' => null,
+            ]);
+            $this->assertDatabaseHas('depot_performance_snapshots', [
+                'depot_id' => $depot->id,
+                'period' => 'month',
+                'end_date' => '2026-07-31',
+                'expires_at' => null,
+            ]);
+            $this->assertDatabaseMissing('depot_performance_snapshots', [
+                'depot_id' => $depot->id,
+                'end_date' => '2026-08-07',
+            ]);
+
+            $livePrice->update(['price' => '134.00000000']);
+            DB::enableQueryLog();
+            try {
+                $this->getJson('/admin/dashboard/performance')
+                    ->assertOk()
+                    ->assertJsonPath('days.4.change_amount', '14.00')
+                    ->assertJsonPath('sums.0.change_amount', '14.00')
+                    ->assertJsonPath('sums.1.change_amount', '10.00')
+                    ->assertJsonPath('sums.3.change_amount', '20.00')
+                    ->assertJsonPath('sums.4.change_amount', '34.00');
+
+                $queries = collect(DB::getQueryLog())->pluck('query');
+                $this->assertTrue($queries->contains(fn (string $query): bool => str_contains($query, 'depot_performance_snapshots')));
+                $this->assertFalse($queries->contains(fn (string $query): bool => str_contains($query, 'historical_observations')));
+            } finally {
+                DB::disableQueryLog();
+                DB::flushQueryLog();
+            }
         } finally {
             Carbon::setTestNow();
         }
+    }
+
+    public function test_backdated_bookings_and_date_corrections_refresh_stored_periods(): void
+    {
+        $this->travelTo(Carbon::parse('2026-08-07 12:00:00', 'Europe/Vienna'));
+        $depot = Depot::factory()->create(['account_balance' => '1000.00', 'is_active' => true]);
+        DepotTransaction::factory()->for($depot)->create([
+            'type' => 'opening_balance',
+            'cash_delta' => '1000.00',
+            'balance_after' => '1000.00',
+            'booked_at' => '2026-01-01 00:00:00',
+        ]);
+        $this->actingAs($this->adminUser())
+            ->getJson('/admin/dashboard/performance')
+            ->assertJsonPath('sums.3.change_amount', '0.00');
+
+        $booking = $this->postJson('/admin/depot-transactions/cash', [
+            'type' => 'dividend',
+            'total_amount' => '100.00',
+            'booked_at' => '2026-07-15',
+        ])->assertCreated();
+
+        $this->assertDatabaseMissing('depot_performance_snapshots', [
+            'depot_id' => $depot->id, 'period' => 'month', 'end_date' => '2026-07-31',
+        ]);
+        $this->getJson('/admin/dashboard/performance')
+            ->assertJsonPath('sums.3.change_amount', '100.00');
+
+        $this->patchJson('/admin/depot-transactions/'.$booking->json('transaction.id').'/date', [
+            'booked_at' => '2026-08-06',
+        ])->assertOk();
+        $this->getJson('/admin/dashboard/performance')
+            ->assertJsonPath('sums.3.change_amount', '0.00')
+            ->assertJsonPath('sums.2.change_amount', '100.00');
+    }
+
+    public function test_backfill_stores_completed_weeks_months_and_years_once_per_depot(): void
+    {
+        $this->travelTo(Carbon::parse('2026-01-12 12:00:00', 'Europe/Vienna'));
+        $depot = Depot::factory()->create(['account_balance' => '1000.00']);
+        DepotTransaction::factory()->for($depot)->create([
+            'type' => 'opening_balance',
+            'cash_delta' => '1000.00',
+            'balance_after' => '1000.00',
+            'booked_at' => '2025-12-01 00:00:00',
+        ]);
+
+        $this->artisan('dashboard:backfill-performance')->assertSuccessful();
+
+        foreach (['week' => '2026-01-11', 'month' => '2025-12-31', 'year' => '2025-12-31'] as $period => $end) {
+            $this->assertDatabaseHas('depot_performance_snapshots', [
+                'depot_id' => $depot->id, 'period' => $period, 'end_date' => $end, 'expires_at' => null,
+            ]);
+        }
+        $this->assertDatabaseMissing('depot_performance_snapshots', [
+            'depot_id' => $depot->id, 'period' => 'week', 'end_date' => '2026-01-18',
+        ]);
+
+        $count = DB::table('depot_performance_snapshots')->count();
+        $this->artisan('dashboard:backfill-performance')->assertSuccessful();
+        $this->assertDatabaseCount('depot_performance_snapshots', $count);
     }
 
     public function test_dashboard_performance_is_empty_without_an_active_depot(): void

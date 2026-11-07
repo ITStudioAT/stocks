@@ -43,14 +43,6 @@ export const provenanceIndex = {
     recent_prices: [{ trading_date: '2026-11-04', actual_price: '24000', start_price: '23900', last_price: '23800', source_markers: ['EODHD'] }],
     realtime_prices: [{ trading_date: '2026-11-04', price: '24000', as_of: '2026-11-04T10:00:00Z', source_markers: ['EODHD'] }],
 };
-const research = {
-    id: 'demo-research', stock_holding_id: 1, status: 'finished', summary: 'Demo research with documented evidence.',
-    recommendation: 'hold', recommendation_percentages: { buy: 20, hold: 60, sell: 20 },
-    developments: [], calculated_events: {}, sources: [{ url: 'https://example.com/issuer', title: 'Issuer report', source_markers: ['free'] }],
-    now_relevant: { blocks: [{ key: 'data_coverage', title: 'Evidence coverage', items: [{ type: 'coverage', title: 'Earnings', detail: 'Documented provider data', source_title: 'EODHD', source_markers: ['EODHD'] }] }] },
-    data_source_markers: ['free', 'EODHD'],
-};
-
 export function provenanceResponse(path) {
     if (path.endsWith('/date-range')) {
         return { range: { date_from: '2026-11-03', date_to: '2026-11-04', row_count: 2, source_markers: ['free', 'EODHD'] } };
@@ -95,9 +87,6 @@ export function provenanceResponse(path) {
     }
     if (path.startsWith('/admin/index-watch-items')) {
         return { indexes: [provenanceIndex], index: provenanceIndex };
-    }
-    if (path === '/admin/dashboard/ai/stock-researches') {
-        return { researches: [research], holdings: [provenanceHolding] };
     }
     if (path === '/admin/dashboard/performance') {
         return { days: [{ date: '2026-11-04', change_amount: '4', change_percent: '0.36', data_source_markers: ['free', 'EODHD'] }], sums: [] };

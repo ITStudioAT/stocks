@@ -9,6 +9,7 @@ use App\Models\StockHolding;
 use App\Models\StockHoldingIntradayReloadRun;
 use App\Models\StockRealtimePrice;
 use App\Services\CompletedTradingDay;
+use App\Services\DashboardPerformanceSnapshots;
 use App\Services\EndOfDayDataUpdateScheduler;
 use App\Services\EodhdApiUsage;
 use App\Services\EodhdEndOfDayDataService;
@@ -30,6 +31,8 @@ use Illuminate\Support\Carbon;
 
 class AdminDataController extends Controller
 {
+    public function __construct(private DashboardPerformanceSnapshots $performanceSnapshots) {}
+
     public function exchanges(
         EodhdExchangeDataImporter $importer,
         EodhdApiUsage $eodhdApiUsage,
@@ -321,12 +324,7 @@ class AdminDataController extends Controller
 
     public function repairEndOfDay(StockEndOfDayRepairService $repairService, EodhdApiUsage $eodhdApiUsage): JsonResponse
     {
-        $payload = $repairService->repair();
-
-        return response()->json([
-            ...$payload,
-            'eodhd_api_usage' => $eodhdApiUsage->payload(),
-        ]);
+        return $this->repairResponse($repairService->repair(), 'stored_prices_count', $eodhdApiUsage);
     }
 
     public function repairEndOfDayStock(
@@ -334,20 +332,12 @@ class AdminDataController extends Controller
         StockEndOfDayRepairService $repairService,
         EodhdApiUsage $eodhdApiUsage,
     ): JsonResponse {
-        return response()->json([
-            ...$repairService->repairHolding($holding),
-            'eodhd_api_usage' => $eodhdApiUsage->payload(),
-        ]);
+        return $this->repairResponse($repairService->repairHolding($holding), 'stored_prices_count', $eodhdApiUsage);
     }
 
     public function repairHistoricalData(StockHistoricalIntradayCandleRepairService $repairService, EodhdApiUsage $eodhdApiUsage): JsonResponse
     {
-        $payload = $repairService->repair();
-
-        return response()->json([
-            ...$payload,
-            'eodhd_api_usage' => $eodhdApiUsage->payload(),
-        ]);
+        return $this->repairResponse($repairService->repair(), 'stored_candles_count', $eodhdApiUsage);
     }
 
     public function repairHistoricalDataStock(
@@ -355,8 +345,18 @@ class AdminDataController extends Controller
         StockHistoricalIntradayCandleRepairService $repairService,
         EodhdApiUsage $eodhdApiUsage,
     ): JsonResponse {
+        return $this->repairResponse($repairService->repairHolding($holding), 'stored_candles_count', $eodhdApiUsage);
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function repairResponse(array $payload, string $storedCountKey, EodhdApiUsage $eodhdApiUsage): JsonResponse
+    {
+        if ($payload[$storedCountKey] > 0) {
+            $this->performanceSnapshots->invalidate(from: now()->subYear());
+        }
+
         return response()->json([
-            ...$repairService->repairHolding($holding),
+            ...$payload,
             'eodhd_api_usage' => $eodhdApiUsage->payload(),
         ]);
     }

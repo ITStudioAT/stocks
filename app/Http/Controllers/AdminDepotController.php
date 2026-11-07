@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Depot;
 use App\Models\DepotTransaction;
 use App\Models\StockHolding;
+use App\Services\DashboardPerformanceSnapshots;
 use App\Services\EndOfDayDataUpdateScheduler;
 use App\Services\EodhdApiUsage;
 use App\Services\IndexDataUpdateScheduler;
@@ -88,11 +89,12 @@ class AdminDepotController extends Controller
         ], 201);
     }
 
-    public function update(Request $request, Depot $depot): JsonResponse
+    public function update(Request $request, Depot $depot, DashboardPerformanceSnapshots $performanceSnapshots): JsonResponse
     {
         $validated = $this->validatedDepotData($request, $depot);
 
-        DB::transaction(function () use ($depot, $validated): void {
+        DB::transaction(function () use ($depot, $validated, $performanceSnapshots): void {
+            $depot = Depot::query()->lockForUpdate()->findOrFail($depot->id);
             $shouldActivateDepot = (bool) ($validated['is_active'] ?? false);
 
             if ($shouldActivateDepot) {
@@ -104,7 +106,11 @@ class AdminDepotController extends Controller
                 'account_balance' => $validated['account_balance'],
                 'is_active' => $shouldActivateDepot || $depot->is_active,
             ]);
-        });
+
+            if ($depot->wasChanged('account_balance')) {
+                $performanceSnapshots->invalidate($depot->id);
+            }
+        }, attempts: 3);
 
         return response()->json([
             'message' => 'Depot updated.',

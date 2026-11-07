@@ -15,13 +15,9 @@ function developmentProcesses(bool $supportsPail): array
         ['server', '#93c5fd', 'php artisan serve'],
         ['queue', '#c4b5fd', 'php artisan queue:listen --tries=1 --timeout=0'],
         ['scheduler', '#86efac', 'php artisan schedule:work'],
+        ['logs', '#fb7185', $supportsPail ? 'php artisan pail --timeout=0' : 'php scripts/dev-logs.php'],
+        ['vite', '#fdba74', 'npm run dev'],
     ];
-
-    if ($supportsPail) {
-        $processes[] = ['logs', '#fb7185', 'php artisan pail --timeout=0'];
-    }
-
-    $processes[] = ['vite', '#fdba74', 'npm run dev'];
 
     return [
         'commands' => array_column($processes, 2),
@@ -115,14 +111,6 @@ $command = [
     '--names='.implode(',', $processes['names']),
     '--kill-others',
 ];
-
-if (! $supportsPail && ! $isDryRun) {
-    $reason = PHP_OS_FAMILY === 'Windows'
-        ? 'Pail is unavailable on native Windows.'
-        : 'Pail requires the PCNTL extension.';
-
-    fwrite(STDOUT, "{$reason} Continuing without live log output.\n");
-}
 
 if ($isDryRun) {
     fwrite(STDOUT, displayDevelopmentCommand($command)."\n");

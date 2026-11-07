@@ -11,6 +11,8 @@ use Illuminate\Validation\ValidationException;
 
 class DepotTransactionBooker
 {
+    public function __construct(private DashboardPerformanceSnapshots $performanceSnapshots) {}
+
     public function bookCash(
         Depot $depot,
         string $type,
@@ -124,7 +126,8 @@ class DepotTransactionBooker
                 'account_balance' => $this->decimal($balanceAfter, 2),
             ]);
 
-            return DepotTransaction::query()->create([
+            $bookingDate = $bookedAt ?? now();
+            $transaction = DepotTransaction::query()->create([
                 'depot_id' => $lockedDepot->id,
                 'stock_holding_id' => $stockHolding?->id,
                 'type' => $type,
@@ -134,11 +137,19 @@ class DepotTransactionBooker
                 'unit_price' => $piecesAmount === null ? null : $this->decimal($amount / $piecesAmount, 8),
                 'cash_delta' => $this->decimal($cashDelta, 2),
                 'balance_after' => $this->decimal($balanceAfter, 2),
-                'booked_at' => $bookedAt ?? now(),
+                'booked_at' => $bookingDate,
                 'note' => $note,
                 'is_external_cashflow' => in_array($type, DepotTransaction::ExternalCashflowTypes, true),
                 'affects_performance' => in_array($type, DepotTransaction::PerformanceCashTypes, true),
             ]);
+
+            if ($type === 'opening_balance' || $bookingDate->gt(now()->endOfDay())) {
+                $this->performanceSnapshots->invalidate($lockedDepot->id);
+            } elseif ($bookingDate->lt(now()->startOfDay())) {
+                $this->performanceSnapshots->invalidate($lockedDepot->id, $bookingDate);
+            }
+
+            return $transaction;
         }, attempts: 3);
     }
 

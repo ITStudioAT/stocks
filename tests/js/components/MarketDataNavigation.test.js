@@ -124,7 +124,6 @@ describe('visible market data provenance across navigation', () => {
         expect(wrapper.text()).not.toContain('NaN');
         expect(wrapper.get('.depot-performance-chart').findAll('.depot-performance-source-point')).toHaveLength(2);
         expect(wrapper.get('.depot-performance-chart').findAll('.depot-performance-chart-line')).toHaveLength(2);
-        expect(wrapper.get('[aria-label="Free market data policy"]').text()).toContain('keinen garantierten Schlusskurs');
     });
 
     it('disables the paid sync action while preserving the individual free reload', async () => {
@@ -132,7 +131,6 @@ describe('visible market data provenance across navigation', () => {
         const sync = wrapper.findAll('button').find((button) => button.text() === 'EODHD Sync');
 
         expect(sync.attributes('disabled')).toBeDefined();
-        expect(wrapper.text()).toContain('EODHD-Abrufe sind deaktiviert');
     });
 
     it.each([1440, 390])('renders current, previous and calculated depot prices at width %i', async (width) => {
@@ -178,15 +176,10 @@ describe('visible market data provenance across navigation', () => {
         ['/admin/menu/indices', '.index-watch-card', 'EODHD'],
         ['/admin/menu/data/stocks/live-data', '[aria-label="Stored data date range"]', 'free'],
         ['/admin/menu/dashboard/overview', '.dashboard-performance-day-card', 'free'],
-        ['/admin/menu/dashboard/ki', '.dashboard-ki-stock-card', 'free'],
-        ['/admin/menu/analyze/trend-v2?stock=1', '[aria-label="Analysis price data provenance"]', 'EODHD'],
     ])('renders provenance in %s', async (path, selector, expected) => {
         await renderPage(path);
         expect(markers(wrapper.get(selector))).toContain(expected);
         expect(wrapper.find('svg .data-source-markers').exists()).toBe(false);
-        if (path === '/admin/menu/dashboard/ki') {
-            expect(markers(wrapper.get('.dashboard-ki-recommendation'))).toEqual(['free', 'EODHD']);
-        }
     });
 
     it('renders the public index ticker using the same marker component', async () => {

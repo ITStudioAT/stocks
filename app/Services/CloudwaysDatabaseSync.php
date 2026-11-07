@@ -177,6 +177,8 @@ class CloudwaysDatabaseSync
 
         if ($syncTables !== []) {
             $this->refreshSourceConnection($sourceConnectionName);
+            $invalidatesPerformance = array_intersect(DashboardPerformanceSnapshots::SourceTables, $syncTables) !== []
+                && Schema::connection($targetConnectionName)->hasTable(DashboardPerformanceSnapshots::Table);
             Schema::connection($targetConnectionName)->disableForeignKeyConstraints();
 
             try {
@@ -187,8 +189,13 @@ class CloudwaysDatabaseSync
                     $onTableSynced,
                     $onProgress,
                     $totalSyncTables,
+                    $invalidatesPerformance,
                     &$syncedTables,
                 ): void {
+                    if ($invalidatesPerformance) {
+                        DB::connection($targetConnectionName)->table('depots')->orderBy('id')->lockForUpdate()->get(['id']);
+                    }
+
                     foreach ($syncTables as $index => $table) {
                         if ($onProgress !== null) {
                             $onProgress([
@@ -229,6 +236,10 @@ class CloudwaysDatabaseSync
 
                     if (array_intersect(['stock_holdings', 'stock_realtime_prices'], $syncTables) !== []) {
                         $this->repairLatestRealtimePriceLinks($targetConnectionName);
+                    }
+
+                    if ($invalidatesPerformance) {
+                        DB::connection($targetConnectionName)->table(DashboardPerformanceSnapshots::Table)->delete();
                     }
                 });
             } finally {

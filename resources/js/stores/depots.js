@@ -54,16 +54,6 @@ export const useDepotStore = defineStore('depots', {
         indexDataUpdateSettings: null,
         intradayBackfillRefresh: null,
         queueStatus: null,
-        testOptions: {
-            indices: [],
-            stocks: [],
-        },
-        testTickers: [],
-        testTickerExchangeCode: 'XETRA',
-        testExchanges: [],
-        testExchangeDetails: {},
-        testExchangeDetailErrors: {},
-        testIntraday: null,
         dataExchanges: [],
         dataExchangeRefresh: null,
         dataIntradayStocks: [],
@@ -72,24 +62,11 @@ export const useDepotStore = defineStore('depots', {
         dataIntradayRefresh: null,
         dataRepairSummary: null,
         stockHistoricalPriceCoverage: null,
-        analyzeIntradayCandles: null,
-        analyzeIntradayCandlesRequestedId: null,
         holdingIntradayCandles: {},
         holdingIntradayCandlesLoading: {},
         holdingIntradayCandlesErrors: {},
         uiPreferences: {
             depot_price_source: 'latest',
-            analyze_trend_row_limit: 200,
-            analyze_trend_max_invest_amount: 0,
-            analyze_trend_virtual_buy_amount: 7000,
-            analyze_trend_streak_buy_thresholds: [-4, -3, -2, -1, 0],
-            analyze_trend_streak_sell_threshold: 3,
-            analyze_trend_signal_columns: [
-                'vbuy_vsell',
-                'vbuy_vsell_max_invest',
-                'vbuy_once',
-                'vbuy_once_emergency',
-            ],
         },
         stockSearchResults: [],
         stockSearchSource: 'free',
@@ -120,17 +97,12 @@ export const useDepotStore = defineStore('depots', {
         depotStockPeriodLoading: false,
         exchangeTradingTimesLoading: false,
         queueStatusLoading: false,
-        testOptionsLoading: false,
-        testTickersLoading: false,
-        testExchangesLoading: false,
-        testIntradayLoading: false,
         dataExchangesLoading: false,
         dataExchangeReloadLoading: false,
         dataIntradayLoading: false,
         dataIntradayReloadLoading: false,
         dataRepairLoading: false,
         stockSearchLoading: false,
-        analyzeIntradayCandlesLoading: false,
         error: '',
         holdingsError: '',
         transactionsError: '',
@@ -138,15 +110,10 @@ export const useDepotStore = defineStore('depots', {
         depotStockPeriodError: '',
         exchangeTradingTimesError: '',
         queueStatusError: '',
-        testOptionsError: '',
-        testTickersError: '',
-        testExchangesError: '',
-        testIntradayError: '',
         dataExchangesError: '',
         dataIntradayError: '',
         dataRepairError: '',
         stockSearchError: '',
-        analyzeIntradayCandlesError: '',
     }),
     actions: {
         async loadActiveDepot() {
@@ -299,8 +266,6 @@ export const useDepotStore = defineStore('depots', {
             this.intradayRequestVersion += 1;
             this.holdingsRequestId += 1;
             this.holdingsLoading = false;
-            this.analyzeIntradayCandlesRequestedId = null;
-            this.analyzeIntradayCandlesLoading = false;
         },
         async loadActiveDepotHoldings(page = 1) {
             return await this.loadWatchlistHoldings(page);
@@ -337,85 +302,6 @@ export const useDepotStore = defineStore('depots', {
                 throw error;
             } finally {
                 this.queueStatusLoading = false;
-            }
-        },
-        async loadTestOptions() {
-            this.testOptionsLoading = true;
-            this.testOptionsError = '';
-
-            try {
-                const data = await request('/admin/tests/options');
-                this.testOptions = {
-                    indices: data.indices ?? [],
-                    stocks: data.stocks ?? [],
-                };
-
-                return data;
-            } catch (error) {
-                this.testOptionsError = error.message;
-                throw error;
-            } finally {
-                this.testOptionsLoading = false;
-            }
-        },
-        async loadTestTickers() {
-            this.testTickersLoading = true;
-            this.testTickersError = '';
-
-            try {
-                const data = await request('/admin/tests/tickers', {
-                    method: 'POST',
-                });
-                this.testTickerExchangeCode = data.exchange_code ?? 'XETRA';
-                this.testTickers = data.tickers ?? [];
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.testTickersError = error.message;
-                throw error;
-            } finally {
-                this.testTickersLoading = false;
-            }
-        },
-        async loadTestIntraday(stockId) {
-            this.testIntradayLoading = true;
-            this.testIntradayError = '';
-
-            try {
-                const data = await request(`/admin/tests/stocks/${stockId}/intraday`, {
-                    method: 'POST',
-                });
-                this.testIntraday = data;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.testIntradayError = error.message;
-                throw error;
-            } finally {
-                this.testIntradayLoading = false;
-            }
-        },
-        async loadTestExchanges() {
-            this.testExchangesLoading = true;
-            this.testExchangesError = '';
-
-            try {
-                const data = await request('/admin/tests/exchanges', {
-                    method: 'POST',
-                });
-                this.testExchanges = data.exchanges ?? [];
-                this.testExchangeDetails = data.exchange_details ?? {};
-                this.testExchangeDetailErrors = data.exchange_detail_errors ?? {};
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.testExchangesError = error.message;
-                throw error;
-            } finally {
-                this.testExchangesLoading = false;
             }
         },
         async loadDataExchanges() {
@@ -1064,81 +950,6 @@ export const useDepotStore = defineStore('depots', {
                 throw error;
             }
         },
-        async loadHistoricalPriceRowCoverage(rowCount) {
-            this.holdingsError = '';
-
-            try {
-                const query = new URLSearchParams({
-                    row_count: String(rowCount),
-                });
-                const data = await request(`/admin/watchlist/holdings/historical-price-rows?${query.toString()}`);
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.holdingsError = error.message;
-                throw error;
-            }
-        },
-        async ensureHistoricalPriceRows(rowCount) {
-            this.holdingsError = '';
-
-            try {
-                const data = await request('/admin/watchlist/holdings/historical-price-rows', {
-                    method: 'POST',
-                    body: JSON.stringify({ row_count: rowCount }),
-                });
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.holdingsError = error.message;
-                throw error;
-            }
-        },
-        async loadHoldingIntradayCandles(id) {
-            const requestVersion = this.intradayRequestVersion;
-            this.analyzeIntradayCandlesRequestedId = id;
-            this.analyzeIntradayCandlesLoading = true;
-            this.analyzeIntradayCandlesError = '';
-
-            try {
-                let data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`, {
-                    method: 'POST', deduplicate: true,
-                });
-
-                if (this.analyzeIntradayCandlesRequestedId === id) {
-                    this.analyzeIntradayCandles = data;
-                }
-                if (['queued', 'running'].includes(data.refresh?.status)) {
-                    const completed = await waitForIntradayRefresh(id, 'detail', () => this.intradayRequestVersion === requestVersion && this.analyzeIntradayCandlesRequestedId === id);
-                    if (!completed) {
-                        return data;
-                    }
-                    data = await request(`/admin/watchlist/holdings/${id}/intraday-candles`, { method: 'POST', deduplicate: true });
-                }
-                if (data.refresh?.error) {
-                    throw new Error(data.refresh.error);
-                }
-
-                if (this.analyzeIntradayCandlesRequestedId === id) {
-                    this.analyzeIntradayCandles = data;
-                    this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-                }
-
-                return data;
-            } catch (error) {
-                if (this.analyzeIntradayCandlesRequestedId === id) {
-                    this.analyzeIntradayCandlesError = error.message;
-                }
-
-                throw error;
-            } finally {
-                if (this.analyzeIntradayCandlesRequestedId === id) {
-                    this.analyzeIntradayCandlesLoading = false;
-                }
-            }
-        },
         async loadExpandedHoldingIntradayCandles(id) {
             const requestVersion = this.intradayRequestVersion;
             this.holdingIntradayCandlesLoading = {
@@ -1186,11 +997,6 @@ export const useDepotStore = defineStore('depots', {
                     [id]: false,
                 };
             }
-        },
-        clearHoldingIntradayCandles() {
-            this.analyzeIntradayCandlesRequestedId = null;
-            this.analyzeIntradayCandles = null;
-            this.analyzeIntradayCandlesError = '';
         },
         async updatePriceRefreshSettings(payload) {
             this.holdingsError = '';

@@ -96,14 +96,14 @@ describe('useDepotStore', () => {
             .mockResolvedValueOnce(jsonResponse(completed));
         vi.stubGlobal('fetch', fetchMock);
         const depots = useDepotStore();
-        const loading = depots.loadHoldingIntradayCandles(7);
+        const loading = depots.loadExpandedHoldingIntradayCandles(7);
         await vi.advanceTimersByTimeAsync(0);
-        expect(depots.analyzeIntradayCandles.intraday.rows[0].close).toBe('100');
-        expect(depots.analyzeIntradayCandlesLoading).toBe(true);
+        expect(depots.holdingIntradayCandles[7].intraday.rows[0].close).toBe('100');
+        expect(depots.holdingIntradayCandlesLoading[7]).toBe(true);
         await vi.advanceTimersByTimeAsync(4000);
         await loading;
-        expect(depots.analyzeIntradayCandles.intraday.rows[0].close).toBe('101');
-        expect(depots.analyzeIntradayCandlesLoading).toBe(false);
+        expect(depots.holdingIntradayCandles[7].intraday.rows[0].close).toBe('101');
+        expect(depots.holdingIntradayCandlesLoading[7]).toBe(false);
         expect(fetchMock).toHaveBeenNthCalledWith(2, '/admin/watchlist/holdings/7/intraday-refresh/detail', expect.any(Object));
     });
 
@@ -142,7 +142,7 @@ describe('useDepotStore', () => {
         const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ refresh: { status: 'queued' } }));
         vi.stubGlobal('fetch', fetchMock);
         const depots = useDepotStore();
-        const loading = depots.loadHoldingIntradayCandles(7);
+        const loading = depots.loadExpandedHoldingIntradayCandles(7);
         await vi.advanceTimersByTimeAsync(0);
         depots.cancelIntradayRefreshes();
         await vi.advanceTimersByTimeAsync(2000);
@@ -151,11 +151,11 @@ describe('useDepotStore', () => {
 
         fetchMock.mockResolvedValueOnce(jsonResponse({ refresh: { status: 'queued' } }))
             .mockResolvedValueOnce(jsonResponse({ refresh: { status: 'failed', error: 'Provider unavailable' } }));
-        const failed = depots.loadHoldingIntradayCandles(8).catch(error => error);
+        const failed = depots.loadExpandedHoldingIntradayCandles(8).catch(error => error);
         await vi.advanceTimersByTimeAsync(2000);
         expect(await failed).toMatchObject({ message: 'Provider unavailable' });
-        expect(depots.analyzeIntradayCandlesError).toBe('Provider unavailable');
-        expect(depots.analyzeIntradayCandlesLoading).toBe(false);
+        expect(depots.holdingIntradayCandlesErrors[8]).toBe('Provider unavailable');
+        expect(depots.holdingIntradayCandlesLoading[8]).toBe(false);
     });
 
     it('does not replace a newer holding selection with a late previous response', async () => {
@@ -244,73 +244,6 @@ describe('useDepotStore', () => {
         expect(depots.holdingsError).toBe('');
     });
 
-    it('loads today intraday values for a selected test stock', async () => {
-        const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
-            stock: {
-                id: 5,
-                symbol: 'AMES',
-                name: 'Amundi IBEX 35 UCITS ETF',
-                currency: 'EUR',
-            },
-            day: {
-                trading_date: '2026-06-25',
-                interval: '5m',
-                overview: null,
-                rows: [
-                    {
-                        datetime: '2026-06-25 07:00:00',
-                        open: '498.10000000',
-                        high: '499.20000000',
-                        low: '497.90000000',
-                        close: '499.15000000',
-                        volume: 1200,
-                    },
-                ],
-            },
-            refresh: {
-                message: '1 intraday candles loaded/updated.',
-            },
-        }));
-        vi.stubGlobal('fetch', fetchMock);
-
-        const depots = useDepotStore();
-        const data = await depots.loadTestIntraday(5);
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/stocks/5/intraday', expect.objectContaining({
-            method: 'POST',
-        }));
-        expect(data.day.rows[0].close).toBe('499.15000000');
-        expect(depots.testIntraday.stock.symbol).toBe('AMES');
-        expect(depots.testIntradayLoading).toBe(false);
-        expect(depots.testIntradayError).toBe('');
-    });
-
-    it('uses POST requests for paid ticker and exchange tests', async () => {
-        const fetchMock = vi.fn()
-            .mockResolvedValueOnce(jsonResponse({
-                exchange_code: 'XETRA',
-                tickers: [],
-            }))
-            .mockResolvedValueOnce(jsonResponse({
-                exchanges: [],
-                exchange_details: {},
-                exchange_detail_errors: {},
-            }));
-        vi.stubGlobal('fetch', fetchMock);
-
-        const depots = useDepotStore();
-
-        await depots.loadTestTickers();
-        await depots.loadTestExchanges();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/tickers', expect.objectContaining({
-            method: 'POST',
-        }));
-        expect(fetchMock).toHaveBeenCalledWith('/admin/tests/exchanges', expect.objectContaining({
-            method: 'POST',
-        }));
-    });
-
     it('uses POST requests when ensuring intraday candles', async () => {
         const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
             holding: {
@@ -324,13 +257,9 @@ describe('useDepotStore', () => {
 
         const depots = useDepotStore();
 
-        await depots.loadHoldingIntradayCandles(7);
         await depots.loadExpandedHoldingIntradayCandles(7);
 
         expect(fetchMock).toHaveBeenNthCalledWith(1, '/admin/watchlist/holdings/7/intraday-candles', expect.objectContaining({
-            method: 'POST',
-        }));
-        expect(fetchMock).toHaveBeenNthCalledWith(2, '/admin/watchlist/holdings/7/intraday-candles', expect.objectContaining({
             method: 'POST',
         }));
     });
@@ -374,43 +303,6 @@ describe('useDepotStore', () => {
 
         expect(fetchMock).toHaveBeenCalledWith(
             '/admin/watchlist/holdings/charts?page=1&include_charts=1&chart_stock_id=7',
-            expect.objectContaining({ method: 'POST' }),
-        );
-    });
-
-    it('checks and confirms bounded historical row downloads', async () => {
-        const fetchMock = vi.fn()
-            .mockResolvedValueOnce(jsonResponse({ coverage: { is_complete: false } }))
-            .mockResolvedValueOnce(jsonResponse({ coverage: { is_complete: true } }))
-            .mockResolvedValueOnce(jsonResponse({ depot: null, holdings: [], meta: {} }));
-        vi.stubGlobal('fetch', fetchMock);
-
-        const depots = useDepotStore();
-
-        await depots.loadHistoricalPriceRowCoverage(1000);
-        await depots.ensureHistoricalPriceRows(1000);
-        await depots.loadWatchlistHoldings(1, {
-            allChartHoldings: true,
-            historyRowLimit: 1000,
-            includeCharts: true,
-        });
-
-        expect(fetchMock).toHaveBeenNthCalledWith(
-            1,
-            '/admin/watchlist/holdings/historical-price-rows?row_count=1000',
-            expect.any(Object),
-        );
-        expect(fetchMock).toHaveBeenNthCalledWith(
-            2,
-            '/admin/watchlist/holdings/historical-price-rows',
-            expect.objectContaining({
-                body: JSON.stringify({ row_count: 1000 }),
-                method: 'POST',
-            }),
-        );
-        expect(fetchMock).toHaveBeenNthCalledWith(
-            3,
-            '/admin/watchlist/holdings/charts?page=1&include_charts=1&all_chart_holdings=1&history_row_limit=1000',
             expect.objectContaining({ method: 'POST' }),
         );
     });

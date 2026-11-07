@@ -13,7 +13,8 @@ use Throwable;
 class FreeDailyMarketData
 {
     public function __construct(private MarketIdentityRegistry $identities, private MarketDataCoordinator $coordinator,
-        private MarketPriceLegacyImporter $normalizer, private MarketPriceStore $store, private FreeTradingCalendar $calendar) {}
+        private MarketPriceLegacyImporter $normalizer, private MarketPriceStore $store, private FreeTradingCalendar $calendar,
+        private DashboardPerformanceSnapshots $performanceSnapshots) {}
 
     /** @return array<string, mixed> */
     public function import(StockHolding $holding, int $days = 365): array
@@ -35,6 +36,8 @@ class FreeDailyMarketData
         $until = now($listing->timezone)->startOfDay()->addDay();
         $stored = 0;
         $skipped = 0;
+        $firstHistoricalChange = null;
+        $today = now()->toDateString();
         try {
             $response = Http::connectTimeout(4)->timeout(15)->withOptions(['allow_redirects' => false,
                 'progress' => static function (float $total, float $received): void {
@@ -103,7 +106,12 @@ class FreeDailyMarketData
                 $row['raw_payload'] = ['provider_timestamp' => $timestamp, 'meta' => $meta, 'events' => $chart['events'] ?? [], 'values' => $row];
                 $attributes = $this->normalizer->attributes($holding, $row);
                 $attributes['reported_mic'] = $xetra ? 'XETR' : null;
-                $stored += (int) $this->store->store($listing->id, $attributes)->wasRecentlyCreated;
+                $observation = $this->store->store($listing->id, $attributes);
+                $stored += (int) $observation->wasRecentlyCreated;
+                if ($observation->wasRecentlyCreated && $observation->is_current && $row['trading_date'] < $today
+                    && ($firstHistoricalChange === null || $row['trading_date'] < $firstHistoricalChange)) {
+                    $firstHistoricalChange = $row['trading_date'];
+                }
             }
             Cache::put('market-data.daily.checked.'.$listing->id, true, now()->addHours(6));
             if ($stored > 0) {
@@ -113,6 +121,9 @@ class FreeDailyMarketData
                 'from' => $from->toDateString(), 'to' => $until->copy()->subDay()->toDateString()];
         } catch (Throwable $exception) {
             $result = ['status' => 'failed', 'stored_count' => $stored, 'error' => $exception->getMessage()];
+        }
+        if ($firstHistoricalChange !== null) {
+            $this->performanceSnapshots->invalidate(from: Carbon::parse($firstHistoricalChange));
         }
         $this->coordinator->record('yahoo_daily', $listing->id, $result['status'], $result);
 

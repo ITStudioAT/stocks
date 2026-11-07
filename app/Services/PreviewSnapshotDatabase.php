@@ -186,7 +186,8 @@ class PreviewSnapshotDatabase
             : $this->connection->query("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")->fetchAll(PDO::FETCH_COLUMN);
         sort($names);
         $hash = hash_init('sha256');
-        foreach (array_diff($names, array_keys($this->schema->columns())) as $table) {
+        // Depot replacement cascades to derived performance snapshots.
+        foreach (array_diff($names, array_keys($this->schema->columns()), [DashboardPerformanceSnapshots::Table]) as $table) {
             if (! preg_match('/^[a-z][a-z0-9_]*$/D', $table)) {
                 throw new RuntimeException('Unsupported protected table name.');
             }

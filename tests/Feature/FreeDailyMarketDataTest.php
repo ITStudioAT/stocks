@@ -2,9 +2,11 @@
 
 namespace Tests\Feature;
 
+use App\Models\Depot;
 use App\Models\MarketPrice;
 use App\Models\StockHolding;
 use App\Models\User;
+use App\Services\DashboardPerformanceSnapshots;
 use App\Services\FreeDailyMarketData;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -42,11 +44,18 @@ class FreeDailyMarketDataTest extends TestCase
     public function test_daily_import_preserves_real_semantics_skips_gaps_and_is_repeatable(): void
     {
         $holding = $this->holding();
+        $depot = Depot::factory()->create();
+        $snapshots = app(DashboardPerformanceSnapshots::class);
+        $snapshots->closingBalance($depot, Carbon::parse('2026-11-04'));
+        $snapshots->closingBalance($depot, Carbon::parse('2026-11-05'));
+
         Http::fake(['query1.finance.yahoo.com/*' => Http::response($this->chart())]);
         $daily = app(FreeDailyMarketData::class);
         $first = $daily->import($holding);
         $this->assertSame(1, $first['stored_count']);
         $this->assertSame(1, $first['skipped_count']);
+        $this->assertDatabaseHas('depot_performance_snapshots', ['depot_id' => $depot->id, 'end_date' => '2026-11-04']);
+        $this->assertDatabaseMissing('depot_performance_snapshots', ['depot_id' => $depot->id, 'end_date' => '2026-11-05']);
         $row = MarketPrice::sole();
         $this->assertSame('bar', $row->record_kind);
         $this->assertSame('1d', $row->interval_code);

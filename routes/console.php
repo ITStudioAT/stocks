@@ -23,6 +23,9 @@ if ($preview && config('security.preview.control_enabled') !== true) {
 $canRun = static fn (): bool => ! $preview || app(PreviewBackgroundState::class)->enabled();
 $canRunEodhd = static fn (): bool => $canRun() && app(EodhdApiClient::class)->configured();
 
+Schedule::command('dashboard:backfill-performance')->dailyAt('00:20')
+    ->when($canRun)->withoutOverlapping(120);
+
 Schedule::command('market-data:collect')->everyFiveMinutes()
     ->when(static fn (): bool => ! $preview && MarketPriceStore::enabled())->withoutOverlapping(5);
 Schedule::command('market-data:daily --limit=3')->hourly()

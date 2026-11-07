@@ -2,6 +2,8 @@
 
 namespace Tests\Unit;
 
+use DateTimeImmutable;
+use DateTimeZone;
 use FilesystemIterator;
 use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
@@ -211,12 +213,56 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertStringContainsString('php artisan queue:listen', $windows->getOutput());
         $this->assertStringContainsString('php artisan schedule:work', $windows->getOutput());
         $this->assertStringContainsString('npm run dev', $windows->getOutput());
-        $this->assertStringContainsString('--names=server,queue,scheduler,vite', $windows->getOutput());
+        $this->assertStringContainsString('php scripts/dev-logs.php', $windows->getOutput());
+        $this->assertStringContainsString('--names=server,queue,scheduler,logs,vite', $windows->getOutput());
         $this->assertStringNotContainsString('php artisan pail', $windows->getOutput());
 
         $this->assertTrue($unix->isSuccessful(), $unix->getErrorOutput());
         $this->assertStringContainsString('php artisan pail --timeout=0', $unix->getOutput());
         $this->assertStringContainsString('--names=server,queue,scheduler,logs,vite', $unix->getOutput());
+    }
+
+    public function test_development_log_fallback_streams_new_single_and_daily_entries(): void
+    {
+        $storage = sys_get_temp_dir().DIRECTORY_SEPARATOR.'stocks-deployment-test-'.bin2hex(random_bytes(8));
+        $this->temporaryDeploymentDirectories[] = $storage;
+        mkdir("{$storage}/logs", 0777, true);
+
+        $singleLog = "{$storage}/logs/laravel.log";
+        file_put_contents($singleLog, "Historical entry that should not be replayed\n");
+
+        $process = new Process([PHP_BINARY, 'scripts/dev-logs.php'], $this->projectPath(), [
+            'APP_CONFIG_CACHE' => "{$storage}/config.php",
+            'LARAVEL_STORAGE_PATH' => $storage,
+        ], timeout: 10);
+
+        $waitForOutput = function (string $message) use ($process): void {
+            while ($process->isRunning() && ! str_contains($process->getOutput(), $message)) {
+                $process->checkTimeout();
+                usleep(10_000);
+            }
+
+            $this->assertStringContainsString($message, $process->getOutput(), $process->getErrorOutput());
+        };
+
+        $process->start();
+
+        try {
+            $waitForOutput('Following Laravel log files.');
+
+            file_put_contents($singleLog, "New single log entry\n", FILE_APPEND);
+            $waitForOutput('New single log entry');
+            $this->assertStringNotContainsString('Historical entry', $process->getOutput());
+
+            $today = new DateTimeImmutable('now', new DateTimeZone('Europe/Vienna'))->format('Y-m-d');
+            file_put_contents("{$storage}/logs/laravel-{$today}.log", "First daily log entry\n");
+            $waitForOutput('First daily log entry');
+
+            file_put_contents($singleLog, "After truncation\n");
+            $waitForOutput('After truncation');
+        } finally {
+            $process->stop(0);
+        }
     }
 
     public function test_stale_vite_cleanup_only_targets_the_vite_entry_point(): void
