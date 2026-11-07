@@ -58,6 +58,7 @@ return [
             'index_watch_item_prices',
             'index_watch_item_realtime_prices',
             'index_watch_items',
+            'market_prices',
             'stock_holding_daily_prices',
             'stock_holding_intraday_candles',
             'stock_holding_intraday_prices',
@@ -76,7 +77,7 @@ return [
                 'key_prefixes' => ['ui.preferences.user.'],
             ],
             'stock_holdings' => [
-                'excluded_columns' => ['latest_realtime_price_id'],
+                'excluded_columns' => ['latest_realtime_price_id', 'market_listing_id', 'latest_market_price_id'],
             ],
         ],
         'deployment' => [

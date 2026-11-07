@@ -131,6 +131,7 @@ const loginPassword = ref('');
 const loginMode = ref('password');
 const localError = ref('');
 const activeSection = ref('dashboard');
+let privateIndexRefreshTimer = null;
 const activeDataSubsection = ref('overview');
 const infoTables = ref([]);
 const infoMethods = ref([]);
@@ -799,6 +800,16 @@ watch(
 
 watch(activeSection, () => depotsStore.cancelIntradayRefreshes(), { flush: 'sync' });
 
+watch(activeSection, (section) => {
+    window.clearInterval(privateIndexRefreshTimer);
+    if (section === 'indices') {
+        request('/admin/index-watch-items/refresh-free', { method: 'POST', body: JSON.stringify({ force: false }) }).catch(() => {});
+    }
+    privateIndexRefreshTimer = section === 'indices' ? window.setInterval(() => {
+        if (!document.hidden) depotsStore.loadIndexWatchItems().catch(() => {});
+    }, 30000) : null;
+});
+
 watch(
     [activeSection, activeInfoSubsection],
     ([section]) => {
@@ -901,6 +912,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+    window.clearInterval(privateIndexRefreshTimer);
     depotsStore.cancelIntradayRefreshes();
     stopPriceRefreshPolling();
     stopIntradayBackfillPolling();
@@ -1150,6 +1162,16 @@ function navigateSection(section) {
         loadWatchlistHoldingsForActiveSection(1).catch(() => {});
     }
 
+}
+
+async function refreshPrivateIndexQuotes() {
+    indexError.value = '';
+    try {
+        const result = await request('/admin/index-watch-items/refresh-free', { method: 'POST', body: JSON.stringify({ force: true }) });
+        indexMessage.value = result.message;
+    } catch (error) {
+        indexError.value = error.message;
+    }
 }
 
 async function loadInfoData() {
@@ -6808,14 +6830,11 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     <v-btn
                                         class="dashboard-action-button"
                                         color="secondary"
-                                        prepend-icon="mdi-cloud-sync-outline"
-                                        type="button" title="EODHD is disabled; no paid provider requests are made."
+                                        prepend-icon="mdi-refresh"
                                         variant="outlined"
-                                        disabled
-                                        :loading="isIndexEodhdSyncRunning"
-                                        @click="startIndexEodhdSync"
+                                        @click="refreshPrivateIndexQuotes"
                                     >
-                                        EODHD Sync
+                                        Kurse aktualisieren
                                     </v-btn>
                                     <v-btn
                                         class="dashboard-action-button"
@@ -6839,388 +6858,8 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 </div>
                             </div>
 
-                            <v-alert
-                                v-if="indexEodhdSyncError"
-                                class="mb-4"
-                                density="compact"
-                                type="error"
-                                variant="tonal"
-                            >
-                                {{ indexEodhdSyncError }}
-                            </v-alert>
 
-                            <v-card class="mb-6" variant="outlined" aria-label="Automatic v2 index updates">
-                                <v-card-text v-if="!EODHD_REQUESTS_ENABLED">EODHD is disabled. Stored schedules do not run; retained prices are historical observations.</v-card-text>
-                                <v-card-text>
-                                    <div
-                                        class="index-update-schedule-row d-flex flex-wrap align-center justify-space-between ga-3"
-                                        aria-label="V2 index EOD and intraday schedule"
-                                    >
-                                        <div class="flex-grow-1">
-                                            <div class="d-flex flex-wrap align-center ga-2">
-                                                <span class="text-body-2 font-weight-bold">Automatic EODHD updates</span>
-                                                <v-chip
-                                                    aria-label="Index EODHD update schedule status"
-                                                    :color="indexEodhdSyncSettings?.status === 'updating' ? 'primary' : 'default'"
-                                                    size="x-small"
-                                                    variant="tonal"
-                                                >
-                                                    {{ indexEodhdSyncSettings?.status_label ?? 'Waiting' }}
-                                                </v-chip>
-                                                <v-chip
-                                                    aria-label="Index EODHD update activity status"
-                                                    :color="indexEodhdActivityColor(indexEodhdSyncSettings)"
-                                                    size="x-small"
-                                                    variant="tonal"
-                                                >
-                                                    <span class="live-update-status-dot" aria-hidden="true" />
-                                                    {{ indexEodhdActivityLabel(indexEodhdSyncSettings) }}
-                                                </v-chip>
-                                            </div>
-                                            <div class="text-body-2">
-                                                {{ formatIndexEodhdUpdateSchedule(indexEodhdSyncSettings) }}
-                                            </div>
-                                            <div
-                                                v-if="indexEodhdUpdateStatusDetail(indexEodhdSyncSettings)"
-                                                class="text-caption text-medium-emphasis"
-                                            >
-                                                {{ indexEodhdUpdateStatusDetail(indexEodhdSyncSettings) }}
-                                            </div>
-                                            <div class="text-caption text-medium-emphasis">
-                                                Latest {{ indexEodhdSyncSettings?.latest_update_at
-                                                    ? formatDateTime(indexEodhdSyncSettings.latest_update_at)
-                                                    : 'never' }}
-                                                · Next {{ indexEodhdSyncSettings?.next_update_at
-                                                    ? formatDateTime(indexEodhdSyncSettings.next_update_at)
-                                                    : '-' }}
-                                                · {{ indexEodhdSyncSettings?.timezone ?? 'Europe/Vienna' }}
-                                            </div>
-                                        </div>
-                                        <v-btn
-                                            prepend-icon="mdi-clock-edit-outline"
-                                            size="small"
-                                            type="button"
-                                            variant="text"
-                                            @click="openIndexEodhdSyncScheduleDialog"
-                                        >
-                                            Edit EOD + intraday times
-                                        </v-btn>
-                                    </div>
-                                    <v-divider class="my-4" />
-                                    <div
-                                        class="index-update-schedule-row d-flex flex-wrap align-center justify-space-between ga-3"
-                                        aria-label="V2 index realtime schedule"
-                                    >
-                                        <div class="flex-grow-1">
-                                            <div class="text-body-2 font-weight-bold">Live/realtime prices</div>
-                                            <div class="text-body-2">
-                                                {{ formatLiveDataUpdateSchedule(indexEodhdSyncSettings?.realtime) }}
-                                            </div>
-                                            <div class="text-caption text-medium-emphasis">
-                                                {{ indexEodhdSyncSettings?.realtime?.status_detail
-                                                    ?? 'The next refresh starts at the time shown below.' }}
-                                            </div>
-                                            <div class="text-caption text-medium-emphasis">
-                                                Latest {{ indexEodhdSyncSettings?.realtime?.latest_update_at
-                                                    ? formatDateTime(indexEodhdSyncSettings.realtime.latest_update_at)
-                                                    : 'never' }}
-                                                · Next {{ indexEodhdSyncSettings?.realtime?.next_refresh_at
-                                                    ? formatDateTime(indexEodhdSyncSettings.realtime.next_refresh_at)
-                                                    : '-' }}
-                                                · {{ indexEodhdSyncSettings?.realtime?.timezone ?? 'Europe/Vienna' }}
-                                            </div>
-                                        </div>
-                                        <v-btn
-                                            prepend-icon="mdi-timer-edit-outline"
-                                            size="small"
-                                            type="button"
-                                            variant="text"
-                                            @click="openIndexV2RealtimeScheduleDialog"
-                                        >
-                                            Edit live period
-                                        </v-btn>
-                                    </div>
-                                    <v-alert
-                                        v-if="indexEodhdSyncSettings?.realtime?.last_error"
-                                        class="mt-3"
-                                        density="compact"
-                                        type="warning"
-                                        variant="tonal"
-                                    >
-                                        {{ indexEodhdSyncSettings.realtime.last_error }}
-                                    </v-alert>
-                                    <v-alert
-                                        v-if="indexEodhdSyncScheduleMessage"
-                                        class="mt-4"
-                                        density="compact"
-                                        type="success"
-                                        variant="tonal"
-                                    >
-                                        {{ indexEodhdSyncScheduleMessage }}
-                                    </v-alert>
-                                </v-card-text>
-                            </v-card>
 
-                            <v-card v-if="indexEodhdSync" class="index-eodhd-sync-card mb-6" variant="outlined">
-                                <v-card-title class="d-flex flex-wrap align-center justify-space-between ga-2">
-                                    <span>EODHD index synchronization</span>
-                                    <div class="d-flex align-center ga-2">
-                                        <v-chip
-                                            :color="indexEodhdSyncStatusColor(indexEodhdSync.status)"
-                                            size="small"
-                                            variant="tonal"
-                                        >
-                                            {{ indexEodhdSyncStatusLabel(indexEodhdSync.status) }}
-                                        </v-chip>
-                                        <v-btn
-                                            v-if="!isIndexEodhdSyncRunning"
-                                            aria-label="Close EODHD synchronization result"
-                                            icon="mdi-close"
-                                            size="small"
-                                            title="Close result"
-                                            variant="text"
-                                            @click="closeIndexEodhdSyncResult"
-                                        />
-                                    </div>
-                                </v-card-title>
-                                <v-card-text>
-                                    <div class="text-body-2 text-medium-emphasis mb-3">
-                                        {{ formatIndexHistoryDate(indexEodhdSync.date_from) }} –
-                                        {{ formatIndexHistoryDate(indexEodhdSync.date_to) }}
-                                    </div>
-                                    <v-progress-linear
-                                        v-if="isIndexEodhdSyncRunning"
-                                        class="mb-4"
-                                        color="primary"
-                                        height="7"
-                                        :model-value="indexEodhdSyncProgress.percent"
-                                        rounded
-                                    />
-                                    <div
-                                        v-if="indexEodhdSyncProgress.total > 0"
-                                        class="d-flex flex-wrap justify-space-between ga-2 text-body-2 mb-3"
-                                    >
-                                        <strong>
-                                            {{ indexEodhdSyncProgress.completed }} / {{ indexEodhdSyncProgress.total }} steps processed
-                                        </strong>
-                                        <span
-                                            v-if="isIndexEodhdSyncRunning && indexEodhdSyncProgress.estimated_remaining_seconds !== null"
-                                            class="text-medium-emphasis"
-                                        >
-                                            Estimated remaining: {{ formatIndexEodhdSyncRemaining(indexEodhdSyncProgress.estimated_remaining_seconds) }}
-                                        </span>
-                                        <span v-else-if="!isIndexEodhdSyncRunning" class="text-medium-emphasis">
-                                            {{ indexEodhdSyncProgress.successful }} successful ·
-                                            {{ indexEodhdSyncProgress.deferred }} waiting ·
-                                            {{ indexEodhdSyncProgress.issues }} with gaps or errors
-                                        </span>
-                                    </div>
-                                    <div v-if="indexEodhdSync.current" class="text-body-2 mb-3">
-                                        {{ indexEodhdSync.current }}
-                                    </div>
-                                    <div v-if="indexEodhdSync.index_progress?.length" class="mb-5">
-                                        <h3 class="text-subtitle-1 font-weight-bold mb-2">
-                                            {{ isIndexEodhdSyncRunning ? 'Indices being checked' : 'Checked indices' }}
-                                        </h3>
-                                        <v-table class="index-eodhd-sync-checklist" density="compact">
-                                            <thead>
-                                                <tr>
-                                                    <th>Index</th>
-                                                    <th class="text-center">EOD check</th>
-                                                    <th class="text-center">EOD sync</th>
-                                                    <th class="text-center">Intraday check</th>
-                                                    <th class="text-center">Intraday sync</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                <tr
-                                                    v-for="indexProgress in indexEodhdSync.index_progress"
-                                                    :key="indexProgress.id"
-                                                >
-                                                    <td>
-                                                        <strong>{{ indexProgress.symbol }}</strong>
-                                                        <div class="text-caption text-medium-emphasis">{{ indexProgress.name }}</div>
-                                                    </td>
-                                                    <td
-                                                        v-for="stageKey in ['eod_check', 'eod_sync', 'intraday_check', 'intraday_sync']"
-                                                        :key="stageKey"
-                                                        class="text-center"
-                                                        :title="indexProgress[stageKey]?.message ?? ''"
-                                                    >
-                                                        <v-icon
-                                                            :class="{ 'mdi-spin': indexProgress[stageKey]?.status === 'running' }"
-                                                            :color="indexEodhdSyncStepColor(indexProgress[stageKey]?.status)"
-                                                            :icon="indexEodhdSyncStepIcon(indexProgress[stageKey]?.status)"
-                                                            size="small"
-                                                        />
-                                                        <div class="text-caption">
-                                                            {{ indexEodhdSyncChecklistStatusLabel(indexProgress[stageKey]?.status) }}
-                                                        </div>
-                                                        <div
-                                                            v-if="indexEodhdSyncShowsStatusMessage(indexProgress[stageKey]?.status)"
-                                                            class="text-caption text-medium-emphasis"
-                                                        >
-                                                            {{ indexProgress[stageKey]?.message }}
-                                                        </div>
-                                                    </td>
-                                                </tr>
-                                            </tbody>
-                                        </v-table>
-                                        <template
-                                            v-for="indexProgress in indexEodhdSync.index_progress"
-                                            :key="`intraday-blocks-${indexProgress.id}`"
-                                        >
-                                            <div
-                                                v-if="indexProgress.intraday_blocks?.length"
-                                                class="mt-3 rounded border pa-3"
-                                            >
-                                                <div class="text-subtitle-2 font-weight-bold mb-2">
-                                                    {{ indexProgress.symbol }} intraday blocks
-                                                </div>
-                                                <v-list density="compact" lines="two">
-                                                    <v-list-item
-                                                        v-for="block in indexProgress.intraday_blocks"
-                                                        :key="`${indexProgress.id}-${block.position}`"
-                                                    >
-                                                        <template #prepend>
-                                                            <v-icon
-                                                                :class="{ 'mdi-spin': block.status === 'running' }"
-                                                                :color="indexEodhdSyncStepColor(block.status)"
-                                                                :icon="indexEodhdSyncStepIcon(block.status)"
-                                                                size="small"
-                                                            />
-                                                        </template>
-                                                        <v-list-item-title>
-                                                            Block {{ block.position }}/{{ block.total }}:
-                                                            {{ block.date_from }} – {{ block.date_to }}
-                                                            · {{ indexEodhdSyncChecklistStatusLabel(block.status) }}
-                                                        </v-list-item-title>
-                                                        <v-list-item-subtitle>
-                                                            {{ block.attempts }} attempt(s), {{ block.records }} returned,
-                                                            {{ block.synced }} new. {{ block.message }}
-                                                        </v-list-item-subtitle>
-                                                    </v-list-item>
-                                                </v-list>
-                                            </div>
-                                        </template>
-                                    </div>
-                                    <v-list class="index-eodhd-sync-steps" density="compact">
-                                        <v-list-item
-                                            v-for="step in indexEodhdSync.steps"
-                                            :key="step.key"
-                                            :class="`index-eodhd-sync-step index-eodhd-sync-step--${step.status}`"
-                                        >
-                                            <template #prepend>
-                                                <v-icon
-                                                    :class="{ 'mdi-spin': step.status === 'running' }"
-                                                    :color="indexEodhdSyncStepColor(step.status)"
-                                                    :icon="indexEodhdSyncStepIcon(step.status)"
-                                                />
-                                            </template>
-                                            <v-list-item-title>{{ step.label }}</v-list-item-title>
-                                            <v-list-item-subtitle v-if="step.message">
-                                                {{ step.message }}
-                                            </v-list-item-subtitle>
-                                        </v-list-item>
-                                    </v-list>
-
-                                    <div v-if="indexEodhdSync.summary" class="index-eodhd-sync-summary mt-5">
-                                        <h3 class="text-h6 mb-3">Synchronization summary</h3>
-                                        <v-alert class="mb-4" density="compact" type="info" variant="tonal">
-                                            “New” means inserted by this run. Existing stored candles remain available and are shown separately.
-                                            A date is verified when stored EODHD 5-minute candles exist; this does not claim every possible session slot is present.
-                                        </v-alert>
-                                        <div class="d-flex flex-wrap ga-3 mb-4">
-                                            <v-chip color="primary" variant="tonal">
-                                                EOD: {{ indexEodhdSync.summary.eod.new_rows ?? indexEodhdSync.summary.eod.synced }} new rows
-                                            </v-chip>
-                                            <v-chip color="primary" variant="tonal">
-                                                Intraday: {{ indexEodhdSync.summary.intraday.new_candles ?? indexEodhdSync.summary.intraday.synced }} new candles
-                                            </v-chip>
-                                            <v-chip color="secondary" variant="tonal">
-                                                Stored intraday: {{ indexEodhdSync.summary.intraday.stored_candles ?? 0 }} candles
-                                            </v-chip>
-                                            <v-chip
-                                                v-if="indexEodhdSync.summary.intraday.no_data_indices"
-                                                color="warning"
-                                                variant="tonal"
-                                            >
-                                                No EODHD data: {{ indexEodhdSync.summary.intraday.no_data_indices }}
-                                            </v-chip>
-                                            <v-chip
-                                                v-if="indexEodhdSync.summary.intraday.partial_indices"
-                                                color="warning"
-                                                variant="tonal"
-                                            >
-                                                Partial gaps: {{ indexEodhdSync.summary.intraday.partial_indices }}
-                                            </v-chip>
-                                            <v-chip
-                                                v-if="indexEodhdSync.summary.intraday.not_found_indices ?? indexEodhdSync.summary.intraday.unsupported_indices"
-                                                color="warning"
-                                                variant="tonal"
-                                            >
-                                                HTTP 404: {{ indexEodhdSync.summary.intraday.not_found_indices ?? indexEodhdSync.summary.intraday.unsupported_indices }}
-                                            </v-chip>
-                                            <v-chip
-                                                v-if="indexEodhdSync.summary.intraday.access_denied_indices"
-                                                color="error"
-                                                variant="tonal"
-                                            >
-                                                Access denied: {{ indexEodhdSync.summary.intraday.access_denied_indices }}
-                                            </v-chip>
-                                            <v-chip
-                                                v-if="indexEodhdSync.summary.intraday.deferred_dates"
-                                                color="info"
-                                                variant="tonal"
-                                            >
-                                                Deferred dates: {{ indexEodhdSync.summary.intraday.deferred_dates }}
-                                            </v-chip>
-                                            <v-chip
-                                                v-if="indexEodhdSync.summary.intraday.market_closed_dates"
-                                                color="info"
-                                                variant="tonal"
-                                            >
-                                                Non-trading dates: {{ indexEodhdSync.summary.intraday.market_closed_dates }}
-                                            </v-chip>
-                                            <v-chip
-                                                v-if="indexEodhdSync.summary.intraday.retry_later_dates"
-                                                color="warning"
-                                                variant="tonal"
-                                            >
-                                                Waiting for retry: {{ indexEodhdSync.summary.intraday.retry_later_dates }} dates
-                                            </v-chip>
-                                        </div>
-                                        <v-table density="compact">
-                                            <thead>
-                                                <tr>
-                                                    <th>Index</th>
-                                                    <th class="text-right">New EOD rows</th>
-                                                    <th class="text-right">New candles</th>
-                                                    <th class="text-right">Stored candles</th>
-                                                    <th class="text-right">Verified</th>
-                                                    <th class="text-right">Deferred</th>
-                                                    <th>Intraday status</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                <tr v-for="indexSummary in indexEodhdSync.summary.indices" :key="indexSummary.id">
-                                                    <td>{{ indexSummary.symbol }}</td>
-                                                    <td class="text-right">{{ indexSummary.eod?.new_rows ?? indexSummary.eod?.synced ?? 0 }}</td>
-                                                    <td class="text-right">{{ indexSummary.intraday?.new_candles ?? indexSummary.intraday?.synced ?? 0 }}</td>
-                                                    <td class="text-right">{{ indexSummary.intraday?.stored_candles ?? 0 }}</td>
-                                                    <td class="text-right">
-                                                        {{ indexSummary.intraday?.verified_dates ?? 0 }}/{{ indexSummary.intraday?.expected_dates ?? 0 }}
-                                                    </td>
-                                                    <td class="text-right">{{ indexSummary.intraday?.deferred_dates ?? 0 }}</td>
-                                                    <td>
-                                                        {{ indexEodhdSyncChecklistStatusLabel(indexSummary.intraday?.status ?? 'not checked') }}
-                                                    </td>
-                                                </tr>
-                                            </tbody>
-                                        </v-table>
-                                    </div>
-                                </v-card-text>
-                            </v-card>
 
                             <v-alert v-if="indexMessage" type="success" variant="tonal" density="compact" class="mb-4">
                                 {{ indexMessage }}
@@ -7256,11 +6895,17 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             <span class="index-watch-card-country">{{ indexItem.country || '-' }}</span>
                                         </span>
                                         <span class="index-watch-card-label">{{ indexItem.name || 'Index' }} <DataSourceMarkers :markers="marketDataMarkers(indexItem)" /></span>
+                                        <span v-if="indexItem.instrument_type === 'ETF'" class="index-watch-card-session">ETF</span>
                                         <span class="index-watch-card-price" :class="indexChangeClass(indexItem)">
                                             <span v-if="formatIndexChangePercent(indexItem)">
                                                 {{ formatIndexChangePercent(indexItem) }}
                                             </span>
                                             <span>{{ formatIndexPrice(indexItem) }} <DataSourceMarkers :markers="marketDataMarkers(indexItem, 'latest_price')" /></span>
+                                        </span>
+                                        <span v-if="indexItem.latest_price_as_of" class="index-watch-card-session">
+                                            {{ indexItem.private_quote ? 'Yahoo Finance · möglicherweise verzögert' : 'Gespeicherter Kurs' }}<br>
+                                            Kurszeit {{ formatDateTime(indexItem.latest_price_as_of) }}
+                                            <template v-if="indexItem.latest_price_fetched_at"><br>Abgerufen {{ formatDateTime(indexItem.latest_price_fetched_at) }}</template>
                                         </span>
                                         <span
                                             v-if="indexWatchItemRefreshSchedule(indexItem).sessionWindow"
@@ -7269,25 +6914,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         >
                                             <span>{{ indexWatchItemRefreshSchedule(indexItem).sessionLabel }}</span>
                                             <span>{{ indexWatchItemRefreshSchedule(indexItem).sessionWindow }}</span>
-                                        </span>
-                                        <span class="index-watch-card-statuses d-inline-flex flex-column align-center ga-1">
-                                            <v-chip
-                                                :aria-label="`${indexItem.symbol || 'Index'} live update schedule status`"
-                                                :color="indexWatchItemRefreshSchedule(indexItem).scheduleColor"
-                                                size="x-small"
-                                                variant="tonal"
-                                            >
-                                                {{ indexWatchItemRefreshSchedule(indexItem).scheduleStatus }}
-                                            </v-chip>
-                                            <v-chip
-                                                :aria-label="`${indexItem.symbol || 'Index'} live update activity status`"
-                                                :color="indexWatchItemRefreshSchedule(indexItem).color"
-                                                size="x-small"
-                                                variant="tonal"
-                                            >
-                                                <span class="live-update-status-dot" aria-hidden="true" />
-                                                {{ indexWatchItemRefreshSchedule(indexItem).status }}
-                                            </v-chip>
                                         </span>
                                     </button>
                                 </div>

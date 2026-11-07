@@ -27,7 +27,7 @@ class PerformanceConsistencyTest extends TestCase
         $depot = Depot::factory()->create(['created_at' => '2025-12-01 10:00:00', 'account_balance' => 0]);
         DB::table('depot_performance_snapshots')->insert([
             'depot_id' => $depot->id, 'period' => 'month', 'end_date' => '2025-12-31',
-            'payload' => json_encode(['period' => 'month', 'change_amount' => '999.00', 'change_percent' => '999.00', 'source_markers' => []]),
+            'payload' => json_encode(['period' => 'month', 'change_amount' => '999.00', 'change_percent' => '999.00', 'source_markers' => [], '_source_policy' => app(DashboardPerformanceSnapshots::class)->sourcePolicy()]),
         ]);
 
         $response = $this->actingAs($admin)->postJson('/admin/data/performance-consistency', ['repair' => true])->assertOk();
@@ -76,7 +76,7 @@ class PerformanceConsistencyTest extends TestCase
         $admin = User::factory()->create();
         $admin->assignRole(Role::findOrCreate('admin'));
         $depot = Depot::factory()->create(['created_at' => '2026-01-01 10:00:00']);
-        $payload = json_encode(['period' => 'month', 'change_amount' => '999.00']);
+        $payload = json_encode(['period' => 'month', 'change_amount' => '999.00', '_source_policy' => app(DashboardPerformanceSnapshots::class)->sourcePolicy()]);
         DB::table('depot_performance_snapshots')->insert([
             'depot_id' => $depot->id, 'period' => 'month', 'end_date' => '2026-01-31', 'payload' => $payload,
         ]);
@@ -98,7 +98,7 @@ class PerformanceConsistencyTest extends TestCase
         $fresh = $snapshots->calculatePeriodFresh($depot, 'month', Carbon::parse('2026-01-31'));
         DB::table('depot_performance_snapshots')->insert([
             'depot_id' => $depot->id, 'period' => 'month', 'end_date' => '2026-01-31',
-            'payload' => json_encode(array_reverse($fresh, true)),
+            'payload' => json_encode([...array_reverse($fresh, true), '_source_policy' => $snapshots->sourcePolicy()]),
         ]);
         $id = $this->actingAs($admin)->postJson('/admin/data/performance-consistency', ['repair' => false])->json('run.id');
         (new CheckPerformanceConsistency($id))->handle($snapshots);

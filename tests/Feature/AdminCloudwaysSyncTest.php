@@ -58,12 +58,13 @@ class AdminCloudwaysSyncTest extends TestCase
         $this->assertContains('app_configs', $tables);
         $this->assertContains('index_watch_item_realtime_prices', $tables);
         $this->assertContains('stock_realtime_prices', $tables);
+        $this->assertContains('market_prices', $tables);
         $this->assertSame(
             ['ui.preferences.user.'],
             config('services.cloudways.sync_table_scopes.app_configs.key_prefixes'),
         );
         $this->assertSame(
-            ['latest_realtime_price_id'],
+            ['latest_realtime_price_id', 'market_listing_id', 'latest_market_price_id'],
             config('services.cloudways.sync_table_scopes.stock_holdings.excluded_columns'),
         );
         $this->assertNotContains('index_eodhd_sync_runs', $tables);

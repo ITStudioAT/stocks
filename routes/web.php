@@ -182,6 +182,9 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
     Route::get('/admin/watchlist/exchange-trading-times', [AdminDepotHoldingController::class, 'exchangeTradingTimes'])->name('admin.watchlist.exchange-trading-times');
     Route::get('/admin/watchlist/holdings/pdf', [AdminDepotHoldingController::class, 'exportPdf'])->name('admin.watchlist.holdings.pdf');
     Route::get('/admin/index-watch-items', [AdminIndexWatchItemController::class, 'index'])->name('admin.index-watch-items.index');
+    Route::post('/admin/index-watch-items/refresh-free', [AdminIndexWatchItemController::class, 'refreshFree'])
+        ->middleware('throttle:admin.costly-operation')
+        ->name('admin.index-watch-items.refresh-free');
     Route::post('/admin/index-watch-items/{indexWatchItem}/prices/ensure', [AdminIndexWatchItemController::class, 'ensurePrices'])
         ->middleware(BlockPaidMarketDataRequests::class)
         ->middleware('throttle:admin.costly-operation')

@@ -8,25 +8,37 @@ const run = ref(null);
 const error = ref('');
 const loading = ref(false);
 const running = computed(() => ['queued', 'running'].includes(run.value?.status));
+const historyRows = computed(() => run.value?.daily_history ?? []);
+const hasIssues = computed(() => run.value?.unavailable || run.value?.missing || run.value?.incorrect
+    || historyRows.value.some(row => row.status !== 'complete'));
 const periodLabels = { week: 'Wochen', month: 'Monate', year: 'Jahre' };
 const reasons = { missing: 'Zeitraum fehlt oder ist veraltet', incorrect: 'Gespeicherter Wert weicht ab', unavailable: 'Wert konnte nicht berechnet werden' };
 const statusText = computed(() => {
     if (!run.value) return 'Noch nicht geprüft';
     if (running.value) return 'Prüfung läuft';
     if (run.value.status === 'failed') return 'Prüfung fehlgeschlagen';
-    if (run.value.unavailable || run.value.missing || run.value.incorrect) return 'Prüfung mit Hinweisen';
+    if (hasIssues.value) return 'Prüfung mit Hinweisen';
     return 'Werte stimmen überein';
 });
 const statusIcon = computed(() => {
     if (running.value) return 'mdi-progress-clock';
     if (!run.value) return 'mdi-clipboard-search-outline';
-    if (run.value.status === 'failed' || run.value.unavailable || run.value.missing || run.value.incorrect) return 'mdi-alert-circle-outline';
+    if (run.value.status === 'failed' || hasIssues.value) return 'mdi-alert-circle-outline';
     return 'mdi-check-decagram-outline';
 });
 let timer;
 
 function formatDate(date) {
     return date ? date.split('-').reverse().join('.') : '–';
+}
+
+function historyStatus(row) {
+    if (row.status === 'complete') return 'Vollständig';
+    if (row.status === 'unsupported') return 'Keine verifizierte Gratisquelle';
+    if (row.repair_status === 'cooldown') return 'Abruf pausiert. Später erneut starten.';
+    if (row.repair_status === 'failed') return 'Abruf fehlgeschlagen';
+    if (row.repair_status === 'preview') return 'Abruf in der Vorschau deaktiviert';
+    return 'Tageskurse fehlen';
 }
 
 function formatValue(value, suffix) {
@@ -69,7 +81,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
 
 <template>
     <v-alert v-if="running && !showCard" type="info" density="compact" class="mb-4" aria-live="polite">
-        Datenkonsistenz: {{ run.step }} · {{ run.checked }} Zeiträume geprüft
+        Datenkonsistenz: {{ run.step }} · {{ historyRows.length }} Aktien und {{ run.checked }} Zeiträume geprüft
     </v-alert>
     <v-card v-if="showCard" class="consistency-card mt-4" aria-label="Datenkonsistenz">
         <v-card-text class="consistency-content">
@@ -77,7 +89,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
                 <div>
                     <div class="consistency-eyebrow">DATA OVERVIEW</div>
                     <h2>Datenkonsistenz</h2>
-                    <p class="consistency-intro">Abgeschlossene Wochen, Monate und Jahre werden mit den vorhandenen Buchungen und Kursen verglichen.</p>
+                    <p class="consistency-intro">Prüft die Tageskurse der letzten zwölf Monate sowie abgeschlossene Depotzeiträume. „Neu aufbauen“ lädt fehlende Gratis-Kurse nach und berechnet betroffene Depotwerte neu.</p>
                 </div>
                 <span class="consistency-status"><v-icon size="18" :icon="statusIcon" /> {{ statusText }}</span>
             </div>
@@ -88,7 +100,26 @@ onBeforeUnmount(() => window.clearInterval(timer));
                 <div class="consistency-progress" aria-live="polite">
                     <v-progress-linear v-if="running" indeterminate color="primary" class="mb-3" />
                     <strong>{{ run.step }}</strong>
-                    <div v-if="run.repair" class="consistency-muted">Die Zahlen zeigen die Feststellungen vor dem Neuaufbau.</div>
+                    <div v-if="run.repair" class="consistency-muted">Die Feststellungen zu Depotzeiträumen beziehen sich auf deren Stand vor der Neuberechnung.</div>
+                </div>
+
+                <div v-if="historyRows.length" class="consistency-section">
+                    <h3>Tageskurse der letzten zwölf Monate</h3>
+                    <p class="consistency-muted">Gezählt werden Schlusskurse für abgeschlossene Handelstage des jeweiligen Börsenplatzes.</p>
+                    <div class="consistency-issues">
+                        <div v-for="row in historyRows" :key="row.holding_id" class="consistency-issue">
+                            <div>
+                                <strong>{{ row.label }}</strong>
+                                <span v-if="row.exchange"> · {{ row.exchange }}</span><br>
+                                <span>{{ historyStatus(row) }}</span>
+                            </div>
+                            <div v-if="row.expected_count !== null" class="consistency-amounts">
+                                {{ row.missing_count }} von {{ row.expected_count }} Handelstagen fehlen
+                                <template v-if="row.filled_count"> · {{ row.filled_count }} ergänzt</template><br>
+                                {{ formatDate(row.from) }} – {{ formatDate(row.to) }}
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="consistency-summary">
@@ -131,7 +162,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
                     <p v-if="run.repair" class="consistency-muted mt-2">{{ run.repaired }} Zeiträume neu aufgebaut.</p>
                 </div>
             </template>
-            <p v-else class="consistency-muted mt-5">Starte die Prüfung, um den Zustand der gespeicherten Zeiträume zu sehen.</p>
+            <p v-else class="consistency-muted mt-5">Starte die Prüfung, um den Stand der Tageskurse und Depotzeiträume zu sehen.</p>
         </v-card-text>
         <v-card-actions class="consistency-actions">
             <v-btn :disabled="loading || running" variant="flat" color="primary" prepend-icon="mdi-magnify" @click="start(false)">Prüfen</v-btn>

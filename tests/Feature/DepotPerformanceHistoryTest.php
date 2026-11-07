@@ -26,12 +26,25 @@ class DepotPerformanceHistoryTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        // These legacy compatibility scenarios deliberately exercise stored paid prices.
+        config(['services.market_data.free_only' => false]);
         $this->travelTo(Carbon::parse('2026-11-04 15:00:00', 'UTC'));
         Role::findOrCreate('admin');
         $user = User::factory()->create();
         $user->assignRole('admin');
         $this->actingAs($user);
         Http::preventStrayRequests();
+    }
+
+    public function test_free_only_history_does_not_use_paid_prices(): void
+    {
+        config(['services.market_data.free_only' => true]);
+        [, $holding] = $this->portfolio();
+        StockHoldingDailyPrice::factory()->create(['stock_holding_id' => $holding->id, 'trading_date' => '2026-10-27',
+            'currency' => 'EUR', 'close' => 50, 'source_key' => 'eodhd_eod']);
+        $resolver = app(StoredHistoricalPriceResolver::class);
+        $resolver->prime(collect([$holding]), Carbon::parse('2026-10-27'), Carbon::parse('2026-10-28'));
+        $this->assertNull($resolver->at($holding, Carbon::parse('2026-10-27 23:59:59', 'Europe/Vienna')));
     }
 
     public function test_stored_paid_history_restores_valuations_without_changing_free_previous_day_policy(): void

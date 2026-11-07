@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\MarketPrice;
 use App\Models\StockHolding;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
@@ -16,24 +17,43 @@ class FreeDailyMarketData
         private MarketPriceLegacyImporter $normalizer, private MarketPriceStore $store, private FreeTradingCalendar $calendar,
         private DashboardPerformanceSnapshots $performanceSnapshots) {}
 
+    /** @return array{status: string, from: ?string, to: ?string, expected_count: ?int, missing_count: ?int} */
+    public function coverage(StockHolding $holding): array
+    {
+        $listing = DB::table('market_listings')->where('id', $holding->market_listing_id)->where('status', 'verified')->first();
+        $timezone = $listing?->timezone ?? $this->calendar->timezone($holding);
+        if ($timezone === null) {
+            return ['status' => 'unsupported', 'from' => null, 'to' => null, 'expected_count' => null, 'missing_count' => null];
+        }
+
+        [$from, $until, $expectedDays] = $this->historyWindow($holding, $timezone, null);
+        $coverage = $this->countCoverage($listing?->id, $holding->currency, $from, $until, $expectedDays);
+        $status = match (true) {
+            $coverage['missing_count'] === 0 => 'complete',
+            $listing === null || $this->mapping($listing->id) === null => 'unsupported',
+            default => 'missing',
+        };
+
+        return ['status' => $status, ...$coverage];
+    }
+
     /** @return array<string, mixed> */
-    public function import(StockHolding $holding, int $days = 365): array
+    public function import(StockHolding $holding, ?int $days = null): array
     {
         if (app(MarketDataMode::class)->paused()) {
             return ['status' => 'cooldown', 'stored_count' => 0];
         }
         app(PreviewIsolation::class)->assertIntegrationAllowed();
         $listing = $this->identities->listing($holding);
-        $mapping = DB::table('market_source_instruments')->where('market_listing_id', $listing->id)->where('source_key', 'yahoo')
-            ->whereNotNull('verified_at')->where(fn ($q) => $q->whereNull('valid_until')->orWhere('valid_until', '>', now()))->first();
+        $mapping = $this->mapping($listing->id);
         if ($mapping === null || $listing->status !== 'verified') {
             return ['status' => 'unsupported', 'stored_count' => 0];
         }
         if (Cache::has('free-intraday.cooldown.yahoo') || ! $this->coordinator->reserve('yahoo-symbol:'.$mapping->symbol)) {
             return ['status' => 'cooldown', 'stored_count' => 0];
         }
-        $from = now($listing->timezone)->startOfDay()->subDays(max(1, min(3650, $days)) - 1);
-        $until = now($listing->timezone)->startOfDay()->addDay();
+        [$from, $until, $expectedDays] = $this->historyWindow($holding, $listing->timezone, $days);
+        $xetra = $listing->calendar_key === 'XETRA';
         $stored = 0;
         $skipped = 0;
         $firstHistoricalChange = null;
@@ -61,7 +81,6 @@ class FreeDailyMarketData
             }
             $chart = $response->json('chart.result.0');
             $meta = $chart['meta'] ?? [];
-            $xetra = $listing->calendar_key === 'XETRA';
             if (($meta['symbol'] ?? null) !== $mapping->symbol || ($meta['currency'] ?? null) !== $listing->currency
                 || ($meta['exchangeTimezoneName'] ?? null) !== $listing->timezone || ($meta['dataGranularity'] ?? null) !== '1d'
                 || ($xetra && (($meta['exchangeName'] ?? null) !== 'GER' || strtoupper($meta['fullExchangeName'] ?? '') !== 'XETRA'))
@@ -76,14 +95,13 @@ class FreeDailyMarketData
 
                     continue;
                 }
-                $date = Carbon::createFromTimestampUTC($timestamp)->setTimezone($listing->timezone);
-                $session = $this->calendar->session($holding, $date);
-                if ($date->lessThan($from) || $date->greaterThanOrEqualTo($until) || $session === null || $session['close']->copy()->addMinutes($xetra ? 20 : 30)->greaterThan(now())) {
+                $date = Carbon::createFromTimestampUTC($timestamp)->setTimezone($listing->timezone)->toDateString();
+                if (! isset($expectedDays[$date])) {
                     $skipped++;
 
                     continue;
                 }
-                $row = ['interval' => '1d', 'trading_date' => $date->toDateString(), 'currency' => $listing->currency,
+                $row = ['interval' => '1d', 'trading_date' => $date, 'currency' => $listing->currency,
                     'source_key' => 'yahoo_daily', 'source_name' => 'Yahoo Finance daily OHLC · unofficial',
                     'source_url' => 'https://finance.yahoo.com/quote/'.rawurlencode($mapping->symbol).'/history/', 'fetched_at' => now()->utc()->toDateTimeString(),
                     'adjusted_close' => $chart['indicators']['adjclose'][0]['adjclose'][$index] ?? null];
@@ -117,8 +135,9 @@ class FreeDailyMarketData
             if ($stored > 0) {
                 $this->coordinator->prepareReads();
             }
-            $result = ['status' => $skipped ? 'partial' : 'complete', 'stored_count' => $stored, 'skipped_count' => $skipped,
-                'from' => $from->toDateString(), 'to' => $until->copy()->subDay()->toDateString()];
+            $coverage = $this->countCoverage($listing->id, $listing->currency, $from, $until, $expectedDays);
+            $result = ['status' => $skipped > 0 || $coverage['missing_count'] > 0 ? 'partial' : 'complete',
+                'stored_count' => $stored, 'skipped_count' => $skipped, ...$coverage];
         } catch (Throwable $exception) {
             $result = ['status' => 'failed', 'stored_count' => $stored, 'error' => $exception->getMessage()];
         }
@@ -128,5 +147,47 @@ class FreeDailyMarketData
         $this->coordinator->record('yahoo_daily', $listing->id, $result['status'], $result);
 
         return $result;
+    }
+
+    private function mapping(int $listingId): ?object
+    {
+        return DB::table('market_source_instruments')->where('market_listing_id', $listingId)->where('source_key', 'yahoo')
+            ->whereNotNull('verified_at')->where(fn ($query) => $query->whereNull('valid_until')->orWhere('valid_until', '>', now()))->first();
+    }
+
+    /** @return array{Carbon, Carbon, array<string, true>} */
+    private function historyWindow(StockHolding $holding, string $timezone, ?int $days): array
+    {
+        $reference = now($timezone);
+        $from = $reference->copy()->startOfDay();
+        $from = $days === null ? $from->subYearNoOverflow() : $from->subDays(max(1, min(3650, $days)) - 1);
+        $until = $reference->copy()->startOfDay()->addDay();
+        $delayMinutes = $timezone === 'America/New_York' ? 30 : 20;
+        $expectedDays = [];
+        for ($day = $from->copy(); $day->lessThan($until); $day->addDay()) {
+            $session = $this->calendar->session($holding, $day);
+            if ($session !== null && $session['close']->copy()->addMinutes($delayMinutes)->lessThanOrEqualTo($reference)) {
+                $expectedDays[$day->toDateString()] = true;
+            }
+        }
+
+        return [$from, $until, $expectedDays];
+    }
+
+    /**
+     * @param  array<string, true>  $expectedDays
+     * @return array{from: string, to: string, expected_count: int, missing_count: int}
+     */
+    private function countCoverage(?int $listingId, ?string $currency, Carbon $from, Carbon $until, array $expectedDays): array
+    {
+        $to = $until->copy()->subDay()->toDateString();
+        $coveredDays = $listingId === null ? [] : MarketPrice::query()->where('market_listing_id', $listingId)
+            ->where('currency', $currency)->whereIn('source_key', StockPreviousCloseResolver::FreeSources)
+            ->where('interval_code', '1d')->where('adjustment_basis', 'unadjusted')
+            ->where('is_current', true)->where('validation_status', 'valid')->where('close', '>', 0)
+            ->whereBetween('trading_date', [$from->toDateString(), $to])->pluck('trading_date')->flip()->all();
+
+        return ['from' => $from->toDateString(), 'to' => $to,
+            'expected_count' => count($expectedDays), 'missing_count' => count(array_diff_key($expectedDays, $coveredDays))];
     }
 }

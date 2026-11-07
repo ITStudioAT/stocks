@@ -1,6 +1,7 @@
 <?php
 
 use App\Console\Commands\RedactEodhdErrors;
+use App\Jobs\RefreshPrivateIndexQuotes;
 use App\Models\AdminLoginCode;
 use App\Services\EodhdApiClient;
 use App\Services\MarketPriceStore;
@@ -21,14 +22,17 @@ if ($preview && config('security.preview.control_enabled') !== true) {
     return;
 }
 $canRun = static fn (): bool => ! $preview || app(PreviewBackgroundState::class)->enabled();
-$canRunEodhd = static fn (): bool => $canRun() && app(EodhdApiClient::class)->configured();
+$canRunEodhd = static fn (): bool => $canRun() && ! config('services.market_data.free_only', true) && app(EodhdApiClient::class)->configured();
 
 Schedule::command('dashboard:backfill-performance')->dailyAt('00:20')
     ->when($canRun)->withoutOverlapping(120);
 
+Schedule::job(new RefreshPrivateIndexQuotes)->everyFifteenMinutes()
+    ->when(static fn (): bool => ! $preview && config('queue.default') !== 'sync');
+
 Schedule::command('market-data:collect')->everyFiveMinutes()
     ->when(static fn (): bool => ! $preview && MarketPriceStore::enabled())->withoutOverlapping(5);
-Schedule::command('market-data:daily --limit=3')->hourly()
+Schedule::command('market-data:daily --days=7 --limit=3 --initialized-only')->hourly()
     ->when(static fn (): bool => ! $preview && MarketPriceStore::enabled())->withoutOverlapping(10);
 
 Schedule::command('intraday:collect-free --queue')

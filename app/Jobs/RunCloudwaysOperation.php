@@ -54,7 +54,9 @@ class RunCloudwaysOperation implements ShouldQueue
         $run = $operations->current();
         if (($run['id'] ?? null) === $this->runId) {
             $run['status'] = 'failed';
-            $run['error'] = 'Der Cloudways-Auftrag ist fehlgeschlagen. Details stehen im Anwendungsprotokoll.';
+            $run['error'] = $this->action === 'sync'
+                ? 'Die Synchronisation ist fehlgeschlagen und wurde möglicherweise teilweise übernommen. Bitte erneut prüfen; Details stehen im Anwendungsprotokoll.'
+                : 'Der Cloudways-Auftrag ist fehlgeschlagen. Details stehen im Anwendungsprotokoll.';
             $operations->save($run);
         }
     }

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\RefreshPrivateIndexQuotes;
 use App\Models\IndexWatchItem;
 use App\Models\IndexWatchItemPrice;
 use App\Models\IndexWatchItemRealtimePrice;
@@ -11,12 +12,15 @@ use App\Services\IndexMarketHours;
 use App\Services\IndexWatchItemPriceRefresher;
 use App\Services\KnownInstrumentMetadataCorrections;
 use App\Services\MarketDataProvenance;
+use App\Services\PreviewIsolation;
+use App\Services\PrivateIndexQuotes;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 
@@ -36,6 +40,7 @@ class AdminIndexWatchItemController extends Controller
         private KnownInstrumentMetadataCorrections $metadataCorrections,
         private IndexMarketHours $indexMarketHours,
         private ChartDataRefresh $chartDataRefresh,
+        private PrivateIndexQuotes $privateIndexQuotes,
     ) {}
 
     public function index(): JsonResponse
@@ -65,9 +70,26 @@ class AdminIndexWatchItemController extends Controller
             $item->setRelation('readRealtimePrices', $realtimePrices->get($item->id, collect()));
         }
 
+        $privateQuotes = $this->privateIndexQuotes->forItems($items);
+
         return response()->json([
-            'indexes' => $items->map(fn (IndexWatchItem $item): array => $this->indexWatchItemPayload($item)),
+            'indexes' => $items->map(fn (IndexWatchItem $item): array => $this->indexWatchItemPayload($item, privateQuotes: $privateQuotes)),
         ]);
+    }
+
+    public function refreshFree(Request $request): JsonResponse
+    {
+        app(PreviewIsolation::class)->assertIntegrationAllowed();
+        $validated = $request->validate(['force' => ['sometimes', 'boolean']]);
+        if (config('queue.default') === 'sync') {
+            return response()->json(['message' => 'Für die Aktualisierung muss eine Hintergrund-Queue eingerichtet sein.'], 503);
+        }
+        if (! Cache::add('private-index-quotes.dispatch', true, now()->addMinute())) {
+            return response()->json(['message' => 'Die Aktualisierung wurde vor Kurzem gestartet.']);
+        }
+        RefreshPrivateIndexQuotes::dispatch($validated['force'] ?? false);
+
+        return response()->json(['message' => 'Die Aktualisierung läuft im Hintergrund.']);
     }
 
     public function store(Request $request): JsonResponse
@@ -182,6 +204,7 @@ class AdminIndexWatchItemController extends Controller
     private function indexWatchItemPayload(
         IndexWatchItem $item,
         int $priceLimit = IndexWatchItemPriceRefresher::RecentPriceLimit,
+        ?array $privateQuotes = null,
     ): array {
         $recentPrices = $item->relationLoaded('prices')
             ? $item->prices
@@ -205,7 +228,7 @@ class AdminIndexWatchItemController extends Controller
                 ->get(['id', 'trading_date', 'price', 'as_of', 'source_name'])
             : collect());
 
-        return [
+        $payload = [
             'id' => $item->id,
             'symbol' => $item->symbol,
             'name' => $item->name,
@@ -250,6 +273,21 @@ class AdminIndexWatchItemController extends Controller
                 ->all(),
             'created_at' => $item->created_at?->toIso8601String(),
         ];
+        $privateQuotes ??= $this->privateIndexQuotes->forItems([$item]);
+        $quote = $this->privateIndexQuotes->forItem($item, $privateQuotes);
+        if ($quote !== null && isset($quote['as_of'], $quote['price'])
+            && ($payload['latest_price_as_of'] === null || Carbon::parse($quote['as_of'])->gte(Carbon::parse($payload['latest_price_as_of'])))) {
+            $payload['latest_price'] = $quote['price'];
+            $payload['last_price'] = $quote['previous_close'] ?? null;
+            $payload['latest_price_change_pct'] = $quote['change_percent'] ?? null;
+            $payload['latest_price_as_of'] = $quote['as_of'];
+            $payload['latest_price_fetched_at'] = $quote['fetched_at'] ?? null;
+            $payload['latest_price_source'] = 'Yahoo Finance';
+            $payload['latest_price_source_markers'] = ['free'];
+            $payload['private_quote'] = true;
+        }
+
+        return $payload;
     }
 
     private function storedUtcTimestamp(Model $model, string $column): ?string

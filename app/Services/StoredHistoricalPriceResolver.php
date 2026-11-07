@@ -19,7 +19,7 @@ class StoredHistoricalPriceResolver
     public function prime(Collection $holdings, Carbon $from, Carbon $until): void
     {
         if (MarketPriceStore::enabled()) {
-            $history = app(MarketPriceCompatibility::class)->history($holdings, $from, $until);
+            $history = app(MarketPriceCompatibility::class)->history($holdings, $from, $until, freeOnly: config('services.market_data.free_only', true));
             foreach ($holdings as $holding) {
                 $holding->setRelation('readHistoricalMarketPrices', collect($history[$holding->market_listing_id] ?? []));
             }
@@ -29,7 +29,9 @@ class StoredHistoricalPriceResolver
         $byId = $holdings->keyBy('id');
         $byInstrument = $holdings->groupBy(fn (StockHolding $holding): string => $this->catalog->instrumentKeyForHolding($holding));
         $prices = [];
-        $sources = [...StockPreviousCloseResolver::FreeSources, 'eodhd_eod', 'eodhd_realtime', 'eodhd_intraday'];
+        $sources = config('services.market_data.free_only', true)
+            ? StockPreviousCloseResolver::FreeSources
+            : [...StockPreviousCloseResolver::FreeSources, 'eodhd_eod', 'eodhd_realtime', 'eodhd_intraday'];
 
         foreach ([StockPrice::class, StockRealtimePrice::class, StockHoldingIntradayCandle::class] as $modelClass) {
             $canonical = $modelClass === StockPrice::class;

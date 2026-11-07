@@ -141,9 +141,20 @@ class CloudwaysDatabaseSync
 
         $this->assertDistinctDatabaseConnections($sourceConnectionName, $targetConnectionName);
 
+        $centralRequested = in_array('market_prices', $checkedDifferentTables, true);
+        if ($centralRequested && ($targetConnectionName !== config('database.default') || ! MarketPriceStore::enabled())) {
+            throw new RuntimeException('Die zentrale Kursablage ist lokal nicht aktiviert. Der Kursabgleich wurde nicht gestartet.');
+        }
+        if ($centralRequested) {
+            foreach (['market_prices', 'market_listings', 'market_instruments'] as $table) {
+                if (! Schema::connection($sourceConnectionName)->hasTable($table) || ! Schema::connection($targetConnectionName)->hasTable($table)) {
+                    throw new RuntimeException('Die zentrale Kursablage fehlt auf einer der beiden Datenbanken.');
+                }
+            }
+        }
         $synchronizableTables = array_values(array_intersect(
             $this->synchronizableTableNames(),
-            $checkedDifferentTables,
+            array_diff($checkedDifferentTables, ['market_prices']),
         ));
 
         $sourceTables = array_values(array_intersect(
@@ -247,6 +258,21 @@ class CloudwaysDatabaseSync
             }
         }
 
+        $requiresCentralSync = $centralRequested || array_intersect($syncTables, [
+            'stock_holdings', 'stock_prices', 'stock_realtime_prices', 'stock_holding_intraday_candles', 'stock_holding_daily_prices',
+        ]) !== [];
+        $centralResult = null;
+        if ($requiresCentralSync && $targetConnectionName === config('database.default') && MarketPriceStore::enabled()) {
+            $centralResult = app(CloudwaysFreeMarketDataSync::class)->sync($sourceConnectionName, $onProgress);
+            $syncedTables[] = [
+                'name' => 'market_prices', 'rows' => $centralResult['imported'], 'columns' => 0, 'status' => 'imported',
+                'message' => 'Kostenlose Kurse wurden identitätsbasiert abgeglichen.',
+            ];
+            if ($onTableSynced !== null) {
+                $onTableSynced(end($syncedTables), count($syncedTables), count($syncTables) + 1);
+            }
+        }
+
         $sync = [
             'source_connection' => $sourceConnectionName,
             'target_connection' => $targetConnectionName,
@@ -254,8 +280,9 @@ class CloudwaysDatabaseSync
             'skipped_tables' => $skippedTables,
             'skipped_table_details' => $skippedTableDetails,
             'synced_tables' => count($syncedTables),
-            'total_tables' => count($sourceTables),
+            'total_tables' => count($sourceTables) + (int) ($centralResult !== null),
             'rows' => array_sum(array_column($syncedTables, 'rows')),
+            'central_market_data' => $centralResult,
             'synced_at' => now(self::Timezone)->toIso8601String(),
         ];
 
@@ -662,6 +689,18 @@ class CloudwaysDatabaseSync
 
         if (! $existsLocally) {
             return $this->missingComparisonTable($table, 'missing_local', 'Missing locally.');
+        }
+
+        if ($table === 'market_prices') {
+            $sourceCount = DB::connection($sourceConnectionName)->table($table)->whereIn('source_key', StockPreviousCloseResolver::FreeSources)->where('is_current', true)->where('validation_status', 'valid')->count();
+            $targetCount = DB::connection($targetConnectionName)->table($table)->whereIn('source_key', StockPreviousCloseResolver::FreeSources)->where('is_current', true)->where('validation_status', 'valid')->count();
+
+            return [
+                'name' => $table, 'status' => $sourceCount === $targetCount ? 'comparison_required' : 'different',
+                'cloudways_rows' => $sourceCount, 'local_rows' => $targetCount, 'cloudways_hash' => null, 'local_hash' => null,
+                'row_differences' => null, 'cloudways_only_columns' => [], 'local_only_columns' => [],
+                'message' => 'Kostenlose Kurse werden über Wertpapieridentität abgeglichen.',
+            ];
         }
 
         $sourceColumnDefinitions = Schema::connection($sourceConnectionName)->getColumns($table);

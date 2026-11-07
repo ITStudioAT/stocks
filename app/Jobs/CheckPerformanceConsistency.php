@@ -4,7 +4,11 @@ namespace App\Jobs;
 
 use App\Models\AppConfig;
 use App\Models\Depot;
+use App\Models\StockHolding;
 use App\Services\DashboardPerformanceSnapshots;
+use App\Services\FreeDailyMarketData;
+use App\Services\MarketPriceStore;
+use App\Services\PreviewIsolation;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -40,6 +44,9 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
         $run['issues'] ??= [];
         $run['periods'] ??= [];
         $run['status'] = 'running';
+        if (MarketPriceStore::enabled()) {
+            $this->checkDailyHistory($run, app(FreeDailyMarketData::class), ! app(PreviewIsolation::class)->active());
+        }
         $run['step'] = 'Depots werden geprüft';
         $this->save($run);
 
@@ -67,8 +74,10 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
                         $row = DB::table(DashboardPerformanceSnapshots::Table)->where($key)->first();
                         $actual = $row ? json_decode($row->payload, true) : null;
                         $fresh = $snapshots->calculatePeriodFresh($locked, $period, $end);
-                        $missing = $row === null || ($row->expires_at !== null && Carbon::parse($row->expires_at)->isPast());
+                        $missing = $row === null || ($row->expires_at !== null && Carbon::parse($row->expires_at)->isPast())
+                            || ! is_array($actual) || ($actual['_source_policy'] ?? null) !== $snapshots->sourcePolicy();
                         if (is_array($actual)) {
+                            unset($actual['_source_policy']);
                             ksort($actual);
                         }
                         $expected = $fresh;
@@ -105,7 +114,7 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
                             DB::table(DashboardPerformanceSnapshots::Table)->where($key)->delete();
                         }
                         if ($run['repair'] && ($missing || $incorrect) && $fresh['change_amount'] !== null) {
-                            DB::table(DashboardPerformanceSnapshots::Table)->upsert([...$key, 'payload' => json_encode($fresh, JSON_THROW_ON_ERROR), 'expires_at' => $fresh['change_amount'] === null ? now()->addHour() : null], ['depot_id', 'period', 'end_date'], ['payload', 'expires_at']);
+                            DB::table(DashboardPerformanceSnapshots::Table)->upsert([...$key, 'payload' => json_encode([...$fresh, '_source_policy' => $snapshots->sourcePolicy()], JSON_THROW_ON_ERROR), 'expires_at' => $fresh['change_amount'] === null ? now()->addHour() : null], ['depot_id', 'period', 'end_date'], ['payload', 'expires_at']);
                             $run['repaired']++;
                         }
                     }, attempts: 3);
@@ -120,6 +129,40 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
         $run['step'] = 'Prüfung abgeschlossen';
         $run['finished_at'] = now()->toIso8601String();
         $this->save($run);
+    }
+
+    private function checkDailyHistory(array &$run, FreeDailyMarketData $daily, bool $canFetch): void
+    {
+        $run['daily_history'] = [];
+        foreach (StockHolding::query()->orderBy('id')->lazyById() as $holding) {
+            $label = $holding->name ?? $holding->symbol;
+            $run['step'] = "{$label}: Jahreskurse werden geprüft";
+            $this->save($run);
+            $before = $daily->coverage($holding);
+            $after = $before;
+            $repairStatus = null;
+            if ($run['repair'] && $before['status'] === 'missing') {
+                if ($canFetch) {
+                    $run['step'] = "{$label}: Fehlende Tageskurse werden nachgeladen";
+                    $this->save($run);
+                    $repairStatus = $daily->import($holding)['status'];
+                    $after = $daily->coverage($holding);
+                } else {
+                    $repairStatus = 'preview';
+                }
+            }
+
+            $run['daily_history'][] = [
+                'holding_id' => $holding->id,
+                'label' => $label,
+                'symbol' => $holding->symbol,
+                'exchange' => $holding->exchange,
+                ...$after,
+                'filled_count' => max(0, ($before['missing_count'] ?? 0) - ($after['missing_count'] ?? 0)),
+                'repair_status' => $repairStatus,
+            ];
+            $this->save($run);
+        }
     }
 
     public function failed(?Throwable $exception): void

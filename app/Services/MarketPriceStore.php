@@ -186,6 +186,7 @@ class MarketPriceStore
     {
         $price = MarketPrice::query()->where('market_listing_id', $listingId)->where('is_current', true)->where('validation_status', 'valid')
             ->whereNotNull('effective_at')->where('effective_at', '<=', now()->utc())->whereNull('nav')
+            ->when(config('services.market_data.free_only', true), fn ($query) => $query->whereIn('source_key', StockPreviousCloseResolver::FreeSources))
             ->whereNotIn('price_type', ['indicative', 'nav'])->where('interval_code', '!=', '1d')->where('session_type', '!=', 'unknown')
             ->orderByRaw("CASE WHEN interval_code = '5m' THEN period_start_at ELSE effective_at END DESC")
             ->orderByRaw("CASE WHEN record_kind = 'bar' THEN 1 ELSE 0 END")

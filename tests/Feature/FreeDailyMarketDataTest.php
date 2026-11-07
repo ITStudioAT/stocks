@@ -11,6 +11,7 @@ use App\Services\FreeDailyMarketData;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -97,5 +98,51 @@ class FreeDailyMarketDataTest extends TestCase
         Http::fake(['query1.finance.yahoo.com/*' => Http::response($this->chart())]);
         $this->postJson('/admin/watchlist/holdings/'.$holding->id.'/daily-history')->assertOk()->assertJsonPath('stored_count', 1);
         $this->assertSame(1, MarketPrice::count());
+    }
+
+    public function test_data_consistency_checks_a_year_of_daily_history_and_only_fetches_on_repair(): void
+    {
+        config(['queue.default' => 'database']);
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin'));
+        $chart = $this->chart();
+        $chart['chart']['result'][0]['timestamp'][1] = Carbon::parse('2025-11-06 08:00:00', 'UTC')->timestamp;
+        $chart['chart']['result'][0]['indicators']['quote'][0] = array_map(fn ($values) => [$values[0], $values[0]], $chart['chart']['result'][0]['indicators']['quote'][0]);
+        Http::fake(['query1.finance.yahoo.com/*' => Http::response($chart)]);
+
+        $holdingId = $this->actingAs($admin)->postJson('/admin/watchlist/holdings', [
+            'symbol' => 'TKE', 'isin' => 'US8740541094', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR',
+        ])->assertCreated()->json('holding.id');
+
+        $this->assertSame(0, Queue::size());
+        $this->artisan('market-data:daily --days=7 --initialized-only')->assertSuccessful();
+        Http::assertNothingSent();
+
+        StockHolding::factory()->create(['symbol' => 'UNMAPPED', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
+        $this->postJson('/admin/data/performance-consistency', ['repair' => false])->assertOk()->assertJsonPath('run.status', 'queued');
+        $this->assertSame(1, Queue::size());
+        Queue::pop()->fire();
+        $checked = $this->getJson('/admin/data/performance-consistency')->assertOk()
+            ->assertJsonPath('run.daily_history.0.holding_id', $holdingId)
+            ->assertJsonPath('run.daily_history.0.from', '2025-11-06')
+            ->assertJsonPath('run.daily_history.0.status', 'missing')
+            ->assertJsonPath('run.daily_history.1.status', 'unsupported')->json('run.daily_history.0');
+        $this->assertSame($checked['expected_count'], $checked['missing_count']);
+        Http::assertNothingSent();
+
+        $this->postJson('/admin/data/performance-consistency', ['repair' => true])->assertOk()->assertJsonPath('run.status', 'queued');
+        Http::assertNothingSent();
+        $this->assertSame(1, Queue::size());
+        Queue::pop()->fire();
+
+        Http::assertSent(fn ($request) => (int) $request['period1'] === Carbon::parse('2025-11-06', 'Europe/Berlin')->timestamp
+            && $request['interval'] === '1d');
+        $this->assertSame(['2025-11-06', '2026-11-05'], MarketPrice::query()->where('source_key', 'yahoo_daily')->orderBy('trading_date')->pluck('trading_date')->all());
+        $this->assertDatabaseHas('market_data_runs', ['source_key' => 'yahoo_daily', 'status' => 'partial']);
+        $this->getJson('/admin/data/performance-consistency')->assertOk()
+            ->assertJsonPath('run.daily_history.0.filled_count', 2)
+            ->assertJsonPath('run.daily_history.0.missing_count', $checked['missing_count'] - 2)
+            ->assertJsonPath('run.daily_history.1.status', 'unsupported');
+        Http::assertSentCount(1);
     }
 }

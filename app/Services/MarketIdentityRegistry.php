@@ -33,7 +33,7 @@ class MarketIdentityRegistry
 
         return DB::transaction(function () use ($holding, $identity, $venue, $currency, $known, $xetra, $us, $mic): object {
             DB::table('market_instruments')->insertOrIgnore(['identity_key' => $identity, 'isin' => $holding->isin, 'wkn' => $holding->wkn,
-                'name' => $holding->name, 'instrument_type' => $holding->instrument_type, 'created_at' => now(), 'updated_at' => now()]);
+                'name' => $holding->name ?? $holding->symbol, 'instrument_type' => $holding->instrument_type, 'created_at' => now(), 'updated_at' => now()]);
             $instrument = DB::table('market_instruments')->where('identity_key', $identity)->value('id');
             $key = hash('sha256', json_encode([$instrument, $venue, $currency, 'unit'], JSON_THROW_ON_ERROR));
             DB::table('market_listings')->insertOrIgnore(['identity_key' => $key, 'market_instrument_id' => $instrument, 'venue_key' => $venue,

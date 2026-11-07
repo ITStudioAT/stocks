@@ -173,7 +173,7 @@ class DashboardPerformanceSnapshots
 
             DB::table(self::Table)->upsert([
                 ...$key,
-                'payload' => json_encode($payload, JSON_THROW_ON_ERROR),
+                'payload' => json_encode([...$payload, '_source_policy' => $this->sourcePolicy()], JSON_THROW_ON_ERROR),
                 'expires_at' => $payload[$valueKey] === null ? now()->addHour() : null,
             ], ['depot_id', 'period', 'end_date'], ['payload', 'expires_at']);
 
@@ -191,6 +191,20 @@ class DashboardPerformanceSnapshots
             ->where(fn (Builder $query) => $query->whereNull('expires_at')->orWhere('expires_at', '>', now()))
             ->value('payload');
 
-        return $payload === null ? null : json_decode($payload, true, flags: JSON_THROW_ON_ERROR);
+        if ($payload === null) {
+            return null;
+        }
+        $decoded = json_decode($payload, true, flags: JSON_THROW_ON_ERROR);
+        if (($decoded['_source_policy'] ?? null) !== $this->sourcePolicy()) {
+            return null;
+        }
+        unset($decoded['_source_policy']);
+
+        return $decoded;
+    }
+
+    public function sourcePolicy(): string
+    {
+        return config('services.market_data.free_only', true) ? 'free-v1' : 'all-v1';
     }
 }

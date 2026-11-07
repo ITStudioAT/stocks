@@ -14,12 +14,12 @@ class AdminMarketDailyHistoryController extends Controller
     {
         abort_unless(MarketPriceStore::enabled(), 422, 'Central market data is not enabled.');
         $validated = $request->validate(['days' => ['sometimes', 'integer', 'min:1', 'max:3650']]);
-        $result = $daily->import($holding, $validated['days'] ?? 365);
+        $result = $daily->import($holding, $validated['days'] ?? null);
         $message = match ($result['status']) {
             'cooldown' => 'Provider check is paused. The five-minute interval or a longer provider cooldown applies.',
             'unsupported' => 'No verified free daily-history mapping is available for this listing.',
             'failed' => 'Free daily-history import failed; stored prices are preserved.',
-            default => 'Free daily history checked: '.$result['stored_count'].' new observations/revisions. Gaps remain visible.',
+            default => 'Free daily history checked. '.$result['stored_count'].' new observations, '.$result['missing_count'].' of '.$result['expected_count'].' trading days missing.',
         };
 
         return response()->json([...$result, 'message' => $message, 'checked_at' => now()->toIso8601String()]);

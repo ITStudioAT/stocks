@@ -21,7 +21,7 @@ const countedDifferences = computed(() => differentTables.value.reduce((total, t
     return total + (rows ? rows.changed + rows.source_only + rows.local_only : 0);
 }, 0));
 const uncountedTables = computed(() => differentTables.value.filter((table) => !table.row_differences).length);
-const tableStatus = (status) => ({ identical: 'Übereinstimmend', missing_local: 'Lokal nicht vorhanden', missing_cloudways: 'Auf Cloudways nicht vorhanden' }[status] ?? 'Unterschiedlich');
+const tableStatus = (status) => ({ identical: 'Übereinstimmend', comparison_required: 'Abgleich erforderlich', missing_local: 'Lokal nicht vorhanden', missing_cloudways: 'Auf Cloudways nicht vorhanden' }[status] ?? 'Unterschiedlich');
 const lastCheckedLabel = computed(() => {
     if (!lastCheckStatusLoaded.value) return 'Nicht verfügbar';
     if (!lastCheckedAt.value) return 'Noch keine Prüfung';
@@ -109,6 +109,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
                 <v-progress-linear indeterminate color="primary" class="mb-3" />
                 <strong>{{ run?.status === 'queued' ? 'Wartet in der Queue' : progress?.table ? `Tabelle ${progress.table}` : 'Vorgang wird vorbereitet' }}</strong>
                 <span v-if="progress?.total"> · {{ progress.completed ?? 0 }} von {{ progress.total }} Tabellen abgeschlossen</span>
+                <span v-if="progress?.processed"> · {{ progress.processed }} Kurse geprüft</span>
             </div>
             <div v-if="run?.action === 'check' && run.status !== 'finished' && run.checked_tables?.length" class="mt-5" aria-live="polite">
                 <h3>Bereits geprüft</h3>
@@ -119,7 +120,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
             <div v-if="comparison" class="cloudways-summary" aria-live="polite">
                 <div><strong>{{ comparison.total_tables }}</strong><span>Tabellen geprüft</span></div>
                 <div><strong>{{ comparison.identical_tables }}</strong><span>stimmen überein</span></div>
-                <div><strong>{{ comparison.different_tables }}</strong><span>mit Unterschieden</span></div>
+                <div><strong>{{ comparison.different_tables }}</strong><span>abweichend oder abzugleichen</span></div>
                 <div><strong>{{ countedDifferences }}</strong><span>abweichende Datensätze{{ uncountedTables ? ' (teilweise gezählt)' : '' }}</span></div>
             </div>
             <div v-if="comparison" class="mt-5">
@@ -140,9 +141,10 @@ onBeforeUnmount(() => window.clearInterval(timer));
                     </table>
                 </div>
             </div>
-            <v-alert v-if="syncResult" :type="syncResult.skipped_tables?.length ? 'warning' : 'success'" class="mt-4">
+            <v-alert v-if="syncResult" :type="syncResult.skipped_tables?.length || syncResult.central_market_data?.unmatched || syncResult.central_market_data?.conflicts ? 'warning' : 'success'" class="mt-4">
                 {{ syncResult.synced_tables }} Tabellen mit {{ syncResult.rows }} Datensätzen übernommen.
                 <span v-if="syncResult.skipped_tables?.length"> Nicht übernommen: {{ syncResult.skipped_tables.join(', ') }}.</span>
+                <span v-if="syncResult.central_market_data?.unmatched || syncResult.central_market_data?.conflicts"> Bei {{ syncResult.central_market_data.unmatched }} Kursen fehlte eine eindeutige Zuordnung, {{ syncResult.central_market_data.conflicts }} Kurse benötigen eine Prüfung.</span>
             </v-alert>
         </v-card-text>
         <v-card-actions class="cloudways-actions">

@@ -1297,7 +1297,7 @@ describe('App', () => {
             expect(fetchMock).not.toHaveBeenCalledWith('/admin/v2/indices/realtime-sync', expect.objectContaining({
                 method: 'POST',
             }));
-            expect(wrapper.text()).toContain('EODHD is disabled. Stored schedules do not run');
+            expect(wrapper.find('[aria-label="Automatic v2 index updates"]').exists()).toBe(false);
 
             await vi.advanceTimersByTimeAsync(5000);
             await flushPromises();
@@ -2842,7 +2842,6 @@ describe('App', () => {
 
         const automaticStockUpdates = wrapper.get('[aria-label="Automatic free stock updates"]');
         const stockRealtimeSchedule = automaticStockUpdates.get('[aria-label="Stock realtime schedule"]');
-        const stockRealtimeScheduleClasses = stockRealtimeSchedule.attributes('class');
         expect(stockRealtimeSchedule.get('.text-body-2.font-weight-bold').text()).toBe('Automatic free updates');
         expect(stockRealtimeSchedule.text()).toContain('start 5 min before trading until 10 min after trading · 20 min · closed: off');
         const stockRefreshExchangeWindows = stockRealtimeSchedule.get('.stock-refresh-exchange-windows');
@@ -2943,94 +2942,9 @@ describe('App', () => {
         expect(window.location.pathname).toBe('/admin/menu/indices');
         expect(wrapper.find('[aria-label="Indices"]').exists()).toBe(true);
         expect(wrapper.find('.watch-list-section').exists()).toBe(false);
-        const automaticUpdatesCard = wrapper.get('[aria-label="Automatic v2 index updates"]');
-        const eodAndIntradaySchedule = automaticUpdatesCard.get('[aria-label="V2 index EOD and intraday schedule"]');
-        const realtimeSchedule = automaticUpdatesCard.get('[aria-label="V2 index realtime schedule"]');
-        expect(stockRealtimeScheduleClasses).toBe(realtimeSchedule.attributes('class'));
-        expect(eodAndIntradaySchedule.attributes('class')).toBe(realtimeSchedule.attributes('class'));
-        expect(eodAndIntradaySchedule.get('.text-body-2.font-weight-bold').text()).toBe('Automatic EODHD updates');
-        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update schedule status"]').text()).toBe('Waiting');
-        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update activity status"]').text()).toBe('Inactive');
-        expect(eodAndIntradaySchedule.get('[aria-label="Index EODHD update activity status"]').classes()).toContain('text-error');
-        expect(realtimeSchedule.get('.text-body-2.font-weight-bold').text()).toBe('Live/realtime prices');
-        expect(eodAndIntradaySchedule.get('.v-chip').classes()).toContain('v-chip--size-x-small');
-        expect(realtimeSchedule.find('.v-chip').exists()).toBe(false);
-        expect(eodAndIntradaySchedule.get('.v-btn').classes()).toContain('v-btn--variant-text');
-        expect(realtimeSchedule.get('.v-btn').classes()).toContain('v-btn--variant-text');
-        expect(automaticUpdatesCard.text()).toContain('EOD + 5-minute intraday run times · 02:00 · 18:30');
-        expect(automaticUpdatesCard.text()).not.toContain('No job is running; the next update starts at the time shown below.');
-        expect(automaticUpdatesCard.text()).toContain('Live/realtime prices');
-        expect(realtimeSchedule.find('[aria-label="Index live update schedule status"]').exists()).toBe(false);
-        expect(realtimeSchedule.find('[aria-label="Index live update activity status"]').exists()).toBe(false);
-        expect(automaticUpdatesCard.text()).toContain('No job is running; the next refresh starts at the time shown below.');
-        expect(automaticUpdatesCard.text()).toContain('start 15 min before trading until 20 min after trading · 30 min · closed: off');
-        expect(eodAndIntradaySchedule.text()).toContain('Latest 05.08.2026, 09:45');
-        expect(automaticUpdatesCard.text()).toContain('05.08.2026');
-        expect(automaticUpdatesCard.text()).toContain('09:45');
-        expect(automaticUpdatesCard.text()).toContain('02:00');
-        expect(automaticUpdatesCard.text()).toContain('18:30');
+        expect(wrapper.find('[aria-label="Automatic v2 index updates"]').exists()).toBe(false);
+        expect(wrapper.findAll('button').some((button) => button.text() === 'EODHD Sync')).toBe(false);
 
-        const editEodTimesButton = automaticUpdatesCard.findAll('button')
-            .find((button) => button.text() === 'Edit EOD + intraday times');
-        await editEodTimesButton.trigger('click');
-        await flushPromises();
-
-        expect(document.body.textContent).toContain('Edit automatic update times');
-        wrapper.vm.indexEodhdSyncScheduleForm.times = ['06:30', '21:15'];
-        await flushPromises();
-
-        const saveTimesButton = Array.from(document.body.querySelectorAll('button'))
-            .find((button) => button.textContent.trim() === 'Save times');
-        saveTimesButton.click();
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/v2/indices/eodhd-sync-settings', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({ times: ['06:30', '21:15'] }),
-        }));
-        expect(automaticUpdatesCard.text()).toContain('06:30');
-        expect(automaticUpdatesCard.text()).toContain('21:15');
-        expect(automaticUpdatesCard.text()).toContain('Automatic index update times saved.');
-
-        const editLivePeriodButton = automaticUpdatesCard.findAll('button')
-            .find((button) => button.text() === 'Edit live period');
-        await editLivePeriodButton.trigger('click');
-        await flushPromises();
-
-        expect(document.body.textContent).toContain('Edit live/realtime update period');
-        wrapper.vm.indexV2RealtimeScheduleForm.trading_interval_minutes = 5;
-        wrapper.vm.indexV2RealtimeScheduleForm.trading_starts_before_minutes = 10;
-        wrapper.vm.indexV2RealtimeScheduleForm.trading_ends_after_minutes = 25;
-        wrapper.vm.indexV2RealtimeScheduleForm.closed_refresh_enabled = true;
-        wrapper.vm.indexV2RealtimeScheduleForm.closed_interval_minutes = 120;
-        await wrapper.vm.$nextTick();
-
-        const saveLiveScheduleButton = Array.from(document.body.querySelectorAll('button'))
-            .find((button) => button.textContent.trim() === 'Save live schedule');
-        saveLiveScheduleButton.click();
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/v2/indices/eodhd-sync-settings', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({
-                realtime: {
-                    trading_interval_minutes: 5,
-                    trading_starts_before_minutes: 10,
-                    trading_ends_after_minutes: 25,
-                    closed_refresh_enabled: true,
-                    closed_interval_minutes: 120,
-                },
-            }),
-        }));
-        expect(automaticUpdatesCard.text()).toContain('start 10 min before trading until 25 min after trading · 5 min · closed: every 120 min');
-        expect(automaticUpdatesCard.text()).toContain('Automatic index realtime schedule saved.');
-
-        const eodhdSyncButton = wrapper.findAll('button').find((button) => button.text() === 'EODHD Sync');
-        await eodhdSyncButton.trigger('click');
-        await flushPromises();
-
-        expect(eodhdSyncButton.attributes('disabled')).toBeDefined();
-        expect(fetchMock).not.toHaveBeenCalledWith('/admin/v2/indices/eodhd-sync', expect.objectContaining({ method: 'POST' }));
 
         const addIndexButton = wrapper.findAll('button').find((button) => button.text() === 'Index hinzufügen');
         await addIndexButton.trigger('click');
@@ -3080,6 +2994,14 @@ describe('App', () => {
         expect(indexWatchStrip.text()).toContain('DAX Index');
         expect(indexWatchStrip.text()).toContain('+0.33%');
         expect(indexWatchStrip.text()).toContain('6,116.53');
+        expect(wrapper.findAll('button').some((button) => button.text() === 'Kurse aktualisieren')).toBe(true);
+        wrapper.vm.indexWatchItems[0].private_quote = true;
+        wrapper.vm.indexWatchItems[0].latest_price_as_of = '2026-08-06T15:30:00Z';
+        wrapper.vm.indexWatchItems[0].latest_price_fetched_at = '2026-08-06T15:45:00Z';
+        await wrapper.vm.$nextTick();
+        expect(indexWatchStrip.text()).toContain('Yahoo Finance · möglicherweise verzögert');
+        expect(indexWatchStrip.text()).toContain('Kurszeit');
+        expect(indexWatchStrip.text()).toContain('Abgerufen');
         wrapper.vm.indexEodhdSyncSettings.realtime.closed_refresh_enabled = false;
         wrapper.vm.liveDataStatusNow = Date.parse('2026-08-06T18:40:00+02:00');
         wrapper.vm.indexWatchItems.push({
@@ -3110,20 +3032,10 @@ describe('App', () => {
             .find((card) => card.text().includes('DAX Index'));
         const djiIndexCard = wrapper.findAll('.index-watch-card')
             .find((card) => card.text().includes('Dow Jones Industrial Average'));
-        const utcIndexCard = wrapper.findAll('.index-watch-card')
-            .find((card) => card.text().includes('UTC Index'));
-        expect(daxIndexCard.get('[aria-label="DAX live update schedule status"]').text()).toBe('Waiting');
-        expect(daxIndexCard.get('[aria-label="DAX live update activity status"]').text()).toBe('Inactive');
-        expect(daxIndexCard.get('[aria-label="DAX live update activity status"]').classes()).toContain('text-error');
         expect(daxIndexCard.get('[aria-label="DAX trading time in Europe/Vienna"]').text()).toContain('Next 07.08.');
         expect(daxIndexCard.get('[aria-label="DAX trading time in Europe/Vienna"]').text()).toContain('09:00–17:30');
-        expect(djiIndexCard.get('[aria-label="DJI live update schedule status"]').text()).toBe('Scheduled');
-        expect(djiIndexCard.get('[aria-label="DJI live update activity status"]').text()).toBe('Active');
-        expect(djiIndexCard.get('[aria-label="DJI live update activity status"]').classes()).toContain('text-success');
         expect(djiIndexCard.get('[aria-label="DJI trading time in Europe/Vienna"]').text()).toContain('Current');
         expect(djiIndexCard.get('[aria-label="DJI trading time in Europe/Vienna"]').text()).toContain('15:30–22:00');
-        expect(utcIndexCard.get('[aria-label="UTCX live update schedule status"]').text()).toBe('Scheduled');
-        expect(utcIndexCard.get('[aria-label="UTCX live update activity status"]').text()).toBe('Active');
         wrapper.vm.indexWatchItems.splice(
             wrapper.vm.indexWatchItems.findIndex((indexItem) => indexItem.id === 2),
             2,
@@ -3994,6 +3906,33 @@ describe('App', () => {
         expect(data.findAll('[role="tab"]').map((tab) => tab.text())).toEqual(['Overview', 'Cloudways']);
         expect(wrapper.find('[aria-label="Datenkonsistenz"]').exists()).toBe(true);
         expect(fetchMock.mock.calls.map(([url]) => url).sort()).toEqual(['/admin/cloudways/operation', '/admin/cloudways/status', '/admin/data/performance-consistency', '/admin/depots/active', '/admin/me']);
+    });
+
+    it('shows which daily-history gaps were filled and which lack a verified free source', async () => {
+        window.history.pushState({}, '', '/admin/menu/data/overview');
+        const run = {
+            status: 'finished', repair: true, step: 'Prüfung abgeschlossen',
+            checked: 0, missing: 0, incorrect: 0, unavailable: 0,
+            daily_history: [
+                { holding_id: 1, label: 'Aktie A', status: 'missing', expected_count: 250, missing_count: 3,
+                    filled_count: 10, from: '2025-11-06', to: '2026-11-06' },
+                { holding_id: 2, label: 'Aktie B', status: 'unsupported', expected_count: null },
+            ],
+        };
+        vi.stubGlobal('fetch', vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({ user: { id: 1, roles: ['admin'] } }));
+            }
+            return Promise.resolve(jsonResponse(path === '/admin/data/performance-consistency' ? { run } : {}));
+        }));
+        const wrapper = mountApp();
+        await flushPromises();
+
+        const report = wrapper.get('[aria-label="Datenkonsistenz"]');
+        expect(report.text()).toContain('3 von 250 Handelstagen fehlen');
+        expect(report.text()).toContain('10 ergänzt');
+        expect(report.text()).toContain('Keine verifizierte Gratisquelle');
+        expect(report.text()).toContain('Prüfung mit Hinweisen');
     });
 
     it.each(['/admin/menu/data/cloudways', '/admin/menu/cloudways'])('opens Cloudways from %s', async (path) => {
