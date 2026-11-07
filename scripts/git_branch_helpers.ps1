@@ -626,13 +626,10 @@ function gitdeploy {
     Write-Host "Live target: $target $root" -ForegroundColor Yellow
     Write-Host "GitHub main: $releaseCommit; source: $sourceCommit" -ForegroundColor Yellow
     Write-Host 'Package integrity verified. GitHub tests run in the background; deployment does not wait for their result.' -ForegroundColor Cyan
-    if ((Read-Host 'Install this release on live? Type LIVE') -cne 'LIVE') {
-        throw 'Live deployment cancelled.'
-    }
     Update-StocksRemote
     if ((Invoke-StocksGit rev-parse refs/remotes/origin/main) -cne $releaseCommit -or
         (Invoke-StocksGit rev-parse HEAD) -cne $releaseCommit) {
-        throw 'main changed during confirmation. Review and retry gitdeploy.'
+        throw 'main changed during deployment preparation. Review and retry gitdeploy.'
     }
     Assert-StocksClean
     $remoteCommand = "cd '$root' && tr -d '\r' | bash -s -- '$sourceCommit'"

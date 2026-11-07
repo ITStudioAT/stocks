@@ -6894,7 +6894,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             <span class="index-watch-card-symbol">{{ indexItem.symbol }}</span>
                                             <span class="index-watch-card-country">{{ indexItem.country || '-' }}</span>
                                         </span>
-                                        <span class="index-watch-card-label">{{ indexItem.name || 'Index' }} <DataSourceMarkers :markers="marketDataMarkers(indexItem)" /></span>
+                                        <span class="index-watch-card-label">{{ indexItem.name || 'Index' }}</span>
                                         <span v-if="indexItem.instrument_type === 'ETF'" class="index-watch-card-session">ETF</span>
                                         <span class="index-watch-card-price" :class="indexChangeClass(indexItem)">
                                             <span v-if="formatIndexChangePercent(indexItem)">
@@ -6902,10 +6902,19 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             </span>
                                             <span>{{ formatIndexPrice(indexItem) }} <DataSourceMarkers :markers="marketDataMarkers(indexItem, 'latest_price')" /></span>
                                         </span>
-                                        <span v-if="indexItem.latest_price_as_of" class="index-watch-card-session">
-                                            {{ indexItem.private_quote ? 'Yahoo Finance · möglicherweise verzögert' : 'Gespeicherter Kurs' }}<br>
-                                            Kurszeit {{ formatDateTime(indexItem.latest_price_as_of) }}
-                                            <template v-if="indexItem.latest_price_fetched_at"><br>Abgerufen {{ formatDateTime(indexItem.latest_price_fetched_at) }}</template>
+                                        <span v-if="indexItem.latest_price_as_of" class="index-watch-card-quote-meta">
+                                            <span v-if="indexItem.private_quote">
+                                                Yahoo Finance<br>ggf. verzögert
+                                            </span>
+                                            <span v-else>Gespeicherter Kurs</span>
+                                            <span>
+                                                Kurszeit
+                                                <time :datetime="indexItem.latest_price_as_of">{{ formatDateTime(indexItem.latest_price_as_of) }}</time>
+                                            </span>
+                                            <span v-if="indexItem.latest_price_fetched_at">
+                                                Abgerufen
+                                                <time :datetime="indexItem.latest_price_fetched_at">{{ formatDateTime(indexItem.latest_price_fetched_at) }}</time>
+                                            </span>
                                         </span>
                                         <span
                                             v-if="indexWatchItemRefreshSchedule(indexItem).sessionWindow"
@@ -11120,6 +11129,10 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     gap: 10px;
 }
 
+.index-watch-item {
+    display: flex;
+}
+
 .index-watch-card {
     align-items: center;
     background: transparent;
@@ -11152,7 +11165,26 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 }
 
 .index-watch-card--market-status {
-    height: 190px;
+    gap: 6px;
+    height: auto;
+    min-height: 190px;
+}
+
+.index-watch-card-quote-meta {
+    border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    color: rgba(var(--v-theme-on-surface), 0.72);
+    display: grid;
+    font-size: 0.625rem;
+    gap: 4px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+    padding-top: 6px;
+    width: 100%;
+}
+
+.index-watch-card-quote-meta time {
+    display: block;
+    font-variant-numeric: tabular-nums;
 }
 
 .index-watch-card-session {
@@ -11197,6 +11229,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     line-height: 1.15;
     margin-top: 2px;
     overflow: hidden;
+    overflow-wrap: anywhere;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
 }
@@ -11209,6 +11242,8 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     font-weight: 700;
     line-height: 1.1;
     margin-top: 2px;
+    max-width: 100%;
+    overflow-wrap: anywhere;
 }
 
 .index-watch-card-price.is-up {

@@ -165,8 +165,8 @@ und nur, wenn sich die geprüften GitHub-Stände nicht verändert haben. Nach ei
 erfolgreichen Release aktualisiert `gitmain` die lokale Umgebung.
 
 `gitdeploy` verlangt einen sauberen `main` auf genau dem GitHub-Release-Commit,
-prüft das Paket und zeigt das Live-Ziel vor der Eingabe `LIVE`. Wie bei Schooltool
-läuft GitHub-CI im Hintergrund: `gitdeploy` wartet nicht auf ihren Abschluss.
+prüft das Paket und zeigt das Live-Ziel an. Der Aufruf startet nach erfolgreichen
+Prüfungen direkt die Installation. GitHub-CI läuft im Hintergrund.
 Bei einem fehlgeschlagenen CI-Lauf ist der Fehler gesondert zu beheben.
 Ein normaler Git-Push von Quellcode allein auf `main` erfüllt den Release-Vertrag
 nicht. Auch ein GitHub-PR darf nicht ohne diesen Release-Schritt nach `main` gemergt

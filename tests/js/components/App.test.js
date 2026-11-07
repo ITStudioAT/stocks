@@ -2996,12 +2996,20 @@ describe('App', () => {
         expect(indexWatchStrip.text()).toContain('6,116.53');
         expect(wrapper.findAll('button').some((button) => button.text() === 'Kurse aktualisieren')).toBe(true);
         wrapper.vm.indexWatchItems[0].private_quote = true;
+        wrapper.vm.indexWatchItems[0].source_markers = ['EODHD'];
+        wrapper.vm.indexWatchItems[0].latest_price_source_markers = ['free'];
         wrapper.vm.indexWatchItems[0].latest_price_as_of = '2026-08-06T15:30:00Z';
         wrapper.vm.indexWatchItems[0].latest_price_fetched_at = '2026-08-06T15:45:00Z';
         await wrapper.vm.$nextTick();
-        expect(indexWatchStrip.text()).toContain('Yahoo Finance · möglicherweise verzögert');
-        expect(indexWatchStrip.text()).toContain('Kurszeit');
-        expect(indexWatchStrip.text()).toContain('Abgerufen');
+        const quoteMeta = indexWatchStrip.get('.index-watch-card-quote-meta');
+        expect(quoteMeta.text()).toContain('Yahoo Finance');
+        expect(quoteMeta.text()).toContain('ggf. verzögert');
+        expect(quoteMeta.text()).toContain('Kurszeit');
+        expect(quoteMeta.text()).toContain('Abgerufen');
+        expect(quoteMeta.findAll('time').map(time => time.attributes('datetime'))).toEqual([
+            '2026-08-06T15:30:00Z', '2026-08-06T15:45:00Z',
+        ]);
+        expect(indexWatchStrip.text()).not.toContain('EODHD');
         wrapper.vm.indexEodhdSyncSettings.realtime.closed_refresh_enabled = false;
         wrapper.vm.liveDataStatusNow = Date.parse('2026-08-06T18:40:00+02:00');
         wrapper.vm.indexWatchItems.push({

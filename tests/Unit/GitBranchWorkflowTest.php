@@ -419,7 +419,7 @@ POWERSHELL);
         $this->assertNotEmpty($this->git($this->directory.'/pc', 'for-each-ref', '--format=%(refname)', 'refs/stocks/discarded'));
     }
 
-    public function test_gitdeploy_passes_the_exact_main_release_to_cloudways_while_ci_is_running(): void
+    public function test_gitdeploy_passes_the_exact_main_release_to_cloudways_without_prompting_while_ci_is_running(): void
     {
         $source = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
         mkdir($this->directory.'/pc/deployment');
@@ -433,7 +433,6 @@ POWERSHELL);
         $this->git($this->directory.'/pc', 'push', 'origin', 'main');
         $release = $this->git($this->directory.'/pc', 'rev-parse', 'HEAD');
         $this->environment['STOCKS_TEST_PREPARE'] = '1';
-        $this->environment['STOCKS_TEST_PROMPT'] = 'LIVE';
         $this->environment['STOCKS_TEST_CI'] = json_encode([[
             'status' => 'in_progress', 'conclusion' => null, 'headSha' => $release,
         ]], JSON_THROW_ON_ERROR);
