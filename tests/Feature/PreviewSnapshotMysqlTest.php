@@ -21,7 +21,7 @@ class PreviewSnapshotMysqlTest extends PreviewSnapshotDatabaseTest
             $this->markTestSkipped('Requires the dedicated isolated MySQL CI service.');
         }
         config(['database.default' => 'mysql', 'database.connections.mysql' => [
-            'driver' => 'mysql', 'host' => '127.0.0.1', 'port' => 3306,
+            'driver' => 'mysql', 'host' => '127.0.0.1', 'port' => (int) (getenv('PREVIEW_MYSQL_TEST_PORT') ?: 3306),
             'database' => 'stocks_preview_snapshot_test', 'username' => 'root',
             'password' => 'snapshot-test-only', 'charset' => 'utf8mb4',
             'collation' => 'utf8mb4_unicode_ci', 'prefix' => '', 'strict' => true,
@@ -81,7 +81,7 @@ class PreviewSnapshotMysqlTest extends PreviewSnapshotDatabaseTest
 
         try {
             $transfer = new PreviewSnapshotTransfer($database, new PreviewSnapshotArchive(new PreviewOriginalPolicy),
-                $directory.'/private', $directory.'/framework/down', $directory.'/framework/sessions', $directory.'/framework/cache/data');
+                realpath($directory.'/private'), $directory.'/framework/down', $directory.'/framework/sessions', $directory.'/framework/cache/data');
             $request = $transfer->prepare([
                 'source_app_id' => '100', 'target_app_id' => '200', 'source_commit' => str_repeat('a', 40),
                 'target_commit' => str_repeat('b', 40), 'nonce' => str_repeat('c', 64),

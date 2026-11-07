@@ -75,6 +75,30 @@ class PreviewSnapshotDatabaseTest extends TestCase
         }
     }
 
+    public function test_active_central_market_data_is_refused_instead_of_silently_omitted_from_original_snapshot(): void
+    {
+        config(['services.market_data.central_enabled' => true]);
+        $holding = StockHolding::factory()->create(['isin' => 'US8740541094', 'symbol' => 'TKE', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
+        $this->assertNotNull($holding->market_listing_id);
+        $before = DB::table('market_listings')->count();
+        try {
+            (new PreviewSnapshotDatabase(DB::getPdo(), new PreviewOriginalSchema))->export();
+            $this->fail('Central identities and prices require an explicit transfer scope.');
+        } catch (RuntimeException $exception) {
+            $this->assertStringContainsString('central market-data scope', $exception->getMessage());
+        }
+        $this->assertSame($before, DB::table('market_listings')->count());
+        $this->assertSame($holding->market_listing_id, $holding->fresh()->market_listing_id);
+    }
+
+    public function test_unknown_extra_columns_are_still_refused_by_the_snapshot_contract(): void
+    {
+        DB::statement('ALTER TABLE stock_holdings ADD COLUMN unsupported_business_value VARCHAR(32) NULL');
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Snapshot schema mismatch: stock_holdings');
+        (new PreviewSnapshotDatabase(DB::getPdo(), new PreviewOriginalSchema))->export();
+    }
+
     public function test_constraint_failure_rolls_back_deleted_original_preview_admin(): void
     {
         [$database, $original, $before] = $this->fixtures();

@@ -24,26 +24,40 @@ class PreviewOriginalSchemaTest extends TestCase
         'admin_login_codes', 'personal_access_tokens', 'jobs', 'job_batches', 'failed_jobs',
     ];
 
-    public function test_allowlist_and_keys_match_the_entire_migrated_application_schema(): void
+    public function test_legacy_allowlist_covers_business_schema_and_explicitly_excludes_central_data(): void
     {
         $this->assertSame('sqlite', config('database.default'));
         $this->assertSame(':memory:', config('database.connections.sqlite.database'));
         $schema = new PreviewOriginalSchema;
         $actualTables = array_map(fn (string $table): string => str_replace('main.', '', $table), Schema::getTableListing());
-        $actualTables = array_values(array_diff($actualTables, self::Excluded));
+        $actualTables = array_values(array_diff($actualTables, self::Excluded, PreviewOriginalSchema::CentralTables));
+        foreach (PreviewOriginalSchema::CentralTables as $table) {
+            $this->assertTrue(Schema::hasTable($table));
+        }
         $this->assertCount(35, $schema->columns());
         $this->assertEqualsCanonicalizing($actualTables, array_keys($schema->columns()));
         $this->assertSame(array_keys($schema->columns()), array_keys($schema->primaryKeys()));
         $this->assertSame(array_keys($schema->columns()), array_keys($schema->foreignKeys()));
 
         foreach ($schema->columns() as $table => $columns) {
-            $this->assertEqualsCanonicalizing(Schema::getColumnListing($table), $columns, $table);
+            $actualColumns = Schema::getColumnListing($table);
+            if ($table === 'stock_holdings') {
+                $actualColumns = array_values(array_diff($actualColumns, array_keys(PreviewOriginalSchema::CentralHoldingReferences)));
+            }
+            $this->assertEqualsCanonicalizing($actualColumns, $columns, $table);
             $this->assertCount(count(array_unique($columns)), $columns);
             $primary = array_values(array_filter(Schema::getIndexes($table), fn (array $index): bool => $index['primary']));
             $this->assertSame($primary[0]['columns'], $schema->primaryKeys()[$table], $table);
             $nullable = array_column(Schema::getColumns($table), 'nullable', 'name');
 
             foreach (Schema::getForeignKeys($table) as $foreignKey) {
+                $column = $foreignKey['columns'][0];
+                if ($table === 'stock_holdings' && isset(PreviewOriginalSchema::CentralHoldingReferences[$column])) {
+                    $this->assertSame(PreviewOriginalSchema::CentralHoldingReferences[$column], $foreignKey['foreign_table']);
+                    $this->assertTrue($nullable[$column]);
+
+                    continue;
+                }
                 $expected = [
                     'columns' => $foreignKey['columns'],
                     'foreign_table' => $foreignKey['foreign_table'],
@@ -326,6 +340,9 @@ class PreviewOriginalSchemaTest extends TestCase
             $row = [];
 
             foreach (Schema::getColumns($table) as $column) {
+                if (! in_array($column['name'], $columns, true)) {
+                    continue;
+                }
                 $row[$column['name']] = $column['nullable'] ? null : (in_array($column['type_name'], ['integer', 'tinyint', 'numeric'], true) ? 1 : 'fixture');
 
                 if ($column['name'] === 'id' && $column['type_name'] === 'varchar') {

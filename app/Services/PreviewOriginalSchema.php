@@ -6,6 +6,12 @@ use InvalidArgumentException;
 
 class PreviewOriginalSchema
 {
+    /** @var list<string> */
+    public const CentralTables = ['market_instruments', 'market_listings', 'market_source_instruments', 'market_prices', 'market_price_legacy_links', 'market_price_selections', 'market_data_runs'];
+
+    /** @var array<string, string> */
+    public const CentralHoldingReferences = ['market_listing_id' => 'market_listings', 'latest_market_price_id' => 'market_prices'];
+
     /** @var array<string, list<string>>|null */
     private ?array $columnCache = null;
 

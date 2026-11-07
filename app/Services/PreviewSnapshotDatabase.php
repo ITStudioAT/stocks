@@ -19,6 +19,15 @@ class PreviewSnapshotDatabase
 
     public function assertSchema(): void
     {
+        foreach (PreviewOriginalSchema::CentralTables as $table) {
+            $exists = $this->driver() === 'mysql'
+                ? $this->connection->prepare('SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?')
+                : $this->connection->prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
+            $exists->execute([$table]);
+            if ($exists->fetchColumn() !== false && $this->connection->query("SELECT 1 FROM `{$table}` LIMIT 1")->fetchColumn() !== false) {
+                throw new RuntimeException('Original snapshot requires an explicit central market-data scope; no central prices or identities may be omitted.');
+            }
+        }
         foreach ($this->schema->columns() as $table => $expected) {
             if ($this->driver() === 'mysql') {
                 $query = $this->connection->prepare('SELECT ENGINE FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND TABLE_TYPE = ?');
@@ -35,7 +44,19 @@ class PreviewSnapshotDatabase
                     throw new RuntimeException('Snapshot target/source business triggers are unsupported.');
                 }
             } else {
-                $actual = array_column($this->connection->query("PRAGMA table_info(`{$table}`)")->fetchAll(PDO::FETCH_ASSOC), 'name');
+                $metadata = $this->connection->query("PRAGMA table_info(`{$table}`)")->fetchAll(PDO::FETCH_ASSOC);
+                $actual = array_column($metadata, 'name');
+            }
+            if ($table === 'stock_holdings') {
+                foreach (array_intersect($actual, array_keys(PreviewOriginalSchema::CentralHoldingReferences)) as $column) {
+                    $definition = array_values(array_filter($metadata, fn (array $field): bool => ($field['Field'] ?? $field['name']) === $column))[0];
+                    $nullable = $this->driver() === 'mysql' ? $definition['Null'] === 'YES' && $definition['Default'] === null
+                        : (int) $definition['notnull'] === 0 && $definition['dflt_value'] === null;
+                    if (! $nullable || $this->connection->query("SELECT 1 FROM `stock_holdings` WHERE `{$column}` IS NOT NULL LIMIT 1")->fetchColumn() !== false) {
+                        throw new RuntimeException('Original snapshot refuses non-empty central market-data references.');
+                    }
+                    $actual = array_values(array_diff($actual, [$column]));
+                }
             }
             sort($actual);
             sort($expected);
@@ -59,6 +80,7 @@ class PreviewSnapshotDatabase
             $this->connection->beginTransaction();
         }
         try {
+            $this->assertSchema();
             $tables = $this->read();
             $this->schema->validate($tables);
 
@@ -118,6 +140,7 @@ class PreviewSnapshotDatabase
         $this->connection->beginTransaction();
         try {
             $this->lockTables();
+            $this->assertSchema();
             if ($this->digest($this->read()) !== $expectedBeforeDigest) {
                 throw new RuntimeException('Preview changed since its verified backup.');
             }

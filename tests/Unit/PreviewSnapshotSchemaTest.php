@@ -2,6 +2,7 @@
 
 namespace Tests\Unit;
 
+use App\Services\PreviewOriginalSchema;
 use App\Services\PreviewSnapshotPolicy;
 use App\Services\PreviewSnapshotSchema;
 use Illuminate\Foundation\Testing\LazilyRefreshDatabase;
@@ -14,7 +15,7 @@ class PreviewSnapshotSchemaTest extends TestCase
 {
     use LazilyRefreshDatabase;
 
-    public function test_allowlist_matches_every_column_and_foreign_key_in_the_migrated_schema(): void
+    public function test_legacy_allowlist_covers_approved_columns_and_foreign_keys(): void
     {
         $this->assertSame('sqlite', config('database.default'));
         $this->assertSame(':memory:', config('database.connections.sqlite.database'));
@@ -22,10 +23,21 @@ class PreviewSnapshotSchemaTest extends TestCase
         $this->assertEqualsCanonicalizing(PreviewSnapshotPolicy::Tables, array_keys($columns));
 
         foreach ($columns as $table => $allowed) {
-            $this->assertEqualsCanonicalizing(Schema::getColumnListing($table), $allowed, $table);
+            $actual = Schema::getColumnListing($table);
+            if ($table === 'stock_holdings') {
+                $actual = array_values(array_diff($actual, array_keys(PreviewOriginalSchema::CentralHoldingReferences)));
+            }
+            $this->assertEqualsCanonicalizing($actual, $allowed, $table);
             $this->assertCount(count(array_unique($allowed)), $allowed);
 
             foreach (Schema::getForeignKeys($table) as $foreignKey) {
+                $column = $foreignKey['columns'][0];
+                if ($table === 'stock_holdings' && isset(PreviewOriginalSchema::CentralHoldingReferences[$column])) {
+                    $this->assertSame(PreviewOriginalSchema::CentralHoldingReferences[$column], $foreignKey['foreign_table']);
+                    $this->assertTrue(collect(Schema::getColumns($table))->firstWhere('name', $column)['nullable']);
+
+                    continue;
+                }
                 $this->assertArrayHasKey($foreignKey['foreign_table'], $columns);
                 $tables = $this->fixture();
                 $tables[$table][0][$foreignKey['columns'][0]] = 999;
@@ -129,6 +141,9 @@ class PreviewSnapshotSchemaTest extends TestCase
 
         foreach ((new PreviewSnapshotSchema)->columns() as $table => $columns) {
             foreach (Schema::getColumns($table) as $column) {
+                if (! in_array($column['name'], $columns, true)) {
+                    continue;
+                }
                 $tables = $fixture;
                 $tables[$table][0][$column['name']] = null;
 
@@ -192,10 +207,16 @@ class PreviewSnapshotSchemaTest extends TestCase
             $row = [];
 
             foreach (Schema::getColumns($table) as $column) {
+                if (! in_array($column['name'], $columns, true)) {
+                    continue;
+                }
                 $row[$column['name']] = $column['nullable'] ? null : 1;
             }
 
             foreach (Schema::getForeignKeys($table) as $foreignKey) {
+                if (! in_array($foreignKey['columns'][0], $columns, true)) {
+                    continue;
+                }
                 $row[$foreignKey['columns'][0]] = 1;
             }
 
