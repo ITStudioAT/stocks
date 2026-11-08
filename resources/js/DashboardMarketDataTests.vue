@@ -1,6 +1,6 @@
 <script setup>
 import DataSourceMarkers from './DataSourceMarkers.vue';
-import { marketDataMarkers } from './utils/marketDataProvenance';
+import { marketDataDisplayText, marketDataMarkers } from './utils/marketDataProvenance';
 import { onBeforeUnmount, ref } from 'vue';
 import { request } from './stores/auth';
 import { formatPriceValue } from './utils/numberFormatters';
@@ -175,7 +175,7 @@ function finding(instrument) {
                 <v-btn v-if="loading" class="ms-2" variant="text" @click="stopSearch">Suche abbrechen</v-btn>
                 <p v-if="loading" class="text-body-2 mt-3" role="status">Katalog und begrenzte Dateistichprobe werden gelesen … {{ progress }}</p>
                 <p v-if="stopReason" class="text-body-2 mt-3" role="status">{{ stopReason }}</p>
-                <v-alert v-if="error" class="mt-4" type="error" variant="tonal" role="alert">{{ error }}</v-alert>
+                <v-alert v-if="error" class="mt-4" type="error" variant="tonal" role="alert">{{ marketDataDisplayText(error) }}</v-alert>
                 <p v-if="!result && !loading && !error" class="text-body-2 text-medium-emphasis mt-4">
                     Noch kein Test ausgeführt. Der Abruf startet erst auf Knopfdruck.
                 </p>
@@ -195,14 +195,14 @@ function finding(instrument) {
                 <p class="mb-4 text-body-2">Nicht geprüfte Zwischenzeiten bleiben offen. Die erste Stichprobe erfolgt auf Xetra; alternative Quellen werden nur für Instrumente ohne Treffer geprüft. Angezeigt wird der jüngste Trade aus den für dieses Instrument gelesenen Dateien vor dem Quellenwechsel.</p>
                 <ul class="mb-4 text-body-2" aria-label="Geprüfte Quellen und Abdeckung">
                     <li v-for="coverage in result.coverage" :key="`${coverage.source_code}-${coverage.round}`">
-                        {{ coverage.source }} · Runde {{ coverage.round + 1 }} · <template v-if="coverage.source_code === 'YAHOO'">{{ coverage.requests }} US-Anfragen</template><template v-else>{{ coverage.files }} von {{ coverage.selected }} Dateien</template>
+                        {{ marketDataDisplayText(coverage.source) }} · Runde {{ coverage.round + 1 }} · <template v-if="coverage.source_code === 'YAHOO'">{{ coverage.requests }} US-Anfragen</template><template v-else>{{ coverage.files }} von {{ coverage.selected }} Dateien</template>
                         · {{ coverage.status === 'failed' ? 'Quellenfehler – keine Abdeckung' : (coverage.status === 'partial' ? 'teilweise geprüft / Fehler oder Limit' : (coverage.status === 'skipped' ? 'keine passenden US-Instrumente' : 'geprüft')) }}
                         <span v-if="coverage.from"> · {{ dateTime(coverage.from) }} bis {{ dateTime(coverage.to) }} ({{ coverage.source_code === 'YAHOO' ? 'Datenzeiten der US-Kurse' : 'Dateisegmente, keine lückenlose Zeitreihe' }})</span>
                     </li>
                 </ul>
                 <dl class="text-body-2 mb-4">
                     <dt>Test abgeschlossen · Europe/Vienna</dt><dd>{{ dateTime(result.checked_at) }}</dd>
-                    <dt>Quellen</dt><dd>{{ result.source }} <DataSourceMarkers :markers="['free']" /> · Deutsche Börse: 15 Minuten verzögert; Yahoo: Verzögerung unbekannt</dd>
+                    <dt>Quellen</dt><dd>{{ marketDataDisplayText(result.source) }} <DataSourceMarkers :markers="['free']" /> · Deutsche Börse: 15 Minuten verzögert; Yahoo: Verzögerung unbekannt</dd>
                     <dt>Katalog erstellt</dt><dd>{{ dateTime(result.catalog_generated_at) }}</dd>
                     <dt>Jüngstes ausgewähltes Dateisegment</dt><dd>{{ dateTime(result.newest_catalog_segment_at) }}</dd>
                     <dt>Jüngster tatsächlich gelesener Quellzeitpunkt</dt>
@@ -220,7 +220,7 @@ function finding(instrument) {
                 </v-alert>
                 <v-alert v-if="result.instrument_limit_reached" class="mb-3" type="info" variant="tonal">Es werden nur die ersten 50 Instrumente nach Name geprüft.</v-alert>
                 <v-alert v-if="result.records_ignored" class="mb-3" type="info" variant="tonal">{{ result.records_ignored }} nicht preisfähige oder korrigierte Meldungen wurden übersprungen.</v-alert>
-                <v-alert v-for="warning in result.warnings" :key="warning" class="mb-3" type="warning" variant="tonal">{{ warning }}</v-alert>
+                <v-alert v-for="warning in result.warnings" :key="warning" class="mb-3" type="warning" variant="tonal">{{ marketDataDisplayText(warning) }}</v-alert>
                 <v-table density="compact" aria-label="Instrumente der Deutsche-Börse-Stichprobe">
                     <thead><tr><th>Instrument / ISIN</th><th>Gefundener Quellkurs / Trade</th><th>Zuletzt gespeicherter gültiger Kurs</th><th>Vergleich / Befund</th></tr></thead>
                     <tbody>
@@ -231,13 +231,13 @@ function finding(instrument) {
                                 <div>{{ instrument.trade_at ? dateTime(instrument.trade_at) : '–' }}</div>
                                 <div v-if="instrument.provider === 'Yahoo Finance'" class="text-caption">Yahoo Finance · {{ instrument.quote_venue || 'US-Börse ungeklärt' }} · Listing-MIC {{ instrument.listing_mic || '–' }} · Ausführungs-MIC unbekannt · {{ instrument.price_type || 'kein Kurs' }}</div>
                                 <div v-else class="text-caption">Deutsche Börse · {{ instrument.trade_source || 'Xetra' }} · MIC {{ instrument.trade_venue || '–' }}</div>
-                                <div v-if="instrument.quote_note" class="text-caption">{{ instrument.quote_note }}</div>
+                                <div v-if="instrument.quote_note" class="text-caption">{{ marketDataDisplayText(instrument.quote_note) }}</div>
                             </td>
                             <td>
                                 <template v-if="instrument.stored_quote">
                                     <div>{{ formatPriceValue(instrument.stored_quote.price) }} {{ instrument.stored_quote.currency }}</div>
                                     <div>{{ instrument.stored_quote.as_of ? dateTime(instrument.stored_quote.as_of) : `Tagesschluss ${instrument.stored_quote.trading_date} (keine Uhrzeit)` }}</div>
-                                    <div class="text-caption">{{ instrument.stored_quote.source }} <DataSourceMarkers :markers="marketDataMarkers(instrument.stored_quote)" /> · {{ instrument.stored_quote.venue || 'Handelsplatz unbekannt' }} · MIC {{ instrument.stored_quote.mic || '–' }} · {{ instrument.stored_quote.price_type }}</div>
+                                    <div class="text-caption">{{ marketDataDisplayText(instrument.stored_quote.source) }} <DataSourceMarkers :markers="marketDataMarkers(instrument.stored_quote)" /> · {{ instrument.stored_quote.venue || 'Handelsplatz unbekannt' }} · MIC {{ instrument.stored_quote.mic || '–' }} · {{ instrument.stored_quote.price_type }}</div>
                                     <div v-if="instrument.stored_quote.stale" class="text-caption text-warning">Gespeicherter Kurs veraltet (älter als vier Tage)</div>
                                 </template>
                                 <span v-else>Kein gespeicherter Kurs</span>

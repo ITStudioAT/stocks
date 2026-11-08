@@ -8,6 +8,7 @@ use App\Models\StockHolding;
 use Brick\Math\BigDecimal;
 use Brick\Math\RoundingMode;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -74,20 +75,25 @@ class DepotTransactionBooker
 
     public function positionPieces(Depot $depot, StockHolding $holding): string
     {
-        $pieces = DepotTransaction::query()
+        $transactions = DepotTransaction::query()
             ->where('depot_id', $depot->id)
             ->where('stock_holding_id', $holding->id)
             ->whereIn('type', DepotTransaction::StockTypes)
-            ->get(['type', 'pieces'])
-            ->reduce(function (float $sum, DepotTransaction $transaction): float {
-                $pieces = (float) $transaction->pieces;
+            ->get(['type', 'pieces']);
 
-                return $transaction->type === 'buy'
-                    ? $sum + $pieces
-                    : $sum - $pieces;
-            }, 0.0);
+        return $this->positionPiecesFromTransactions($transactions);
+    }
 
-        return $this->decimal($pieces, 8);
+    /** @return Collection<int, string> */
+    public function positionPiecesByHolding(Depot $depot): Collection
+    {
+        return DepotTransaction::query()
+            ->where('depot_id', $depot->id)
+            ->whereIn('type', DepotTransaction::StockTypes)
+            ->whereNotNull('stock_holding_id')
+            ->get(['stock_holding_id', 'type', 'pieces'])
+            ->groupBy('stock_holding_id')
+            ->map(fn (Collection $transactions): string => $this->positionPiecesFromTransactions($transactions));
     }
 
     /**
@@ -302,6 +308,20 @@ class DepotTransactionBooker
         throw ValidationException::withMessages([
             'type' => 'Unknown transaction type.',
         ]);
+    }
+
+    /** @param Collection<int, DepotTransaction> $transactions */
+    private function positionPiecesFromTransactions(Collection $transactions): string
+    {
+        $pieces = $transactions->reduce(function (float $sum, DepotTransaction $transaction): float {
+            $pieces = (float) $transaction->pieces;
+
+            return $transaction->type === 'buy'
+                ? $sum + $pieces
+                : $sum - $pieces;
+        }, 0.0);
+
+        return $this->decimal($pieces, 8);
     }
 
     private function decimal(float $value, int $places): string

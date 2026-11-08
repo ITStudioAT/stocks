@@ -20,5 +20,17 @@ export function marketDataMarkers(record, field = null) {
 }
 
 export function marketDataSourceText(record) {
-    return marketDataMarkers(record).join(' · ');
+    return marketDataMarkers(record).filter((marker) => marker !== 'free').join(' · ');
+}
+
+export function marketDataDisplayText(value) {
+    if (typeof value !== 'string') {
+        return value;
+    }
+
+    return value
+        .replace(/\bFree for non-commercial use\b/g, 'Available for non-commercial use')
+        .replace(/\bFree\s+([a-z])/g, (_, letter) => letter.toUpperCase())
+        .replace(/\bfree\b\s*/gi, '')
+        .trim();
 }

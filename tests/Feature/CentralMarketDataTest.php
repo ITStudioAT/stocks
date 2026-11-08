@@ -203,6 +203,54 @@ class CentralMarketDataTest extends TestCase
         Http::assertNothingSent();
     }
 
+    public function test_analysis_trend_summary_reads_the_central_store(): void
+    {
+        $holding = $this->holding();
+        foreach (['2026-11-04' => 188, '2026-11-05' => 190, '2026-11-06' => 190] as $date => $value) {
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => $date,
+                'currency' => 'EUR',
+                'close' => $value,
+                'adjusted_close' => $value,
+            ]);
+        }
+        app(MarketPriceLegacyImporter::class)->run(1);
+        config(['services.market_data.central_enabled' => true]);
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin'));
+
+        $this->actingAs($admin)->getJson('/admin/analysis/trends')->assertOk()
+            ->assertJsonCount(1, 'trends')
+            ->assertJsonPath('trends.0.id', $holding->id)
+            ->assertJsonPath('trends.0.direction', 'up')
+            ->assertJsonPath('trends.0.count', 2);
+    }
+
+    public function test_analysis_reads_stored_daily_prices_from_the_central_store(): void
+    {
+        $holding = $this->holding();
+        StockHoldingDailyPrice::factory()->create([
+            'stock_holding_id' => $holding->id,
+            'trading_date' => '2026-11-05',
+            'currency' => 'EUR',
+            'close' => '190.00000000',
+            'adjusted_close' => '189.00000000',
+        ]);
+        app(MarketPriceLegacyImporter::class)->run(1);
+        config(['services.market_data.central_enabled' => true]);
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin'));
+        Http::preventStrayRequests();
+
+        $this->actingAs($admin)->getJson("/admin/analysis/holdings/{$holding->id}/historical-prices")
+            ->assertOk()
+            ->assertJsonCount(1, 'prices')
+            ->assertJsonPath('prices.0.trading_date', '2026-11-05')
+            ->assertJsonPath('prices.0.price', '189.00000000');
+        Http::assertNothingSent();
+    }
+
     public function test_central_readers_use_shared_prices_without_provider_requests_and_history_cache_avoids_scans(): void
     {
         $holding = $this->holding();

@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import { mergeMarketDataMarkers } from './utils/marketDataProvenance';
 
 const props = defineProps({ markers: { type: Array, default: () => [] } });
-const visibleMarkers = computed(() => mergeMarketDataMarkers(props.markers));
+const visibleMarkers = computed(() => mergeMarketDataMarkers(props.markers).filter((marker) => marker !== 'free'));
 </script>
 
 <template>

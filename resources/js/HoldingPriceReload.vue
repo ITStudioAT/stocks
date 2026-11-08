@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue';
 import { useDepotStore } from './stores/depots';
 import { hasPriceValue } from './utils/numberFormatters';
+import { marketDataDisplayText } from './utils/marketDataProvenance';
 
 const props = defineProps({ holding: { type: Object, required: true } });
 const depots = useDepotStore();
@@ -84,9 +85,9 @@ function checkedAt(value) {
             class="text-caption text-wrap"
             :class="{ 'text-error': error || result?.status === 'error', 'text-warning': result?.status === 'incomplete' }"
         >
-            {{ error || result?.message || '' }}
+            {{ marketDataDisplayText(error || result?.message || '') }}
             <span v-if="result?.checked_at">Checked {{ checkedAt(result.checked_at) }} Vienna.</span>
-            <span v-if="result?.warnings?.length">{{ result.warnings.join(' ') }}</span>
+            <span v-if="result?.warnings?.length">{{ marketDataDisplayText(result.warnings.join(' ')) }}</span>
         </span>
     </div>
 </template>

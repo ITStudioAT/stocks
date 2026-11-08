@@ -8,11 +8,12 @@ import { useRoleStore } from './stores/roles';
 import { useUserStore } from './stores/users';
 import { formatAdaptiveNumber, formatPriceValue, hasPriceValue } from './utils/numberFormatters';
 import HoldingPriceReload from './HoldingPriceReload.vue';
+import AnalysisPriceHistory from './AnalysisPriceHistory.vue';
 import InstrumentSearchSource from './InstrumentSearchSource.vue';
 import DataSourceMarkers from './DataSourceMarkers.vue';
 import PerformanceConsistency from './PerformanceConsistency.vue';
 import CloudwaysSynchronization from './CloudwaysSynchronization.vue';
-import { marketDataMarkers, marketDataSourceText, mergeMarketDataMarkers } from './utils/marketDataProvenance';
+import { marketDataDisplayText, marketDataMarkers, marketDataSourceText, mergeMarketDataMarkers } from './utils/marketDataProvenance';
 const logoMarkUrl = '/images/gkstocks-logo-mark.png';
 const displayTimeZone = 'Europe/Vienna';
 const kestTaxRate = 0.275;
@@ -181,6 +182,14 @@ const isCashTransactionDialogOpen = ref(false);
 const isStockTransactionDialogOpen = ref(false);
 const selectedHolding = ref(null);
 const selectedStockWatchItem = ref(null);
+const expandedAnalysisHoldingId = ref(null);
+const expandedAnalysisCardId = ref(null);
+const analysisOverviewBackButton = ref(null);
+const analysisTrends = ref([]);
+const analysisTrendsLoading = ref(false);
+const analysisTrendsError = ref('');
+const expandedAnalysisCard = computed(() => analysisTrends.value.find((trend) => trend.id === expandedAnalysisCardId.value) ?? null);
+const analysisPriceHistories = ref({});
 const selectedStockPriceRange = ref('intraday');
 const isStockPriceChartLoading = ref(false);
 const stockPriceChartError = ref('');
@@ -296,7 +305,8 @@ const isHandsetLandscape = computed(() => viewportWidth.value <= 960
     && viewportWidth.value > viewportHeight.value);
 const isCompactDepotStocksTable = computed(() => isHandsetLandscape.value);
 const isCompactCashLedgerTable = computed(() => isHandsetLandscape.value);
-const watchListTableColumnCount = computed(() => (isCompactWatchListTable.value ? 4 : 5));
+const watchListTableColumnCount = computed(() => (isCompactWatchListTable.value ? 4 : 5)
+    - (activeSection.value === 'analysis' ? 1 : 0));
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
 const visibleHoldingMessage = computed(() => {
     if (priceRefresh.value && isFinishedPriceRefresh(priceRefresh.value)) {
@@ -612,6 +622,11 @@ const menuItems = computed(() => [
         label: 'Stocks',
         icon: 'mdi-finance',
     },
+    {
+        key: 'analysis',
+        label: 'Analysis',
+        icon: 'mdi-chart-box-outline',
+    },
     ...(canManageDashboardAdmin.value ? [
         {
             key: 'data',
@@ -754,6 +769,12 @@ watch(
         }
     },
 );
+
+watch(activeSection, (section) => {
+    if (section === 'analysis') {
+        loadAnalysisTrends();
+    }
+});
 
 watch(activeSection, (section) => {
     depotsStore.cancelIntradayRefreshes();
@@ -1066,7 +1087,7 @@ async function reloadSelectedIndexWatchItem() {
 }
 
 function navigateSection(section) {
-    const knownSections = ['dashboard', 'indices', 'stocks', 'profile', 'data', 'infos', 'depot', 'depots', 'users', 'roles'];
+    const knownSections = ['dashboard', 'indices', 'stocks', 'analysis', 'profile', 'data', 'infos', 'depot', 'depots', 'users', 'roles'];
 
     if (!knownSections.includes(section)) {
         activeSection.value = 'dashboard';
@@ -1077,6 +1098,10 @@ function navigateSection(section) {
     }
 
     activeSection.value = section;
+
+    if (section === 'analysis') {
+        selectedStockWatchItem.value = null;
+    }
 
     if (section === 'infos' && !isInfoSubsection(activeInfoSubsection.value)) {
         activeInfoSubsection.value = 'eodhd';
@@ -1123,8 +1148,8 @@ function navigateSection(section) {
         ]).catch(() => {});
     }
 
-    if (section === 'stocks') {
-        if (selectedStockWatchItem.value) {
+    if (['stocks', 'analysis'].includes(section)) {
+        if (section === 'stocks' && selectedStockWatchItem.value) {
             loadSelectedStockPrices();
         } else {
             loadWatchlistHoldingsForActiveSection(1).catch(() => {});
@@ -1211,10 +1236,14 @@ async function refreshVisibleApplicationData() {
         );
     }
 
-    if (activeSection.value === 'stocks') {
+    if (['stocks', 'analysis'].includes(activeSection.value)) {
         refreshRequests.push(
             loadWatchlistHoldingsForActiveSection(holdingsPagination.value.current_page, { silent: true }),
         );
+    }
+
+    if (activeSection.value === 'analysis') {
+        refreshRequests.push(loadAnalysisTrends());
     }
 
     if (activeSection.value === 'infos') {
@@ -1334,7 +1363,7 @@ function infoMethodClassName(className) {
 }
 
 function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.current_page, options = {}) {
-    if (activeSection.value !== 'stocks'
+    if (!['stocks', 'analysis'].includes(activeSection.value)
         && !(activeSection.value === 'depot' && activeDepotSubsection.value === 'overview')) {
         return Promise.resolve();
     }
@@ -1459,6 +1488,14 @@ function applyRouteFromPath() {
             activeDataSubsection.value = (normalizedSection === 'cloudways' || subsectionSegment === 'cloudways') && canUseCloudways.value
                 ? 'cloudways'
                 : 'overview';
+            updateUrlPath({ replace: true });
+
+            return;
+        }
+
+        if (normalizedSection === 'analysis' || (normalizedSection === 'stocks' && subsectionSegment === 'analysis')) {
+            activeSection.value = 'analysis';
+            selectedStockWatchItem.value = null;
             updateUrlPath({ replace: true });
 
             return;
@@ -2711,7 +2748,85 @@ async function loadSelectedStockPrices() {
     }
 }
 
+async function loadAnalysisTrends() {
+    if (analysisTrendsLoading.value) {
+        return;
+    }
+
+    analysisTrendsLoading.value = true;
+    analysisTrendsError.value = '';
+
+    try {
+        const response = await request('/admin/analysis/trends');
+        analysisTrends.value = response.trends ?? [];
+    } catch (error) {
+        analysisTrendsError.value = error.message || 'Unable to load trend overview.';
+    } finally {
+        analysisTrendsLoading.value = false;
+    }
+}
+
+async function loadAnalysisPriceHistory(holding) {
+    analysisPriceHistories.value[holding.id] = { loading: true, error: '', prices: [] };
+
+    try {
+        const response = await request(`/admin/analysis/holdings/${holding.id}/historical-prices`);
+        analysisPriceHistories.value[holding.id] = {
+            loading: false,
+            error: '',
+            prices: response.prices ?? [],
+            trend_anchor: response.trend_anchor ?? null,
+            trend_prior_count: response.trend_prior_count ?? null,
+        };
+    } catch (error) {
+        analysisPriceHistories.value[holding.id] = {
+            loading: false,
+            error: error.message || 'Unable to load historical prices.',
+            prices: [],
+        };
+    }
+}
+
+function toggleAnalysisHolding(holding) {
+    if (expandedAnalysisHoldingId.value === holding.id) {
+        expandedAnalysisHoldingId.value = null;
+
+        return;
+    }
+
+    expandedAnalysisHoldingId.value = holding.id;
+    ensureAnalysisPriceHistory(holding);
+}
+
+async function selectAnalysisCard(holding) {
+    expandedAnalysisCardId.value = holding.id;
+    ensureAnalysisPriceHistory(holding);
+    await nextTick();
+    analysisOverviewBackButton.value?.focus();
+}
+
+async function returnToAnalysisCards() {
+    const selectedId = expandedAnalysisCardId.value;
+    expandedAnalysisCardId.value = null;
+    await nextTick();
+    document.getElementById(`analysis-trend-card-${selectedId}`)?.focus();
+}
+
+function ensureAnalysisPriceHistory(holding) {
+    const history = analysisPriceHistories.value[holding.id];
+
+    if (!history || history.error) {
+        loadAnalysisPriceHistory(holding);
+    }
+}
+
 function handleStockHoldingRowClick(holding) {
+    if (activeSection.value === 'analysis') {
+        toggleAnalysisHolding(holding);
+
+        return;
+    }
+
     if (activeSection.value === 'stocks') {
         toggleStockWatchItemSelection(holding);
 
@@ -4871,7 +4986,7 @@ function latestPriceClass(holding) {
 }
 
 function watchListLatestPriceClass(holding) {
-    if (activeSection.value === 'stocks' && !stockHoldingRefreshSchedule(holding).isActive) {
+    if (['stocks', 'analysis'].includes(activeSection.value) && !stockHoldingRefreshSchedule(holding).isActive) {
         return {
             'text-success': holding.latest_price_trend === 'up',
             'text-error': holding.latest_price_trend === 'down',
@@ -6055,7 +6170,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 
             <v-main>
                 <v-container class="py-8" :fluid="lgAndDown">
-                    <section v-if="['dashboard', 'indices', 'stocks'].includes(activeSection)">
+                    <section v-if="['dashboard', 'indices', 'stocks', 'analysis'].includes(activeSection)">
                         <div v-if="activeSection === 'dashboard'" class="dashboard-version-page" aria-label="Dashboard">
                             <v-card
                                 class="dashboard-version-card"
@@ -6159,7 +6274,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     type="error"
                                     variant="tonal"
                                 >
-                                    {{ dashboardDailyPerformanceError }}
+                                    {{ marketDataDisplayText(dashboardDailyPerformanceError) }}
                                 </v-alert>
 
                                 <v-alert
@@ -6170,7 +6285,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     variant="tonal"
                                     role="status"
                                 >
-                                    {{ dashboardPerformanceRepairFeedback.label }} · {{ dashboardPerformanceRepairFeedback.message }}
+                                    {{ dashboardPerformanceRepairFeedback.label }} · {{ marketDataDisplayText(dashboardPerformanceRepairFeedback.message) }}
                                 </v-alert>
 
                                 <div class="dashboard-performance-grid">
@@ -6310,6 +6425,67 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             </div>
                         </div>
 
+                        <div v-if="activeSection === 'analysis'" class="dashboard-heading mb-6" aria-label="Analysis dashboard">
+                            <div>
+                                <p class="text-overline text-primary mb-1">Stocks</p>
+                                <h1 class="text-h4">Analysis</h1>
+                            </div>
+                        </div>
+
+                        <section v-if="activeSection === 'analysis'" class="mb-6" aria-label="Longest current trends">
+                            <h2 class="text-subtitle-1 mb-2">Longest current trends</h2>
+                            <p class="text-caption text-medium-emphasis mb-3">All stocks ranked by consecutive observations; unchanged prices count. Based on the latest stored daily prices.</p>
+                            <p v-if="analysisTrendsLoading" role="status" class="text-body-2">Loading trends…</p>
+                            <v-alert v-else-if="analysisTrendsError" type="error" variant="tonal" density="compact">
+                                {{ marketDataDisplayText(analysisTrendsError) }}
+                                <v-btn size="small" variant="text" @click="loadAnalysisTrends">Retry</v-btn>
+                            </v-alert>
+                            <p v-else-if="analysisTrends.length === 0" class="text-body-2 text-medium-emphasis">No stocks are available.</p>
+                            <template v-else>
+                                <div v-if="!expandedAnalysisCard" class="analysis-trend-grid">
+                                    <article v-for="trend in analysisTrends" :key="trend.id" class="analysis-trend-card">
+                                        <button
+                                            type="button"
+                                            class="analysis-trend-card-button"
+                                            :id="`analysis-trend-card-${trend.id}`"
+                                            @click="selectAnalysisCard(trend)"
+                                        >
+                                            <span class="sr-only">Show price history for </span>
+                                            <span class="analysis-trend-card-top">
+                                                <span v-if="trend.direction" class="analysis-trend-badge" :class="trend.direction === 'up' ? 'analysis-trend-badge--up' : 'analysis-trend-badge--down'">
+                                                    {{ trend.direction === 'up' ? '↑ Up' : '↓ Down' }} <strong>{{ trend.count }}</strong>
+                                                </span>
+                                                <span v-else class="analysis-trend-badge analysis-trend-badge--neutral">No trend</span>
+                                                <span class="analysis-trend-position-state">{{ hasPositionPieces(trend) ? 'Held' : 'Not held' }}</span>
+                                            </span>
+                                            <span class="analysis-trend-name">{{ trend.name || `Stock ${trend.id}` }}</span>
+                                            <span class="analysis-trend-pieces"><span>Pieces</span><strong>{{ formatPositionPieces(trend) }}</strong></span>
+                                        </button>
+                                    </article>
+                                </div>
+                                <div v-else id="analysis-card-history" class="rounded border border-slate-300 dark:border-slate-600">
+                                    <div class="d-flex flex-wrap align-center ga-3 px-4 pt-3">
+                                        <button
+                                            ref="analysisOverviewBackButton"
+                                            type="button"
+                                            class="analysis-trend-back"
+                                            aria-label="Back to all stocks"
+                                            @click="returnToAnalysisCards"
+                                        >
+                                            ← All stocks
+                                        </button>
+                                        <h3 class="text-subtitle-2 break-words [overflow-wrap:anywhere]">{{ expandedAnalysisCard.name || `Stock ${expandedAnalysisCard.id}` }}</h3>
+                                    </div>
+                                    <AnalysisPriceHistory
+                                        :holding="expandedAnalysisCard"
+                                        :history="analysisPriceHistories[expandedAnalysisCard.id]"
+                                        @close="returnToAnalysisCards"
+                                        @retry="loadAnalysisPriceHistory(expandedAnalysisCard)"
+                                    />
+                                </div>
+                            </template>
+                        </section>
+
                         <div v-if="activeSection === 'indices'" aria-label="Indices">
                             <div class="dashboard-heading mb-6">
                                 <div>
@@ -6361,10 +6537,10 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 {{ privateIndexRefreshStatus === 'running' ? 'Kursaktualisierung läuft im Hintergrund.' : 'Kursaktualisierung wartet in der Queue.' }}
                             </v-alert>
                             <v-alert v-else-if="indexMessage" type="success" variant="tonal" density="compact" class="mb-4">
-                                {{ indexMessage }}
+                                {{ marketDataDisplayText(indexMessage) }}
                             </v-alert>
                             <v-alert v-if="indexError || holdingsError" type="error" variant="tonal" density="compact" class="mb-4">
-                                {{ indexError || holdingsError }}
+                                {{ marketDataDisplayText(indexError || holdingsError) }}
                             </v-alert>
 
                             <v-alert
@@ -6435,18 +6611,18 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             density="compact"
                             class="mb-4"
                         >
-                            {{ visibleHoldingMessage }}
+                            {{ marketDataDisplayText(visibleHoldingMessage) }}
                         </v-alert>
                         <v-alert
-                            v-if="activeSection === 'stocks' && (holdingError || holdingsError)"
+                            v-if="['stocks', 'analysis'].includes(activeSection) && (holdingError || holdingsError)"
                             type="error"
                             variant="tonal"
                             density="compact"
                             class="mb-4"
                         >
-                            {{ holdingError || holdingsError }}
+                            {{ marketDataDisplayText(holdingError || holdingsError) }}
                         </v-alert>
-                        <section v-if="activeSection === 'stocks'" class="watch-list-section mb-4" aria-label="Stocks">
+                        <section v-if="['stocks', 'analysis'].includes(activeSection)" class="watch-list-section mb-4" aria-label="Stocks">
                             <div class="watch-list-section-header">
                                 <div>
                                     <div class="watch-list-section-eyebrow">Watch-list</div>
@@ -6473,10 +6649,12 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         :aria-selected="activeSection === 'stocks'
                                             ? selectedStockWatchItem?.id === holding.id
                                             : undefined"
-                                        :tabindex="activeSection === 'stocks' ? 0 : undefined"
-                                        @click="activeSection === 'stocks' && toggleStockWatchItemSelection(holding)"
-                                        @keydown.enter.prevent="activeSection === 'stocks' && toggleStockWatchItemSelection(holding)"
-                                        @keydown.space.prevent="activeSection === 'stocks' && toggleStockWatchItemSelection(holding)"
+                                        :aria-expanded="activeSection === 'analysis' ? expandedAnalysisHoldingId === holding.id : undefined"
+                                        :role="activeSection === 'analysis' ? 'button' : undefined"
+                                        tabindex="0"
+                                        @click="handleStockHoldingRowClick(holding)"
+                                        @keydown.enter.prevent="handleStockHoldingRowClick(holding)"
+                                        @keydown.space.prevent="handleStockHoldingRowClick(holding)"
                                     >
                                     <div class="mobile-stock-name">
                                         {{ stockDisplayName(holding) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding)" />
@@ -6488,7 +6666,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         Pieces: {{ formatPositionPieces(holding) }}
                                     </div>
                                     <div
-                                        v-if="activeSection === 'stocks'"
+                                        v-if="['stocks', 'analysis'].includes(activeSection)"
                                         class="stock-holding-refresh-statuses d-flex flex-wrap align-center ga-1"
                                     >
                                         <v-chip
@@ -6543,7 +6721,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             </dd>
                                         </div>
                                     </dl>
-                                    <HoldingPriceReload :holding="holding" />
+                                    <HoldingPriceReload v-if="activeSection === 'stocks'" :holding="holding" />
                                     <div v-if="activeSection === 'stocks'" class="mobile-stock-actions" @click.stop @keydown.stop>
                                         <v-btn
                                             aria-label="Edit stock"
@@ -6574,8 +6752,16 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         />
                                     </div>
                                     </article>
+                                    <AnalysisPriceHistory
+                                        v-if="activeSection === 'analysis' && expandedAnalysisHoldingId === holding.id"
+                                        :holding="holding"
+                                        :history="analysisPriceHistories[holding.id]"
+                                        @close="expandedAnalysisHoldingId = null"
+                                        @retry="loadAnalysisPriceHistory(holding)"
+                                    />
                                     <div
-                                        v-show="activeSection === 'stocks' && selectedStockWatchItem?.id === holding.id"
+                                        v-if="activeSection === 'stocks'"
+                                        v-show="selectedStockWatchItem?.id === holding.id"
                                         :id="`mobile-stock-chart-target-${holding.id}`"
                                         class="stock-price-chart-mobile-target"
                                     />
@@ -6591,17 +6777,17 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 <col class="watch-list-name-column" />
                                 <col class="watch-list-latest-column" />
                                 <col class="watch-list-last-day-column" />
-                                <col class="watch-list-actions-column" />
+                                <col v-if="activeSection === 'stocks'" class="watch-list-actions-column" />
                             </colgroup>
                             <thead>
                                 <tr>
                                     <th v-if="!isCompactWatchListTable" scope="col">Symbol</th>
                                     <th scope="col">Name</th>
                                     <th scope="col">{{ isHandsetLandscape ? 'Price' : 'Latest price' }}</th>
-                                    <th scope="col" title="Last observed free price of the previous trading day; not an official close. Missing observations stay unavailable.">
+                                    <th scope="col" title="Last observed price of the previous trading day; not an official close. Missing observations stay unavailable.">
                                         Last day
                                     </th>
-                                    <th scope="col" class="text-right watch-list-actions-cell">
+                                    <th v-if="activeSection === 'stocks'" scope="col" class="text-right watch-list-actions-cell">
                                         Actions
                                     </th>
                                 </tr>
@@ -6617,7 +6803,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             'stock-holding-row--selected': activeSection === 'stocks'
                                                 && selectedStockWatchItem?.id === holding.id,
                                         }"
-                                        :aria-expanded="activeSection === 'stocks' ? undefined : isHoldingExpanded(holding)"
+                                        :aria-expanded="activeSection === 'analysis' ? expandedAnalysisHoldingId === holding.id : undefined"
                                         :aria-selected="activeSection === 'stocks'
                                             ? selectedStockWatchItem?.id === holding.id
                                             : undefined"
@@ -6715,7 +6901,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                     </span>
                                                 </span>
                                             </span>
-                                            <HoldingPriceReload :holding="holding" />
+                                            <HoldingPriceReload v-if="activeSection === 'stocks'" :holding="holding" />
                                         </td>
                                         <td v-else class="watch-list-price-cell">
                                             <span class="latest-price-value d-inline-flex flex-column" :class="watchListLatestPriceClass(holding)">
@@ -6744,7 +6930,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                     {{ formatLatestPriceChangePercent(holding) }}
                                                 </span>
                                             </span>
-                                            <HoldingPriceReload :holding="holding" />
+                                            <HoldingPriceReload v-if="activeSection === 'stocks'" :holding="holding" />
                                         </td>
                                         <td class="watch-list-price-cell">
                                             <span>{{ formatSessionPrice(holding.end_price_24, holding) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'end_price_24')" /></span>
@@ -6752,7 +6938,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 {{ formatViennaTime(holding.end_price_24_as_of) }}
                                             </time>
                                         </td>
-                                        <td class="watch-list-actions-cell">
+                                        <td v-if="activeSection === 'stocks'" class="watch-list-actions-cell">
                                             <div class="d-flex justify-end gap-1" @keydown.stop>
                                                 <v-btn
                                                     icon
@@ -6790,15 +6976,26 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             </div>
                                         </td>
                                     </tr>
+                                    <tr v-if="activeSection === 'analysis' && expandedAnalysisHoldingId === holding.id" class="stock-holding-detail-row">
+                                        <td :colspan="watchListTableColumnCount">
+                                            <AnalysisPriceHistory
+                                                :holding="holding"
+                                                :history="analysisPriceHistories[holding.id]"
+                                                @close="expandedAnalysisHoldingId = null"
+                                                @retry="loadAnalysisPriceHistory(holding)"
+                                            />
+                                        </td>
+                                    </tr>
                                     <tr
-                                        v-show="activeSection === 'stocks' && selectedStockWatchItem?.id === holding.id"
+                                        v-if="activeSection === 'stocks'"
+                                        v-show="selectedStockWatchItem?.id === holding.id"
                                         class="stock-price-chart-row"
                                     >
                                         <td :colspan="watchListTableColumnCount">
                                             <div :id="`desktop-stock-chart-target-${holding.id}`" />
                                         </td>
                                     </tr>
-                                    <tr v-if="activeSection !== 'stocks' && isHoldingExpanded(holding)" class="stock-holding-detail-row">
+                                    <tr v-if="!['stocks', 'analysis'].includes(activeSection) && isHoldingExpanded(holding)" class="stock-holding-detail-row">
                                         <td :colspan="watchListTableColumnCount">
                                             <div
                                                 v-if="expandedHoldingIntradayLoading(holding)"
@@ -6813,7 +7010,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 variant="tonal"
                                                 density="compact"
                                             >
-                                                {{ expandedHoldingIntradayError(holding) }}
+                                                {{ marketDataDisplayText(expandedHoldingIntradayError(holding)) }}
                                             </v-alert>
                                             <div
                                                 v-else-if="expandedHoldingIntradayRows(holding).length"
@@ -6963,7 +7160,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                             :cx="point.x"
                                                             :cy="point.y"
                                                             r="2.8"
-                                                        ><title>{{ marketDataSourceText(point) }} · {{ point.source_name || 'Stored source' }} · {{ point.datetime }} · {{ point.interval }}</title></circle>
+                                                        ><title>{{ marketDataSourceText(point) }} · {{ marketDataDisplayText(point.source_name || 'Stored source') }} · {{ point.datetime }} · {{ point.interval }}</title></circle>
                                                     </svg>
                                                 </div>
                                                 <div class="holding-intraday-table-wrap">
@@ -6987,7 +7184,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 </div>
                                             </div>
                                             <span v-else class="text-body-2 text-medium-emphasis">
-                                                No stored intraday observations available for this session. Free source coverage can have gaps.
+                                                No stored intraday observations available for this session. Source coverage can have gaps.
                                             </span>
                                         </td>
                                     </tr>
@@ -7053,7 +7250,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     variant="tonal"
                                     density="compact"
                                 >
-                                    {{ stockPriceChartError }}
+                                    {{ marketDataDisplayText(stockPriceChartError) }}
                                 </v-alert>
                                 <div class="index-price-current mb-4">
                                     <span class="text-caption text-medium-emphasis">Actual price</span>
@@ -7207,14 +7404,14 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                         </Teleport>
 
                         <v-progress-linear
-                            v-if="activeSection === 'stocks' && (holdingsLoading || holdings.some(holding => holding.historical_prices_fetching))"
+                            v-if="['stocks', 'analysis'].includes(activeSection) && (holdingsLoading || holdings.some(holding => holding.historical_prices_fetching))"
                             indeterminate
                             color="primary"
                             class="mt-4"
                         />
 
                         <v-pagination
-                            v-if="activeSection === 'stocks' && holdingsPagination.last_page > 1"
+                            v-if="['stocks', 'analysis'].includes(activeSection) && holdingsPagination.last_page > 1"
                             v-model="holdingsPagination.current_page"
                             class="mt-6"
                             :length="holdingsPagination.last_page"
@@ -7259,7 +7456,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     />
 
                                     <v-alert v-if="stockSearchError" type="error" variant="tonal" density="compact" class="mb-4">
-                                        {{ stockSearchError }}
+                                        {{ marketDataDisplayText(stockSearchError) }}
                                     </v-alert>
 
                                     <v-table v-if="stockSearchResults.length > 0">
@@ -7280,7 +7477,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 <td>
                                                     {{ result.name }}
                                                     <div v-if="result.source_name" class="text-caption text-medium-emphasis">
-                                                        {{ result.source_name }} <DataSourceMarkers :markers="marketDataMarkers(result)" /><span v-if="result.source_as_of"> · {{ result.source_as_of }}</span>
+                                                        {{ marketDataDisplayText(result.source_name) }} <DataSourceMarkers :markers="marketDataMarkers(result)" /><span v-if="result.source_as_of"> · {{ result.source_as_of }}</span>
                                                     </div>
                                                 </td>
                                                 <td>{{ result.isin || '-' }}</td>
@@ -7328,7 +7525,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             type="error"
                                             variant="tonal"
                                         >
-                                            {{ holdingError }}
+                                            {{ marketDataDisplayText(holdingError) }}
                                         </v-alert>
                                         <v-row>
                                             <v-col cols="12" sm="4">
@@ -7575,11 +7772,11 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </form>
 
                                     <v-alert v-if="stockSearchError || indexError" type="error" variant="tonal" density="compact" class="mb-4">
-                                        {{ stockSearchError || indexError }}
+                                        {{ marketDataDisplayText(stockSearchError || indexError) }}
                                     </v-alert>
 
                                     <v-alert v-if="indexMessage" type="success" variant="tonal" density="compact" class="mb-4">
-                                        {{ indexMessage }}
+                                        {{ marketDataDisplayText(indexMessage) }}
                                     </v-alert>
 
                                     <v-table v-if="stockSearchResults.length > 0">
@@ -7600,7 +7797,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 <td>
                                                     {{ result.name }}
                                                     <div v-if="result.source_name" class="text-caption text-medium-emphasis">
-                                                        {{ result.source_name }} <DataSourceMarkers :markers="marketDataMarkers(result)" /><span v-if="result.source_as_of"> · {{ result.source_as_of }}</span>
+                                                        {{ marketDataDisplayText(result.source_name) }} <DataSourceMarkers :markers="marketDataMarkers(result)" /><span v-if="result.source_as_of"> · {{ result.source_as_of }}</span>
                                                     </div>
                                                 </td>
                                                 <td>{{ result.isin || '-' }}</td>
@@ -7690,7 +7887,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         variant="tonal"
                                         density="compact"
                                     >
-                                        {{ indexPriceChartError }}
+                                        {{ marketDataDisplayText(indexPriceChartError) }}
                                     </v-alert>
                                     <div class="index-price-current mb-4">
                                         <span class="text-caption text-medium-emphasis">Actual price</span>
@@ -8106,7 +8303,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             type="error"
                             variant="tonal"
                         >
-                            {{ infoTablesError }}
+                            {{ marketDataDisplayText(infoTablesError) }}
                         </v-alert>
 
                         <div class="info-summary-grid mb-6">
@@ -8166,9 +8363,9 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             <div class="text-caption text-medium-emphasis mt-1">{{ table.category }}</div>
                                         </td>
                                         <td>
-                                            <div>{{ table.purpose }}</div>
+                                            <div>{{ marketDataDisplayText(table.purpose) }}</div>
                                             <div class="text-caption text-medium-emphasis mt-2" lang="de">
-                                                {{ table.purpose_de }}
+                                                {{ marketDataDisplayText(table.purpose_de) }}
                                             </div>
                                         </td>
                                         <td>
@@ -8185,7 +8382,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 {{ table.eodhd.endpoint }}
                                             </code>
                                             <div v-else class="text-caption text-medium-emphasis">
-                                                {{ table.eodhd.access }}
+                                                {{ marketDataDisplayText(table.eodhd.access) }}
                                             </div>
                                             <div
                                                 v-if="table.eodhd.documentation?.length"
@@ -8207,7 +8404,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 </v-btn>
                                             </div>
                                         </td>
-                                        <td>{{ table.cadence }}</td>
+                                        <td>{{ marketDataDisplayText(table.cadence) }}</td>
                                         <td>
                                             <v-chip
                                                 class="mb-2"
@@ -8253,7 +8450,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 type="error"
                                 variant="tonal"
                             >
-                                {{ infoTablesError }}
+                                {{ marketDataDisplayText(infoTablesError) }}
                             </v-alert>
 
                             <v-progress-linear v-if="infoTablesLoading" class="mb-4" color="primary" indeterminate />
@@ -8296,12 +8493,12 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     class="info-method-card"
                                     variant="outlined"
                                 >
-                                    <v-card-title>{{ method.title }}</v-card-title>
+                                    <v-card-title>{{ marketDataDisplayText(method.title) }}</v-card-title>
                                     <v-card-subtitle>
                                         <code class="info-api-path">{{ method.access }}</code>
                                     </v-card-subtitle>
                                     <v-card-text>
-                                        <p class="mb-3">{{ method.description }}</p>
+                                        <p class="mb-3">{{ marketDataDisplayText(method.description) }}</p>
 
                                         <div class="d-flex flex-wrap ga-2 mb-3">
                                             <v-chip
@@ -8333,7 +8530,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         </div>
 
                                         <p class="text-body-2 text-medium-emphasis mb-4">
-                                            {{ method.execution.description }}
+                                            {{ marketDataDisplayText(method.execution.description) }}
                                         </p>
 
                                         <div class="info-method-section">
@@ -8359,7 +8556,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                         size="x-small"
                                                         variant="outlined"
                                                     >
-                                                        {{ laravelMethod.layer }}
+                                                        {{ marketDataDisplayText(laravelMethod.layer) }}
                                                     </v-chip>
                                                     <code>
                                                         {{ infoMethodClassName(laravelMethod.class) }}::{{ laravelMethod.method }}()
@@ -8392,7 +8589,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             type="info"
                                             variant="tonal"
                                         >
-                                            {{ method.note }}
+                                            {{ marketDataDisplayText(method.note) }}
                                         </v-alert>
                                     </v-card-text>
                                 </v-card>
@@ -8451,7 +8648,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     density="compact"
                                     class="mb-3"
                                 >
-                                    {{ depotStockPeriodError }}
+                                    {{ marketDataDisplayText(depotStockPeriodError) }}
                                 </v-alert>
 
                                 <div v-if="depotStockPeriodStocks.length > 0" class="mobile-depot-year-stocks">
@@ -8652,7 +8849,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             <p class="text-overline text-medium-emphasis mb-2">Depot stocks</p>
                             <v-progress-linear v-if="transactionsLoading" indeterminate class="mb-2" />
                             <v-alert v-if="transactionsError" type="error" variant="tonal" density="compact" class="mb-2">
-                                {{ transactionsError }}
+                                {{ marketDataDisplayText(transactionsError) }}
                             </v-alert>
                             <div v-if="depotHoldings.length > 0" class="mobile-depot-stocks">
                                 <article
@@ -9096,7 +9293,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             </div>
                             <v-progress-linear v-if="transactionsLoading" indeterminate class="mb-2" />
                             <v-alert v-if="transactionsError" type="error" variant="tonal" density="compact" class="mb-2">
-                                {{ transactionsError }}
+                                {{ marketDataDisplayText(transactionsError) }}
                             </v-alert>
                             <div v-if="transactions.length > 0" class="mobile-cash-ledger">
                                 <article
@@ -11459,5 +11656,111 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 
 .recent-price-trend-dot-flat {
     background: rgba(17, 17, 17, 0.55);
+}
+
+.analysis-trend-grid {
+    display: grid;
+    gap: 0.5rem;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 9.5rem), 1fr));
+}
+
+.analysis-trend-card {
+    min-width: 0;
+}
+
+.analysis-trend-card-button {
+    align-items: stretch;
+    background: rgb(var(--v-theme-surface));
+    border: 1px solid rgba(var(--v-border-color), 0.18);
+    border-radius: 7px;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    height: 100%;
+    padding: 0.55rem 0.6rem;
+    text-align: left;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    width: 100%;
+}
+
+.analysis-trend-card-button:hover {
+    border-color: rgba(var(--v-theme-primary), 0.65);
+    box-shadow: 0 1px 4px rgba(var(--v-theme-on-surface), 0.08);
+}
+
+.analysis-trend-card-button:focus-visible {
+    outline: 2px solid rgb(var(--v-theme-primary));
+    outline-offset: 2px;
+}
+
+.analysis-trend-back {
+    color: rgb(var(--v-theme-primary));
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.analysis-trend-back:focus-visible {
+    outline: 2px solid rgb(var(--v-theme-primary));
+    outline-offset: 3px;
+}
+
+.analysis-trend-card-top {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    justify-content: space-between;
+}
+
+.analysis-trend-badge {
+    border-radius: 4px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    line-height: 1.25;
+    padding: 0.15rem 0.3rem;
+    white-space: nowrap;
+}
+
+.analysis-trend-badge--up {
+    background: rgba(var(--v-theme-success), 0.11);
+    color: rgb(var(--v-theme-success));
+}
+
+.analysis-trend-badge--down {
+    background: rgba(var(--v-theme-error), 0.11);
+    color: rgb(var(--v-theme-error));
+}
+
+.analysis-trend-badge--neutral {
+    background: rgba(var(--v-theme-on-surface), 0.07);
+    color: rgba(var(--v-theme-on-surface), 0.65);
+}
+
+.analysis-trend-position-state,
+.analysis-trend-pieces {
+    color: rgba(var(--v-theme-on-surface), 0.65);
+    font-size: 0.65rem;
+    line-height: 1.25;
+}
+
+.analysis-trend-name {
+    color: rgb(var(--v-theme-on-surface));
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+}
+
+.analysis-trend-pieces {
+    align-items: baseline;
+    display: flex;
+    gap: 0.35rem;
+    justify-content: space-between;
+    margin-top: auto;
+}
+
+.analysis-trend-pieces strong {
+    color: rgb(var(--v-theme-on-surface));
+    font-size: 0.7rem;
 }
 </style>

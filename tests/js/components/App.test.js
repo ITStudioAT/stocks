@@ -2893,6 +2893,7 @@ describe('App', () => {
             'depot',
             'indices',
             'stocks',
+            'analysis',
             'data',
             'admin',
             'profile',

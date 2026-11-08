@@ -1320,6 +1320,104 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonMissingPath('entries.8');
     }
 
+    public function test_analysis_returns_up_to_101_stored_daily_prices_for_the_requested_holding(): void
+    {
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create();
+        $otherHolding = StockHolding::factory()->create();
+
+        foreach (range(0, 101) as $day) {
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => Carbon::parse('2026-01-01')->addDays($day),
+                'close' => 100 + $day,
+                'adjusted_close' => $day === 101 ? null : 100 + $day,
+                'currency' => 'EUR',
+            ]);
+        }
+
+        StockHoldingDailyPrice::factory()->create(['stock_holding_id' => $otherHolding->id]);
+
+        $this->actingAs($admin)
+            ->getJson("/admin/analysis/holdings/{$holding->id}/historical-prices")
+            ->assertOk()
+            ->assertJsonCount(101, 'prices')
+            ->assertJsonPath('prices.0.trading_date', '2026-04-12')
+            ->assertJsonPath('prices.0.price', '201.00000000')
+            ->assertJsonPath('prices.100.trading_date', '2026-01-02')
+            ->assertJsonPath('prices.100.price', '101.00000000')
+            ->assertJsonPath('trend_anchor.trading_date', '2026-01-01')
+            ->assertJsonPath('trend_anchor.price', '100.00000000')
+            ->assertJsonPath('trend_prior_count', 1);
+
+        $emptyHolding = StockHolding::factory()->create();
+        $this->getJson("/admin/analysis/holdings/{$emptyHolding->id}/historical-prices")
+            ->assertOk()->assertJsonCount(0, 'prices');
+        $this->getJson('/admin/analysis/holdings/999999/historical-prices')->assertNotFound();
+    }
+
+    public function test_analysis_finds_the_trend_anchor_across_flat_prices_before_the_visible_rows(): void
+    {
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create();
+
+        foreach (range(0, 105) as $day) {
+            $value = match ($day) {
+                0 => 200,
+                1, 2 => 99,
+                3, 4 => 100,
+                5, 6 => 101,
+                default => 96 + $day,
+            };
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => Carbon::parse('2026-01-01')->addDays($day),
+                'close' => $value,
+                'adjusted_close' => $value,
+                'currency' => 'EUR',
+            ]);
+        }
+
+        $this->actingAs($admin)->getJson("/admin/analysis/holdings/{$holding->id}/historical-prices")
+            ->assertOk()
+            ->assertJsonCount(101, 'prices')
+            ->assertJsonPath('prices.99.price', '101.00000000')
+            ->assertJsonPath('prices.100.price', '101.00000000')
+            ->assertJsonPath('prices.100.trading_date', '2026-01-06')
+            ->assertJsonPath('trend_anchor.trading_date', '2026-01-03')
+            ->assertJsonPath('trend_anchor.price', '99.00000000')
+            ->assertJsonPath('trend_prior_count', 3);
+    }
+
+    public function test_analysis_does_not_extend_the_trend_across_a_currency_change(): void
+    {
+        $admin = $this->adminUser();
+        $holding = StockHolding::factory()->create();
+
+        foreach (range(0, 102) as $day) {
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => Carbon::parse('2026-01-01')->addDays($day),
+                'close' => 100 + $day,
+                'adjusted_close' => 100 + $day,
+                'currency' => $day === 1 ? 'USD' : 'EUR',
+            ]);
+        }
+
+        $this->actingAs($admin)->getJson("/admin/analysis/holdings/{$holding->id}/historical-prices")
+            ->assertOk()
+            ->assertJsonCount(101, 'prices')
+            ->assertJsonPath('trend_anchor', null)
+            ->assertJsonPath('trend_prior_count', 0);
+    }
+
+    public function test_analysis_historical_prices_require_authentication(): void
+    {
+        $holding = StockHolding::factory()->create();
+
+        $this->getJson("/admin/analysis/holdings/{$holding->id}/historical-prices")->assertUnauthorized();
+    }
+
     public function test_admin_can_list_latest_thirty_end_of_day_prices(): void
     {
         $admin = $this->adminUser();

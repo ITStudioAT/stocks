@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\AdminAnalysisHistoricalPricesController;
+use App\Http\Controllers\AdminAnalysisTrendsController;
 use App\Http\Controllers\AdminAuthController;
 use App\Http\Controllers\AdminCloudwaysController;
 use App\Http\Controllers\AdminCloudwaysOperationController;
@@ -166,6 +168,8 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
     Route::post('/admin/depot-transactions/cash', [AdminDepotTransactionController::class, 'storeCash'])->name('admin.depot-transactions.cash.store');
     Route::post('/admin/depot-transactions/stocks', [AdminDepotTransactionController::class, 'storeStock'])->name('admin.depot-transactions.stocks.store');
     Route::get('/admin/watchlist/holdings', [AdminDepotHoldingController::class, 'index'])->name('admin.watchlist.holdings.index');
+    Route::get('/admin/analysis/trends', AdminAnalysisTrendsController::class)->name('admin.analysis.trends');
+    Route::get('/admin/analysis/holdings/{holding}/historical-prices', AdminAnalysisHistoricalPricesController::class)->name('admin.analysis.holdings.historical-prices');
     Route::post('/admin/watchlist/holdings/charts', [AdminDepotHoldingController::class, 'index'])
         ->middleware('throttle:admin.costly-operation')
         ->name('admin.watchlist.holdings.charts');

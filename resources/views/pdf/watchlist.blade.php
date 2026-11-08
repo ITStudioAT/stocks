@@ -38,6 +38,9 @@
         }
     };
 
+    $displaySourceName = static fn (?string $source): string => trim(preg_replace('/\\bfree\\b\\s*/i', '', $source ?? '')) ?: '–';
+    $displaySourceMarkers = static fn (array $markers): string => implode(' · ', array_filter($markers, static fn (string $marker): bool => $marker !== 'free'));
+
     $statusLabels = [
         'realtime' => 'Real-time',
         'fresh' => 'Fresh',
@@ -317,7 +320,7 @@
 
     <main>
         <div class="summary">
-            <strong>{{ count($holdings) }}</strong> {{ \Illuminate\Support\Str::plural('instrument', count($holdings)) }} on the watch-list. Last-day references are observed free prices, not official closes. Missing values remain unavailable.
+            <strong>{{ count($holdings) }}</strong> {{ \Illuminate\Support\Str::plural('instrument', count($holdings)) }} on the watch-list. Last-day references are observed prices, not official closes. Missing values remain unavailable.
         </div>
 
         @forelse ($holdings as $holding)
@@ -356,7 +359,7 @@
                         </div>
                     </div>
                     <div class="latest-price-cell">
-                        <div class="price-value">{{ $formatPrice($holding['latest_price'] ?? null, $holding['currency'] ?? null) }} {{ implode(' · ', $holding['latest_price_source_markers'] ?? []) }}</div>
+                        <div class="price-value">{{ $formatPrice($holding['latest_price'] ?? null, $holding['currency'] ?? null) }} {{ $displaySourceMarkers($holding['latest_price_source_markers'] ?? []) }}</div>
                         @if ($badgeClass && $changeLabel)
                             <span class="badge {{ $badgeClass }}">{{ $changeLabel }}</span>
                         @endif
@@ -372,13 +375,13 @@
                 <div class="fact-cell"><span class="label">Country</span><span class="value">{{ $holding['country'] ?: '–' }}</span></div>
                 <div class="fact-cell"><span class="label">Price type</span><span class="value">{{ $holding['price_type'] ?: '–' }}</span></div>
                 <div class="fact-cell"><span class="label">Spread %</span><span class="value">{{ $holding['price_spread_pct'] !== null ? number_format((float) $holding['price_spread_pct'], 4).'%' : '–' }}</span></div>
-                <div class="fact-cell"><span class="label">Start price</span><span class="value">{{ $formatPrice($holding['start_price'] ?? null, $holding['currency'] ?? null) }} {{ implode(' · ', $holding['start_price_source_markers'] ?? []) }}</span></div>
-                <div class="fact-cell"><span class="label">End price</span><span class="value">{{ $formatPrice($holding['end_price'] ?? null, $holding['currency'] ?? null) }} {{ implode(' · ', $holding['end_price_source_markers'] ?? []) }}</span></div>
-                <div class="fact-cell"><span class="label">End 24</span><span class="value">{{ $formatPrice($holding['end_price_24'] ?? null, $holding['currency'] ?? null) }} {{ implode(' · ', $holding['end_price_24_source_markers'] ?? []) }}</span></div>
-                <div class="fact-cell"><span class="label">End 48</span><span class="value">{{ $formatPrice($holding['end_price_48'] ?? null, $holding['currency'] ?? null) }} {{ implode(' · ', $holding['end_price_48_source_markers'] ?? []) }}</span></div>
+                <div class="fact-cell"><span class="label">Start price</span><span class="value">{{ $formatPrice($holding['start_price'] ?? null, $holding['currency'] ?? null) }} {{ $displaySourceMarkers($holding['start_price_source_markers'] ?? []) }}</span></div>
+                <div class="fact-cell"><span class="label">End price</span><span class="value">{{ $formatPrice($holding['end_price'] ?? null, $holding['currency'] ?? null) }} {{ $displaySourceMarkers($holding['end_price_source_markers'] ?? []) }}</span></div>
+                <div class="fact-cell"><span class="label">End 24</span><span class="value">{{ $formatPrice($holding['end_price_24'] ?? null, $holding['currency'] ?? null) }} {{ $displaySourceMarkers($holding['end_price_24_source_markers'] ?? []) }}</span></div>
+                <div class="fact-cell"><span class="label">End 48</span><span class="value">{{ $formatPrice($holding['end_price_48'] ?? null, $holding['currency'] ?? null) }} {{ $displaySourceMarkers($holding['end_price_48_source_markers'] ?? []) }}</span></div>
                 <div class="fact-cell"><span class="label">Source time</span><span class="value">{{ $formatDateTime($holding['latest_price_as_of'] ?? null) }}</span></div>
                 <div class="fact-cell"><span class="label">Fetched</span><span class="value">{{ $formatDateTime($holding['latest_price_fetched_at'] ?? null) }}</span></div>
-                <div class="fact-wide"><span class="label">Source</span><span class="value">{{ $holding['latest_price_source'] ?: '–' }} {{ implode(' · ', $holding['latest_price_source_markers'] ?? []) }}</span></div>
+                <div class="fact-wide"><span class="label">Source</span><span class="value">{{ $displaySourceName($holding['latest_price_source'] ?? null) }} {{ $displaySourceMarkers($holding['latest_price_source_markers'] ?? []) }}</span></div>
                 <div class="fact-wide"><span class="label">Trading times</span><span class="value">{{ $holding['trading_times'] ?: '–' }}</span></div>
 
                 <div class="prices">
@@ -397,7 +400,7 @@
                                 @foreach ($recentPrices as $recentPrice)
                                     <tr>
                                         <td>{{ $formatDateTime($recentPrice['as_of'] ?? null) }}</td>
-                                        <td>{{ $recentPrice['source_name'] ?: '–' }} {{ implode(' · ', $recentPrice['source_markers'] ?? []) }}</td>
+                                        <td>{{ $displaySourceName($recentPrice['source_name'] ?? null) }} {{ $displaySourceMarkers($recentPrice['source_markers'] ?? []) }}</td>
                                         <td>{{ $recentPrice['price_type'] ?: '–' }}</td>
                                         <td class="num">{{ $formatPrice($recentPrice['price'] ?? null, $recentPrice['currency'] ?? ($holding['currency'] ?? null)) }}</td>
                                     </tr>

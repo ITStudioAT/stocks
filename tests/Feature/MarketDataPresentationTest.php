@@ -55,15 +55,16 @@ class MarketDataPresentationTest extends TestCase
         $this->mixedHolding();
         $pdf = app(WatchlistPdfReport::class)->pdf(now());
         $document = $pdf->getDomPDF()->getDom();
+        $this->assertDoesNotMatchRegularExpression('/\\bfree\\b/i', $document->textContent);
         $this->assertStringContainsString('not official closes', $document->textContent);
         $xpath = new DOMXPath($document);
         $current = $xpath->query('//*[contains(@class,"price-value")]')->item(0)->textContent;
         $this->assertStringContainsString('56', $current);
-        $this->assertStringContainsString('free', $current);
+        $this->assertStringNotContainsString('free', strtolower($current));
         $this->assertStringNotContainsString('999', $current);
         $end24 = $xpath->query('//*[contains(@class,"fact-cell")][span[text()="End 24"]]')->item(0)->textContent;
         $this->assertStringContainsString('53.5', $end24);
-        $this->assertStringContainsString('free', $end24);
+        $this->assertStringNotContainsString('free', strtolower($end24));
         $this->assertStringNotContainsString('EODHD', $end24);
         $this->assertStringStartsWith('%PDF', $pdf->output());
         Http::assertNothingSent();

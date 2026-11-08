@@ -128,6 +128,297 @@ describe('visible market data provenance across navigation', () => {
         expect(wrapper.get('.depot-performance-chart').findAll('.depot-performance-chart-line')).toHaveLength(2);
     });
 
+    it.each([1440, 390])('shows a read-only stock analysis list at width %i', async (width) => {
+        await renderPage('/admin/menu/stocks', width, (response, path) => {
+            if (path.startsWith('/admin/watchlist/holdings') && response.holdings) {
+                response.holdings[0].price_reload_available = true;
+            }
+
+            return response;
+        });
+
+        await wrapper.get('.stock-holding-row').trigger('click');
+        await flushPromises();
+        expect(wrapper.find('.stock-price-chart-row').exists()).toBe(true);
+
+        const menuKeys = wrapper.vm.menuItems.map((item) => item.key);
+        expect(menuKeys.indexOf('analysis')).toBe(menuKeys.indexOf('stocks') + 1);
+        const analysisMenuItem = width < 600
+            ? wrapper.get('.dashboard-compact-menu-item[aria-label="Analysis"]')
+            : wrapper.findAll('.dashboard-navigation-drawer .v-list-item').find((item) => item.text().includes('Analysis'));
+        expect(analysisMenuItem).toBeDefined();
+        await analysisMenuItem.trigger('click');
+        await flushPromises();
+
+        expect(window.location.pathname).toBe('/admin/menu/analysis');
+        expect(wrapper.get('[aria-label="Analysis dashboard"]').text()).toContain('Analysis');
+        expect(wrapper.find('[role="tab"]').exists()).toBe(false);
+        const list = wrapper.get('.watch-list-section');
+        expect(list.text()).toContain('Demo investment');
+        expect(list.text()).toContain('56.000');
+        expect(list.text()).not.toContain('Actions');
+        expect(list.findAll('button')).toHaveLength(0);
+        expect(wrapper.find('[aria-label="Stocks dashboard"]').exists()).toBe(false);
+        expect(wrapper.find('.stock-price-chart-row').exists()).toBe(false);
+        expect(wrapper.find('.stock-price-chart-mobile-target').exists()).toBe(false);
+
+        const row = list.get('.stock-holding-row');
+        const card = list.get('.mobile-stock-card');
+        expect(row.attributes('tabindex')).toBe('0');
+        expect(card.attributes('tabindex')).toBe('0');
+        fetch.mockClear();
+        await row.trigger('click');
+        await flushPromises();
+        expect(row.attributes('aria-expanded')).toBe('true');
+        expect(list.findAll('.analysis-price-history')).toHaveLength(2);
+        expect(list.text()).toContain('No stored historical prices available.');
+        expect(fetch).toHaveBeenCalledWith('/admin/analysis/holdings/1/historical-prices', expect.any(Object));
+        await card.trigger('keydown.enter');
+        expect(row.attributes('aria-expanded')).toBe('false');
+        expect(list.find('.analysis-price-history').exists()).toBe(false);
+        expect(wrapper.find('.stock-price-chart-row').exists()).toBe(false);
+        expect(fetch.mock.calls.some(([path]) => path.includes('/holdings/charts'))).toBe(false);
+        expect(fetch.mock.calls.some(([, options]) => ['POST', 'PATCH', 'DELETE'].includes(options?.method))).toBe(false);
+
+        wrapper.unmount();
+        await renderPage('/admin/menu/analysis', width);
+        expect(window.location.pathname).toBe('/admin/menu/analysis');
+        expect(wrapper.get('.watch-list-section').text()).toContain('Demo investment');
+        expect(wrapper.get('[aria-label="Analysis dashboard"]').exists()).toBe(true);
+    });
+
+    it.each([1440, 390])('shows mixed trends above the stock list at width %i', async (width) => {
+        await renderPage('/admin/menu/analysis', width, (response, path) => {
+            if (path === '/admin/analysis/trends') {
+                return { trends: [
+                    { id: 2, name: 'Falling stock SupercalifragilisticexpialidociousLongCompanyName', symbol: 'DOWN', position_pieces: '4.12500000', direction: 'down', count: 9, trading_date: '2026-11-04' },
+                    { id: 1, name: 'Rising stock', symbol: 'UP', position_pieces: '0', direction: 'up', count: 7, trading_date: '2026-11-03' },
+                    { id: 3, name: 'No history', symbol: 'NONE', position_pieces: '0', direction: null, count: null, trading_date: null },
+                ] };
+            }
+
+            return response;
+        });
+        const overview = wrapper.get('[aria-label="Longest current trends"]');
+        const cards = overview.findAll('article');
+        expect(cards).toHaveLength(3);
+        expect(cards[0].text()).toContain('Falling stock SupercalifragilisticexpialidociousLongCompanyName');
+        expect(cards[0].get('.analysis-trend-position-state').text()).toBe('Held');
+        expect(cards[0].get('.analysis-trend-pieces').text()).toBe('Pieces4.125');
+        expect(cards[0].text()).not.toContain('DOWN');
+        expect(cards[0].find('.truncate').exists()).toBe(false);
+        expect(cards[0].get('.analysis-trend-name').text()).toBe('Falling stock SupercalifragilisticexpialidociousLongCompanyName');
+        expect(cards[0].get('.analysis-trend-badge--down').text()).toMatch(/Down\s*9/);
+        expect(cards[1].get('.analysis-trend-badge--up').text()).toMatch(/Up\s*7/);
+        expect(cards[1].get('.analysis-trend-position-state').text()).toBe('Not held');
+        expect(cards[1].get('.analysis-trend-pieces').text()).toBe('Pieces0');
+        expect(cards[1].text()).not.toContain('UP');
+        expect(cards[1].get('.analysis-trend-badge--up').exists()).toBe(true);
+        expect(cards[2].get('.analysis-trend-badge--neutral').text()).toBe('No trend');
+        expect(cards[2].get('.analysis-trend-position-state').text()).toBe('Not held');
+        expect(cards[2].get('.analysis-trend-pieces').text()).toBe('Pieces0');
+        expect(cards[0].text()).not.toContain('04.11.2026');
+        expect(cards[2].text()).not.toContain('NONE');
+        expect(cards.every((card) => card.find('button').exists())).toBe(true);
+        expect(cards.every((card) => card.get('button').get('.sr-only').text() === 'Show price history for')).toBe(true);
+        expect(overview.element.compareDocumentPosition(wrapper.get('.watch-list-section').element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(fetch.mock.calls.filter(([path]) => path === '/admin/analysis/trends')).toHaveLength(1);
+        expect(fetch.mock.calls.filter(([path]) => path.includes('/analysis/holdings/'))).toHaveLength(0);
+    });
+
+    it('reports when no current trend is available', async () => {
+        await renderPage('/admin/menu/analysis');
+        expect(wrapper.get('[aria-label="Longest current trends"]').text()).toContain('No stocks are available');
+    });
+
+    it('opens the same cached history from a card and the stock list', async () => {
+        await renderPage('/admin/menu/analysis', 1440, (response, path) => {
+            if (path === '/admin/analysis/trends') {
+                return { trends: [
+                    { id: 1, name: 'Demo investment', position_pieces: '2', direction: 'up', count: 2, trading_date: '2026-11-04' },
+                    { id: 2, name: 'Another stock', position_pieces: '0', direction: null, count: null, trading_date: null },
+                ] };
+            }
+            if (path === '/admin/analysis/holdings/1/historical-prices') {
+                return { prices: [
+                    { trading_date: '2026-11-04', price: '121', currency: 'EUR' },
+                    { trading_date: '2026-11-03', price: '110', currency: 'EUR' },
+                    { trading_date: '2026-11-02', price: '100', currency: 'EUR' },
+                ] };
+            }
+            if (path === '/admin/analysis/holdings/2/historical-prices') {
+                return { prices: [] };
+            }
+
+            return response;
+        });
+        let buttons = wrapper.get('[aria-label="Longest current trends"]').findAll('article button');
+        await buttons[0].trigger('click');
+        await flushPromises();
+        expect(wrapper.findAll('.analysis-trend-card')).toHaveLength(0);
+        expect(wrapper.get('#analysis-card-history h3').text()).toBe('Demo investment');
+        const backButton = wrapper.get('[aria-label="Back to all stocks"]');
+        expect(document.activeElement).toBe(backButton.element);
+        const cardHistory = wrapper.get('#analysis-card-history .analysis-price-history');
+        expect(cardHistory.text()).toContain('+21.00%');
+        const cardRows = cardHistory.findAll('.analysis-price-history-table > tbody > tr').map((row) => row.text());
+        await wrapper.get('.stock-holding-row').trigger('click');
+        await flushPromises();
+        const listRows = wrapper.get('.desktop-watch-list-table .analysis-price-history').findAll('.analysis-price-history-table > tbody > tr').map((row) => row.text());
+        expect(listRows).toEqual(cardRows);
+        expect(fetch.mock.calls.filter(([path]) => path === '/admin/analysis/holdings/1/historical-prices')).toHaveLength(1);
+        await backButton.trigger('click');
+        await flushPromises();
+        buttons = wrapper.get('[aria-label="Longest current trends"]').findAll('article button');
+        expect(buttons).toHaveLength(2);
+        expect(document.activeElement).toBe(buttons[0].element);
+        expect(wrapper.get('.watch-list-section').exists()).toBe(true);
+        await buttons[1].trigger('click');
+        await flushPromises();
+        expect(wrapper.findAll('.analysis-trend-card')).toHaveLength(0);
+        expect(wrapper.get('#analysis-card-history h3').text()).toBe('Another stock');
+        expect(wrapper.get('#analysis-card-history').text()).toContain('No stored historical prices available.');
+        expect(fetch.mock.calls.filter(([path]) => path === '/admin/analysis/holdings/2/historical-prices')).toHaveLength(1);
+        await wrapper.get('[aria-label="Back to all stocks"]').trigger('click');
+        await flushPromises();
+        expect(wrapper.find('#analysis-card-history').exists()).toBe(false);
+        expect(wrapper.findAll('.analysis-trend-card')).toHaveLength(2);
+        expect(document.activeElement).toBe(wrapper.get('#analysis-trend-card-2').element);
+    });
+
+    it.each([1440, 390])('closes the correct history on an interior click at width %i', async (width) => {
+        await renderPage('/admin/menu/analysis', width, (response, path) => {
+            if (path === '/admin/analysis/trends') {
+                return { trends: [
+                    { id: 1, name: 'Demo investment', position_pieces: '2', direction: 'up', count: 2 },
+                    { id: 2, name: 'Other stock', position_pieces: '0', direction: null, count: null },
+                ] };
+            }
+            if (path === '/admin/analysis/holdings/1/historical-prices') {
+                return { prices: [
+                    { trading_date: '2026-11-04', price: '121', currency: 'EUR' },
+                    { trading_date: '2026-11-03', price: '110', currency: 'EUR' },
+                ] };
+            }
+
+            return response;
+        });
+
+        await wrapper.get('#analysis-trend-card-1').trigger('click');
+        await flushPromises();
+        expect(wrapper.get('#analysis-card-history .analysis-price-history').exists()).toBe(true);
+        expect(wrapper.findAll('.analysis-trend-card')).toHaveLength(0);
+        await wrapper.get('#analysis-card-history tbody td time').trigger('click');
+        await flushPromises();
+        expect(wrapper.find('#analysis-card-history').exists()).toBe(false);
+        expect(wrapper.findAll('.analysis-trend-card')).toHaveLength(2);
+        expect(document.activeElement).toBe(wrapper.get('#analysis-trend-card-1').element);
+
+        const list = wrapper.get('.watch-list-section');
+        const row = list.get(width < 600 ? '.mobile-stock-card' : '.stock-holding-row');
+        await row.trigger('click');
+        await flushPromises();
+        const visibleHistory = list.get(width < 600
+            ? '.mobile-watch-list .analysis-price-history'
+            : '.desktop-watch-list-table .analysis-price-history');
+        expect(visibleHistory.get('tbody tr').exists()).toBe(true);
+        await visibleHistory.get('tbody td time').trigger('click');
+        await flushPromises();
+        expect(list.find('.analysis-price-history').exists()).toBe(false);
+        expect(wrapper.findAll('.analysis-trend-card')).toHaveLength(2);
+        expect(fetch.mock.calls.filter(([path]) => path === '/admin/analysis/holdings/1/historical-prices')).toHaveLength(1);
+    });
+
+    it.each([1440, 390])('shows the loading state without cards and restores focus at width %i', async (width) => {
+        const longName = 'International Long Named Fund With SupercalifragilisticexpialidociousHoldings';
+        await renderPage('/admin/menu/analysis', width, (response, path) => {
+            if (path === '/admin/analysis/trends') {
+                return { trends: [
+                    { id: 1, name: longName, position_pieces: '0', direction: 'up', count: 3 },
+                    { id: 2, name: 'Other stock', position_pieces: '0', direction: 'down', count: 1 },
+                ] };
+            }
+
+            return response;
+        });
+        let resolveHistory;
+        fetch.mockImplementationOnce(() => new Promise((resolve) => { resolveHistory = resolve; }));
+        const card = wrapper.get('#analysis-trend-card-1');
+        card.element.focus();
+        await card.trigger('click');
+        await flushPromises();
+        expect(wrapper.findAll('.analysis-trend-card')).toHaveLength(0);
+        expect(wrapper.get('#analysis-card-history h3').text()).toBe(longName);
+        expect(wrapper.get('#analysis-card-history [role="status"]').text()).toContain('Loading');
+        expect(document.activeElement).toBe(wrapper.get('[aria-label="Back to all stocks"]').element);
+        expect(wrapper.get('.watch-list-section').exists()).toBe(true);
+        resolveHistory({ ok: true, json: () => Promise.resolve({ prices: [] }) });
+        await flushPromises();
+        expect(wrapper.get('#analysis-card-history').text()).toContain('No stored historical prices available.');
+        await wrapper.get('[aria-label="Back to all stocks"]').trigger('click');
+        await flushPromises();
+        expect(wrapper.findAll('.analysis-trend-card')).toHaveLength(2);
+        expect(document.activeElement).toBe(wrapper.get('#analysis-trend-card-1').element);
+    });
+
+    it('renders every stock card and allows a failed history request to be retried', async () => {
+        await renderPage('/admin/menu/analysis', 390, (response, path) => {
+            if (path === '/admin/analysis/trends') {
+                return { trends: Array.from({ length: 18 }, (_, index) => ({
+                    id: index + 1, name: `Company ${index + 1}`, position_pieces: '0', direction: null, count: null,
+                })) };
+            }
+
+            return response;
+        });
+        const overview = wrapper.get('[aria-label="Longest current trends"]');
+        const buttons = overview.findAll('article button');
+        expect(buttons).toHaveLength(18);
+        expect(buttons[17].text()).toContain('Company 18');
+        fetch.mockImplementationOnce(() => Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ message: 'History unavailable.' }) }))
+            .mockImplementationOnce(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ prices: [] }) }));
+
+        await buttons[17].trigger('click');
+        await flushPromises();
+        expect(wrapper.get('#analysis-card-history').text()).toContain('History unavailable.');
+        await wrapper.get('#analysis-card-history .v-alert button').trigger('click');
+        await flushPromises();
+        expect(wrapper.get('#analysis-card-history').text()).toContain('No stored historical prices available.');
+        expect(wrapper.findAll('.analysis-trend-card')).toHaveLength(0);
+    });
+
+    it('uses the older trend anchor and count returned for an expanded analysis holding', async () => {
+        await renderPage('/admin/menu/analysis', 1440, (response, path) => {
+            if (path === '/admin/analysis/trends') {
+                return { trends: [{ id: 1, name: 'Demo investment', position_pieces: '2', direction: 'up', count: 110 }] };
+            }
+            if (path === '/admin/analysis/holdings/1/historical-prices') {
+                const prices = Array.from({ length: 101 }, (_, index) => ({
+                    trading_date: new Date(Date.UTC(2026, 5, 1) - index * 86400000).toISOString().slice(0, 10),
+                    price: String(200 - index),
+                    currency: 'EUR',
+                }));
+
+                return { prices, trend_anchor: { trading_date: '2026-02-11', price: '90', currency: 'EUR' }, trend_prior_count: 10 };
+            }
+
+            return response;
+        });
+        await wrapper.get('#analysis-trend-card-1').trigger('click');
+        await flushPromises();
+        const cardRows = wrapper.findAll('#analysis-card-history .analysis-price-history-table > tbody > tr');
+        expect(cardRows).toHaveLength(100);
+        expect(cardRows[99].findAll('td')[4].text()).toBe('+12.22%');
+        expect(cardRows[99].findAll('td')[5].text()).toBe('11');
+        expect(cardRows[0].findAll('td')[5].text()).toBe('110');
+        await wrapper.get('.stock-holding-row').trigger('click');
+        await flushPromises();
+
+        const rows = wrapper.findAll('.desktop-watch-list-table .analysis-price-history-table > tbody > tr');
+        expect(rows).toHaveLength(100);
+        expect(rows.map((row) => row.text())).toEqual(cardRows.map((row) => row.text()));
+    });
+
     it('offers the individual free reload when prices are missing', async () => {
         await renderPage('/admin/menu/stocks', 1440, (response, path) => {
             if (path.startsWith('/admin/watchlist/holdings') && response.holdings) {
@@ -371,11 +662,17 @@ describe('visible market data provenance across navigation', () => {
     it.each([
         ['/admin/menu/stocks', '.watch-list-section', 'EODHD'],
         ['/admin/menu/indices', '.index-watch-card', 'EODHD'],
-        ['/admin/menu/dashboard/overview', '.dashboard-performance-day-card', 'free'],
     ])('renders provenance in %s', async (path, selector, expected) => {
         await renderPage(path);
         expect(markers(wrapper.get(selector))).toContain(expected);
         expect(wrapper.find('svg .data-source-markers').exists()).toBe(false);
+    });
+
+    it.each(['/admin/menu/dashboard/overview', '/admin/menu/depot/overview', '/admin/menu/depot/all-stocks/actual-year'])('hides the free marker on %s while preserving EODHD', async (path) => {
+        await renderPage(path);
+        expect(wrapper.text()).not.toMatch(/\bfree\b/i);
+        expect(wrapper.find('[title="Data origin: free"]').exists()).toBe(false);
+        expect(fetch.mock.calls.some(([url]) => url.startsWith('/admin/'))).toBe(true);
     });
 
     it('renders the public index ticker using the same marker component', async () => {

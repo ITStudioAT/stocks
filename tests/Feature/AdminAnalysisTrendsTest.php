@@ -1,0 +1,107 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\Depot;
+use App\Models\DepotTransaction;
+use App\Models\StockHolding;
+use App\Models\StockHoldingDailyPrice;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
+use Spatie\Permission\Models\Role;
+use Tests\TestCase;
+
+class AdminAnalysisTrendsTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_summary_ranks_both_directions_and_counts_flat_days_without_querying_each_stock(): void
+    {
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin', 'web'));
+        $up = $this->holdingWithPrices('Upward', [100, 110, 110, 121]);
+        $down = $this->holdingWithPrices('Downward', [100, 90, 90, 90, 80]);
+        $reverse = $this->holdingWithPrices('Reversal', [100, 90, 90, 110]);
+        $this->holdingWithPrices('Only flat', [100, 100, 100]);
+        $this->holdingWithPrices('Single', [100]);
+        $long = $this->holdingWithPrices('Long run', range(100, 202));
+        $incompatible = $this->holdingWithPrices('Currency gap', [100, 110]);
+        $empty = StockHolding::factory()->create(['name' => 'No prices']);
+        StockHoldingDailyPrice::query()->where('stock_holding_id', $incompatible->id)->whereDate('trading_date', '2026-01-01')->update(['currency' => 'USD']);
+
+        DB::enableQueryLog();
+        $response = $this->actingAs($admin)->getJson('/admin/analysis/trends')->assertOk();
+        $queries = collect(DB::getQueryLog())->filter(fn (array $query): bool => str_contains(strtolower($query['query']), 'stock_holding_daily_prices'));
+        DB::disableQueryLog();
+
+        $response->assertJsonCount(8, 'trends')
+            ->assertJsonPath('trends.0.id', $long->id)->assertJsonPath('trends.0.count', 102)->assertJsonPath('trends.0.direction', 'up')
+            ->assertJsonPath('trends.1.id', $down->id)->assertJsonPath('trends.1.count', 4)->assertJsonPath('trends.1.direction', 'down')
+            ->assertJsonPath('trends.2.id', $up->id)->assertJsonPath('trends.2.count', 3)->assertJsonPath('trends.2.direction', 'up')
+            ->assertJsonPath('trends.3.id', $reverse->id)->assertJsonPath('trends.3.count', 1)
+            ->assertJsonPath('trends.4.id', $incompatible->id)->assertJsonPath('trends.4.direction', null)
+            ->assertJsonPath('trends.5.id', $empty->id)->assertJsonPath('trends.5.count', null);
+        $this->assertCount(1, $queries);
+    }
+
+    public function test_summary_returns_all_stocks_and_an_empty_list_without_stocks(): void
+    {
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin', 'web'));
+        $this->actingAs($admin)->getJson('/admin/analysis/trends')->assertOk()->assertJsonCount(0, 'trends');
+
+        foreach (range(1, 15) as $number) {
+            $this->holdingWithPrices(sprintf('Stock %02d', $number), [100, 101]);
+        }
+
+        $this->getJson('/admin/analysis/trends')->assertOk()->assertJsonCount(15, 'trends')
+            ->assertJsonPath('trends.0.name', 'Stock 01')
+            ->assertJsonPath('trends.14.name', 'Stock 15');
+    }
+
+    public function test_summary_uses_the_active_depot_positions_like_the_stocks_list(): void
+    {
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin', 'web'));
+        $depot = Depot::factory()->create(['is_active' => true]);
+        $otherDepot = Depot::factory()->create(['is_active' => false]);
+        $held = $this->holdingWithPrices('Held stock', [10, 11]);
+        $empty = StockHolding::factory()->create(['name' => 'No position']);
+        DepotTransaction::factory()->create(['depot_id' => $depot->id, 'stock_holding_id' => $held->id, 'type' => 'buy', 'pieces' => '5.25000000']);
+        DepotTransaction::factory()->create(['depot_id' => $depot->id, 'stock_holding_id' => $held->id, 'type' => 'sell', 'pieces' => '1.12500000']);
+        DepotTransaction::factory()->create(['depot_id' => $otherDepot->id, 'stock_holding_id' => $held->id, 'type' => 'buy', 'pieces' => '20.00000000']);
+
+        $this->actingAs($admin);
+        $trends = collect($this->getJson('/admin/analysis/trends')->assertOk()->json('trends'))->keyBy('id');
+        $stocks = collect($this->getJson('/admin/watchlist/holdings?page=1&all=1')->assertOk()->json('holdings'))->keyBy('id');
+        $this->assertSame('4.12500000', $trends[$held->id]['position_pieces']);
+        $this->assertSame('0.00000000', $trends[$empty->id]['position_pieces']);
+        $this->assertSame($stocks[$held->id]['position_pieces'], $trends[$held->id]['position_pieces']);
+        $this->assertSame($stocks[$empty->id]['position_pieces'], $trends[$empty->id]['position_pieces']);
+    }
+
+    public function test_summary_requires_authentication(): void
+    {
+        $this->getJson('/admin/analysis/trends')->assertUnauthorized();
+    }
+
+    /** @param array<int, int> $values */
+    private function holdingWithPrices(string $name, array $values): StockHolding
+    {
+        $holding = StockHolding::factory()->create(['name' => $name, 'currency' => 'EUR']);
+
+        foreach ($values as $index => $value) {
+            StockHoldingDailyPrice::factory()->create([
+                'stock_holding_id' => $holding->id,
+                'trading_date' => Carbon::parse('2026-01-01')->addDays($index),
+                'close' => $value,
+                'adjusted_close' => $value,
+                'currency' => 'EUR',
+            ]);
+        }
+
+        return $holding;
+    }
+}

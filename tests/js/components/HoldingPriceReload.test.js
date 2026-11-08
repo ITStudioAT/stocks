@@ -32,7 +32,8 @@ describe('holding price reload', () => {
         await wrapper.get('[aria-label="Reload UN9 price"]').trigger('click');
         await flushPromises();
         expect(reload).toHaveBeenCalledExactlyOnceWith(34);
-        expect(wrapper.get('[role="status"]').text()).toContain(message);
+        expect(wrapper.get('[role="status"]').text()).not.toMatch(/\bfree\b/i);
+        expect(wrapper.get('[role="status"]').text()).toContain(message.replace(/\bFree\s+([a-z])/g, (_, letter) => letter.toUpperCase()).replace(/\bfree\b\s*/gi, ''));
         expect(wrapper.text()).toContain('10:01:00 Vienna');
         expect(wrapper.text()).toContain('Source delay is 15 minutes.');
         expect(wrapper.get('[role="status"]').classes().includes('text-error')).toBe(status === 'error');
