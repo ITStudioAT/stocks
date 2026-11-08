@@ -450,6 +450,145 @@ describe('App', () => {
         expect(wrapper.vm.latestPriceIsLive({ latest_price: '79.18', price_type: 'regular_market_last' })).toBe(false);
     });
 
+    it('keeps weekly chart dots on the line when a refresh replaces rows with shared timestamps', async () => {
+        window.history.pushState({}, '', '/admin/menu/stocks');
+        setViewportSize(1400, 900);
+        const holding = { id: 1, symbol: 'AMEE', name: 'Amundi Global Hydrogen UCITS ETF Acc', currency: 'EUR' };
+        const makeSamples = (hours, prices) => hours.map((hour, index) => ({
+            id: index + 1,
+            price: String(prices[index]),
+            as_of: `2026-11-06T${hour}:00:00+00:00`,
+        }));
+        let weeklySamples = makeSamples(['08', '09', '09', '10'], [681, 686, 691, 678]);
+        const fetchMock = vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({ user: { id: 1, roles: ['admin'] } }));
+            }
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({ depot: null }));
+            }
+            if (isWatchlistHoldingsRequest(path)) {
+                const intradayPrices = path.includes('chart_range=1w') ? weeklySamples : [];
+                return Promise.resolve(jsonResponse({ holdings: [{ ...holding, intraday_prices: intradayPrices }] }));
+            }
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        });
+        vi.stubGlobal('fetch', fetchMock);
+
+        const wrapper = mountApp();
+        await flushPromises();
+        await wrapper.get('.stock-holding-row').trigger('click');
+        await flushPromises();
+        const weekTab = wrapper.findAll('.stock-price-range-tabs .v-tab').find((tab) => tab.text() === '1 week');
+        await weekTab.trigger('click');
+        await flushPromises();
+        expect(wrapper.findAll('.stock-price-chart-point')).toHaveLength(4);
+
+        weeklySamples = makeSamples(['07', '09', '09', '11'], [683, 692, 685, 679]);
+        await wrapper.vm.refreshActiveItemPage();
+        await flushPromises();
+
+        const dots = wrapper.findAll('.stock-price-chart-point');
+        expect(dots).toHaveLength(4);
+        const coordinates = dots.map((dot) => [dot.attributes('cx'), dot.attributes('cy')]);
+        const pathCommands = wrapper.get('path.stock-price-chart-line').attributes('d').split(/ [MC] /);
+        expect(pathCommands.map((command) => command.split(' ').slice(-2))).toEqual(coordinates);
+    });
+
+    it('waits for the selected stock and range and ignores chart responses that arrive late', async () => {
+        window.history.pushState({}, '', '/admin/menu/stocks');
+        setViewportSize(1400, 900);
+        const recentPrices = [
+            { price: '680', as_of: '2026-11-06T10:00:00Z' },
+            { price: '681', as_of: '2026-11-06T11:00:00Z' },
+        ];
+        const dailyPrices = [{ price: '673', trading_date: '2026-11-05' }, { price: '679', trading_date: '2026-11-06' }];
+        const holdings = [
+            { id: 1, symbol: 'AMEE', name: 'Amundi', recent_prices: recentPrices },
+            { id: 2, symbol: 'MSFT', name: 'Microsoft', recent_prices: recentPrices },
+        ];
+        const chartRequests = [];
+        vi.stubGlobal('fetch', vi.fn((path) => {
+            if (path === '/admin/me') {
+                return Promise.resolve(jsonResponse({ user: { id: 1, roles: ['admin'] } }));
+            }
+            if (path === '/admin/depots/active') {
+                return Promise.resolve(jsonResponse({ depot: null }));
+            }
+            if (path.startsWith('/admin/watchlist/holdings/charts?')) {
+                const parameters = new URL(path, window.location.origin).searchParams;
+                return new Promise((resolve, reject) => chartRequests.push({
+                    range: parameters.get('chart_range'), stockId: Number(parameters.get('chart_stock_id')), resolve, reject,
+                }));
+            }
+            if (isWatchlistHoldingsRequest(path)) {
+                return Promise.resolve(jsonResponse({ holdings }));
+            }
+            return Promise.reject(new Error(`Unexpected request: ${path}`));
+        }));
+
+        const wrapper = mountApp();
+        const tab = (label) => wrapper.findAll('.stock-price-range-tabs .v-tab').find((entry) => entry.text() === label);
+        const reply = (index, data) => {
+            const { stockId, resolve } = chartRequests[index];
+            resolve(jsonResponse({ holdings: holdings.map((holding) => holding.id === stockId ? { ...holding, ...data } : holding) }));
+        };
+        const expectPendingWithoutChart = () => {
+            const card = wrapper.get('.stock-price-inline-card');
+            expect(card.find('.v-progress-linear').exists()).toBe(true);
+            expect(card.find('.index-price-chart-panel').exists()).toBe(false);
+            expect(card.text()).not.toContain('No stored stock prices yet.');
+        };
+        await flushPromises();
+        const [amundi, microsoft] = wrapper.findAll('.stock-holding-row');
+        await amundi.trigger('click');
+        expectPendingWithoutChart();
+        reply(0, {});
+        await flushPromises();
+        expect(wrapper.get('path.stock-price-chart-line').attributes('d')).toContain(' C ');
+
+        await tab('1 week').trigger('click');
+        expectPendingWithoutChart();
+        await tab('1 month').trigger('click');
+        expectPendingWithoutChart();
+        reply(1, { intraday_prices: recentPrices });
+        await flushPromises();
+        expectPendingWithoutChart();
+        reply(2, { daily_prices: dailyPrices });
+        await flushPromises();
+        expect(wrapper.get('path.stock-price-chart-line').attributes('d')).toContain(' C ');
+
+        for (const [index, label] of [[3, '6 month'], [4, '1 year']]) {
+            await tab(label).trigger('click');
+            expectPendingWithoutChart();
+            reply(index, { daily_prices: dailyPrices });
+            await flushPromises();
+            expect(wrapper.find('polyline.stock-price-chart-line').exists()).toBe(true);
+        }
+
+        await tab('1 week').trigger('click');
+        await microsoft.trigger('click');
+        expectPendingWithoutChart();
+        chartRequests[5].reject(new Error('Late error from AMEE'));
+        await flushPromises();
+        expectPendingWithoutChart();
+        expect(wrapper.get('.stock-price-inline-card').text()).not.toContain('Late error from AMEE');
+        chartRequests[6].reject(new Error('Could not load Microsoft'));
+        await flushPromises();
+        expect(wrapper.get('.stock-price-inline-card').text()).toContain('Could not load Microsoft');
+        expect(wrapper.find('.stock-price-chart').exists()).toBe(false);
+
+        await tab('1 year').trigger('click');
+        expectPendingWithoutChart();
+        reply(7, {});
+        await flushPromises();
+        expect(wrapper.get('.stock-price-inline-card').text()).toContain('No stored stock prices yet.');
+        expect(wrapper.find('.stock-price-chart').exists()).toBe(false);
+        expect(chartRequests.map(({ stockId, range }) => [stockId, range])).toEqual([
+            [1, 'today'], [1, '1w'], [1, '1m'], [1, '6m'], [1, '1y'], [1, '1w'], [2, 'today'], [2, '1y'],
+        ]);
+    });
+
     it('opens the overview for a retired Dashboard Tests bookmark', async () => {
         window.history.pushState({}, '', '/admin/menu/dashboard/tests');
         const fetchMock = vi.fn(path => Promise.resolve(jsonResponse(path === '/admin/me'
@@ -680,7 +819,8 @@ describe('App', () => {
 
         expect(wrapper.find('.dashboard-navigation-drawer').classes()).toContain('dashboard-navigation-drawer--compact');
         expect(wrapper.findComponent({ name: 'VNavigationDrawer' }).props('width')).toBe(64);
-        expect(wrapper.findAll('.dashboard-compact-menu-item')).toHaveLength(8);
+        expect(wrapper.findAll('.dashboard-compact-menu-item').map((item) => item.attributes('aria-label')))
+            .toEqual(['Dashboard', 'Depot', 'Indices', 'Stocks', 'Data', 'Admin', 'Profile']);
         expect(wrapper.find('.dashboard-compact-menu-item--active').exists()).toBe(true);
         expect(wrapper.find('[aria-label="Enhance dashboard menu"]').exists()).toBe(true);
         expect(wrapper.find('.dashboard-navigation-drawer').text()).not.toContain('Stocks');
@@ -707,10 +847,12 @@ describe('App', () => {
         expect(versionCard.text()).toContain('3.5.41');
     });
 
-    it('compacts the watch-list table below desktop width', async () => {
+    it('keeps long watch-list names, prices and actions usable across viewport sizes', async () => {
         window.history.pushState({}, '', '/admin/menu/stocks');
-        setViewportSize(1000, 768);
+        setViewportSize(1400, 900);
 
+        const longStockName = 'Amundi Global Hydrogen UCITS ETF Acc';
+        const longStockSubtitle = 'Wasserstoff weltweit, Elektrolyse, Brennstoffzellen, Industrie und Infrastruktur für den globalen Energiemarkt';
         const emptyPagination = {
             current_page: 1,
             last_page: 1,
@@ -758,6 +900,14 @@ describe('App', () => {
                             latest_price_change_pct: '2.28',
                             latest_price_status: 'fresh',
                             latest_price_as_of: '2026-06-03T15:35:00+00:00',
+                            price_reload_available: true,
+                            start_price: null,
+                            start_price_date: '2026-06-03',
+                            end_price_24_date: '2026-06-02',
+                            end_price_24_as_of: '2026-06-02T15:27:45+00:00',
+                            data_source_markers: ['free'],
+                            latest_price_source_markers: ['free', 'EODHD'],
+                            end_price_24_source_markers: ['free', 'EODHD'],
                             recent_prices: [],
                             position_pieces: '2.00000000',
                         },
@@ -772,9 +922,28 @@ describe('App', () => {
                             latest_price: null,
                             end_price: '429.950000',
                             end_price_24: '420.000000',
+                            end_price_24_date: '2026-06-02',
+                            end_price_24_as_of: null,
                             latest_price_status: 'closed_market',
+                            price_reload_available: true,
                             recent_prices: [],
                             position_pieces: '0.00000000',
+                        },
+                        {
+                            id: 3,
+                            symbol: 'OTHER',
+                            name: longStockName,
+                            subtitle: longStockSubtitle,
+                            isin: 'FR0010930644',
+                            currency: 'EUR',
+                            latest_price: '12.34',
+                            end_price_24: '182.30',
+                            latest_price_change_pct: '-1234.56',
+                            latest_price_trend: 'down',
+                            latest_price_fetched_at: '2026-06-03T18:35:00+00:00',
+                            price_reload_available: false,
+                            daily_history_available: false,
+                            data_source_markers: ['free', 'EODHD'],
                         },
                     ],
                     meta: emptyPagination,
@@ -808,15 +977,42 @@ describe('App', () => {
 
         const wrapper = mountApp();
         await flushPromises();
+        expect(fetchMock.mock.calls.some(([path]) => path.startsWith('/admin/v2/stocks/eodhd-sync'))).toBe(false);
 
         const watchListTable = wrapper.get('.desktop-watch-list-table');
+        expect(watchListTable.classes()).toContain('v-table--density-compact');
+        expect(watchListTable.classes()).not.toContain('desktop-watch-list-table--compact');
+        expect(watchListTable.findAll('th[scope="col"]').map((header) => header.text()))
+            .toEqual(['Symbol', 'Name', 'Latest price', 'Last day', 'Actions']);
+        expect(watchListTable.findAll('colgroup > col').map((column) => column.classes()[0])).toEqual([
+            'watch-list-symbol-column', 'watch-list-name-column', 'watch-list-latest-column',
+            'watch-list-last-day-column', 'watch-list-actions-column',
+        ]);
+        expect(watchListTable.get('.stock-price-chart-row td').attributes('colspan')).toBe('5');
+        expect(watchListTable.find('[title="Data origin: free"]').exists()).toBe(false);
+        const longNameRow = watchListTable.findAll('.stock-holding-row')[2];
+        const desktopChange = longNameRow.get('.watch-list-change-percent');
+        expect(desktopChange.text()).toBe('-1234.56%');
+        expect(desktopChange.classes()).toContain('lg:text-xl/6');
+        expect(longNameRow.get('.latest-price-value').classes()).toContain('text-error');
+        const identity = longNameRow.get('.watch-list-name-cell');
+        expect(identity.get('.font-weight-bold.truncate').text()).toBe(longStockName);
+        expect(identity.get('.font-weight-bold.truncate').attributes('title')).toBe(longStockName);
+        expect(identity.get('.stock-subtitle.truncate').attributes('title')).toBe(longStockSubtitle);
+        expect(identity.get('.watch-list-meta').text()).toContain('FR0010930644');
+        expect(identity.get('.watch-list-meta').findAll('.data-source-marker').map((marker) => marker.text()))
+            .toEqual(['EODHD']);
+        expect(longNameRow.get('.watch-list-actions-cell .justify-end').findAll('button').map((button) => button.attributes('aria-label')))
+            .toEqual(['Edit stock', 'Buy stock', 'Sell stock']);
+
+        setViewportSize(1000, 768);
+        await flushPromises();
+
+        expect(watchListTable.classes()).toContain('desktop-watch-list-table--compact');
+        expect(watchListTable.find('col.watch-list-symbol-column').exists()).toBe(false);
         const headers = watchListTable.findAll('thead th').map((header) => header.text());
-        expect(headers).not.toContain('Symbol');
-        expect(headers[0]).toBe('Name');
-        expect(headers).toContain('Latest price');
-        expect(headers.some((header) => header.includes('Last day'))).toBe(true);
-        expect(headers.some((header) => header.includes('End price'))).toBe(false);
-        expect(headers).not.toContain('Source time');
+        expect(headers).toEqual(['Name', 'Latest price', 'Last day', 'Actions']);
+        expect(watchListTable.get('.stock-price-chart-row td').attributes('colspan')).toBe('4');
 
         const firstRowCells = watchListTable.find('.stock-holding-row').findAll('td');
         expect(firstRowCells[0].text()).toContain('Apple');
@@ -824,44 +1020,99 @@ describe('App', () => {
         expect(firstRowCells[0].text()).not.toContain('US0378331005');
         expect(firstRowCells[0].text()).not.toContain('WKN: 865985');
         expect(firstRowCells[1].text()).toContain('306.32');
-        expect(firstRowCells[1].text()).toContain('03.06. 17:35');
+        expect(firstRowCells[1].get('time.watch-list-price-time').text()).toBe('03.06. 17:35');
+        expect(firstRowCells[1].get('.data-source-marker').text()).toBe('EODHD');
+        expect(firstRowCells[2].get('time.watch-list-price-time').text()).toBe('17:27');
+        expect(firstRowCells[2].get('.data-source-marker').text()).toBe('EODHD');
         expect(wrapper.get('.mobile-stock-price-row').text()).toContain('03.06. 17:35');
-        expect(wrapper.get('.mobile-watch-list').find('[aria-label="Reload AAPL price"]').exists()).toBe(true);
-        expect(firstRowCells[1].find('[aria-label="Reload AAPL price"]').exists()).toBe(true);
+        expect(firstRowCells[1].find('button').exists()).toBe(false);
 
         setViewportSize(852, 393);
         await flushPromises();
 
         const landscapeHeaders = watchListTable.findAll('thead th').map((header) => header.text());
-        expect(landscapeHeaders).toContain('Price');
-        expect(landscapeHeaders).not.toContain('Latest price');
-        expect(landscapeHeaders).not.toContain('End price');
-        expect(landscapeHeaders).not.toContain('Source time');
+        expect(landscapeHeaders).toEqual(['Name', 'Price', 'Last day', 'Actions']);
+        expect(watchListTable.find('[title="Data origin: free"]').exists()).toBe(false);
 
         const landscapeRows = watchListTable.findAll('.stock-holding-row');
         const appleCells = landscapeRows[0].findAll('td');
         const microsoftCells = landscapeRows[1].findAll('td');
         expect(appleCells[1].text()).toContain('306.32');
         expect(appleCells[1].text()).toContain('03.06. 17:35');
-        expect(appleCells[1].text()).toContain('+2.28% · 299.50');
+        expect(appleCells[1].get('.watch-list-change-percent').text()).toBe('+2.28%');
+        expect(appleCells[1].get('.watch-list-price-change').text()).toContain('· 299.50');
         expect(appleCells[1].find('[aria-label="Day indicator: Price increased"]').exists()).toBe(true);
         expect(appleCells[1].find('.recent-price-trend-dot--day').classes()).toContain('recent-price-trend-dot-up');
+        expect(appleCells[2].get('time').text()).toBe('17:27');
         expect(microsoftCells[1].text()).toContain('-');
         expect(microsoftCells[1].find('[aria-label="Reload MSFT price"]').exists()).toBe(true);
+        expect(microsoftCells[2].text()).toContain('420.00');
+        expect(microsoftCells[2].find('time').exists()).toBe(false);
+        expect(landscapeRows[2].find('time').exists()).toBe(false);
+        expect(landscapeRows[2].find('[aria-label="Reload OTHER price"]').exists()).toBe(false);
+
+        setViewportSize(320, 844);
+        await flushPromises();
+
+        const mobileWatchList = wrapper.get('.mobile-watch-list');
+        expect(mobileWatchList.text()).not.toContain('Start price');
+        expect(mobileWatchList.find('[title="Data origin: free"]').exists()).toBe(false);
+        const [appleMobileCard, microsoftMobileCard, longNameCard] = mobileWatchList.findAll('.mobile-stock-card');
+        expect(longNameCard.get('.mobile-stock-name').text()).toContain(longStockName);
+        expect(longNameCard.get('.stock-subtitle.line-clamp-2').attributes('title')).toBe(longStockSubtitle);
+        expect(longNameCard.get('.mobile-stock-name .data-source-marker').text()).toBe('EODHD');
+        const mobileChange = longNameCard.get('.watch-list-change-percent');
+        expect(mobileChange.text()).toBe('-1234.56%');
+        expect(mobileChange.classes()).toContain('text-lg/5');
+        expect(longNameCard.get('.mobile-stock-price').classes()).toContain('text-error');
+        expect(longNameCard.get('.watch-list-price-change').text()).toContain('· 182.30');
+        expect(appleMobileCard.findAll('.mobile-stock-prices dt').map((label) => label.text()))
+            .toEqual(['Latest price', 'Last day']);
+        expect(appleMobileCard.get('.mobile-stock-price-main .data-source-marker').text()).toBe('EODHD');
+        expect(appleMobileCard.get('.mobile-stock-price-row time.watch-list-price-time').text()).toBe('03.06. 17:35');
+        expect(appleMobileCard.get('.mobile-stock-last-day .data-source-marker').text()).toBe('EODHD');
+        expect(appleMobileCard.get('.mobile-stock-last-day time.watch-list-price-time').text()).toBe('17:27');
+        expect(microsoftMobileCard.find('.mobile-stock-last-day time').exists()).toBe(false);
+        expect(appleMobileCard.find('[aria-label="Reload AAPL price"]').exists()).toBe(false);
 
         fetchMock.mockImplementationOnce((path, options) => {
-            expect(path).toBe('/admin/watchlist/holdings/1/price/reload');
+            expect(path).toBe('/admin/watchlist/holdings/2/price/reload');
             expect(options.method).toBe('POST');
             return Promise.resolve(jsonResponse({
                 status: 'updated', message: 'Newer source data loaded.',
-                holding: { id: 1, latest_price: '307.320010', latest_price_as_of: '2026-06-03T15:36:00+00:00' },
+                holding: { id: 2, latest_price: '430.12', latest_price_as_of: '2026-06-03T15:36:00+00:00' },
             }));
         });
-        await wrapper.get('.mobile-watch-list').get('[aria-label="Reload AAPL price"]').trigger('click');
+        await microsoftMobileCard.get('button.holding-price-reload-button[aria-label="Reload MSFT price"]').trigger('click');
         await flushPromises();
-        expect(wrapper.get('.mobile-stock-price-row').text()).toContain('307.32');
-        expect(wrapper.get('.mobile-stock-price-row').text()).toContain('03.06. 17:36');
-        expect(wrapper.get('.mobile-watch-list').text()).toContain('Newer source data loaded.');
+        expect(microsoftMobileCard.get('.mobile-stock-price-row').text()).toContain('430.12');
+        expect(microsoftMobileCard.get('.mobile-stock-price-row time').text()).toBe('03.06. 17:36');
+        expect(microsoftMobileCard.text()).toContain('Newer source data loaded.');
+        expect(microsoftMobileCard.find('[aria-label="Reload MSFT price"]').exists()).toBe(false);
+
+        setViewportSize(1440, 900);
+        await flushPromises();
+        const navigation = wrapper.get('.dashboard-navigation-drawer');
+        const desktopMenu = navigation.findAll('.v-list-item');
+        expect(desktopMenu.map((item) => item.get('.v-list-item-title').text()))
+            .toEqual(['Dashboard', 'Depot', 'Indices', 'Stocks', 'Data', 'Admin', 'Profile']);
+        await desktopMenu[4].trigger('click');
+        await flushPromises();
+        expect(window.location.pathname).toBe('/admin/menu/data/overview');
+        await desktopMenu[5].trigger('click');
+        await flushPromises();
+        expect(window.location.pathname).toBe('/admin/menu/depots');
+
+        setViewportSize(320, 844);
+        await wrapper.get('[aria-label="Minify dashboard menu"]').trigger('click');
+        expect(navigation.findAll('.dashboard-compact-menu-item').map((item) => item.attributes('aria-label')))
+            .toEqual(['Dashboard', 'Depot', 'Indices', 'Stocks', 'Data', 'Admin', 'Profile']);
+        await navigation.get('button[aria-label="Data"]').trigger('click');
+        await flushPromises();
+        expect(window.location.pathname).toBe('/admin/menu/data/overview');
+        await navigation.get('button[aria-label="Admin"]').trigger('click');
+        await flushPromises();
+        expect(window.location.pathname).toBe('/admin/menu/depots');
     });
 
     it('renders the depots menu section with paginated depot data', async () => {
@@ -1366,7 +1617,6 @@ describe('App', () => {
         let currentPriceRefreshSettings = priceRefreshSettings();
         let indexChartDirection = 'up';
         let appleSubtitle = 'Core technology holding';
-        let currentStockEodhdSync = null;
         const currentIndexPriceRefreshSettings = indexPriceRefreshSettings({
             last_refreshed_at: '2026-06-02T13:00:00+00:00',
             next_refresh_at: '2026-06-02T13:30:00+00:00',
@@ -1476,8 +1726,10 @@ describe('App', () => {
                             start_price_date: '2026-06-05',
                             end_price_date: '2026-06-05',
                             end_price_24_date: '2026-06-04',
+                            end_price_24_as_of: '2026-06-04T15:32:30+00:00',
                             end_price_48_date: '2026-06-03',
                             historical_prices_fetching: true,
+                            price_reload_available: true,
                             latest_price_trend: 'up',
                             latest_price_change_pct: '2.28',
                             latest_price_tick_trend: 'up',
@@ -1960,51 +2212,6 @@ describe('App', () => {
                 }));
             }
 
-            if (path === '/admin/v2/stocks/eodhd-sync' && options?.method === 'POST') {
-                currentStockEodhdSync = {
-                    refresh_id: 'stock-eodhd-test',
-                    status: 'queued',
-                    stage: 'eod',
-                    date_from: '2025-08-06',
-                    date_to: '2026-08-06',
-                    current: 'Synchronizing missing EOD data...',
-                    steps: [
-                        { key: 'eod', label: 'EOD-Daten', status: 'running', message: 'Synchronizing EOD data.' },
-                        { key: 'intraday', label: 'Intraday-Daten', status: 'pending', message: 'Waiting for EOD data.' },
-                    ],
-                    progress: { completed: 0, total: 7, percent: 0 },
-                    eod: { stored_count: 0, failed_count: 0 },
-                    intraday: { stored_count: 0, failed_count: 0 },
-                    message: 'Stock EODHD sync queued.',
-                    error: null,
-                };
-
-                return Promise.resolve(jsonResponse({ refresh: currentStockEodhdSync }));
-            }
-
-            if (path === '/admin/v2/stocks/eodhd-sync' && (!options?.method || options.method === 'GET')) {
-                return Promise.resolve(jsonResponse({ refresh: currentStockEodhdSync }));
-            }
-
-            if (path === '/admin/v2/stocks/eodhd-sync/stock-eodhd-test') {
-                currentStockEodhdSync = {
-                    ...currentStockEodhdSync,
-                    status: 'finished',
-                    stage: 'intraday',
-                    current: null,
-                    steps: [
-                        { key: 'eod', label: 'EOD-Daten', status: 'finished', message: '40 EOD records loaded/updated.' },
-                        { key: 'intraday', label: 'Intraday-Daten', status: 'finished', message: '900 candles loaded/updated.' },
-                    ],
-                    progress: { completed: 7, total: 7, percent: 100 },
-                    eod: { stored_count: 40, failed_count: 0 },
-                    intraday: { stored_count: 900, failed_count: 0 },
-                    message: 'Stock EODHD sync finished.',
-                };
-
-                return Promise.resolve(jsonResponse({ refresh: currentStockEodhdSync }));
-            }
-
             if (path === '/admin/v2/indices/eodhd-sync' && options?.method === 'POST') {
                 return Promise.resolve(jsonResponse({
                     message: 'Index EODHD sync queued.',
@@ -2445,16 +2652,7 @@ describe('App', () => {
         expect(dashboardHeaders[0]).toBe('Symbol');
         expect(dashboardHeaders[1]).toBe('Name');
         expect(dashboardHeaders[2]).toBe('Latest price');
-        expect(dashboardHeaders[3]).toContain('Start price');
-        expect(dashboardHeaders[3]).toContain('05.06.2026');
-        expect(dashboardHeaders[4]).toContain('Last day');
-        expect(dashboardHeaders[4]).toContain('04.06.2026');
-        expect(dashboardHeaders[4]).not.toContain('Yesterday');
-        expect(dashboardHeaders[5]).toBe('Source time');
-        expect(dashboardHeaders[6]).toBe('Actions');
-        expect(wrapper.find('thead th.watch-list-content-cell').exists()).toBe(true);
-        expect(wrapper.find('thead th.watch-list-source-time-cell').exists()).toBe(true);
-        expect(wrapper.get('td.watch-list-source-time-cell').find('[aria-label^="Reload "]').exists()).toBe(true);
+        expect(dashboardHeaders.slice(3)).toEqual(['Last day', 'Actions']);
         expect(wrapper.find('thead th.watch-list-actions-cell').exists()).toBe(true);
         expect(wrapper.get('.app-bar-row').text()).not.toContain('Stocks Last:');
         expect(wrapper.find('.dashboard-status-card').exists()).toBe(false);
@@ -2489,17 +2687,14 @@ describe('App', () => {
         expect(wrapper.text()).toContain('Long term depot');
         expect(wrapper.text()).toContain('AAPL');
         expect(wrapper.text()).toContain('Apple');
-        const stockSubtitles = wrapper.findAll('.stock-subtitle');
-        expect(stockSubtitles.length).toBeGreaterThan(0);
-        expect(stockSubtitles.every((subtitle) => subtitle.classes().includes('text-info'))).toBe(true);
-        expect(stockSubtitles.every((subtitle) => !subtitle.classes().includes('text-primary'))).toBe(true);
-        expect(stockSubtitles.every((subtitle) => subtitle.classes().includes('font-weight-medium'))).toBe(true);
+        expect(watchListSection.get('.watch-list-name-cell .stock-subtitle').classes()).toContain('text-medium-emphasis');
+        expect(watchListSection.get('.mobile-stock-card .stock-subtitle').classes()).toContain('text-info');
         expect(wrapper.text()).toContain('US0378331005');
         expect(wrapper.text()).toContain('865985');
         expect(wrapper.text()).toContain('US0378331005 · WKN: 865985');
         expect(wrapper.text()).toContain('306.32');
         expect(wrapper.text()).not.toContain('306.32 EUR');
-        expect(wrapper.text()).toContain('300.10');
+        expect(watchListSection.text()).not.toContain('300.10');
         expect(wrapper.text()).toContain('299.50');
         expect(wrapper.text()).toContain('+2.28%');
         expect(wrapper.text()).toContain('DOWN');
@@ -2515,11 +2710,11 @@ describe('App', () => {
         expect(holdingRows[0].findAll('td')[1].text()).not.toContain('Exchange: NASDAQ');
         expect(holdingRows[0].findAll('td')[1].text()).not.toContain('Pieces: 0');
         expect(holdingRows[0].findAll('td')[1].text()).toContain('US0378331005 · WKN: 865985');
-        expect(holdingRows[0].findAll('td')[5].text()).toContain('03.06.2026, 17:35');
+        expect(holdingRows[0].findAll('td')[2].get('time.watch-list-price-time').text()).toBe('03.06.2026, 17:35');
+        expect(holdingRows[0].findAll('td')[3].get('time.watch-list-price-time').text()).toBe('17:32');
+        expect(holdingRows[0].find('[aria-label^="Reload "]').exists()).toBe(false);
         expect(wrapper.find('.stock-trend-signal').exists()).toBe(false);
-        expect(holdingRows[0].findAll('td')[5].text()).not.toContain('Tradegate Exchange');
-        expect(holdingRows[0].findAll('td')[5].classes()).toContain('watch-list-source-time-cell');
-        expect(holdingRows[0].findAll('td')[6].classes()).toContain('watch-list-actions-cell');
+        expect(holdingRows[0].findAll('td')[4].classes()).toContain('watch-list-actions-cell');
         expect(holdingRows[0].findAll('td')[2].classes()).not.toContain('bg-success');
         expect(holdingRows[1].findAll('td')[2].classes()).not.toContain('bg-error');
         expect(upPriceValue.classes()).toContain('bg-success');
@@ -2695,11 +2890,10 @@ describe('App', () => {
         const topLevelMenuKeys = wrapper.vm.menuItems.map((item) => item.key);
         expect(topLevelMenuKeys).toEqual([
             'dashboard',
+            'depot',
             'indices',
             'stocks',
-            'depot',
             'data',
-            'infos',
             'admin',
             'profile',
         ]);
@@ -2718,26 +2912,18 @@ describe('App', () => {
         const stocksDashboard = wrapper.get('[aria-label="Stocks dashboard"]');
         expect(stocksDashboard.text()).toContain('View and manage all saved stocks.');
         const stocksDashboardButtons = stocksDashboard.findAll('button');
-        const stockEodhdSyncButton = stocksDashboardButtons.find((button) => button.text() === 'EODHD Sync');
         const stocksAddButton = stocksDashboardButtons.find((button) => button.text() === 'Add stock');
-        const stocksEditButton = stocksDashboardButtons.find((button) => button.text() === 'Edit stock');
         const stocksDeleteButton = stocksDashboardButtons.find((button) => button.text() === 'Delete stock');
-        expect(stockEodhdSyncButton.attributes('disabled')).toBeDefined();
-        expect(stocksAddButton.exists()).toBe(true);
-        expect(stocksEditButton).toBeUndefined();
-        expect(stocksDeleteButton.exists()).toBe(true);
+        expect(stocksDashboardButtons.map((button) => button.text())).toEqual(['Add stock', 'Delete stock']);
+        expect(stocksDashboard.find('[role="alert"]').exists()).toBe(false);
+        expect(stocksDashboard.text()).not.toContain('Intraday: Deutsche Börse');
         expect(stocksDeleteButton.attributes('disabled')).toBeDefined();
         expect(fetchMock).toHaveBeenCalledWith(stocksWatchlistHoldingsPath, expect.any(Object));
-        expect(fetchMock).toHaveBeenCalledWith('/admin/v2/stocks/eodhd-sync', expect.any(Object));
+        expect(fetchMock.mock.calls.some(([path]) => path.startsWith('/admin/v2/stocks/eodhd-sync'))).toBe(false);
         expect(wrapper.get('.watch-list-section').text()).toContain('Apple');
         expect(wrapper.get('.watch-list-section').text()).toContain('Core technology holding');
         expect(wrapper.find('[aria-label="Buy stock"]').exists()).toBe(true);
         expect(wrapper.find('[aria-label="Sell stock"]').exists()).toBe(true);
-
-        await stockEodhdSyncButton.trigger('click');
-        await flushPromises();
-
-        expect(fetchMock).not.toHaveBeenCalledWith('/admin/v2/stocks/eodhd-sync', expect.objectContaining({ method: 'POST' }));
 
         const stocksTable = wrapper.get('.desktop-watch-list-table');
         expect(stocksTable.findAll('.watch-list-live-badge')).toHaveLength(1);
@@ -2893,88 +3079,16 @@ describe('App', () => {
         await appleStockRow.trigger('click');
         await flushPromises();
 
-        const automaticStockUpdates = wrapper.get('[aria-label="Automatic free stock updates"]');
-        const stockRealtimeSchedule = automaticStockUpdates.get('[aria-label="Stock realtime schedule"]');
-        expect(stockRealtimeSchedule.get('.text-body-2.font-weight-bold').text()).toBe('Automatic free updates');
-        expect(stockRealtimeSchedule.text()).toContain('start 5 min before trading until 10 min after trading · 20 min · closed: off');
-        const stockRefreshExchangeWindows = stockRealtimeSchedule.get('.stock-refresh-exchange-windows');
-        expect(stockRefreshExchangeWindows.text()).toContain(
-            'US (America/New_York): trading 15:30–22:00 Europe/Vienna'
-                + ' → refresh 15:25–22:10 Europe/Vienna.',
-        );
-        expect(stockRefreshExchangeWindows.text()).toContain(
-            'XETR (Europe/Berlin): trading 09:00–17:30 Europe/Vienna'
-                + ' → refresh 08:55–17:40 Europe/Vienna.',
-        );
-        expect(stockRefreshExchangeWindows.text()).not.toContain('Tradegate');
-        expect(automaticStockUpdates.find('[aria-label="Stock live update schedule status"]').exists()).toBe(false);
-        expect(automaticStockUpdates.find('[aria-label="Stock live update activity status"]').exists()).toBe(false);
+        expect(wrapper.find('[aria-label="Automatic free stock updates"]').exists()).toBe(false);
+        expect(wrapper.text()).not.toContain('Automatic free updates');
         wrapper.vm.liveDataStatusNow = Date.parse('2026-03-20T12:00:00+01:00');
         await wrapper.vm.$nextTick();
-        expect(stockRefreshExchangeWindows.text()).toContain(
-            'US (America/New_York): trading 14:30–21:00 Europe/Vienna'
-                + ' → refresh 14:25–21:10 Europe/Vienna.',
-        );
         expect(usStockRow.get('[aria-label="EXXX live update schedule status"]').text()).toBe('Waiting');
         expect(usStockRow.get('[aria-label="EXXX live update activity status"]').text()).toBe('Inactive');
         wrapper.vm.liveDataStatusNow = Date.parse('2026-08-06T18:49:00+02:00');
         await wrapper.vm.$nextTick();
         expect(usStockRow.get('[aria-label="EXXX live update schedule status"]').text()).toBe('Scheduled');
         expect(usStockRow.get('[aria-label="EXXX live update activity status"]').text()).toBe('Active');
-        expect(stockRealtimeSchedule.text()).not.toContain('No job is running; the next refresh starts at the time shown below.');
-        expect(stockRealtimeSchedule.text()).not.toContain(
-            'Updates are inactive outside the configured trading window.',
-        );
-        expect(stockRealtimeSchedule.text()).toContain('Latest 06.08.2026, 18:49');
-        expect(stockRealtimeSchedule.text()).toContain('Next 06.08.2026, 18:59');
-        expect(stockRealtimeSchedule.text()).toContain('Europe/Vienna');
-        const editStockLivePeriodButton = stockRealtimeSchedule.get('button');
-        expect(editStockLivePeriodButton.text()).toBe('Edit live period');
-        expect(editStockLivePeriodButton.classes()).toContain('v-btn--variant-text');
-
-        await editStockLivePeriodButton.trigger('click');
-        await flushPromises();
-
-        const stockLiveScheduleDialog = document.body.querySelector('.stock-live-schedule-dialog');
-        expect(stockLiveScheduleDialog.textContent).toContain('Edit live/realtime update period');
-        expect(stockLiveScheduleDialog.textContent).toContain(
-            'Refreshes each stock from free sources around its stored trading hours.',
-        );
-        expect(stockLiveScheduleDialog.textContent).toContain('Every (minutes)');
-        expect(stockLiveScheduleDialog.textContent).toContain('Start before (minutes)');
-        expect(stockLiveScheduleDialog.textContent).toContain('End after (minutes)');
-        expect(stockLiveScheduleDialog.textContent).toContain('Also refresh while markets are closed');
-        wrapper.vm.liveDataUpdateScheduleForm.trading_interval_minutes = 12;
-        wrapper.vm.liveDataUpdateScheduleForm.trading_starts_before_minutes = 45;
-        wrapper.vm.liveDataUpdateScheduleForm.trading_ends_after_minutes = 30;
-        wrapper.vm.liveDataUpdateScheduleForm.closed_refresh_enabled = true;
-        wrapper.vm.liveDataUpdateScheduleForm.closed_interval_minutes = 90;
-        await wrapper.vm.$nextTick();
-
-        const saveStockLiveScheduleButton = Array.from(stockLiveScheduleDialog.querySelectorAll('button'))
-            .find((button) => button.textContent.trim() === 'Save live schedule');
-        saveStockLiveScheduleButton.click();
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/price-refresh-settings', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({
-                trading_interval_minutes: 12,
-                trading_starts_before_minutes: 45,
-                trading_ends_after_minutes: 30,
-                trading_start_time: null,
-                trading_end_time: null,
-                closed_refresh_enabled: true,
-                closed_interval_minutes: 90,
-            }),
-        }));
-        expect(stockRealtimeSchedule.text()).toContain(
-            'start 45 min before trading until 30 min after trading · 12 min · closed: every 90 min',
-        );
-        expect(stockRefreshExchangeWindows.text()).toContain(
-            'NASDAQ (Europe/Berlin): trading 08:00–22:00 Europe/Vienna'
-                + ' → refresh 07:15–22:30 Europe/Vienna.',
-        );
 
         await stocksAddButton.trigger('click');
         await flushPromises();
@@ -4541,8 +4655,9 @@ describe('App', () => {
         expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/depot-transactions')).toHaveLength(3);
     });
 
-    it('books stock transaction from the Stocks page', async () => {
+    it('prefills the exact holding for Stocks sales and books only the submitted quantity', async () => {
         window.history.pushState({}, '', '/admin/menu/stocks');
+        setViewportSize(1400, 900);
         const emptyPagination = {
             current_page: 1,
             last_page: 1,
@@ -4585,6 +4700,8 @@ describe('App', () => {
             recent_prices: [],
             validation_errors: [],
         };
+        const fractionalHolding = { ...holding, id: 2, symbol: 'MSFT', name: 'Microsoft', position_pieces: '1.23456789' };
+        const otherHolding = { ...holding, id: 3, symbol: 'NVDA', name: 'Nvidia', position_pieces: '0.12345678' };
         const fetchMock = vi.fn((path, options) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -4607,7 +4724,7 @@ describe('App', () => {
             if (isWatchlistHoldingsRequest(path)) {
                 return Promise.resolve(jsonResponse({
                     depot,
-                    holdings: [holding],
+                    holdings: [holding, fractionalHolding, otherHolding],
                     meta: emptyPagination,
                     price_refresh_settings: priceRefreshSettings(),
                 }));
@@ -4621,6 +4738,7 @@ describe('App', () => {
             }
 
             if (path === '/admin/depot-transactions/stocks' && options?.method === 'POST') {
+                const payload = JSON.parse(options.body);
                 return Promise.resolve(jsonResponse({
                     message: 'Stock transaction booked.',
                     depot: {
@@ -4628,8 +4746,8 @@ describe('App', () => {
                         account_balance: '750.00',
                     },
                     transaction: {
-                        id: 2,
-                        type: 'buy',
+                        id: payload.stock_holding_id,
+                        type: payload.type,
                     },
                 }));
             }
@@ -4654,18 +4772,63 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
-        const buyStockButton = wrapper.find('[aria-label="Buy stock"]');
-        await buyStockButton.trigger('click');
+        const [emptyRow, fractionalRow] = wrapper.findAll('.desktop-watch-list-table .stock-holding-row');
+        expect(emptyRow.get('[aria-label="Sell stock"]').attributes('disabled')).toBeDefined();
+        const sellStockButton = fractionalRow.get('[aria-label="Sell stock"]');
+        const bookingRequests = () => fetchMock.mock.calls.filter(([path]) => path === '/admin/depot-transactions/stocks');
+        const piecesInput = () => document.body.querySelector('#stock-transaction-form input[type="number"]');
+        const setInput = (input, value) => {
+            input.value = value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        };
+        const cancelBooking = async () => {
+            const cancelButton = Array.from(document.body.querySelectorAll('.v-overlay--active button'))
+                .find((button) => button.textContent.trim() === 'Cancel');
+            cancelButton.click();
+            await flushPromises();
+        };
+
+        await sellStockButton.trigger('click');
         await flushPromises();
+        expect(piecesInput().value).toBe('1.23456789');
+        setInput(piecesInput(), '0.125');
+        await cancelBooking();
+
+        setViewportSize(390, 844);
+        await flushPromises();
+        const [emptyCard, , otherCard] = wrapper.findAll('.mobile-stock-card');
+        expect(emptyCard.get('[aria-label="Withdraw"]').attributes('disabled')).toBeDefined();
+        await otherCard.get('[aria-label="Withdraw"]').trigger('click');
+        await flushPromises();
+        expect(piecesInput().value).toBe('0.12345678');
+        expect(otherCard.attributes('aria-selected')).toBe('false');
+        expect(bookingRequests()).toHaveLength(0);
+        await cancelBooking();
+
+        setViewportSize(1400, 900);
+        await flushPromises();
+        await sellStockButton.trigger('click');
+        await flushPromises();
+        expect(piecesInput().value).toBe('1.23456789');
+        setInput(piecesInput(), '0.125');
+        setInput(document.body.querySelectorAll('#stock-transaction-form input[type="number"]')[1], '12.50');
+        setInput(document.body.querySelector('#stock-transaction-form input[type="date"]'), '2026-06-05');
+        expect(bookingRequests()).toHaveLength(0);
+        document.body.querySelector('#stock-transaction-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+        await flushPromises();
+        expect(bookingRequests()).toHaveLength(1);
+        expect(JSON.parse(bookingRequests()[0][1].body)).toEqual({
+            type: 'sell', stock_holding_id: 2, pieces: 0.125, total_amount: 12.5, booked_at: '2026-06-05', note: null,
+        });
+
+        await fractionalRow.get('[aria-label="Buy stock"]').trigger('click');
+        await flushPromises();
+        expect(piecesInput().value).toBe('');
 
         const stockInputs = document.body.querySelectorAll('#stock-transaction-form input[type="number"]');
-        stockInputs[0].value = '3';
-        stockInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
-        stockInputs[1].value = '300';
-        stockInputs[1].dispatchEvent(new Event('input', { bubbles: true }));
-        const stockDateInput = document.body.querySelector('#stock-transaction-form input[type="date"]');
-        stockDateInput.value = '2026-06-05';
-        stockDateInput.dispatchEvent(new Event('input', { bubbles: true }));
+        setInput(stockInputs[0], '3');
+        setInput(stockInputs[1], '300');
+        setInput(document.body.querySelector('#stock-transaction-form input[type="date"]'), '2026-06-05');
         document.body.querySelector('#stock-transaction-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
         await flushPromises();
 
@@ -4673,7 +4836,7 @@ describe('App', () => {
             method: 'POST',
             body: JSON.stringify({
                 type: 'buy',
-                stock_holding_id: 1,
+                stock_holding_id: 2,
                 pieces: 3,
                 total_amount: 300,
                 booked_at: '2026-06-05',
@@ -4732,6 +4895,7 @@ describe('App', () => {
                 previous_day_price: '189.00000000',
                 previous_day_price_date: '2026-06-03',
                 previous_day_change_percent: '1.32',
+                day_change_amount_eur: null,
                 flatex_price: '180.000000',
                 year_start_price: '175.00000000',
                 latest_price_fetched_at: '2026-06-04T10:00:00+00:00',
@@ -4742,6 +4906,11 @@ describe('App', () => {
         const depotValuations = {
             latest: {
                 stock_balance: '383.00',
+                account_overview: {
+                    valuation_date: '2026-06-12', previous_valuation_date: '2026-06-11',
+                    stock_balance: '380.00', cash_balance: '650.00', account_balance: '1030.00',
+                    previous_day_balance: '1020.00', external_cash_flow: '5.00', change_amount: '5.00',
+                },
                 cash_balance: '650.00',
                 account_balance: '1033.00',
                 previous_day_balance: '1020.00',
@@ -4749,6 +4918,7 @@ describe('App', () => {
                 previous_day_change_amount: '3.00',
                 previous_day_change_percent: '0.29',
                 year_start_balance: '1000.00',
+                year_net_capital: '1000.00',
                 current_balance: '1033.00',
                 balance_change_amount: '33.00',
                 balance_change_percent: '3.30',
@@ -4821,8 +4991,6 @@ describe('App', () => {
                 account_balance: '1033.00',
             },
         ];
-        let currentDepotHoldings = depotHoldings;
-        let currentDepotValuations = depotValuations;
         const fetchMock = vi.fn((path, options = {}) => {
             if (path === '/admin/me') {
                 return Promise.resolve(jsonResponse({
@@ -4844,89 +5012,40 @@ describe('App', () => {
 
             if (path === '/admin/depot-transactions') {
                 return Promise.resolve(jsonResponse({
-                    depot_holdings: currentDepotHoldings,
-                    depot_valuations: currentDepotValuations,
+                    depot_holdings: depotHoldings,
+                    depot_valuations: depotValuations,
+                    ui_preferences: { depot_price_source: 'flatex' },
                     depot_performance_series: depotPerformanceSeries,
                     transactions,
                 }));
             }
 
-            if (path === '/admin/depot-transactions/2/date' && options.method === 'PATCH') {
+            if (path === '/admin/depot-transactions/1' && options.method === 'PATCH') {
+                return Promise.resolve(failedJsonResponse({ message: 'The depot cash balance is too low for this booking.' }, { status: 422 }));
+            }
+
+            if (path === '/admin/depot-transactions/2' && options.method === 'PATCH') {
                 const updatedTransaction = {
                     ...transactions[0],
-                    booked_at: '2026-06-03T00:00:00+00:00',
+                    booked_at: '2026-06-05T00:00:00+02:00',
+                    pieces: '2.50000001',
+                    total_amount: '340.01',
+                    cash_delta: '-340.01',
+                    balance_after: '659.99',
+                    note: 'Corrected buy',
                 };
 
                 return Promise.resolve(jsonResponse({
-                    message: 'Transaction date updated.',
+                    message: 'Transaction updated.',
+                    depot: { ...depot, account_balance: '659.99' },
                     depot_holdings: depotHoldings,
-                    depot_valuations: depotValuations,
+                    depot_valuations: {
+                        ...depotValuations,
+                        latest: { ...depotValuations.latest, cash_balance: '659.99' },
+                    },
                     depot_performance_series: depotPerformanceSeries,
                     transaction: updatedTransaction,
                     transactions: [updatedTransaction, transactions[1]],
-                }));
-            }
-
-            if (path === '/admin/ui-preferences' && options.method === 'PATCH') {
-                return Promise.resolve(jsonResponse({
-                    message: 'UI preferences updated.',
-                    ui_preferences: JSON.parse(options.body),
-                }));
-            }
-
-            if (path === '/admin/watchlist/holdings/1/flatex-price' && options.method === 'PATCH') {
-                currentDepotHoldings = [
-                    {
-                        ...depotHoldings[0],
-                        flatex_price: '180.250000',
-                    },
-                ];
-                currentDepotValuations = {
-                    ...depotValuations,
-                    flatex: {
-                        stock_balance: '360.50',
-                        cash_balance: '650.00',
-                        account_balance: '1010.50',
-                        previous_day_balance: '1020.00',
-                        previous_day_external_cash_flow_amount: '10.00',
-                        previous_day_change_amount: '-19.50',
-                        previous_day_change_percent: '-1.89',
-                        year_start_balance: '1000.00',
-                        current_balance: '1010.50',
-                        balance_change_amount: '10.50',
-                        balance_change_percent: '1.05',
-                        taxable_stock_gain_amount: '10.50',
-                        balance_change_with_broker_bonus_amount: '10.50',
-                        balance_change_with_broker_bonus_percent: '1.05',
-                        opening_balance: '0.00',
-                        total_deposits: '1000.00',
-                        total_withdrawals: '0.00',
-                        dividend_amount: '0.00',
-                        interest_amount: '0.00',
-                        fee_amount: '0.00',
-                        tax_amount: '0.00',
-                        broker_bonus_amount: '0.00',
-                        month_start_balance: '1000.00',
-                        month_change_amount: '10.50',
-                        month_change_percent: '1.05',
-                        one_week_start_balance: '995.00',
-                        one_week_change_amount: '15.50',
-                        one_week_change_percent: '1.56',
-                    },
-                };
-
-                return Promise.resolve(jsonResponse({
-                    message: 'Flatex price updated.',
-                    holding: {
-                        id: 1,
-                        flatex_price: '180.250000',
-                    },
-                    holdings: [
-                        {
-                            id: 1,
-                            flatex_price: '180.250000',
-                        },
-                    ],
                 }));
             }
 
@@ -4978,30 +5097,28 @@ describe('App', () => {
 
         expect(wrapper.text()).toContain('Depot stocks');
         expect(wrapper.text()).toContain('Depot');
-        expect(wrapper.text()).toContain('Depot balance');
-        expect(wrapper.text()).toContain('383.00 EUR');
-        expect(wrapper.text()).toContain('Cash balance');
-        expect(wrapper.text()).toContain('650.00 EUR');
-        expect(wrapper.text()).toContain('Account balance');
-        expect(wrapper.text()).toContain('1,033.00 EUR');
-        expect(wrapper.find('.depot-account-yesterday-row').text()).toContain('Account Yesterday');
-        expect(wrapper.find('.depot-account-yesterday-row').text()).toContain('1,020.00 EUR');
-        expect(wrapper.find('.depot-account-external-cash-flow-row').text()).toContain('External cash flow today');
-        expect(wrapper.find('.depot-account-external-cash-flow-row').text()).toContain('+10.00 EUR');
-        expect(wrapper.find('.depot-account-yesterday-change-row').text()).toContain('Performance +/-');
-        expect(wrapper.find('.depot-account-yesterday-change-row').text()).toContain('+0.29% · +3.00 EUR');
-        expect(wrapper.find('.depot-account-yesterday-change-row .text-success').exists()).toBe(true);
+        const overview = wrapper.get('.depot-balance-summary');
+        expect(overview.findAll('h2').map((heading) => heading.text()))
+            .toEqual(['Depot', 'Aktuelle Woche', 'Vorwoche', 'Aktueller Monat', 'Vormonat', 'Aktuelles Jahr']);
+        const overviewDepot = overview.get('.depot-balance-card');
+        expect(overviewDepot.findAll('dt').map((label) => label.text()))
+            .toEqual(['Depot Balance', 'Cash Balance', 'Account Yesterday', 'Account Balance', 'Performance +/-']);
+        expect(overviewDepot.findAll('dd').map((value) => value.text()))
+            .toEqual(['380.00 EUR', '650.00 EUR', '1,020.00 EUR', '1,030.00 EUR', '+5.00 EUR']);
+        expect(overviewDepot.get('[data-account-metric="account_balance"]').attributes('title')).toBe('12.06.2026');
+        expect(overviewDepot.get('[data-account-metric="previous_day_balance"]').attributes('title')).toBe('11.06.2026');
+        expect(overviewDepot.get('[data-account-metric="change_amount"]').classes()).toContain('text-success');
         expect(wrapper.text()).not.toContain('Status');
         expect(wrapper.text()).not.toContain('Active');
         expect(wrapper.text()).toContain('Aktuelles Jahr');
-        expect(wrapper.text()).toContain('Balance 01.01.');
+        expect(wrapper.text()).toContain('Basis 01.01. bereinigt');
         expect(wrapper.text()).toContain('1,000.00 EUR');
         expect(wrapper.text()).toContain(`Balance ${sessionHeaderDate(0).slice(0, 6)}`);
         expect(wrapper.text()).toContain('+3.30% · +33.00 EUR');
         expect(wrapper.text()).not.toContain('Kest - 27,5%');
-        expect(wrapper.text()).toContain('Corrected balance (-27,5%)');
+        expect(wrapper.text()).toContain('Stand nach KESt-Schätzung');
         expect(wrapper.text()).toContain('1,023.92 EUR');
-        expect(wrapper.text()).toContain('Corrected +/-');
+        expect(wrapper.text()).toContain('Ergebnis nach KESt-Schätzung');
         expect(wrapper.text()).toContain('+2.39% · +23.92 EUR');
         expect(wrapper.text()).toContain('Aktuelle Woche');
         expect(wrapper.text()).toContain(`Balance ${previousWeekEndDate().slice(0, 6)}`);
@@ -5009,11 +5126,12 @@ describe('App', () => {
         expect(wrapper.text()).toContain('1 week');
         expect(wrapper.text()).toContain('+4.34% · +43.00 EUR');
         expect(wrapper.text()).toContain('Aktueller Monat');
-        expect(wrapper.text()).toContain(`Balance ${previousMonthEndDate().slice(0, 6)}`);
+        expect(wrapper.text()).toContain(`Balance 01.${sessionHeaderDate(0).slice(3, 6)}`);
+        expect(overview.findAll('.depot-balance-card')[3].get('.depot-balance-reference dt').attributes('title'))
+            .toBe(`Stand am Vormonatsende ${previousMonthEndDate().slice(0, 6)}`);
         expect(wrapper.text()).toContain('Month');
         expect(wrapper.text()).toContain('+3.30% · +33.00 EUR');
-        expect(wrapper.findAll('.depot-balance-card')).toHaveLength(4);
-        expect(wrapper.find('.depot-balance-card tbody td:nth-child(2)').classes()).toContain('text-right');
+        expect(overview.findAll('.depot-balance-card').map((card) => card.findAll('dt').length)).toEqual([5, 3, 3, 3, 3, 5]);
         expect(wrapper.find('.depot-cashflow-card').exists()).toBe(false);
         expect(wrapper.text()).toContain('Depot performance');
         expect(wrapper.text()).toContain('01.01 to now');
@@ -5040,46 +5158,39 @@ describe('App', () => {
         expect(wrapper.text()).not.toContain('BUY/SELL');
         expect(wrapper.text()).toContain('Amount');
         expect(wrapper.text()).toContain('Value');
-        expect(wrapper.text()).toContain('Latest price');
-        expect(wrapper.text()).toContain('Prev Day');
+        expect(wrapper.text()).toContain('Latest Price');
+        expect(wrapper.text()).toContain('Previous Day');
         expect(wrapper.text()).toContain('+/- %');
-        expect(wrapper.text()).toContain('Flatex price');
-        expect(wrapper.text()).toContain('1.1/Buy');
-        expect(wrapper.text()).toContain('Change');
-        expect(wrapper.text()).toContain('+/- EUR');
+        expect(wrapper.text()).not.toContain('Flatex price');
+        expect(wrapper.text()).toContain('Buy / 1.1. €');
+        expect(wrapper.text()).toContain('Change %');
+        expect(wrapper.text()).toContain('Buy / 1.1. +/- €');
         expect(wrapper.text()).toContain('Actions');
         expect(wrapper.text()).toContain('US0378331005');
         const rightAlignedDepotHeaders = wrapper
             .findAll('th.text-right')
             .map((header) => header.text());
-        expect(rightAlignedDepotHeaders).toContain('Latest price');
-        expect(rightAlignedDepotHeaders).toContain('Prev Day');
-        expect(rightAlignedDepotHeaders).toContain('+/- %');
+        expect(rightAlignedDepotHeaders).toContain('Latest Price');
+        expect(rightAlignedDepotHeaders).toContain('Previous Day');
+        expect(rightAlignedDepotHeaders).toContain('Day +/- %');
         expect(rightAlignedDepotHeaders).toContain('Value');
-        expect(rightAlignedDepotHeaders).toContain('Flatex price');
-        expect(rightAlignedDepotHeaders).toContain('1.1/Buy');
-        expect(rightAlignedDepotHeaders).toContain('Change');
-        expect(rightAlignedDepotHeaders).toContain('+/- EUR');
-        const latestPriceHeaderButton = wrapper.findAll('button').find((button) => button.text() === 'Latest price');
-        const flatexPriceHeaderButton = wrapper.findAll('button').find((button) => button.text() === 'Flatex price');
-        expect(latestPriceHeaderButton).toBeTruthy();
-        expect(flatexPriceHeaderButton).toBeTruthy();
-        expect(latestPriceHeaderButton.classes()).toContain('depot-price-source-button--active');
-        expect(flatexPriceHeaderButton.classes()).not.toContain('depot-price-source-button--active');
+        expect(rightAlignedDepotHeaders).toContain('Buy / 1.1. €');
+        expect(rightAlignedDepotHeaders).toContain('Change %');
+        expect(rightAlignedDepotHeaders).toContain('Buy / 1.1. +/- €');
         expect(wrapper.text()).toContain('AAPL');
         expect(wrapper.text()).toContain('2');
         expect(wrapper.text()).toContain('383.00 USD');
         expect(wrapper.text()).toContain('191.50 USD');
         expect(wrapper.text()).toContain('189.00 USD');
         expect(wrapper.text()).toContain('+1.32%');
-        expect(wrapper.text()).toContain('180.00 USD');
-        expect(wrapper.text()).toContain('175.00 USD');
-        expect(wrapper.text()).toContain('↑');
-        expect(wrapper.text()).toContain('+9.43%');
-        expect(wrapper.text()).toContain('+33.00');
+        expect(wrapper.text()).not.toContain('180.00 USD');
         const desktopDepotStockTable = wrapper.get('.desktop-depot-stocks-table');
         const desktopDepotHeaders = desktopDepotStockTable.findAll('thead th').map((header) => header.text());
-        expect(desktopDepotHeaders.slice(0, 4)).toEqual(['Symbol', 'Name', 'Amount', 'Value']);
+        expect(desktopDepotHeaders).toEqual([
+            'Symbol', 'Name', 'Day +/- %', 'Latest Price', 'Previous Day', 'Day +/- €',
+            'Amount', 'Value', 'Buy / 1.1. €', 'Change %', 'Buy / 1.1. +/- €', 'Actions',
+        ]);
+        expect(desktopDepotStockTable.get('tfoot td').attributes('colspan')).toBe('10');
         expect(desktopDepotStockTable.find('tbody .stock-trend-signal').exists()).toBe(false);
         const desktopDepotStockSubtitle = wrapper.get('.desktop-depot-stocks-table .stock-subtitle');
         expect(desktopDepotStockSubtitle.text()).toBe('Technology holding');
@@ -5094,14 +5205,12 @@ describe('App', () => {
         expect(mobileDepotStockCards[0].find('.mobile-depot-stock-isin').text()).toBe('US0378331005');
         expect(mobileDepotStockCards[0].text()).toContain('2');
         expect(mobileDepotStockCards[0].text()).toContain('191.50 USD');
-        expect(mobileDepotStockCards[0].text()).toContain('Prev Day 189.00 USD');
         expect(mobileDepotStockCards[0].text()).toContain('+1.32%');
         expect(mobileDepotStockCards[0].text()).toContain('383.00 USD');
-        expect(mobileDepotStockCards[0].text()).toContain('↑ +9.43%');
-        expect(mobileDepotStockCards[0].text()).toContain('+33.00');
-        expect(mobileDepotStockCards[0].text()).not.toContain('AAPL');
-        expect(mobileDepotStockCards[0].find('.mobile-depot-stock-row--prices').text()).toContain('191.50 USD');
-        expect(mobileDepotStockCards[0].findAll('.mobile-depot-stock-row')).toHaveLength(3);
+        expect(mobileDepotStockCards[0].get('.mobile-depot-stock-name').text()).toBe('AAPL · Apple Inc.');
+        expect(mobileDepotStockCards[0].get('.depot-stock-day-change').text()).toBe('+1.32%');
+        expect(mobileDepotStockCards[0].findAll('.mobile-depot-stock-quotes dd').map((value) => value.text()))
+            .toEqual(['191.50 USD', '189.00 USD', '-']);
         expect(mobileDepotStockCards[0].findAll('.mobile-depot-stock-actions .v-btn')).toHaveLength(2);
         setViewportSize(844, 390);
         await flushPromises();
@@ -5111,17 +5220,18 @@ describe('App', () => {
             .findAll('th')
             .map((header) => header.text());
         expect(compactDepotHeaders).not.toContain('Symbol');
-        expect(compactDepotHeaders).not.toContain('1.1/Buy');
+        expect(compactDepotHeaders).toContain('Buy / 1.1. €');
         expect(compactDepotHeaders).toContain('Name');
         expect(compactDepotHeaders).not.toContain('BUY/SELL');
         expect(compactDepotHeaders).toContain('Amount');
         expect(compactDepotHeaders).toContain('Value');
-        expect(compactDepotHeaders).toContain('Latest price');
-        expect(compactDepotHeaders).toContain('Prev Day');
-        expect(compactDepotHeaders).toContain('+/- %');
-        expect(compactDepotHeaders).toContain('Flatex price');
-        expect(compactDepotHeaders).toContain('Change');
-        expect(compactDepotHeaders).toContain('+/- EUR');
+        expect(compactDepotHeaders.slice(0, 5)).toEqual([
+            'Name', 'Day +/- %', 'Latest Price', 'Previous Day', 'Day +/- €',
+        ]);
+        expect(compactDepotHeaders).not.toContain('Flatex price');
+        expect(desktopDepotStockTable.get('tfoot td').attributes('colspan')).toBe('9');
+        expect(compactDepotHeaders).toContain('Change %');
+        expect(compactDepotHeaders).toContain('Buy / 1.1. +/- €');
         expect(compactDepotHeaders).toContain('Actions');
         expect(wrapper.text()).toContain('Sum');
         expect(wrapper.find('.cash-ledger-section').exists()).toBe(false);
@@ -5188,16 +5298,62 @@ describe('App', () => {
         expect(mobileCashLedgerCards[1].find('.mobile-cash-ledger-stock').exists()).toBe(false);
         expect(mobileCashLedgerCards[1].find('.cash-ledger-note').text()).toBe('Initial funding');
         expect(mobileCashLedgerCards[1].text()).toContain('+1,000.00');
-        const desktopDateInput = wrapper.find('#transaction-date-desktop-2');
-        desktopDateInput.element.value = '2026-06-03';
-        await desktopDateInput.trigger('change');
+        function setCashField(label, value) {
+            const fieldLabel = [...document.querySelectorAll('#cash-transaction-form label')]
+                .find((element) => element.textContent.trim() === label);
+            const input = document.getElementById(fieldLabel.htmlFor);
+            input.value = value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        async function submitCashEdit() {
+            document.querySelector('#cash-transaction-form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            await flushPromises();
+        }
+
+        setViewportSize(1440, 900);
+        await cashLedgerRows[1].get('.cash-ledger-edit-button').trigger('click');
+        await flushPromises();
+        expect(document.body.textContent).toContain('Edit transaction');
+        expect(document.querySelector('#cash-transaction-form input[type="number"]').value).toBe('1000.00');
+        expect(document.body.textContent).toContain('Related stock / ISIN');
+        expect(document.querySelector('#cash-transaction-form input[type="date"]').value).toBe('2026-06-04');
+        setCashField('Amount', '10.50');
+        await submitCashEdit();
+        expect(fetchMock).toHaveBeenCalledWith('/admin/depot-transactions/1', expect.objectContaining({
+            method: 'PATCH',
+            body: JSON.stringify({ total_amount: '10.50' }),
+        }));
+        expect(document.querySelector('#cash-transaction-form [role="alert"]').textContent).toContain('The depot cash balance is too low');
+        expect(document.querySelector('#cash-transaction-form input[type="number"]').value).toBe('10.50');
+        expect(wrapper.find('.cash-balance-card').text()).toContain('650.00 EUR');
+        const cashDialog = document.querySelector('#cash-transaction-form').closest('.v-card');
+        [...cashDialog.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Cancel').click();
         await flushPromises();
 
-        expect(fetchMock).toHaveBeenCalledWith('/admin/depot-transactions/2/date', expect.objectContaining({
+        setViewportSize(320, 740);
+        await mobileCashLedgerCards[0].get('.cash-ledger-edit-button').trigger('click');
+        await flushPromises();
+        const tradeReadOnlyValues = [...document.querySelectorAll('#cash-transaction-form input[readonly]')].map((input) => input.value);
+        expect(tradeReadOnlyValues).toEqual(['Buy', 'Apple Inc. · US0378331005']);
+        setCashField('Pieces', '2.50000001');
+        setCashField('Amount', '340.01');
+        setCashField('Date', '2026-06-05');
+        setCashField('Note', 'Corrected buy');
+        await submitCashEdit();
+        expect(fetchMock).toHaveBeenCalledWith('/admin/depot-transactions/2', expect.objectContaining({
             method: 'PATCH',
-            body: JSON.stringify({ booked_at: '2026-06-03' }),
+            body: JSON.stringify({
+                total_amount: '340.01',
+                booked_at: '2026-06-05',
+                note: 'Corrected buy',
+                pieces: '2.50000001',
+            }),
         }));
-        expect(wrapper.find('.mobile-cash-ledger-card').text()).toContain('03.06.2026');
+        expect(wrapper.find('.mobile-cash-ledger-card').text()).toContain('05.06.2026');
+        expect(wrapper.find('.mobile-cash-ledger-card').text()).toContain('Corrected buy');
+        expect(wrapper.find('.mobile-cash-ledger-card').text()).toContain('-340.01');
+        expect(wrapper.find('.cash-balance-card').text()).toContain('659.99 EUR');
 
         const overviewTab = wrapper.findAll('[role="tab"]').find((tab) => tab.text() === 'Overview');
         await overviewTab.trigger('click');
@@ -5207,63 +5363,10 @@ describe('App', () => {
         expect(wrapper.find('.cash-ledger-section').exists()).toBe(false);
         expect(wrapper.find('.depot-balance-card').exists()).toBe(true);
 
-        const restoredLatestPriceHeaderButton = wrapper.findAll('button').find((button) => button.text() === 'Latest price');
-        const restoredFlatexPriceHeaderButton = wrapper.findAll('button').find((button) => button.text() === 'Flatex price');
-        await restoredFlatexPriceHeaderButton.trigger('click');
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/ui-preferences', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({ depot_price_source: 'flatex' }),
-        }));
-        expect(restoredLatestPriceHeaderButton.classes()).not.toContain('depot-price-source-button--active');
-        expect(restoredFlatexPriceHeaderButton.classes()).toContain('depot-price-source-button--active');
-        expect(wrapper.text()).toContain('360.00 USD');
-        expect(wrapper.text()).toContain('1,010.00 EUR');
-        expect(wrapper.text()).toContain('+1.00% · +10.00 EUR');
-        expect(wrapper.text()).toContain('1,007.25 EUR');
-        expect(wrapper.text()).toContain('+0.73% · +7.25 EUR');
-        expect(wrapper.text()).toContain('+2.86%');
-        expect(wrapper.text()).toContain('+10.00');
-
-        const flatexPriceButton = wrapper.findAll('button').find((button) => button.text() === '180.00 USD');
-        expect(flatexPriceButton).toBeTruthy();
-
-        await flatexPriceButton.trigger('click');
-        await flushPromises();
-
-        const flatexPriceInput = wrapper.find('input.flatex-price-input');
-        expect(flatexPriceInput.exists()).toBe(true);
-
-        await flatexPriceInput.setValue('180.25');
-        await flatexPriceInput.trigger('keydown.enter');
-        await flushPromises();
-
-        expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings/1/flatex-price', expect.objectContaining({
-            method: 'PATCH',
-            body: JSON.stringify({ flatex_price: 180.25 }),
-        }));
-        expect(wrapper.text()).toContain('180.25 USD');
-        expect(wrapper.text()).toContain('360.50 USD');
-        expect(wrapper.text()).toContain('1,010.50 EUR');
-        expect(wrapper.text()).toContain('+1.05% · +10.50 EUR');
-        expect(wrapper.text()).toContain('1,007.61 EUR');
-        expect(wrapper.text()).toContain('+0.76% · +7.61 EUR');
-        expect(wrapper.text()).toContain('+3.00%');
-
-        const updatedFlatexPriceButton = wrapper.findAll('button').find((button) => button.text() === '180.25 USD');
-        expect(updatedFlatexPriceButton).toBeTruthy();
-
-        await updatedFlatexPriceButton.trigger('click');
-        await flushPromises();
-
-        const abortedFlatexPriceInput = wrapper.find('input.flatex-price-input');
-        await abortedFlatexPriceInput.setValue('170.25');
-        await abortedFlatexPriceInput.trigger('keydown.esc');
-        await flushPromises();
-
-        expect(wrapper.text()).toContain('180.25 USD');
-        expect(fetchMock.mock.calls.filter(([path]) => path === '/admin/watchlist/holdings/1/flatex-price')).toHaveLength(1);
+        expect(wrapper.get('.depot-balance-card').text()).toContain('1,030.00 EUR');
+        expect(wrapper.get('.desktop-depot-stocks-table').text()).toContain('383.00 USD');
+        expect(wrapper.find('.flatex-price-input').exists()).toBe(false);
+        expect(fetchMock.mock.calls.some(([path]) => path === '/admin/ui-preferences' || path.endsWith('/flatex-price'))).toBe(false);
     });
 
     it('shows the cash ledger on the Cash page and paginates it by twenty rows', async () => {
@@ -5400,6 +5503,7 @@ describe('App', () => {
                 cash_balance: '84664.35',
                 account_balance: '84664.35',
                 year_start_balance: '84664.35',
+                year_net_capital: '84664.35',
                 current_balance: '84664.35',
                 balance_change_amount: '0.00',
                 balance_change_percent: '0.00',
@@ -5500,11 +5604,11 @@ describe('App', () => {
         const wrapper = mountApp();
         await flushPromises();
 
-        expect(wrapper.text()).toContain('Balance 01.01.');
+        expect(wrapper.text()).toContain('Basis 01.01. bereinigt');
         expect(wrapper.text()).toContain('84,664.35 EUR');
         expect(wrapper.text()).toContain('0.00% · 0.00 EUR');
-        expect(wrapper.text()).toContain('Corrected balance (-27,5%)');
-        expect(wrapper.text()).toContain('Corrected +/-');
+        expect(wrapper.text()).toContain('Stand nach KESt-Schätzung');
+        expect(wrapper.text()).toContain('Ergebnis nach KESt-Schätzung');
         expect(wrapper.text()).not.toContain('84,271.71 EUR');
         expect(wrapper.text()).not.toContain('+1.24% · +1,035.15 EUR');
     });

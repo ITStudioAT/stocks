@@ -9,6 +9,7 @@ use App\Models\StockHoldingDailyPrice;
 use App\Models\StockPrice;
 use App\Models\StockRealtimePrice;
 use App\Models\User;
+use App\Services\DashboardPerformanceSnapshots;
 use App\Services\FreeTradingCalendar;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -379,6 +380,7 @@ class DepotTransactionTest extends TestCase
         $holding = StockHolding::factory()->state(['latest_price_source' => 'Yahoo Finance'])->create([
             'symbol' => 'AAPL',
             'name' => 'Apple Inc.',
+            'flatex_price' => null,
         ]);
 
         $response = $this->actingAs($admin)
@@ -416,7 +418,10 @@ class DepotTransactionTest extends TestCase
             ->assertCreated()
             ->assertJsonPath('depot.account_balance', '830.00')
             ->assertJsonPath('transaction.type', 'sell')
+            ->assertJsonPath('transaction.unit_price', '220.00000000')
             ->assertJsonPath('transaction.cash_delta', '330.00');
+
+        $this->assertNull($holding->refresh()->flatex_price);
 
         $this->actingAs($admin)
             ->getJson('/admin/watchlist/holdings')
@@ -620,6 +625,127 @@ class DepotTransactionTest extends TestCase
             ->assertJsonValidationErrors('booked_at');
     }
 
+    public function test_cash_transaction_edit_recomputes_the_active_depot_and_chronological_balances(): void
+    {
+        $this->travelTo(Carbon::parse('2026-06-12 15:00:00'));
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create(['account_balance' => '350.00', 'is_active' => true]);
+        $holding = StockHolding::factory()->create();
+        $edited = $this->createCashTransaction($depot, 'deposit', '100.00', '2026-06-05 11:00:00');
+        $following = $this->createCashTransaction($depot, 'deposit', '50.00', '2026-06-06 11:00:00');
+        $later = $this->createCashTransaction($depot, 'interest', '20.00', '2026-06-09 11:00:00');
+        $snapshots = app(DashboardPerformanceSnapshots::class);
+        $snapshotDate = Carbon::parse('2026-06-06');
+        $this->assertSame(330.0, $snapshots->closingBalance($depot, $snapshotDate)['balance']);
+
+        $this->actingAs($admin)
+            ->patchJson("/admin/depot-transactions/{$edited->id}", [
+                'type' => 'fee',
+                'stock_holding_id' => $holding->id,
+                'total_amount' => '12.34',
+                'booked_at' => '2026-06-08',
+                'note' => 'Corrected broker fee',
+            ])
+            ->assertOk()
+            ->assertJsonPath('depot.account_balance', '237.66')
+            ->assertJsonPath('depot_valuations.latest.cash_balance', '237.66')
+            ->assertJsonPath('transaction.id', $edited->id)
+            ->assertJsonPath('transaction.type', 'fee')
+            ->assertJsonPath('transaction.stock_holding_id', $holding->id)
+            ->assertJsonPath('transaction.total_amount', '12.34')
+            ->assertJsonPath('transaction.cash_delta', '-12.34')
+            ->assertJsonPath('transaction.note', 'Corrected broker fee')
+            ->assertJsonPath('transaction.is_external_cashflow', false)
+            ->assertJsonPath('transaction.affects_performance', true)
+            ->assertJsonPath('transactions.0.id', $later->id)
+            ->assertJsonPath('transactions.0.balance_after', '237.66')
+            ->assertJsonPath('transactions.1.id', $edited->id)
+            ->assertJsonPath('transactions.1.balance_after', '217.66')
+            ->assertJsonPath('transactions.2.id', $following->id)
+            ->assertJsonPath('transactions.2.balance_after', '230.00');
+
+        $this->assertSame('2026-06-08 00:00:00', $edited->refresh()->booked_at->toDateTimeString());
+        $this->assertSame('237.66', $depot->refresh()->account_balance);
+        $this->assertSame('230.00', $following->refresh()->balance_after);
+        $this->assertSame(230.0, $snapshots->closingBalance($depot, $snapshotDate)['balance']);
+
+        $this->patchJson("/admin/depot-transactions/{$edited->id}", ['stock_holding_id' => null, 'note' => null])
+            ->assertOk()
+            ->assertJsonPath('transaction.stock_holding_id', null)
+            ->assertJsonPath('transaction.note', null)
+            ->assertJsonPath('depot.account_balance', '237.66');
+    }
+
+    public function test_editing_trade_amount_and_pieces_keeps_the_link_and_revalues_the_position(): void
+    {
+        $this->travelTo(Carbon::parse('2026-06-12 15:00:00'));
+        $admin = $this->adminUser();
+        $depot = Depot::factory()->create(['account_balance' => '130.00', 'is_active' => true]);
+        $holding = StockHolding::factory()->create();
+        $buy = DepotTransaction::factory()->create([
+            'depot_id' => $depot->id, 'stock_holding_id' => $holding->id, 'type' => 'buy', 'currency' => 'USD',
+            'pieces' => '4.00000000', 'total_amount' => '100.00', 'unit_price' => '25.00000000',
+            'cash_delta' => '-100.00', 'balance_after' => '100.00', 'booked_at' => '2026-06-04 11:30:00',
+        ]);
+        $sell = DepotTransaction::factory()->create([
+            'depot_id' => $depot->id, 'stock_holding_id' => $holding->id, 'type' => 'sell',
+            'pieces' => '1.00000000', 'total_amount' => '30.00', 'unit_price' => '30.00000000',
+            'cash_delta' => '30.00', 'balance_after' => '130.00', 'booked_at' => '2026-06-05 12:30:00',
+        ]);
+        $url = "/admin/depot-transactions/{$buy->id}";
+
+        $this->actingAs($admin)->patchJson($url, [
+            'total_amount' => '99.99',
+            'pieces' => '3.33333333',
+            'booked_at' => '2026-06-04',
+            'note' => 'Corrected purchase',
+        ])->assertOk()
+            ->assertJsonPath('depot.account_balance', '130.01')
+            ->assertJsonPath('transaction.stock_holding_id', $holding->id)
+            ->assertJsonPath('transaction.type', 'buy')
+            ->assertJsonPath('transaction.currency', 'USD')
+            ->assertJsonPath('transaction.cash_delta', '-99.99')
+            ->assertJsonPath('transaction.pieces', '3.33333333')
+            ->assertJsonPath('transaction.unit_price', '29.99700003')
+            ->assertJsonPath('depot_holdings.0.position_pieces', '2.33333333');
+
+        $this->patchJson($url, ['pieces' => '0.99999999'])->assertUnprocessable()->assertJsonValidationErrors('pieces');
+        $this->patchJson($url, ['booked_at' => '2026-06-06'])->assertUnprocessable()->assertJsonValidationErrors('booked_at');
+        $this->patchJson($url, ['type' => 'sell'])->assertUnprocessable()->assertJsonValidationErrors('type');
+        $this->patchJson($url, ['stock_holding_id' => null])->assertUnprocessable()->assertJsonValidationErrors('stock_holding_id');
+        $this->assertSame('2026-06-04 11:30:00', $buy->refresh()->booked_at->toDateTimeString());
+        $this->assertSame('3.33333333', $buy->pieces);
+        $this->assertSame('130.01', $sell->refresh()->balance_after);
+    }
+
+    public function test_cash_edit_rejects_invalid_fields_and_preserves_the_ledger(): void
+    {
+        $depot = Depot::factory()->create(['account_balance' => '100.00', 'is_active' => true]);
+        $otherDepot = Depot::factory()->create(['is_active' => false]);
+        $transaction = $this->createCashTransaction($depot, 'opening_balance', '100.00', '2026-06-04 09:00:00');
+        $otherTransaction = $this->createCashTransaction($otherDepot, 'deposit', '100.00', '2026-06-04 09:00:00');
+        $url = "/admin/depot-transactions/{$transaction->id}";
+
+        $this->actingAs(User::factory()->create())->patchJson($url, ['note' => 'Unauthorized'])->assertForbidden();
+        $this->actingAs($this->adminUser())
+            ->patchJson("/admin/depot-transactions/{$otherTransaction->id}", ['note' => 'Wrong depot'])
+            ->assertNotFound();
+        $this->patchJson($url, [
+            'total_amount' => '-1.005', 'booked_at' => '2026-02-30',
+            'stock_holding_id' => 9999, 'note' => str_repeat('x', 256),
+        ])->assertUnprocessable()->assertJsonValidationErrors(['total_amount', 'booked_at', 'stock_holding_id', 'note']);
+        $this->patchJson($url, ['total_amount' => '10.005'])->assertUnprocessable()->assertJsonValidationErrors('total_amount');
+        $this->patchJson($url, ['type' => 'withdrawal'])->assertUnprocessable()->assertJsonValidationErrors('type');
+        $this->patchJson($url, ['pieces' => '1'])->assertUnprocessable()->assertJsonValidationErrors('pieces');
+        $this->assertSame('100.00', $transaction->refresh()->total_amount);
+        $this->assertSame('100.00', $depot->refresh()->account_balance);
+
+        $this->postJson('/admin/depot-transactions/cash', ['type' => 'withdrawal', 'total_amount' => '20.00'])->assertCreated();
+        $this->patchJson($url, ['total_amount' => '10.00'])->assertUnprocessable()->assertJsonValidationErrors('total_amount');
+        $this->assertSame('100.00', $transaction->refresh()->total_amount);
+        $this->assertSame('80.00', $depot->refresh()->account_balance);
+    }
+
     public function test_admin_can_list_opening_balance_transaction(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-06-13 12:00:00', 'UTC'));
@@ -756,6 +882,7 @@ class DepotTransactionTest extends TestCase
                 ->assertOk()
                 ->assertJsonCount(0, 'depot_holdings')
                 ->assertJsonPath('depot_valuations.latest.year_start_balance', '83236.56')
+                ->assertJsonPath('depot_valuations.latest.year_net_capital', '84464.35')
                 ->assertJsonPath('depot_valuations.latest.current_balance', '84464.35')
                 ->assertJsonPath('depot_valuations.latest.balance_change_amount', '0.00')
                 ->assertJsonPath('depot_valuations.latest.balance_change_percent', '0.00')
@@ -768,6 +895,10 @@ class DepotTransactionTest extends TestCase
                 ->assertJsonPath('depot_valuations.latest.one_week_start_balance', '83236.56')
                 ->assertJsonPath('depot_valuations.latest.one_week_change_amount', '0.00')
                 ->assertJsonPath('depot_valuations.latest.one_week_change_percent', '0.00')
+                ->assertJsonPath('depot_valuations.latest.completed_periods.week.change_amount', '0.00')
+                ->assertJsonPath('depot_valuations.latest.completed_periods.week.change_percent', '0.00')
+                ->assertJsonPath('depot_valuations.latest.completed_periods.month.change_amount', '0.00')
+                ->assertJsonPath('depot_valuations.latest.completed_periods.month.change_percent', '0.00')
                 ->assertJsonPath('depot_valuations.latest.taxable_stock_gain_amount', '0.00');
 
             $firstPerformancePoint = collect($response->json('depot_performance_series'))->first();
@@ -1402,6 +1533,7 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('depot_holdings.0.previous_day_price', '121.25000000')
             ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-06-12')
             ->assertJsonPath('depot_holdings.0.previous_day_change_percent', null)
+            ->assertJsonPath('depot_holdings.0.day_change_amount_eur', null)
             ->assertJsonPath('depot_valuations.latest.stock_balance', '242.50')
             ->assertJsonPath('depot_valuations.latest.current_balance', '1242.50');
     }
@@ -1443,7 +1575,8 @@ class DepotTransactionTest extends TestCase
             ->assertOk()
             ->assertJsonPath('depot_holdings.0.previous_day_price', null)
             ->assertJsonPath('depot_holdings.0.previous_day_price_date', null)
-            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', null);
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', null)
+            ->assertJsonPath('depot_holdings.0.day_change_amount_eur', null);
     }
 
     public function test_depot_holding_payload_uses_free_observation_and_ignores_paid_official_close(): void
@@ -1472,7 +1605,7 @@ class DepotTransactionTest extends TestCase
         $holding->update([
             'latest_realtime_price_id' => $latestRealtimePrice->id,
         ]);
-        StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->create([
+        $previousRealtimePrice = StockRealtimePrice::factory()->state(['source_key' => 'yahoo_intraday', 'source_name' => 'Yahoo Finance', 'source_url' => 'https://finance.yahoo.com/'])->create([
             'stock_holding_id' => $holding->id,
             'symbol' => 'CEBS',
             'currency' => 'EUR',
@@ -1520,7 +1653,30 @@ class DepotTransactionTest extends TestCase
             ->assertJsonPath('depot_holdings.0.latest_price', '9.79600000')
             ->assertJsonPath('depot_holdings.0.previous_day_price', '9.84300000')
             ->assertJsonPath('depot_holdings.0.previous_day_price_date', '2026-08-06')
-            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '-0.48');
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '-0.48')
+            ->assertJsonPath('depot_holdings.0.day_change_amount_eur', '-47.00')
+            ->assertJsonPath('depot_holdings.0.day_change_amount_eur_source_markers', ['free']);
+
+        $latestRealtimePrice->update(['price' => '9.84300000']);
+        $this->getJson('/admin/depot-transactions')
+            ->assertOk()
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', '0.00')
+            ->assertJsonPath('depot_holdings.0.day_change_amount_eur', '0.00');
+
+        $latestRealtimePrice->update(['as_of' => Carbon::parse('2026-08-07 15:00:00', 'UTC')]);
+        $this->getJson('/admin/depot-transactions')
+            ->assertOk()
+            ->assertJsonPath('depot_holdings.0.previous_day_price', '9.84300000')
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', null)
+            ->assertJsonPath('depot_holdings.0.day_change_amount_eur', null);
+
+        $latestRealtimePrice->update(['as_of' => Carbon::parse('2026-08-07 08:03:00', 'UTC')]);
+        $previousRealtimePrice->update(['currency' => 'USD']);
+        $this->getJson('/admin/depot-transactions')
+            ->assertOk()
+            ->assertJsonPath('depot_holdings.0.previous_day_price', null)
+            ->assertJsonPath('depot_holdings.0.previous_day_change_percent', null)
+            ->assertJsonPath('depot_holdings.0.day_change_amount_eur', null);
     }
 
     public function test_depot_year_start_price_uses_only_current_open_lots_after_sells(): void

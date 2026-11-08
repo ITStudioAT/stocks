@@ -176,7 +176,10 @@ class MarketDataUpgrade
                             : (! empty($row->wkn) ? $byWkn->get($row->wkn.'|'.($row->currency ?? '')) : null));
                     if ($holding !== null) {
                         $attributes = $this->importer->attributes($holding, $actual, $table);
-                        if ($link->status === 'merged' && $this->importer->derivedSnapshotMatches($attributes, $price)) {
+                        $store = app(MarketPriceStore::class);
+                        $expected = $store->prepare($holding->market_listing_id, $attributes);
+                        if ($link->status === 'merged' && ($store->matchesXetraAlias($price, $expected)
+                            || $this->importer->derivedSnapshotMatches($attributes, $price))) {
                             if ((int) $price->market_listing_id !== (int) $holding->market_listing_id) {
                                 throw new RuntimeException('Merged observation belongs to another listing.');
                             }
@@ -184,7 +187,6 @@ class MarketDataUpgrade
 
                             continue;
                         }
-                        $expected = app(MarketPriceStore::class)->prepare($holding->market_listing_id, $attributes);
                         foreach (['observation_key', 'market_listing_id', 'currency', 'source_time_raw', 'time_precision', 'time_basis', 'trade_count'] as $field) {
                             if ((string) ($price->{$field} ?? '') !== (string) ($expected[$field] ?? '')) {
                                 throw new RuntimeException('Central identity/time-fidelity verification failed for '.$table.':'.$row->id);

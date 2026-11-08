@@ -38,6 +38,8 @@ class HoldingPriceReloadTest extends TestCase
         $this->actingAs($this->admin());
         $url = "/admin/watchlist/holdings/{$holding->id}/price/reload";
         $this->postJson($url)->assertOk()->assertJsonPath('status', 'updated')
+            ->assertJsonPath('holding.price_reload_available', true)
+            ->assertJsonPath('holding.start_price_date', '2026-11-04')
             ->assertJsonPath('holding.latest_price', '17.640000')
             ->assertJsonPath('holding.latest_price_as_of', '2026-11-04T09:04:40+01:00');
         $catalogRequests = Http::recorded(fn ($request): bool => $request->url() === 'https://mfs.deutsche-boerse.com/api/DETR-posttrade')->count();
@@ -136,6 +138,40 @@ class HoldingPriceReloadTest extends TestCase
         Http::assertSentCount(1);
         Http::assertSent(fn ($request): bool => str_contains($request->url(), '/ARGT'));
         $this->assertSame($oldOtherQuote, $other->fresh()->latest_realtime_price_id);
+    }
+
+    public function test_central_reload_returns_the_same_prices_and_times_as_the_watchlist(): void
+    {
+        config(['services.market_data.central_enabled' => true]);
+        $this->travelTo(Carbon::parse('2026-11-04 21:00:00', 'UTC'));
+        $holding = StockHolding::factory()->create(['symbol' => 'AAPL', 'isin' => 'US0378331005', 'exchange' => 'NASDAQ', 'currency' => 'USD']);
+        $this->fakeYahooMarketData(['AAPL' => ['price' => 250, 'at' => '2026-11-04 20:00:00']]);
+        $this->actingAs($this->admin());
+
+        $reloaded = $this->postJson("/admin/watchlist/holdings/{$holding->id}/price/reload")
+            ->assertOk()
+            ->assertJsonPath('status', 'updated')
+            ->assertJsonPath('holding.latest_price', '250.000000')
+            ->assertJsonPath('holding.start_price_date', '2026-11-04')
+            ->assertJsonPath('holding.price_reload_available', true)
+            ->assertJsonPath('holding.daily_history_available', true);
+        $row = $this->getJson('/admin/watchlist/holdings?all=1')->assertOk()->json('holdings.0');
+
+        $this->assertSame('2026-11-04 20:00:00', Carbon::parse($row['latest_price_as_of'])->utc()->toDateTimeString());
+        $this->assertSame($row['latest_price_as_of'], $reloaded->json('holding.latest_price_as_of'));
+        $this->assertSame($row['start_price'], $reloaded->json('holding.start_price'));
+        $this->assertSame($row['end_price_24_date'], $reloaded->json('holding.end_price_24_date'));
+        Http::assertSentCount(1);
+    }
+
+    public function test_watchlist_reports_when_no_free_reload_source_is_available(): void
+    {
+        StockHolding::factory()->create(['symbol' => 'VOW3', 'isin' => 'DE0007664039', 'exchange' => 'TRADEGATE', 'mic_code' => 'XGAT', 'currency' => 'EUR']);
+
+        $this->actingAs($this->admin())->getJson('/admin/watchlist/holdings?all=1')->assertOk()
+            ->assertJsonPath('holdings.0.price_reload_available', false)
+            ->assertJsonPath('holdings.0.daily_history_available', false);
+        Http::assertNothingSent();
     }
 
     private function holding(): StockHolding

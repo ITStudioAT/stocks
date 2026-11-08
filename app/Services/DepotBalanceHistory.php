@@ -72,15 +72,32 @@ class DepotBalanceHistory
         return $this->cashBalanceAt($depot, $cutoff) + $stockBalance;
     }
 
-    public function cashBalanceAt(Depot $depot, Carbon $cutoff): float
+    /**
+     * @param  array<int, array<string, mixed>>|null  $liveHoldings
+     * @return array{stock_balance: ?float, cash_balance: float, account_balance: ?float, source_markers: list<string>}
+     */
+    public function tradingAccountValuesAt(Depot $depot, Carbon $cutoff, ?array $liveHoldings = null, ?bool $freeOnly = true): array
     {
-        return $this->initialCashBalance($depot) + (float) DepotTransaction::query()
+        $stockBalance = $this->stockMarketBalanceAt($depot, $cutoff, $sources, $freeOnly, euroOnly: true, liveHoldings: $liveHoldings);
+        $cashBalance = $this->cashBalanceAt($depot, $cutoff, includeFutureBookingsInOpening: true);
+
+        return [
+            'stock_balance' => $stockBalance,
+            'cash_balance' => $cashBalance,
+            'account_balance' => $stockBalance === null ? null : $stockBalance + $cashBalance,
+            'source_markers' => $sources,
+        ];
+    }
+
+    public function cashBalanceAt(Depot $depot, Carbon $cutoff, bool $includeFutureBookingsInOpening = false): float
+    {
+        return $this->initialCashBalance($depot, $includeFutureBookingsInOpening) + (float) DepotTransaction::query()
             ->where('depot_id', $depot->id)
             ->where('booked_at', '<=', $cutoff)
             ->sum('cash_delta');
     }
 
-    public function initialCashBalance(Depot $depot): float
+    public function initialCashBalance(Depot $depot, bool $includeFutureBookings = false): float
     {
         if (DepotTransaction::query()->where('depot_id', $depot->id)->where('type', 'opening_balance')
             ->where('booked_at', '<=', now()->endOfDay())->exists()) {
@@ -89,7 +106,7 @@ class DepotBalanceHistory
 
         $cashDelta = (float) DepotTransaction::query()
             ->where('depot_id', $depot->id)
-            ->where('booked_at', '<=', now()->endOfDay())
+            ->when(! $includeFutureBookings, fn ($query) => $query->where('booked_at', '<=', now()->endOfDay()))
             ->sum('cash_delta');
 
         return round((float) $depot->account_balance - $cashDelta, 2);
@@ -105,7 +122,10 @@ class DepotBalanceHistory
             ->sum('cash_delta');
     }
 
-    private function stockMarketBalanceAt(Depot $depot, Carbon $cutoff, ?array &$sourceMarkers, ?bool $freeOnly): ?float
+    /**
+     * @param  array<int, array<string, mixed>>|null  $liveHoldings
+     */
+    private function stockMarketBalanceAt(Depot $depot, Carbon $cutoff, ?array &$sourceMarkers, ?bool $freeOnly, bool $euroOnly = false, ?array $liveHoldings = null): ?float
     {
         $sourceMarkers = [];
         $openPiecesByHoldingId = $this->openPiecesByHoldingIdAt($depot, $cutoff);
@@ -114,7 +134,9 @@ class DepotBalanceHistory
             return 0.0;
         }
 
-        $marketPriceByHoldingId = $this->historicalMarketPriceByHoldingId($openPiecesByHoldingId->keys(), $cutoff, $sources, $freeOnly);
+        $marketPriceByHoldingId = $liveHoldings === null
+            ? $this->historicalMarketPriceByHoldingId($openPiecesByHoldingId->keys(), $cutoff, $sources, $freeOnly, $euroOnly)
+            : $this->liveMarketPriceByHoldingId($openPiecesByHoldingId->keys(), $cutoff, $liveHoldings, $sources);
 
         if ($openPiecesByHoldingId->keys()->contains(fn ($holdingId): bool => ! is_numeric($marketPriceByHoldingId->get($holdingId)))) {
             return null;
@@ -128,6 +150,29 @@ class DepotBalanceHistory
 
             return is_numeric($price) ? $pieces * (float) $price : 0.0;
         });
+    }
+
+    /**
+     * @param  Collection<int, int|string>  $holdingIds
+     * @param  array<int, array<string, mixed>>  $liveHoldings
+     * @return Collection<int, ?string>
+     */
+    private function liveMarketPriceByHoldingId(Collection $holdingIds, Carbon $cutoff, array $liveHoldings, ?array &$sources): Collection
+    {
+        $quotes = collect($liveHoldings)->keyBy('id');
+
+        return StockHolding::query()->whereKey($holdingIds->all())->where('currency', 'EUR')->get()
+            ->mapWithKeys(function (StockHolding $holding) use ($cutoff, $quotes, &$sources): array {
+                $quote = $quotes->get($holding->id);
+
+                if (($quote['latest_price_trading_date'] ?? null) !== $this->historicalPrices->tradingDate($holding, $cutoff)) {
+                    return [$holding->id => null];
+                }
+
+                $sources[$holding->id] = $quote['latest_price_source_markers'];
+
+                return [$holding->id => $quote['latest_price']];
+            });
     }
 
     /**
@@ -160,9 +205,9 @@ class DepotBalanceHistory
      * @param  Collection<int, int|string>  $holdingIds
      * @return Collection<int, string>
      */
-    private function historicalMarketPriceByHoldingId(Collection $holdingIds, Carbon $cutoff, ?array &$sources, ?bool $freeOnly): Collection
+    private function historicalMarketPriceByHoldingId(Collection $holdingIds, Carbon $cutoff, ?array &$sources, ?bool $freeOnly, bool $euroOnly = false): Collection
     {
-        return $this->historicalHoldings($holdingIds, $cutoff, $freeOnly)->mapWithKeys(function (StockHolding $holding) use ($cutoff, &$sources): array {
+        return $this->historicalHoldings($holdingIds, $cutoff, $freeOnly, $euroOnly)->mapWithKeys(function (StockHolding $holding) use ($cutoff, &$sources): array {
             $observation = $this->historicalPrices->at($holding, $cutoff);
             $price = $observation['price'] ?? null;
             $sources[$holding->id] = $observation['source_markers'] ?? [];
@@ -172,13 +217,19 @@ class DepotBalanceHistory
     }
 
     /** @return Collection<int, StockHolding> */
-    private function historicalHoldings(Collection $holdingIds, Carbon $cutoff, ?bool $freeOnly): Collection
+    private function historicalHoldings(Collection $holdingIds, Carbon $cutoff, ?bool $freeOnly, bool $euroOnly = false): Collection
     {
         if ($holdingIds->isEmpty()) {
             return collect();
         }
 
-        $holdings = StockHolding::query()->whereKey($holdingIds->all())->get();
+        $holdings = StockHolding::query()->whereKey($holdingIds->all())
+            ->when($euroOnly, fn ($query) => $query->where('currency', 'EUR'))
+            ->get();
+        if ($holdings->isEmpty()) {
+            return $holdings;
+        }
+
         $this->historicalPrices->prime($holdings, $cutoff->copy()->subDays(14), $cutoff, $freeOnly);
 
         return $holdings;

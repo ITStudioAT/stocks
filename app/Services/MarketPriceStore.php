@@ -73,19 +73,110 @@ class MarketPriceStore
         foreach (['observed_at', 'effective_at', 'period_start_at', 'period_end_at', 'fetched_at', 'source_published_at'] as $field) {
             $data[$field] = $data[$field] === null ? null : Carbon::parse($data[$field], 'UTC')->utc()->format('Y-m-d H:i:s.u');
         }
-        $keyParts = [$listingId, $data['source_key'], $data['reported_mic'], $data['record_kind'], $data['price_type'], $data['session_type'], $data['interval_code'], $data['adjustment_basis']];
-        $identityTime = $data['observed_at'] === null ? null : rtrim(rtrim($data['observed_at'], '0'), '.');
-        if ($data['time_precision'] === 'nanosecond') {
-            $identityTime = $data['source_time_raw'] ?? $identityTime;
+        if ($data['record_kind'] === 'observation_1s' && $data['observed_at'] !== null && str_starts_with($data['source_record_id'] ?? '', 'second:')) {
+            $data['source_record_id'] = 'second:'.substr($data['observed_at'], 0, 19);
         }
-        $keyParts[] = $data['source_record_id'] ?? [$identityTime, $data['trading_date'], $data['period_start_at'], $data['period_end_at']];
-        $key = hash('sha256', json_encode($keyParts, JSON_THROW_ON_ERROR));
+        $key = $this->observationKey($listingId, $data, $data['source_key']);
         $content = array_intersect_key($data, array_flip([...self::Values, 'trade_count', 'validation_status']));
         $content['events'] = $data['raw_payload']['events'] ?? null;
         ksort($content);
         $hash = hash('sha256', json_encode($content, JSON_THROW_ON_ERROR));
 
         return [...$data, 'market_listing_id' => $listingId, 'observation_key' => $key, 'payload_hash' => $hash];
+    }
+
+    /** @param array<string, mixed> $data */
+    private function observationKey(int $listingId, array $data, string $sourceKey): string
+    {
+        $keyParts = [$listingId, $sourceKey, $data['reported_mic'], $data['record_kind'], $data['price_type'], $data['session_type'], $data['interval_code'], $data['adjustment_basis']];
+        $identityTime = $data['observed_at'] === null ? null : rtrim(rtrim($data['observed_at'], '0'), '.');
+        if ($data['time_precision'] === 'nanosecond') {
+            $identityTime = $data['source_time_raw'] ?? $identityTime;
+        }
+        $keyParts[] = $data['source_record_id'] ?? [$identityTime, $data['trading_date'], $data['period_start_at'], $data['period_end_at']];
+
+        return hash('sha256', json_encode($keyParts, JSON_THROW_ON_ERROR));
+    }
+
+    /** @param array<string, mixed> $data */
+    private function xetraAliasKey(array $data): ?string
+    {
+        if ($data['price_type'] !== 'observed_trade' || $data['validation_status'] !== 'valid' || $data['observed_at'] === null
+            || ! in_array($data['reported_mic'], IntradayMarketIdentity::XetraMics, true)) {
+            return null;
+        }
+
+        if ($data['source_key'] === 'xetra_posttrade' && $data['record_kind'] === 'quote'
+            && $data['interval_code'] === 'point' && $this->xetraSnapshotEventTime($data) !== null) {
+            $observation = [...$data, 'record_kind' => 'observation_1s', 'interval_code' => '1s',
+                'source_record_id' => 'second:'.substr($data['observed_at'], 0, 19)];
+
+            return $this->observationKey($data['market_listing_id'], $observation, $data['source_key']);
+        }
+
+        $otherSource = match ($data['source_key']) {
+            'xetra_posttrade' => 'deutsche_boerse_trade',
+            'deutsche_boerse_trade' => 'xetra_posttrade',
+            default => null,
+        };
+        if ($otherSource === null || $data['record_kind'] !== 'observation_1s' || $data['interval_code'] !== '1s'
+            || $data['time_precision'] !== 'nanosecond' || blank($data['source_time_raw'])) {
+            return null;
+        }
+
+        return $this->observationKey($data['market_listing_id'], $data, $otherSource);
+    }
+
+    /** @param array<string, mixed>|null $candidate @param array<string, mixed> $data */
+    private function sameXetraAlias(?array $candidate, array $data): bool
+    {
+        if ($candidate === null || $candidate['observed_at'] === null || $candidate['currency'] !== $data['currency']
+            || self::decimal($candidate['price']) !== $data['price']) {
+            return false;
+        }
+
+        if ($data['record_kind'] === 'quote') {
+            return substr($candidate['observed_at'], 0, 19) === substr($data['observed_at'], 0, 19)
+                && $candidate['source_time_raw'] === $this->xetraSnapshotEventTime($data);
+        }
+
+        if ($candidate['observed_at'] !== $data['observed_at'] || $candidate['source_time_raw'] !== $data['source_time_raw']) {
+            return false;
+        }
+
+        $events = $data['raw_payload']['events'] ?? [];
+
+        return max($candidate['trade_count'] ?? 0, $data['trade_count'] ?? 0) <= 1
+            || ($events !== [] && ($candidate['raw_payload']['events'] ?? []) === $events);
+    }
+
+    /** @param array<string, mixed> $data */
+    public function matchesXetraAlias(MarketPrice $price, array $data): bool
+    {
+        return $price->observation_key === $this->xetraAliasKey($data)
+            && $this->sameXetraAlias($price->toArray(), $data);
+    }
+
+    /** @param array<string, mixed> $data */
+    private function xetraSnapshotEventTime(array $data): ?string
+    {
+        foreach (['bid', 'ask', 'nav', 'open', 'high', 'low', 'adjusted_close', 'volume'] as $field) {
+            if ($data[$field] !== null) {
+                return null;
+            }
+        }
+        foreach (['last', 'close'] as $field) {
+            if ($data[$field] !== null && $data[$field] !== $data['price']) {
+                return null;
+            }
+        }
+
+        $raw = $data['raw_payload'] ?? [];
+        $time = ($raw['trade_source'] ?? null) === 'Xetra'
+            ? ($raw['days'][$data['trading_date']]['last_trade_at'] ?? $raw['trade_at'] ?? null)
+            : ($raw['trade_at'] ?? null);
+
+        return is_string($time) && str_contains($time, '.') ? $time : null;
     }
 
     /** @param array<string, mixed> $data */
@@ -100,6 +191,12 @@ class MarketPriceStore
             $current = MarketPrice::query()->where('current_key', $key)->first();
             if ($current !== null && ($current->payload_hash === $hash || $this->sameContent($current, $data))) {
                 return $current;
+            }
+            if ($current === null && ($aliasKey = $this->xetraAliasKey($data)) !== null) {
+                $alias = MarketPrice::query()->where('current_key', $aliasKey)->first();
+                if ($alias?->validation_status === 'valid' && $this->sameXetraAlias($alias->toArray(), $data)) {
+                    return $alias;
+                }
             }
             $accepted = $listing->status === 'verified' && $listing->currency === $data['currency'] && in_array($data['validation_status'], ['valid', 'cancelled'], true);
             if ($current !== null) {
@@ -135,25 +232,51 @@ class MarketPriceStore
 
         return DB::transaction(function () use ($rows): array {
             $listings = DB::table('market_listings')->whereIn('id', array_column($rows, 'market_listing_id'))->orderBy('id')->lockForUpdate()->get()->keyBy('id');
-            $existing = MarketPrice::query()->whereIn('observation_key', array_column($rows, 'observation_key'))->get()->groupBy('observation_key');
+            $aliasKeys = array_map($this->xetraAliasKey(...), $rows);
+            $keys = array_unique([...array_column($rows, 'observation_key'), ...array_values(array_filter($aliasKeys))]);
+            $existing = MarketPrice::query()->whereIn('observation_key', $keys)->get()->groupBy('observation_key');
             $inserts = [];
-            foreach ($rows as $row) {
+            $aliases = [];
+            $observationsFirst = array_filter($rows, fn (array $row, int $index): bool => $row['record_kind'] !== 'quote' || $aliasKeys[$index] === null, ARRAY_FILTER_USE_BOTH);
+            foreach (array_replace($observationsFirst, $rows) as $index => $row) {
                 if ($existing->has($row['observation_key']) || isset($inserts[$row['observation_key']])) {
                     continue;
                 }
+                $aliasKey = $aliasKeys[$index];
+                if ($aliasKey !== null) {
+                    $alias = $existing->get($aliasKey)?->firstWhere('is_current', true);
+                    $candidate = $alias?->toArray() ?? $inserts[$aliasKey] ?? null;
+                    if (($candidate['validation_status'] ?? null) === 'valid' && $this->sameXetraAlias($candidate, $row)) {
+                        $aliases[$index] = $aliasKey;
+
+                        continue;
+                    }
+                }
                 $accepted = $listings[$row['market_listing_id']]->status === 'verified' && $listings[$row['market_listing_id']]->currency === $row['currency'] && $row['validation_status'] === 'valid';
                 $insert = [...$row, 'revision' => 1, 'is_current' => $accepted, 'validation_status' => $accepted ? 'valid' : 'quarantined', 'created_at' => now()->utc(), 'updated_at' => now()->utc()];
-                foreach (['provenance', 'raw_payload', 'validation_errors'] as $field) {
-                    $insert[$field] = $insert[$field] === null ? null : json_encode($insert[$field], JSON_THROW_ON_ERROR);
-                }
                 $inserts[$row['observation_key']] = $insert;
             }
             foreach (array_chunk(array_values($inserts), 100) as $chunk) {
-                DB::table('market_prices')->insertOrIgnore($chunk);
+                DB::table('market_prices')->insertOrIgnore(array_map(function (array $row): array {
+                    foreach (['provenance', 'raw_payload', 'validation_errors'] as $field) {
+                        $row[$field] = $row[$field] === null ? null : json_encode($row[$field], JSON_THROW_ON_ERROR);
+                    }
+
+                    return $row;
+                }, $chunk));
             }
-            $records = MarketPrice::query()->whereIn('observation_key', array_column($rows, 'observation_key'))->get()->groupBy('observation_key');
+            $records = MarketPrice::query()->whereIn('observation_key', $keys)->get()->groupBy('observation_key');
             $result = [];
             foreach ($rows as $index => $row) {
+                if (isset($aliases[$index])) {
+                    $alias = $records->get($aliases[$index])?->firstWhere('is_current', true);
+                    if ($alias !== null) {
+                        $result[$index] = clone $alias;
+                        $result[$index]->wasRecentlyCreated = false;
+
+                        continue;
+                    }
+                }
                 $match = $records->get($row['observation_key'], collect())->first(fn (MarketPrice $record): bool => $record->payload_hash === $row['payload_hash'] || $this->sameContent($record, $row));
                 $result[$index] = $match ?? $this->storePrepared($row['market_listing_id'], $row, $row['observation_key'], $row['payload_hash'], false);
                 if ($match !== null && isset($inserts[$row['observation_key']]) && $match->revision === 1) {

@@ -12,9 +12,9 @@ describe('holding price reload', () => {
         setActivePinia(pinia);
     });
 
-    function mountReload() {
+    function mountReload(holding = {}) {
         return mount(HoldingPriceReload, {
-            props: { holding: { id: 34, symbol: 'UN9' } },
+            props: { holding: { id: 34, symbol: 'UN9', price_reload_available: true, ...holding } },
             global: { plugins: [pinia, createStocksVuetify()] },
         });
     }
@@ -62,13 +62,13 @@ describe('holding price reload', () => {
         wrapper.unmount();
     });
 
-    it('loads annual daily history only when the saved listing supports it', async () => {
+    it('uses daily history as the single action for a missing previous trading day', async () => {
         const history = vi.spyOn(useDepotStore(), 'loadHoldingDailyHistory').mockResolvedValue({
             status: 'partial', message: 'Daily history loaded; gaps remain visible.',
         });
-        const wrapper = mountReload();
-        expect(wrapper.find('[aria-label="Load UN9 daily history"]').exists()).toBe(false);
-        await wrapper.setProps({ holding: { id: 34, symbol: 'UN9', daily_history_available: true } });
+        const wrapper = mountReload({ start_price: null, latest_price: '12.20', end_price_24: null,
+            end_price_24_date: '2026-11-03', daily_history_available: true });
+        expect(wrapper.findAll('button')).toHaveLength(1);
         await wrapper.get('[aria-label="Load UN9 daily history"]').trigger('click');
         await flushPromises();
         expect(history).toHaveBeenCalledExactlyOnceWith(34);
@@ -76,12 +76,30 @@ describe('holding price reload', () => {
         wrapper.unmount();
     });
 
+    it('offers one reload when both visible prices are missing', () => {
+        const wrapper = mountReload({ start_price: null, latest_price: null, end_price_24: null,
+            end_price_24_date: '2026-11-03', daily_history_available: true });
+        expect(wrapper.findAll('button')).toHaveLength(1);
+        expect(wrapper.find('[aria-label="Reload UN9 price"]').exists()).toBe(true);
+        wrapper.unmount();
+    });
+
+    it.each([
+        { start_price: 0, latest_price: '0.000000', end_price_24: 0, daily_history_available: true },
+        { start_price: null, latest_price: '12.20', end_price_24: '11.00', daily_history_available: true },
+        { price_reload_available: false, daily_history_available: false },
+        { start_price: '12.00', latest_price: '12.20', end_price_24: null, price_reload_available: false, daily_history_available: true },
+    ])('does not offer an action without a fillable gap (%j)', (holding) => {
+        const wrapper = mountReload(holding);
+        expect(wrapper.find('button').exists()).toBe(false);
+        wrapper.unmount();
+    });
+
     it('identifies the displayed time of a candle as an interval end', () => {
-        const wrapper = mount(HoldingPriceReload, {
-            props: { holding: { id: 34, symbol: 'UN9', latest_price_time_basis: 'interval_end', latest_price_interval: '5m' } },
-            global: { plugins: [pinia, createStocksVuetify()] },
-        });
+        const wrapper = mountReload({ start_price: 12, end_price_24: 11, latest_price: 13,
+            latest_price_as_of: '2026-11-04T09:05:00+01:00', latest_price_time_basis: 'interval_end', latest_price_interval: '5m' });
         expect(wrapper.text()).toContain('5m OHLC · time shown is interval end.');
+        expect(wrapper.find('button').exists()).toBe(false);
         wrapper.unmount();
     });
 });

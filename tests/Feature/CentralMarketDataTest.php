@@ -75,6 +75,98 @@ class CentralMarketDataTest extends TestCase
         $this->assertSame(2, MarketPrice::count());
     }
 
+    public function test_a_repeat_and_an_exact_xetra_alias_reuse_the_same_normalized_observation(): void
+    {
+        $listing = app(MarketIdentityRegistry::class)->listing($this->holding());
+        $store = app(MarketPriceStore::class);
+        $trade = $this->xetraSecond();
+        $first = $store->store($listing->id, $trade);
+        $equivalent = [
+            ...$trade,
+            'source_record_id' => 'second:2026-11-06T16:00:00+01:00',
+            'observed_at' => '2026-11-06T16:00:00+01:00',
+            'effective_at' => '2026-11-06T16:00:00+01:00',
+            'fetched_at' => '2026-11-06T16:30:00+01:00',
+        ];
+
+        $this->assertSame($first->id, $store->store($listing->id, $equivalent)->id);
+        $alias = $store->store($listing->id, [...$equivalent, 'source_key' => 'deutsche_boerse_trade', 'trade_count' => null]);
+        $this->assertSame($first->id, $alias->id);
+        $this->assertFalse($alias->wasRecentlyCreated);
+        $this->assertSame(1, MarketPrice::count());
+
+        $revised = $store->store($listing->id, [...$trade, 'price' => '195'], confirmedCorrection: true);
+        $this->assertSame($first->id, $revised->supersedes_id);
+        $this->assertSame($revised->id, MarketPrice::query()->where('is_current', true)->sole()->id);
+    }
+
+    public function test_a_batch_preserves_separate_xetra_event_times_and_independent_sources(): void
+    {
+        $listing = app(MarketIdentityRegistry::class)->listing($this->holding());
+        $store = app(MarketPriceStore::class);
+        $trade = $this->xetraSecond();
+        $otherTime = [
+            ...$trade,
+            'source_record_id' => 'second:2026-11-06 15:00:01',
+            'observed_at' => '2026-11-06 15:00:01',
+            'effective_at' => '2026-11-06 15:00:01',
+            'source_time_raw' => '2026-11-06T15:00:01.123456789Z',
+        ];
+        $alias = [...$trade, 'source_key' => 'deutsche_boerse_trade', 'trade_count' => null];
+        $rows = array_map(fn (array $row): array => $store->prepare($listing->id, $row), [
+            $trade,
+            $alias,
+            $otherTime,
+            [...$trade, 'source_key' => 'yahoo_xetra_intraday'],
+        ]);
+
+        $first = $store->importBatch($rows);
+        $retry = $store->importBatch($rows);
+
+        $this->assertSame($first[0]->id, $first[1]->id);
+        $this->assertTrue($first[0]->wasRecentlyCreated);
+        $this->assertFalse($first[1]->wasRecentlyCreated);
+        $this->assertSame(array_column($first, 'id'), array_column($retry, 'id'));
+        $this->assertSame(3, MarketPrice::query()->where('is_current', true)->count());
+
+        $otherEvent = $store->store($listing->id, [...$alias, 'source_time_raw' => '2026-11-06T15:00:00.987654321Z']);
+        $this->assertNotSame($first[0]->id, $otherEvent->id);
+        $this->assertSame(4, MarketPrice::query()->where('is_current', true)->count());
+    }
+
+    private function xetraSecond(): array
+    {
+        return $this->quote([
+            'record_kind' => 'observation_1s', 'interval_code' => '1s', 'price_type' => 'observed_trade',
+            'source_record_id' => 'second:2026-11-06 15:00:00', 'time_precision' => 'nanosecond',
+            'source_time_raw' => '2026-11-06T15:00:00.123456789Z', 'trade_count' => 1,
+        ]);
+    }
+
+    public function test_a_rounded_xetra_snapshot_requires_the_matching_precise_trade_from_its_report(): void
+    {
+        $listing = app(MarketIdentityRegistry::class)->listing($this->holding());
+        $store = app(MarketPriceStore::class);
+        $trade = $this->xetraSecond();
+        $snapshot = $this->quote([
+            'price_type' => 'observed_trade',
+            'raw_payload' => ['trade_source' => 'Xetra', 'trade_at' => '2026-11-06T15:00:00+00:00',
+                'days' => ['2026-11-06' => ['last_trade_at' => $trade['source_time_raw']]]],
+        ]);
+        $records = $store->importBatch([$store->prepare($listing->id, $snapshot), $store->prepare($listing->id, $trade)]);
+
+        $this->assertSame($records[1]->id, $records[0]->id);
+        $this->assertSame('observation_1s', $records[0]->record_kind);
+        $this->assertSame($records[1]->id, $store->store($listing->id, $snapshot)->id);
+        $this->assertSame(1, MarketPrice::count());
+
+        $snapshot['raw_payload']['days']['2026-11-06']['last_trade_at'] = '2026-11-06T15:00:00.987654321Z';
+        $unmatched = $store->store($listing->id, $snapshot);
+        $this->assertSame('quote', $unmatched->record_kind);
+        $this->assertNotSame($records[1]->id, $unmatched->id);
+        $this->assertSame(2, MarketPrice::query()->where('is_current', true)->count());
+    }
+
     public function test_corrections_preserve_revisions_and_ambiguous_or_older_inputs_cannot_replace_current(): void
     {
         $listing = app(MarketIdentityRegistry::class)->listing($this->holding());
@@ -229,16 +321,22 @@ class CentralMarketDataTest extends TestCase
         $event = '2026-11-06T15:00:00.123456789Z';
         StockRealtimePrice::factory()->create(['stock_holding_id' => $holding->id, 'isin' => $holding->isin,
             'currency' => 'EUR', 'mic' => 'XETB', 'source_key' => 'xetra_posttrade', 'price_type' => 'observed_trade',
-            'price' => '193.12345678', 'last' => '193.12345678', 'as_of' => '2026-11-06 15:00:00', 'raw_payload' => ['trade_at' => $event]]);
+            'price' => '193.12345678', 'last' => '193.12345678', 'as_of' => '2026-11-06 15:00:00',
+            'raw_payload' => ['trade_source' => 'Xetra', 'trade_at' => '2026-11-06T15:00:00+00:00',
+                'days' => ['2026-11-06' => ['last_trade_at' => $event]]]]);
         StockHoldingIntradayCandle::create(['stock_holding_id' => $holding->id, 'trading_date' => '2026-11-06',
             'interval' => 'xtrade', 'as_of' => '2026-11-06 15:00:00', 'close' => '193.12345678', 'currency' => 'EUR',
             'source_key' => 'xetra_posttrade', 'raw_payload' => ['mic' => 'XETB', 'event_at' => $event, 'events' => [['id' => 'trade-1']]]]);
+        StockHoldingIntradayCandle::create(['stock_holding_id' => $holding->id, 'trading_date' => '2026-11-06',
+            'interval' => 'trade', 'as_of' => '2026-11-06 15:00:00', 'close' => '193.12345678', 'currency' => 'EUR',
+            'source_key' => 'deutsche_boerse_trade', 'raw_payload' => ['mic' => 'XETB', 'event_at' => $event]]);
         $importer = app(MarketPriceLegacyImporter::class);
         $importer->run();
         $this->assertSame(1, MarketPrice::count());
-        $this->assertSame(2, DB::table('market_price_legacy_links')->count());
+        $this->assertSame(3, DB::table('market_price_legacy_links')->count());
+        $this->assertSame(2, DB::table('market_price_legacy_links')->where('status', 'merged')->count());
         $this->assertSame(1, DB::table('market_price_legacy_links')->distinct()->count('market_price_id'));
-        $this->assertSame(2, app(MarketDataUpgrade::class)->verify()['legacy_rows']);
+        $this->assertSame(3, app(MarketDataUpgrade::class)->verify()['legacy_rows']);
         $importer->run();
         $this->assertSame(1, MarketPrice::count());
     }

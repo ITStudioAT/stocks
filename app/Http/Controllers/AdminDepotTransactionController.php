@@ -24,7 +24,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
@@ -254,40 +253,50 @@ class AdminDepotTransactionController extends Controller
         ], 201);
     }
 
-    public function updateDate(Request $request, DepotTransaction $depotTransaction): JsonResponse
+    public function update(Request $request, DepotTransaction $depotTransaction, DepotTransactionBooker $booker): JsonResponse
     {
         $depot = $this->activeDepotOrFail();
+        abort_unless($depotTransaction->depot_id === $depot->id, 404);
+
+        $validated = $request->validate([
+            'type' => ['sometimes', 'required', Rule::in([...DepotTransaction::CashTypes, ...DepotTransaction::StockTypes])],
+            'stock_holding_id' => ['nullable', 'integer', Rule::exists(StockHolding::class, 'id')],
+            'total_amount' => ['sometimes', 'required', 'numeric', 'decimal:0,2', 'min:0.01', 'max:9999999999999.99'],
+            'pieces' => ['sometimes', 'required', 'numeric', 'decimal:0,8', 'min:0.00000001', 'max:999999999999.99999999'],
+            'booked_at' => ['sometimes', 'required', 'date_format:Y-m-d'],
+            'note' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $transaction = $booker->update($depot, $depotTransaction, $validated);
+
+        return $this->updatedTransactionResponse($depot->refresh(), $transaction, 'Transaction updated.');
+    }
+
+    public function updateDate(Request $request, DepotTransaction $depotTransaction, DepotTransactionBooker $booker): JsonResponse
+    {
+        $depot = $this->activeDepotOrFail();
+        abort_unless($depotTransaction->depot_id === $depot->id, 404);
+
         $validated = $request->validate([
             'booked_at' => ['required', 'date_format:Y-m-d'],
         ]);
+        $transaction = $booker->update($depot, $depotTransaction, $validated);
 
-        abort_unless($depotTransaction->depot_id === $depot->id, 404);
+        return $this->updatedTransactionResponse($depot->refresh(), $transaction, 'Transaction date updated.');
+    }
 
-        DB::transaction(function () use ($depot, $depotTransaction, $validated): void {
-            Depot::query()->lockForUpdate()->findOrFail($depot->id);
-            $depotTransaction->refresh();
-            $originalDate = $depotTransaction->booked_at;
-            $date = Carbon::createFromFormat('Y-m-d', $validated['booked_at'])->startOfDay();
-            $depotTransaction->update(['booked_at' => $date]);
-
-            if ($depotTransaction->wasChanged('booked_at')) {
-                $futureBoundary = now()->endOfDay();
-                $affectedDate = $originalDate->gt($futureBoundary) !== $date->gt($futureBoundary)
-                    ? null
-                    : $originalDate->min($date);
-                $this->performanceSnapshots->invalidate($depot->id, $affectedDate);
-            }
-        }, attempts: 3);
-
+    private function updatedTransactionResponse(Depot $depot, DepotTransaction $transaction, string $message): JsonResponse
+    {
         $depotHoldings = $this->depotHoldingPayloads($depot);
 
         return response()->json([
-            'message' => 'Transaction date updated.',
+            'message' => $message,
+            'depot' => $this->depotPayload($depot),
             'depot_holdings' => $depotHoldings,
             'depot_valuations' => $this->depotValuationPayloads($depot, $depotHoldings),
             'depot_performance_series' => $this->depotPerformancePayloads($depot, $depotHoldings),
             'transactions' => $this->transactionPayloads($depot),
-            'transaction' => $this->transactionPayload($depotTransaction->refresh()->load('stockHolding')),
+            'transaction' => $this->transactionPayload($transaction->load('stockHolding')),
         ]);
     }
 
@@ -406,28 +415,16 @@ class AdminDepotTransactionController extends Controller
             ->whereIn('type', DepotTransaction::StockTypes)
             ->orderBy('booked_at')
             ->orderBy('id')
-            ->get(['id', 'stock_holding_id', 'type', 'pieces', 'total_amount', 'booked_at'])
+            ->get(['id', 'stock_holding_id', 'type', 'pieces', 'total_amount', 'cash_delta', 'booked_at'])
             ->groupBy('stock_holding_id');
 
         $positionPiecesByHoldingId = $transactionsByHoldingId
-            ->map(function ($transactions): string {
-                $pieces = $transactions->reduce(function (float $sum, DepotTransaction $transaction): float {
-                    $transactionPieces = (float) $transaction->pieces;
-
-                    return $transaction->type === 'buy'
-                        ? $sum + $transactionPieces
-                        : $sum - $transactionPieces;
-                }, 0.0);
-
-                return number_format($pieces, 8, '.', '');
-            })
+            ->map(fn (Collection $transactions): string => $this->decimal($this->netPositionPieces($transactions), 8))
             ->filter(fn (string $pieces): bool => (float) $pieces > 0);
 
         if ($positionPiecesByHoldingId->isEmpty()) {
             return [];
         }
-
-        $yearStartPriceByHoldingId = $this->yearStartPriceByHoldingId($transactionsByHoldingId);
 
         $holdings = StockHolding::query()
             ->with(['latestRealtimePrice', 'latestStockPrice'])
@@ -437,12 +434,14 @@ class AdminDepotTransactionController extends Controller
             ->values();
 
         $this->stockPreviousCloseResolver->prime($holdings);
+        $yearStartReferences = $this->yearStartReferences($holdings, $transactionsByHoldingId);
 
         return $holdings
             ->map(fn (StockHolding $holding): array => $this->depotHoldingPayload(
                 holding: $holding,
                 positionPieces: $positionPiecesByHoldingId->get($holding->id, '0.00000000'),
-                yearStartPrice: $yearStartPriceByHoldingId->get($holding->id),
+                yearStartReference: $yearStartReferences->get($holding->id),
+                transactions: $transactionsByHoldingId->get($holding->id),
             ))
             ->all();
     }
@@ -464,43 +463,90 @@ class AdminDepotTransactionController extends Controller
     }
 
     /**
-     * @param  Collection<int, Collection<int, DepotTransaction>>  $transactionsByHoldingId
-     * @return Collection<int, ?string>
+     * @param  Collection<int, DepotTransaction>  $transactions
      */
-    private function yearStartPriceByHoldingId(Collection $transactionsByHoldingId): Collection
+    private function netPositionPieces(Collection $transactions): float
     {
-        $yearStart = now()->startOfYear();
-
-        return $transactionsByHoldingId
-            ->map(function ($transactions) use ($yearStart): ?string {
-                $openLots = collect($this->balanceHistory->openBuyLots($transactions))
-                    ->filter(fn (array $lot): bool => $lot['booked_at']?->greaterThanOrEqualTo($yearStart) ?? false);
-                $pieces = $openLots->sum(fn (array $lot): float => $lot['pieces']);
-
-                if ($pieces <= 0) {
-                    return null;
-                }
-
-                $totalAmount = $openLots->sum(fn (array $lot): float => $lot['total_amount']);
-
-                return number_format($totalAmount / $pieces, 8, '.', '');
-            });
+        return round($transactions->sum(fn (DepotTransaction $transaction): float => $transaction->type === 'buy'
+            ? (float) $transaction->pieces
+            : -(float) $transaction->pieces), 8);
     }
 
     /**
-     * @return array{id: int, symbol: ?string, name: ?string, subtitle: ?string, isin: ?string, currency: ?string, latest_price: ?string, previous_day_price: ?string, previous_day_price_date: ?string, previous_day_change_percent: ?string, flatex_price: ?string, year_start_price: ?string, latest_price_fetched_at: ?string, latest_price_status: string, position_pieces: string}
+     * @param  Collection<int, StockHolding>  $holdings
+     * @param  Collection<int, Collection<int, DepotTransaction>>  $transactionsByHoldingId
+     * @return Collection<int, array{price: ?string, source_markers: list<string>}>
+     */
+    private function yearStartReferences(Collection $holdings, Collection $transactionsByHoldingId): Collection
+    {
+        $yearStart = now()->startOfYear();
+        $cutoff = $yearStart->copy()->subSecond();
+        $openLots = $transactionsByHoldingId->map(fn (Collection $transactions): Collection => collect($this->balanceHistory->openBuyLots($transactions)));
+        $openingPieces = $openLots->map(fn (Collection $lots): float => $lots
+            ->filter(fn (array $lot): bool => $lot['booked_at']->lt($yearStart))
+            ->sum('pieces'));
+        $openingHoldings = $holdings->filter(fn (StockHolding $holding): bool => $holding->currency === 'EUR' && $openingPieces->get($holding->id) > 0);
+
+        if ($openingHoldings->isNotEmpty()) {
+            $this->historicalPrices->prime($openingHoldings, $cutoff->copy()->subDays(14), $cutoff, freeOnly: false);
+        }
+
+        return $holdings->mapWithKeys(function (StockHolding $holding) use ($openLots, $openingPieces, $yearStart, $cutoff): array {
+            $lots = $openLots->get($holding->id);
+            $pieces = $lots->sum('pieces');
+            $carriedPieces = $openingPieces->get($holding->id);
+            $openingPrice = $holding->relationLoaded('readHistoricalMarketPrices') ? $this->historicalPrices->at($holding, $cutoff) : null;
+            $buyCosts = $lots->filter(fn (array $lot): bool => $lot['booked_at']->gte($yearStart))->sum('total_amount');
+            $reference = $pieces > 0 && ($carriedPieces === 0.0 || $openingPrice !== null)
+                ? ($buyCosts + $carriedPieces * (float) ($openingPrice['price'] ?? 0)) / $pieces
+                : null;
+
+            return [$holding->id => [
+                'price' => $this->decimal($reference, 8),
+                'source_markers' => $openingPrice['source_markers'] ?? [],
+            ]];
+        });
+    }
+
+    /**
+     * @param  array{price: ?string, source_markers: list<string>}  $yearStartReference
+     * @param  Collection<int, DepotTransaction>  $transactions
+     * @return array<string, int|string|list<string>|null>
      */
     private function depotHoldingPayload(
         StockHolding $holding,
         string $positionPieces,
-        ?string $yearStartPrice,
+        array $yearStartReference,
+        Collection $transactions,
     ): array {
         $latestStoredPrice = $this->latestStoredPrice($holding);
         $latestPrice = $this->latestHoldingPrice($holding, $latestStoredPrice);
+        $currency = $latestStoredPrice?->currency ?? $holding->currency;
+        $latestPriceSources = $this->latestHoldingPriceSources($holding, $latestStoredPrice, $latestPrice);
         $previousCloses = $this->stockPreviousCloseResolver->forObservation($holding, $latestStoredPrice);
-        $changeReference = $this->stockPreviousCloseResolver->comparisonReference($holding, $latestStoredPrice ?? $holding->latest_price_as_of, $previousCloses['previous_close'], $previousCloses['previous_close_date']);
-
-        $previousDayChange = $this->priceChangePercent($latestPrice, $changeReference);
+        $latestAsOf = $latestStoredPrice === null ? $holding->latest_price_as_of : $latestStoredPrice->getRawOriginal('as_of');
+        $latestAt = filled($latestAsOf) ? Carbon::parse($latestAsOf, 'UTC') : null;
+        $referenceDate = $previousCloses['previous_close_date'];
+        $changeReference = filled($currency) && $latestAt?->lte(now())
+            ? $this->stockPreviousCloseResolver->comparisonReference(
+                $holding,
+                $latestStoredPrice ?? $latestAsOf,
+                $previousCloses['previous_close'],
+                $referenceDate,
+            )
+            : null;
+        $tradingDate = $latestStoredPrice === null
+            ? $latestAt?->copy()->setTimezone(app(FreeTradingCalendar::class)->timezone($holding) ?? config('app.timezone'))->toDateString()
+            : $this->stockPreviousCloseResolver->tradingDateOf($holding, $latestStoredPrice);
+        $day = $latestAt?->lte(now()) && is_numeric($latestPrice) && $referenceDate !== null && $tradingDate !== null && $tradingDate > $referenceDate
+            ? $this->positionDayChange($transactions, $currency, (float) $latestPrice, $latestAt, $tradingDate,
+                $referenceDate, $previousCloses['previous_close_as_of'], $changeReference)
+            : ['buy_price' => null, 'uses_buy_price' => false, 'amount' => null];
+        $referencePrice = $day['uses_buy_price'] ? $day['buy_price'] : $changeReference;
+        $previousDayPercent = ! is_numeric($latestPrice) || ! is_numeric($referencePrice) || (float) $referencePrice === 0.0
+            ? null
+            : $this->decimal(((float) $latestPrice - (float) $referencePrice) / (float) $referencePrice * 100, 2);
+        $changeSources = MarketDataProvenance::merge($day['uses_buy_price'] ? [] : $previousCloses['previous_close_source_markers'], $latestPriceSources);
 
         return [
             'id' => $holding->id,
@@ -508,19 +554,69 @@ class AdminDepotTransactionController extends Controller
             'name' => $holding->name,
             'subtitle' => $holding->subtitle,
             'isin' => $holding->isin,
-            'currency' => $latestStoredPrice?->currency ?? $holding->currency,
+            'currency' => $currency,
             'latest_price' => $latestPrice,
-            'latest_price_source_markers' => $this->latestHoldingPriceSources($holding, $latestStoredPrice, $latestPrice),
+            'latest_price_source_markers' => $latestPriceSources,
+            'latest_price_trading_date' => is_numeric($latestPrice) && $latestAt?->lte(now()) ? $tradingDate : null,
             'previous_day_price' => $previousCloses['previous_close'],
             'previous_day_price_source_markers' => $previousCloses['previous_close_source_markers'],
-            'previous_day_change_percent_source_markers' => $previousDayChange === null ? [] : MarketDataProvenance::merge($previousCloses['previous_close_source_markers'], $latestStoredPrice === null ? MarketDataProvenance::markers($holding->latest_price_source) : MarketDataProvenance::forRecord($latestStoredPrice)),
             'previous_day_price_date' => $previousCloses['previous_close_date'],
-            'previous_day_change_percent' => $previousDayChange,
+            'previous_day_change_percent' => $previousDayPercent,
+            'previous_day_change_percent_source_markers' => $previousDayPercent === null ? [] : $changeSources,
+            'day_reference_type' => $day['uses_buy_price'] ? 'buy' : 'previous_day',
+            'day_buy_price' => $this->decimal($day['buy_price'], 8),
+            'day_change_amount_eur' => $this->decimal($day['amount'], 2),
+            'day_change_amount_eur_source_markers' => $day['amount'] === null ? [] : $changeSources,
             'flatex_price' => $holding->flatex_price,
-            'year_start_price' => $yearStartPrice,
+            'year_start_price' => $yearStartReference['price'],
+            ...($yearStartReference['source_markers'] === [] ? [] : [
+                'year_start_price_source_markers' => $yearStartReference['source_markers'],
+            ]),
             'latest_price_fetched_at' => $latestStoredPrice?->fetched_at?->toIso8601String() ?? $holding->latest_price_fetched_at?->toIso8601String(),
             'latest_price_status' => $this->latestPriceStatus($holding, $latestStoredPrice, $latestPrice),
             'position_pieces' => $positionPieces,
+        ];
+    }
+
+    /**
+     * @param  Collection<int, DepotTransaction>  $transactions
+     * @return array{buy_price: ?float, uses_buy_price: bool, amount: ?float}
+     */
+    private function positionDayChange(
+        Collection $transactions,
+        ?string $currency,
+        float $latestPrice,
+        Carbon $latestAt,
+        string $tradingDate,
+        string $previousDate,
+        ?string $previousAsOf,
+        ?string $previousPrice,
+    ): array {
+        $previousAt = $previousAsOf === null ? Carbon::parse($previousDate)->endOfDay() : Carbon::parse($previousAsOf);
+        [$opening, $trades] = $transactions
+            ->filter(fn (DepotTransaction $transaction): bool => $transaction->booked_at->toDateString() <= $tradingDate)
+            ->partition(fn (DepotTransaction $transaction): bool => $transaction->booked_at->toDateString() <= $previousDate
+                && $transaction->booked_at->lte($previousAt));
+        $openingPieces = $this->netPositionPieces($opening);
+        $usesBuyPrice = $openingPieces === 0.0;
+        $result = ['buy_price' => null, 'uses_buy_price' => $usesBuyPrice, 'amount' => null];
+
+        if ($currency !== 'EUR' || $openingPieces < 0 || $trades->contains(fn (DepotTransaction $transaction): bool => $transaction->booked_at->gt($latestAt))) {
+            return $result;
+        }
+
+        $buys = $trades->where('type', 'buy');
+        $boughtPieces = $this->netPositionPieces($buys);
+        $closingPieces = round($openingPieces + $this->netPositionPieces($trades), 8);
+
+        if ($closingPieces < 0 || ($usesBuyPrice ? $boughtPieces <= 0 : ! is_numeric($previousPrice))) {
+            return $result;
+        }
+
+        return [
+            'buy_price' => $usesBuyPrice ? -(float) $buys->sum('cash_delta') / $boughtPieces : null,
+            'uses_buy_price' => $usesBuyPrice,
+            'amount' => $closingPieces * $latestPrice - $openingPieces * (float) $previousPrice + (float) $trades->sum('cash_delta'),
         ];
     }
 
@@ -551,15 +647,6 @@ class AdminDepotTransactionController extends Controller
         return $record === null
             ? MarketDataProvenance::markers($holding->latest_price_source)
             : MarketDataProvenance::forRecord($record);
-    }
-
-    private function priceChangePercent(?string $currentPrice, ?string $referencePrice): ?string
-    {
-        if (! is_numeric($currentPrice) || ! is_numeric($referencePrice) || (float) $referencePrice === 0.0) {
-            return null;
-        }
-
-        return $this->decimal((((float) $currentPrice - (float) $referencePrice) / (float) $referencePrice) * 100, 2);
     }
 
     private function latestPriceStatus(StockHolding $holding, StockPrice|StockRealtimePrice|StockHoldingIntradayCandle|null $latestStoredPrice, ?string $latestPrice): string
@@ -598,7 +685,7 @@ class AdminDepotTransactionController extends Controller
 
     /**
      * @param  array<int, array{id: int, symbol: ?string, name: ?string, isin: ?string, currency: ?string, latest_price: ?string, previous_day_price: ?string, previous_day_price_date: ?string, previous_day_change_percent: ?string, flatex_price: ?string, year_start_price: ?string, latest_price_fetched_at: ?string, latest_price_status: string, position_pieces: string}>  $depotHoldings
-     * @return array{latest: array<string, string>, flatex: array<string, string>}
+     * @return array{latest: array<string, mixed>, flatex: array<string, mixed>}
      */
     private function depotValuationPayloads(Depot $depot, array $depotHoldings): array
     {
@@ -607,15 +694,17 @@ class AdminDepotTransactionController extends Controller
         $previousDayExternalCashFlowAmount = $this->balanceHistory->externalCashFlowAfter($depot, $previousDayCutoff);
         $baselines = $this->depotValuationBaselines($depot);
         $baselines['previous_day_balance_source_markers'] = $previousSources;
+        $today = now();
 
         return [
-            'latest' => $this->depotValuationPayload(
-                $depotHoldings,
-                'latest',
-                $previousDayBalance,
-                $previousDayExternalCashFlowAmount,
-                $baselines,
-            ),
+            'latest' => [
+                ...$this->depotValuationPayload($depotHoldings, 'latest', $previousDayBalance, $previousDayExternalCashFlowAmount, $baselines),
+                'account_overview' => $this->accountOverview($depot, $depotHoldings),
+                'completed_periods' => [
+                    'week' => $this->performanceSnapshots->completedDepotPeriod($depot, 'week', $this->performanceSnapshots->periodOpening('week', $today)),
+                    'month' => $this->performanceSnapshots->completedDepotPeriod($depot, 'month', $this->performanceSnapshots->periodOpening('month', $today)),
+                ],
+            ],
             'flatex' => $this->depotValuationPayload(
                 $depotHoldings,
                 'flatex',
@@ -624,6 +713,77 @@ class AdminDepotTransactionController extends Controller
                 $baselines,
             ),
         ];
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $depotHoldings
+     * @return array<string, string|list<string>|null>
+     */
+    private function accountOverview(Depot $depot, array $depotHoldings): array
+    {
+        $asOf = now();
+        $calendar = app(FreeTradingCalendar::class);
+        $quotes = collect($depotHoldings)->keyBy('id');
+        $holdings = StockHolding::query()->whereKey($quotes->keys()->all())->get();
+        $date = $holdings->isEmpty()
+            ? $calendar->previousDayInTimezone('Europe/Berlin', $asOf->copy()->addDay())?->toDateString()
+            : $holdings->map(function (StockHolding $holding) use ($quotes, $calendar): ?string {
+                $day = $quotes->get($holding->id)['latest_price_trading_date'];
+                $timezone = $calendar->timezone($holding);
+
+                return $day !== null && $timezone !== null && $calendar->session($holding, Carbon::parse($day, $timezone)) !== null ? $day : null;
+            })->max();
+        $previousDate = $date === null ? null : $this->previousAccountTradingDate($holdings, $date, $calendar);
+        $live = $date === $asOf->toDateString();
+        $cutoff = $date === null ? null : ($live ? $asOf : Carbon::parse($date)->endOfDay());
+        $previousCutoff = $previousDate === null ? null : Carbon::parse($previousDate)->endOfDay();
+        $current = $cutoff === null ? null : $this->balanceHistory->tradingAccountValuesAt($depot, $cutoff, $live ? $depotHoldings : null);
+        $previous = $previousCutoff === null ? null : $this->balanceHistory->tradingAccountValuesAt($depot, $previousCutoff);
+        $cashFlow = $previousCutoff === null || $cutoff === null
+            ? null
+            : $this->balanceHistory->externalCashFlowAfter($depot, $previousCutoff, $cutoff);
+        $currentBalance = $current['account_balance'] ?? null;
+        $previousBalance = $previous['account_balance'] ?? null;
+        $change = $currentBalance === null || $previousBalance === null || $cashFlow === null
+            ? null
+            : $currentBalance - $previousBalance - $cashFlow;
+
+        return [
+            'valuation_date' => $date,
+            'previous_valuation_date' => $previousDate,
+            'stock_balance' => $this->decimal($current['stock_balance'] ?? null, 2),
+            'cash_balance' => $this->decimal($current['cash_balance'] ?? $this->balanceHistory->cashBalanceAt($depot, $asOf, includeFutureBookingsInOpening: true), 2),
+            'account_balance' => $this->decimal($currentBalance, 2),
+            'previous_day_balance' => $this->decimal($previousBalance, 2),
+            'external_cash_flow' => $this->decimal($cashFlow, 2),
+            'change_amount' => $this->decimal($change, 2),
+            'stock_balance_source_markers' => $current['source_markers'] ?? [],
+            'account_balance_source_markers' => $current['source_markers'] ?? [],
+            'previous_day_balance_source_markers' => $previous['source_markers'] ?? [],
+            'change_amount_source_markers' => $change === null ? [] : MarketDataProvenance::merge($current['source_markers'], $previous['source_markers']),
+        ];
+    }
+
+    /** @param Collection<int, StockHolding> $holdings */
+    private function previousAccountTradingDate(Collection $holdings, string $date, FreeTradingCalendar $calendar): ?string
+    {
+        if ($holdings->isEmpty()) {
+            return $calendar->previousDayInTimezone('Europe/Berlin', Carbon::parse($date, 'Europe/Berlin'))?->toDateString();
+        }
+
+        return $holdings->map(function (StockHolding $holding) use ($date, $calendar): ?string {
+            $timezone = $calendar->timezone($holding);
+            if ($timezone === null) {
+                return null;
+            }
+
+            $day = $calendar->previousDay($holding, Carbon::parse($date, $timezone));
+            while ($day !== null && $calendar->session($holding, $day) === null) {
+                $day = $calendar->previousDay($holding, $day);
+            }
+
+            return $day?->toDateString();
+        })->max();
     }
 
     /**

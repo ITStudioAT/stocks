@@ -1,40 +1,52 @@
 <script setup>
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { useDepotStore } from './stores/depots';
+import { hasPriceValue } from './utils/numberFormatters';
 
 const props = defineProps({ holding: { type: Object, required: true } });
 const depots = useDepotStore();
 const loading = ref(false);
 const result = ref(null);
 const error = ref('');
+const action = computed(() => {
+    const holding = props.holding;
+    const missingLatestPrice = !hasPriceValue(holding.latest_price);
+    const missingLastDay = !hasPriceValue(holding.end_price_24);
 
-async function reload() {
-    if (loading.value) {
+    if (missingLatestPrice && holding.price_reload_available) {
+        return 'reload';
+    }
+
+    if (missingLastDay && holding.daily_history_available && holding.end_price_24_date) {
+        return 'history';
+    }
+
+    return missingLastDay && holding.price_reload_available ? 'reload' : null;
+});
+const actionLabel = computed(() => action.value === 'history' ? 'Load daily prices' : 'Load prices');
+const actionAriaLabel = computed(() => {
+    const stockName = props.holding.symbol || props.holding.name;
+
+    return action.value === 'history' ? `Load ${stockName} daily history` : `Reload ${stockName} price`;
+});
+const showsIntervalEnd = computed(() => props.holding.latest_price_time_basis === 'interval_end'
+    && hasPriceValue(props.holding.latest_price) && props.holding.latest_price_as_of);
+
+async function loadMissingPrices() {
+    if (loading.value || !action.value) {
         return;
     }
+
+    const loadsHistory = action.value === 'history';
     loading.value = true;
     result.value = null;
     error.value = '';
     try {
-        result.value = await depots.reloadHoldingPrice(props.holding.id);
+        result.value = loadsHistory
+            ? await depots.loadHoldingDailyHistory(props.holding.id)
+            : await depots.reloadHoldingPrice(props.holding.id);
     } catch (failure) {
-        error.value = failure.message || 'Reload failed. Please try again.';
-    } finally {
-        loading.value = false;
-    }
-}
-
-async function loadHistory() {
-    if (loading.value) {
-        return;
-    }
-    loading.value = true;
-    result.value = null;
-    error.value = '';
-    try {
-        result.value = await depots.loadHoldingDailyHistory(props.holding.id);
-    } catch (failure) {
-        error.value = failure.message || 'History import failed.';
+        error.value = failure.message || (loadsHistory ? 'History import failed.' : 'Reload failed. Please try again.');
     } finally {
         loading.value = false;
     }
@@ -48,27 +60,25 @@ function checkedAt(value) {
 </script>
 
 <template>
-    <div class="d-flex flex-column align-start ga-1" @click.stop>
+    <div v-if="action || loading || result || error || showsIntervalEnd" class="d-flex flex-column align-start ga-1" @click.stop @keydown.stop>
+        <span v-if="showsIntervalEnd" class="text-caption">
+            {{ holding.latest_price_interval }} OHLC · time shown is interval end.
+        </span>
         <v-btn
+            v-if="action || loading"
+            class="holding-price-reload-button"
             size="x-small"
             variant="text"
             color="primary"
             :loading="loading"
             :disabled="loading"
-            :aria-label="`Reload ${holding.symbol || holding.name} price`"
-            title="Check this stock's free source for newer data"
-            @click="reload"
+            :aria-label="actionAriaLabel"
+            @click="loadMissingPrices"
         >
-            {{ loading ? 'Loading…' : 'Reload' }}
-        </v-btn>
-        <span v-if="holding.latest_price_time_basis === 'interval_end'" class="text-caption">
-            {{ holding.latest_price_interval }} OHLC · time shown is interval end.
-        </span>
-        <v-btn v-if="holding.daily_history_available" size="x-small" variant="text" :loading="loading" :disabled="loading"
-            :aria-label="`Load ${holding.symbol || holding.name} daily history`" @click="loadHistory">
-            Load 1 year
+            {{ loading ? 'Loading…' : actionLabel }}
         </v-btn>
         <span
+            v-if="action || loading || result || error"
             role="status"
             aria-live="polite"
             class="text-caption text-wrap"

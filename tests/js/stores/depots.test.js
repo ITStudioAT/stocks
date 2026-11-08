@@ -69,19 +69,20 @@ describe('useDepotStore', () => {
         expect(depots.stockSearchNotice).toBe('Free source');
     });
 
-    it('reloads only the selected stock and merges its new quote into both visible lists', async () => {
+    it('reloads only the selected stock and keeps the Depot comparison snapshot together', async () => {
         const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
             status: 'updated', holding: { id: 34, latest_price: '17.64', latest_price_as_of: '2026-11-04T09:04:40+01:00' },
         }));
         vi.stubGlobal('fetch', fetchMock);
         const depots = useDepotStore();
         depots.holdings = [{ id: 34, daily_prices: [{ price: '17' }] }, { id: 13, latest_price: '2.3165' }];
-        depots.depotHoldings = [{ id: 34, position_pieces: '5' }, { id: 13, latest_price: '2.3165' }];
+        const depotHolding = { id: 34, position_pieces: '5', latest_price: '17.50', previous_day_price: '17', day_change_amount_eur: '2.50' };
+        depots.depotHoldings = [depotHolding, { id: 13, latest_price: '2.3165' }];
         expect((await depots.reloadHoldingPrice(34)).status).toBe('updated');
         expect(fetchMock).toHaveBeenCalledExactlyOnceWith('/admin/watchlist/holdings/34/price/reload', expect.objectContaining({ method: 'POST' }));
         expect(depots.holdings[0].latest_price).toBe('17.64');
         expect(depots.holdings[0].daily_prices).toEqual([{ price: '17' }]);
-        expect(depots.depotHoldings[0].position_pieces).toBe('5');
+        expect(depots.depotHoldings[0]).toEqual(depotHolding);
         expect(depots.holdings[1]).toEqual({ id: 13, latest_price: '2.3165' });
         expect(depots.depotHoldings[1]).toEqual({ id: 13, latest_price: '2.3165' });
     });
@@ -284,6 +285,28 @@ describe('useDepotStore', () => {
         await depots.loadWatchlistHoldings(1, { allHoldings: true });
 
         expect(fetchMock).toHaveBeenCalledWith('/admin/watchlist/holdings?page=1&all=1', expect.any(Object));
+    });
+
+    it('refreshes a daily-history gap without dropping other Stocks rows', async () => {
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(jsonResponse({ status: 'partial' }))
+            .mockResolvedValueOnce(jsonResponse({ holdings: [
+                { id: 1 },
+                { id: 17, end_price_24: '11.000000', end_price_24_date: '2026-11-03' },
+            ] }));
+        vi.stubGlobal('fetch', fetchMock);
+        const depots = useDepotStore();
+
+        await depots.loadHoldingDailyHistory(17);
+
+        expect(fetchMock).toHaveBeenNthCalledWith(1, '/admin/watchlist/holdings/17/daily-history', expect.objectContaining({ method: 'POST' }));
+        expect(fetchMock).toHaveBeenNthCalledWith(2,
+            '/admin/watchlist/holdings/charts?page=1&include_charts=1&all=1&chart_stock_id=17&chart_range=year',
+            expect.objectContaining({ method: 'POST' }));
+        expect(depots.holdings).toEqual([
+            { id: 1 },
+            { id: 17, end_price_24: '11.000000', end_price_24_date: '2026-11-03' },
+        ]);
     });
 
     it('uses a POST request when chart loading may fetch provider data', async () => {

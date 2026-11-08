@@ -22,6 +22,7 @@ use App\Services\EodhdMarketData;
 use App\Services\FreeIntradayMarketData;
 use App\Services\IndexDataUpdateScheduler;
 use App\Services\IndexPriceRefreshSettings;
+use App\Services\IntradayMarketIdentity;
 use App\Services\KnownInstrumentMetadataCorrections;
 use App\Services\MarketDataProvenance;
 use App\Services\MarketPriceStore;
@@ -35,7 +36,6 @@ use App\Services\TradingSessionPriceResolver;
 use App\Services\UiPreferences;
 use App\Services\WatchlistPdfReport;
 use App\Services\YahooFinanceMarketData;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
@@ -460,17 +460,6 @@ class AdminDepotHoldingController extends Controller
             'currency' => $validated['currency'] ?? null,
         ]);
 
-        $initialFlatexPrice = $holding->latestRealtimePrice?->price
-            ?? $holding->latestStockPrice?->price
-            ?? $holding->latest_price;
-
-        if ($holding->flatex_price === null && $initialFlatexPrice !== null) {
-            $holding->update([
-                'flatex_price' => $initialFlatexPrice,
-            ]);
-            $holding->refresh();
-        }
-
         return response()->json([
             'message' => 'Stock added to watch-list.',
             'eodhd_api_usage' => $this->eodhdApiUsage->payload(),
@@ -533,13 +522,24 @@ class AdminDepotHoldingController extends Controller
         $response = Cache::lock('free-intraday.reload.'.$holding->id, 90)->get(function () use ($holding, $marketData): JsonResponse {
             $holding->refresh();
             $depot = $this->activeDepot();
+            $centralPrices = MarketPriceStore::enabled();
+            if ($centralPrices) {
+                $this->priceReadBatch->load(collect([$holding]));
+            }
             $before = $this->holdingPayload($holding, $depot);
             $result = $marketData->syncHolding($holding);
-            $payload = $this->holdingPayload($holding->fresh(), $depot);
+            $reloadedHolding = $holding->fresh();
+            if ($centralPrices) {
+                $this->priceReadBatch->load(collect([$reloadedHolding]));
+            }
+            $payload = $this->holdingPayload($reloadedHolding, $depot);
             unset($payload['daily_prices'], $payload['intraday_prices'], $payload['intraday_candles'],
                 $payload['depot_transactions'], $payload['historical_prices_fetching'], $payload['intraday_refresh']);
             $updated = $payload['latest_price_as_of'] !== $before['latest_price_as_of']
-                || $payload['latest_price'] !== $before['latest_price'];
+                || $payload['latest_price'] !== $before['latest_price']
+                || $payload['start_price'] !== $before['start_price']
+                || $payload['end_price_24'] !== $before['end_price_24']
+                || $payload['end_price_24_as_of'] !== $before['end_price_24_as_of'];
             $incomplete = $result['failed_count'] > 0;
             $failed = $incomplete && $result['stored_count'] === 0 && $result['unchanged_count'] === 0;
             $status = match (true) {
@@ -584,65 +584,11 @@ class AdminDepotHoldingController extends Controller
         ]);
     }
 
-    public function updateFlatexPrice(Request $request, StockHolding $holding): JsonResponse
+    public function updateFlatexPrice(): JsonResponse
     {
-        $validated = $request->validate([
-            'flatex_price' => ['nullable', 'numeric', 'min:0', 'max:99999999999999.999999'],
-        ]);
-        $matchingHoldingIds = $this->matchingStockHoldings($holding)->pluck('id');
-
-        StockHolding::query()
-            ->whereKey($matchingHoldingIds->all())
-            ->update([
-                'flatex_price' => $validated['flatex_price'] ?? null,
-            ]);
-
-        $updatedHoldings = StockHolding::query()
-            ->whereKey($matchingHoldingIds->all())
-            ->orderBy('id')
-            ->get(['id', 'symbol', 'isin', 'wkn', 'exchange', 'mic_code', 'flatex_price'])
-            ->map(fn (StockHolding $updatedHolding): array => [
-                'id' => $updatedHolding->id,
-                'symbol' => $updatedHolding->symbol,
-                'isin' => $updatedHolding->isin,
-                'wkn' => $updatedHolding->wkn,
-                'exchange' => $updatedHolding->exchange,
-                'mic_code' => $updatedHolding->mic_code,
-                'flatex_price' => $this->pricePayload($updatedHolding->flatex_price),
-            ]);
-        $updatedHolding = $updatedHoldings
-            ->firstWhere('id', $holding->id)
-            ?? $updatedHoldings->first()
-            ?? [
-                'id' => $holding->id,
-                'flatex_price' => $this->pricePayload($validated['flatex_price'] ?? null),
-            ];
-
         return response()->json([
-            'message' => 'Flatex price updated.',
-            'holding' => $updatedHolding,
-            'holdings' => $updatedHoldings->all(),
-        ]);
-    }
-
-    /**
-     * @return Builder<StockHolding>
-     */
-    private function matchingStockHoldings(StockHolding $holding): Builder
-    {
-        if (filled($holding->isin)) {
-            return StockHolding::query()->where('isin', $holding->isin);
-        }
-
-        if (filled($holding->wkn)) {
-            return StockHolding::query()->where('wkn', $holding->wkn);
-        }
-
-        if (filled($holding->symbol)) {
-            return StockHolding::query()->where('symbol', $holding->symbol);
-        }
-
-        return StockHolding::query()->whereKey($holding->id);
+            'message' => 'The Flatex comparison price can no longer be updated.',
+        ], Response::HTTP_GONE);
     }
 
     public function destroy(StockHolding $holding): JsonResponse
@@ -712,6 +658,8 @@ class AdminDepotHoldingController extends Controller
         $intradayRefresh = $includeCharts && $includeIntradayCharts
             ? ($holding->relationLoaded('chartSamplesRefresh') ? $holding->chartSamplesRefresh : $this->chartIntradayRefresh->status($holding, 'samples'))
             : null;
+        $marketIdentity = $holding->only(['isin', 'symbol', 'exchange', 'mic_code', 'currency']);
+        $supportsYahooUs = YahooFinanceMarketData::supports($marketIdentity);
 
         return [
             'id' => $holding->id,
@@ -739,10 +687,13 @@ class AdminDepotHoldingController extends Controller
             'start_price_date' => $relevantTradingDate ?? $sessionPriceDates['start_price_date'],
             'end_price_date' => $latestEndPrice['date'] ?? $relevantTradingDate ?? $sessionPriceDates['end_price_date'],
             'end_price_24_date' => $endOfDaySessionPrices['end_price_24_date'],
+            'end_price_24_as_of' => $endOfDaySessionPrices['end_price_24_as_of'],
             'end_price_48_date' => $endOfDaySessionPrices['end_price_48_date'],
             'historical_prices_fetching' => in_array($intradayRefresh['status'] ?? null, ['queued', 'running'], true),
+            'price_reload_available' => $supportsYahooUs || (IntradayMarketIdentity::isXetra($marketIdentity)
+                && filled($marketIdentity['isin']) && filled($marketIdentity['currency'])),
             'daily_history_available' => MarketPriceStore::enabled()
-                && (YahooFinanceMarketData::supports($holding->toArray()) || YahooFinanceMarketData::supportsXetra($holding->toArray())),
+                && ($supportsYahooUs || YahooFinanceMarketData::supportsXetra($marketIdentity)),
             'intraday_refresh' => $intradayRefresh,
             'position_pieces' => $activeDepot
                 ? $this->depotTransactionBooker->positionPieces($activeDepot, $holding)
@@ -803,7 +754,7 @@ class AdminDepotHoldingController extends Controller
     }
 
     /**
-     * @return array{end_price_24: ?string, end_price_48: ?string, end_price_24_date: ?string, end_price_48_date: ?string}
+     * @return array{end_price_24: ?string, end_price_48: ?string, end_price_24_date: ?string, end_price_24_as_of: ?string, end_price_48_date: ?string, end_price_24_source_markers: array<int, string>, end_price_48_source_markers: array<int, string>}
      */
     private function endOfDaySessionPrices(StockHolding $holding, StockPrice|StockRealtimePrice|StockHoldingIntradayCandle|null $latest): array
     {
@@ -815,6 +766,7 @@ class AdminDepotHoldingController extends Controller
             'end_price_24_source_markers' => $previousCloses['previous_close_source_markers'],
             'end_price_48_source_markers' => $previousCloses['earlier_close_source_markers'],
             'end_price_24_date' => $previousCloses['previous_close_date'],
+            'end_price_24_as_of' => $previousCloses['previous_close_as_of'],
             'end_price_48_date' => $previousCloses['earlier_close_date'],
         ];
     }

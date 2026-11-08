@@ -3,7 +3,7 @@
 return [
 
     'name' => 'GKStocks',
-    'version' => '2.0.0',
+    'version' => '2.0.1',
 
     'protected_admin' => [
         'email' => env('SUPER_ADMIN_EMAIL'),

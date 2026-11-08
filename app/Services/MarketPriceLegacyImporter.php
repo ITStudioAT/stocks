@@ -11,7 +11,7 @@ use Throwable;
 
 class MarketPriceLegacyImporter
 {
-    public const Tables = ['stock_prices', 'stock_realtime_prices', 'stock_holding_intraday_candles', 'stock_holding_daily_prices', 'stock_holding_intraday_prices'];
+    public const Tables = ['stock_prices', 'stock_holding_intraday_candles', 'stock_realtime_prices', 'stock_holding_daily_prices', 'stock_holding_intraday_prices'];
 
     public function __construct(private MarketIdentityRegistry $identities, private MarketPriceStore $store) {}
 
@@ -28,7 +28,7 @@ class MarketPriceLegacyImporter
         }
         $report = [];
         foreach (self::Tables as $table) {
-            $counts = ['checked' => 0, 'imported' => 0, 'quarantined' => 0, 'unchanged' => 0, 'unresolved' => 0];
+            $counts = ['checked' => 0, 'imported' => 0, 'merged' => 0, 'quarantined' => 0, 'unchanged' => 0, 'unresolved' => 0];
             DB::table($table)->orderBy('id')->chunkById($chunk, function ($rows) use ($table, $listings, &$counts): void {
                 $links = DB::table('market_price_legacy_links')->where('legacy_table', $table)->whereIn('legacy_id', $rows->pluck('id'))
                     ->get(['legacy_id', 'content_hash', 'status', 'created_at'])->keyBy('legacy_id');
@@ -72,7 +72,12 @@ class MarketPriceLegacyImporter
                     foreach ($pending as $id => &$link) {
                         $price = $prices[$id] ?? null;
                         $link['market_price_id'] = $price?->id;
-                        $link['status'] = $price === null || $link['status'] === 'unresolved' ? 'unresolved' : ($price->validation_status === 'valid' ? 'imported' : 'quarantined');
+                        $link['status'] = match (true) {
+                            $price === null || $link['status'] === 'unresolved' => 'unresolved',
+                            $price->observation_key !== $prepared[$id]['observation_key'] => 'merged',
+                            $price->validation_status === 'valid' => 'imported',
+                            default => 'quarantined',
+                        };
                         $counts[$link['status']]++;
                     }
                     unset($link);

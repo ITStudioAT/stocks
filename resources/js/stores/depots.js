@@ -1,4 +1,4 @@
-import { defineStore } from 'pinia';
+import { acceptHMRUpdate, defineStore } from 'pinia';
 import { request } from './auth';
 
 async function waitForIntradayRefresh(id, kind, isCurrent = () => true) {
@@ -28,10 +28,10 @@ export const useDepotStore = defineStore('depots', {
         depots: [],
         holdings: [],
         holdingsRequestId: 0,
+        watchlistStockChart: null,
         intradayRequestVersion: 0,
         indexWatchItems: [],
         indexEodhdSync: null,
-        stockEodhdSync: null,
         indexEodhdSyncSettings: null,
         depotHoldings: [],
         depotValuations: {},
@@ -254,6 +254,13 @@ export const useDepotStore = defineStore('depots', {
                 this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
                 this.uiPreferences = data.ui_preferences ?? this.uiPreferences;
                 this.holdings = data.holdings ?? [];
+                if (options.captureStockChart) {
+                    this.watchlistStockChart = {
+                        stockId: options.chartStockId,
+                        range: options.chartRange,
+                        holding: this.holdings.find((holding) => holding.id === options.chartStockId) ?? null,
+                    };
+                }
                 this.holdingsPagination = data.meta ?? this.holdingsPagination;
                 const pendingHoldings = this.holdings.filter(holding => ['queued', 'running'].includes(holding.intraday_refresh?.status));
                 if (pendingHoldings.length > 0) {
@@ -397,10 +404,6 @@ export const useDepotStore = defineStore('depots', {
 
                 if (data.holding) {
                     this.holdings = this.holdings.map((holding) => holding.id === id ? data.holding : holding);
-                    this.depotHoldings = this.depotHoldings.map((holding) => holding.id === id ? {
-                        ...holding,
-                        ...data.holding,
-                    } : holding);
                 }
 
                 return data;
@@ -414,7 +417,7 @@ export const useDepotStore = defineStore('depots', {
         async loadHoldingDailyHistory(id) {
             const data = await request(`/admin/watchlist/holdings/${id}/daily-history`, { method: 'POST' });
             if (['complete', 'partial'].includes(data.status)) {
-                await this.loadWatchlistHoldings(1, { includeCharts: true, chartStockId: id, chartRange: 'year' });
+                await this.loadWatchlistHoldings(1, { allHoldings: true, includeCharts: true, chartStockId: id, chartRange: 'year' });
             }
             return data;
         },
@@ -422,7 +425,6 @@ export const useDepotStore = defineStore('depots', {
             const data = await request(`/admin/watchlist/holdings/${id}/price/reload`, { method: 'POST' });
             if (data.holding) {
                 this.holdings = this.holdings.map(holding => holding.id === id ? { ...holding, ...data.holding } : holding);
-                this.depotHoldings = this.depotHoldings.map(holding => holding.id === id ? { ...holding, ...data.holding } : holding);
             }
 
             return data;
@@ -534,37 +536,6 @@ export const useDepotStore = defineStore('depots', {
         clearIndexEodhdSync() {
             this.indexEodhdSync = null;
         },
-        async loadLatestStockEodhdSync() {
-            const data = await request('/admin/v2/stocks/eodhd-sync');
-            this.stockEodhdSync = data.refresh ?? null;
-            this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-            return data;
-        },
-        async startStockEodhdSync() {
-            this.holdingsError = '';
-
-            try {
-                const data = await request('/admin/v2/stocks/eodhd-sync', { method: 'POST' });
-                this.stockEodhdSync = data.refresh ?? null;
-                this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-                return data;
-            } catch (error) {
-                this.holdingsError = error.message;
-                throw error;
-            }
-        },
-        async loadStockEodhdSync(refreshId) {
-            const data = await request(`/admin/v2/stocks/eodhd-sync/${refreshId}`);
-            this.stockEodhdSync = data.refresh ?? null;
-            this.eodhdApiUsage = data.eodhd_api_usage ?? this.eodhdApiUsage;
-
-            return data;
-        },
-        clearStockEodhdSync() {
-            this.stockEodhdSync = null;
-        },
         async loadIndexEodhdSyncSettings() {
             const data = await request('/admin/v2/indices/eodhd-sync-settings');
             this.indexEodhdSyncSettings = data.index_eodhd_sync_settings ?? null;
@@ -605,47 +576,6 @@ export const useDepotStore = defineStore('depots', {
         },
         async deleteActiveDepotHolding(id) {
             return await this.deleteWatchlistHolding(id);
-        },
-        async updateHoldingFlatexPrice(id, flatexPrice) {
-            this.transactionsError = '';
-
-            try {
-                const data = await request(`/admin/watchlist/holdings/${id}/flatex-price`, {
-                    method: 'PATCH',
-                    body: JSON.stringify({ flatex_price: flatexPrice }),
-                });
-                const updatedHoldings = data.holdings ?? [data.holding];
-                const flatexPriceByHoldingId = new Map(
-                    updatedHoldings.map((holding) => [holding.id, holding.flatex_price]),
-                );
-
-                this.depotHoldings = this.depotHoldings.map((holding) => {
-                    if (!flatexPriceByHoldingId.has(holding.id)) {
-                        return holding;
-                    }
-
-                    return {
-                        ...holding,
-                        flatex_price: flatexPriceByHoldingId.get(holding.id),
-                    };
-                });
-                this.holdings = this.holdings.map((holding) => {
-                    if (!flatexPriceByHoldingId.has(holding.id)) {
-                        return holding;
-                    }
-
-                    return {
-                        ...holding,
-                        flatex_price: flatexPriceByHoldingId.get(holding.id),
-                    };
-                });
-                await this.loadTransactions();
-
-                return data;
-            } catch (error) {
-                this.transactionsError = error.message;
-                throw error;
-            }
         },
         async refreshWatchlistPrices() {
             this.holdingsLoading = true;
@@ -952,15 +882,16 @@ export const useDepotStore = defineStore('depots', {
                 this.holdingsLoading = false;
             }
         },
-        async updateTransactionDate(id, bookedAt) {
+        async updateCashLedgerTransaction(id, payload) {
             this.transactionsLoading = true;
             this.transactionsError = '';
 
             try {
-                const data = await request(`/admin/depot-transactions/${id}/date`, {
+                const data = await request(`/admin/depot-transactions/${id}`, {
                     method: 'PATCH',
-                    body: JSON.stringify({ booked_at: bookedAt }),
+                    body: JSON.stringify(payload),
                 });
+                this.activeDepot = data.depot ?? this.activeDepot;
                 this.depotHoldings = data.depot_holdings ?? this.depotHoldings;
                 this.depotValuations = data.depot_valuations ?? this.depotValuations;
                 this.depotPerformanceSeries = data.depot_performance_series ?? this.depotPerformanceSeries;
@@ -969,27 +900,8 @@ export const useDepotStore = defineStore('depots', {
                 });
 
                 return data;
-            } catch (error) {
-                this.transactionsError = error.message;
-                throw error;
             } finally {
                 this.transactionsLoading = false;
-            }
-        },
-        async updateUiPreferences(payload) {
-            this.error = '';
-
-            try {
-                const data = await request('/admin/ui-preferences', {
-                    method: 'PATCH',
-                    body: JSON.stringify(payload),
-                });
-                this.uiPreferences = data.ui_preferences;
-
-                return data;
-            } catch (error) {
-                this.error = error.message;
-                throw error;
             }
         },
         async bookStockTransaction(payload) {
@@ -1099,3 +1011,7 @@ export const useDepotStore = defineStore('depots', {
         },
     },
 });
+
+if (import.meta.hot) {
+    import.meta.hot.accept(acceptHMRUpdate(useDepotStore, import.meta.hot));
+}

@@ -44,7 +44,7 @@ class MarketDataCoordinator
                 $report = $this->xetra->collect(advance: true, refreshCatalog: true, coordinated: true);
                 foreach ($eu as $holding) {
                     if (in_array($holding->isin, $report['unresolved_corrections'] ?? [], true)) {
-                        $quarantined = DB::table('market_prices')->where('market_listing_id', $holding->market_listing_id)->where('source_key', 'xetra_posttrade')
+                        $quarantined = DB::table('market_prices')->where('market_listing_id', $holding->market_listing_id)->whereIn('source_key', ['xetra_posttrade', 'deutsche_boerse_trade'])
                             ->where('validation_status', '!=', 'quarantined')->whereIn('trading_date', array_keys($report['days']))->update(['validation_status' => 'quarantined']);
                         if ($quarantined > 0) {
                             DB::table('market_listings')->where('id', $holding->market_listing_id)->increment('data_version');

@@ -6,7 +6,7 @@ import { csrfToken, request, useAuthStore } from './stores/auth';
 import { useDepotStore } from './stores/depots';
 import { useRoleStore } from './stores/roles';
 import { useUserStore } from './stores/users';
-import { formatAdaptiveNumber, formatPriceValue } from './utils/numberFormatters';
+import { formatAdaptiveNumber, formatPriceValue, hasPriceValue } from './utils/numberFormatters';
 import HoldingPriceReload from './HoldingPriceReload.vue';
 import InstrumentSearchSource from './InstrumentSearchSource.vue';
 import DataSourceMarkers from './DataSourceMarkers.vue';
@@ -28,7 +28,6 @@ const indexRealtimeOverdueCheckIntervalMilliseconds = 1000;
 const activeItemRefreshIntervalMilliseconds = 60_000;
 const indexRealtimeDispatchRetryDelayMilliseconds = 5000;
 const EODHD_REQUESTS_ENABLED = false;
-const STOCK_EODHD_SYNC_DISMISSED_REFRESH_ID_KEY = 'stock_eodhd_sync_dismissed_refresh_id';
 const cashTransactionTypeOptions = [
     { title: 'Start balance', value: 'opening_balance' },
     { title: 'Deposit', value: 'deposit' },
@@ -68,7 +67,6 @@ const {
     holdings,
     indexWatchItems,
     indexEodhdSync,
-    stockEodhdSync,
     indexEodhdSyncSettings,
     depotHoldings,
     depotValuations,
@@ -90,7 +88,6 @@ const {
     holdingIntradayCandles,
     holdingIntradayCandlesLoading,
     holdingIntradayCandlesErrors,
-    uiPreferences,
     stockSearchResults,
     stockSearchSource,
     stockSearchNotice,
@@ -187,6 +184,7 @@ const selectedStockWatchItem = ref(null);
 const selectedStockPriceRange = ref('intraday');
 const isStockPriceChartLoading = ref(false);
 const stockPriceChartError = ref('');
+let stockChartRequestId = 0;
 const selectedIndexWatchItem = ref(null);
 const selectedIndexPriceRange = ref('intraday');
 const selectedIndexWatchItemForRemoval = ref(null);
@@ -222,7 +220,6 @@ const privateIndexActionsDisabled = computed(() => privateIndexRefreshStatus.val
     || privateIndexRefreshPending.value || privateIndexRefreshActive.value);
 const indexPriceChartError = ref('');
 const indexEodhdSyncError = ref('');
-const stockEodhdSyncError = ref('');
 const indexEodhdSyncScheduleMessage = ref('');
 const indexEodhdSyncScheduleError = ref('');
 const indexEodhdSyncScheduleForm = ref(emptyIndexEodhdSyncScheduleForm());
@@ -236,22 +233,18 @@ const expandedHoldingIds = ref([]);
 const priceRefreshScheduleForm = ref(emptyPriceRefreshScheduleForm());
 const indexPriceRefreshScheduleForm = ref(emptyPriceRefreshScheduleForm());
 const intradayBackfillScheduleForm = ref(emptyIntradayBackfillScheduleForm());
-const liveDataUpdateScheduleForm = ref(emptyPriceRefreshScheduleForm());
 const priceRefreshScheduleMessage = ref('');
 const priceRefreshScheduleError = ref('');
 const isPriceRefreshScheduleEditing = ref(false);
 const isIndexPriceRefreshScheduleEditing = ref(false);
 const isIntradayBackfillScheduleEditing = ref(false);
-const isLiveDataUpdateScheduleSaving = ref(false);
 const isIntradayBackfillRunningNow = ref(false);
 const priceRefreshTimer = ref(null);
 const intradayBackfillTimer = ref(null);
 const liveDataStatusNow = ref(Date.now());
-const isLiveDataUpdateDialogOpen = ref(false);
 const indexDataSyncMessage = ref('');
 const indexHistoricalDataSyncMessage = ref('');
 const indexEodhdSyncTimer = ref(null);
-const stockEodhdSyncTimer = ref(null);
 const indexRealtimeOverdueTimer = ref(null);
 const activeItemRefreshTimer = ref(null);
 const isActiveItemRefreshing = ref(false);
@@ -261,12 +254,11 @@ const isDashboardMenuCompact = ref(smAndDown.value);
 const viewportWidth = ref(window.visualViewport?.width ?? window.innerWidth);
 const viewportHeight = ref(window.visualViewport?.height ?? window.innerHeight);
 const cashTransactionForm = ref(emptyCashTransactionForm());
+const editingCashLedgerTransaction = ref(null);
+const cashTransactionError = ref('');
+const cashTransactionSaving = ref(false);
 const stockTransactionForm = ref(emptyStockTransactionForm());
 const cashLedgerPage = ref(1);
-const editingFlatexHoldingId = ref(null);
-const flatexPriceEditValue = ref('');
-const flatexPriceEditInput = ref(null);
-const depotPriceSource = ref('latest');
 
 const isLoginPage = computed(() => window.location.pathname === '/admin/login');
 const canManageUsers = computed(() => user.value?.roles?.includes('super_admin') ?? false);
@@ -304,7 +296,7 @@ const isHandsetLandscape = computed(() => viewportWidth.value <= 960
     && viewportWidth.value > viewportHeight.value);
 const isCompactDepotStocksTable = computed(() => isHandsetLandscape.value);
 const isCompactCashLedgerTable = computed(() => isHandsetLandscape.value);
-const watchListTableColumnCount = computed(() => (isCompactWatchListTable.value ? 5 : 7));
+const watchListTableColumnCount = computed(() => (isCompactWatchListTable.value ? 4 : 5));
 const roleList = computed(() => user.value?.roles?.join(', ') ?? '');
 const visibleHoldingMessage = computed(() => {
     if (priceRefresh.value && isFinishedPriceRefresh(priceRefresh.value)) {
@@ -349,14 +341,6 @@ function dismissDataIntradayRefresh() {
     isDataIntradayRefreshDismissed.value = true;
     localStorage.setItem(DATA_INTRADAY_REFRESH_DISMISSED_KEY, '1');
 }
-const sessionHeaderDates = computed(() => {
-    const datedHolding = holdings.value.find((holding) => holding.start_price_date || holding.end_price_24_date);
-
-    return {
-        start: formatSessionHeaderDateValue(datedHolding?.start_price_date) ?? formatSessionHeaderDate(0),
-        lastDay: formatSessionHeaderDateValue(datedHolding?.end_price_24_date) ?? formatSessionHeaderDate(1),
-    };
-});
 const selectedIndexRecentPrices = computed(() => indexPricesForRange(
     selectedIndexWatchItem.value?.recent_prices ?? [],
     selectedIndexPriceRange.value,
@@ -394,10 +378,17 @@ const selectedIndexPriceDateRange = computed(() => {
 
     return `${formatIndexHistoryDate(earliestDate)} – ${formatIndexHistoryDate(latestDate)}`;
 });
-const selectedStockChartPrices = computed(() => stockChartPrices(
-    selectedStockWatchItem.value,
-    selectedStockPriceRange.value,
+const selectedStockChartResult = computed(() => {
+    const chart = depotsStore.watchlistStockChart;
+
+    return chart?.stockId === selectedStockWatchItem.value?.id
+        && chart?.range === stockChartRequestRange(selectedStockPriceRange.value) ? chart : null;
+});
+const isSelectedStockChartPending = computed(() => isStockPriceChartLoading.value || (
+    selectedStockChartResult.value !== null && !holdingsError.value
+    && ['queued', 'running'].includes(selectedStockWatchItem.value?.intraday_refresh?.status)
 ));
+const selectedStockChartPrices = computed(() => stockChartPrices(selectedStockChartResult.value?.holding, selectedStockPriceRange.value));
 const selectedStockChart = computed(() => buildIndexPriceChart(selectedStockChartPrices.value));
 const selectedStockChartLineClass = computed(() => {
     const firstPrice = selectedStockChart.value.first?.chart_price;
@@ -407,7 +398,8 @@ const selectedStockChartLineClass = computed(() => {
         ? 'stock-price-chart-line--negative'
         : 'stock-price-chart-line--positive';
 });
-const showSelectedStockChartPoints = computed(() => !['6m', '1y'].includes(selectedStockPriceRange.value));
+const roundSelectedStockChart = computed(() => ['intraday', '1w', '1m'].includes(selectedStockPriceRange.value));
+const selectedStockChartPath = computed(() => roundSelectedStockChart.value ? stockChartCurvePath(selectedStockChart.value.points) : '');
 const selectedStockPriceDateRange = computed(() => chartPriceDateRange(selectedStockChartPrices.value));
 const stockPriceChartTargetSelector = computed(() => {
     if (!selectedStockWatchItem.value) {
@@ -434,50 +426,7 @@ const indexWatchItemRefreshSchedules = computed(() => new Map(
         ),
     ]),
 ));
-const stockExchangeRefreshSchedules = computed(() => {
-    const schedulesByExchange = new Map();
-    const referenceDate = new Date(liveDataStatusNow.value);
-
-    for (const holding of holdings.value) {
-        const exchangeKey = String(holding.exchange || holding.mic_code || 'Unknown exchange').trim().toUpperCase();
-
-        if (schedulesByExchange.has(exchangeKey)) {
-            continue;
-        }
-
-        const schedule = buildStockHoldingRefreshSchedule(
-            { ...holding, venue: null },
-            priceRefreshSettings.value,
-            referenceDate,
-        );
-
-        schedulesByExchange.set(exchangeKey, {
-            key: exchangeKey,
-            text: schedule.text,
-        });
-    }
-
-    return [...schedulesByExchange.values()];
-});
 const isIndexEodhdSyncRunning = computed(() => ['queued', 'running'].includes(indexEodhdSync.value?.status));
-const isStockEodhdSyncRunning = computed(() => ['queued', 'running'].includes(stockEodhdSync.value?.status));
-const dismissedStockEodhdSyncRefreshId = ref(localStorage.getItem(STOCK_EODHD_SYNC_DISMISSED_REFRESH_ID_KEY));
-const stockEodhdSyncVisible = computed(() => {
-    if (!stockEodhdSync.value) {
-        return false;
-    }
-
-    if (isStockEodhdSyncRunning.value) {
-        return true;
-    }
-
-    return String(stockEodhdSync.value.refresh_id ?? '') !== dismissedStockEodhdSyncRefreshId.value;
-});
-const stockEodhdSyncProgress = computed(() => stockEodhdSync.value?.progress ?? {
-    completed: 0,
-    total: 0,
-    percent: 0,
-});
 const indexEodhdSyncProgress = computed(() => indexEodhdSync.value?.progress ?? {
     completed: 0,
     total: 0,
@@ -513,8 +462,21 @@ const cashTransactionStockOptions = computed(() => {
         });
     });
 
+    const transaction = editingCashLedgerTransaction.value;
+    if (transaction?.stock_holding_id && !optionById.has(transaction.stock_holding_id)) {
+        optionById.set(transaction.stock_holding_id, {
+            title: [transaction.stock_label, transaction.stock_isin].filter(Boolean).join(' · ') || `Stock ${transaction.stock_holding_id}`,
+            value: transaction.stock_holding_id,
+        });
+    }
+
     return Array.from(optionById.values());
 });
+const isEditingStockTrade = computed(() => ['buy', 'sell'].includes(editingCashLedgerTransaction.value?.type));
+const canEditCashTransactionType = computed(() => !isEditingStockTrade.value && editingCashLedgerTransaction.value?.type !== 'opening_balance');
+const availableCashTransactionTypes = computed(() => editingCashLedgerTransaction.value
+    ? cashTransactionTypeOptions.filter((option) => option.value !== 'opening_balance')
+    : cashTransactionTypeOptions);
 
 function localDateKey(date, timeZone = displayTimeZone) {
     const parts = new Intl.DateTimeFormat('en-CA', {
@@ -635,6 +597,12 @@ const menuItems = computed(() => [
         icon: 'mdi-view-dashboard-outline',
     },
     {
+        key: 'depot',
+        label: 'Depot',
+        subtitle: activeDepot.value?.name ?? '–',
+        icon: 'mdi-briefcase-outline',
+    },
+    {
         key: 'indices',
         label: 'Indices',
         icon: 'mdi-chart-areaspline',
@@ -644,22 +612,11 @@ const menuItems = computed(() => [
         label: 'Stocks',
         icon: 'mdi-finance',
     },
-    {
-        key: 'depot',
-        label: 'Depot',
-        subtitle: activeDepot.value?.name ?? '–',
-        icon: 'mdi-briefcase-outline',
-    },
     ...(canManageDashboardAdmin.value ? [
         {
             key: 'data',
             label: 'Data',
             icon: 'mdi-database-outline',
-        },
-        {
-            key: 'infos',
-            label: 'Infos',
-            icon: 'mdi-information-outline',
         },
     ] : []),
     ...(canManageDashboardAdmin.value ? [
@@ -775,16 +732,6 @@ watch(
 );
 
 watch(
-    uiPreferences,
-    (preferences) => {
-        if (['latest', 'flatex'].includes(preferences?.depot_price_source)) {
-            depotPriceSource.value = preferences.depot_price_source;
-        }
-    },
-    { immediate: true },
-);
-
-watch(
     () => transactions.value.length,
     () => {
         if (cashLedgerPage.value > cashLedgerPageCount.value) {
@@ -808,7 +755,14 @@ watch(
     },
 );
 
-watch(activeSection, () => depotsStore.cancelIntradayRefreshes(), { flush: 'sync' });
+watch(activeSection, (section) => {
+    depotsStore.cancelIntradayRefreshes();
+    if (section !== 'stocks') {
+        stockChartRequestId += 1;
+        isStockPriceChartLoading.value = false;
+        stockPriceChartError.value = '';
+    }
+}, { flush: 'sync' });
 
 watch(activeSection, (section) => {
     window.clearInterval(privateIndexRefreshTimer);
@@ -831,10 +785,6 @@ watch(activeSection, (section) => {
 watch(
     [activeSection, activeInfoSubsection],
     ([section]) => {
-        if (section === 'stocks') {
-            restoreStockEodhdSync().catch(() => {});
-        }
-
         if (section === 'dashboard' && dashboardVersions.value === null) {
             loadDashboardVersions().catch(() => {});
         }
@@ -906,9 +856,6 @@ onMounted(async () => {
         activeSection.value === 'indices'
             ? depotsStore.loadIndexEodhdSyncSettings().catch(() => {})
             : Promise.resolve(),
-        activeSection.value === 'stocks'
-            ? restoreStockEodhdSync().catch(() => {})
-            : Promise.resolve(),
     ]);
 
     syncActiveItemRefresh();
@@ -936,7 +883,6 @@ onBeforeUnmount(() => {
     stopPriceRefreshPolling();
     stopIntradayBackfillPolling();
     stopIndexEodhdSyncPolling();
-    stopStockEodhdSyncPolling();
     stopIndexRealtimeOverdueMonitoring();
     stopActiveItemRefresh();
     stopHoldingDialogKeyboardShortcuts();
@@ -1015,7 +961,7 @@ function stopActiveItemRefresh() {
 }
 
 async function refreshActiveItemPage() {
-    if (!shouldRefreshActiveItem() || isActiveItemRefreshing.value) {
+    if (!shouldRefreshActiveItem() || isActiveItemRefreshing.value || isCashTransactionDialogOpen.value || cashTransactionSaving.value) {
         return;
     }
 
@@ -1178,7 +1124,11 @@ function navigateSection(section) {
     }
 
     if (section === 'stocks') {
-        loadWatchlistHoldingsForActiveSection(1).catch(() => {});
+        if (selectedStockWatchItem.value) {
+            loadSelectedStockPrices();
+        } else {
+            loadWatchlistHoldingsForActiveSection(1).catch(() => {});
+        }
     }
 
 }
@@ -1395,6 +1345,7 @@ function loadWatchlistHoldingsForActiveSection(page = holdingsPagination.value.c
         ...options,
         allHoldings: true,
         includeCharts: selectedStock !== null,
+        captureStockChart: selectedStock !== null,
         chartStockId: selectedStock?.id ?? null,
         chartRange: selectedStock ? stockChartRequestRange(selectedStockPriceRange.value) : null,
     });
@@ -2007,82 +1958,6 @@ async function loadSelectedIndexPrices() {
     }
 }
 
-async function restoreStockEodhdSync() {
-    stockEodhdSyncError.value = '';
-
-    try {
-        const data = await depotsStore.loadLatestStockEodhdSync();
-
-        if (data.refresh?.refresh_id && ['queued', 'running'].includes(data.refresh.status)) {
-            startStockEodhdSyncPolling(data.refresh.refresh_id);
-        } else {
-            stopStockEodhdSyncPolling();
-        }
-    } catch (error) {
-        stockEodhdSyncError.value = error.message;
-        throw error;
-    }
-}
-
-async function startStockEodhdSync() {
-    if (!EODHD_REQUESTS_ENABLED) {
-        return;
-    }
-
-    stockEodhdSyncError.value = '';
-
-    try {
-        const data = await depotsStore.startStockEodhdSync();
-
-        if (data.refresh?.refresh_id && ['queued', 'running'].includes(data.refresh.status)) {
-            startStockEodhdSyncPolling(data.refresh.refresh_id);
-        }
-    } catch (error) {
-        stockEodhdSyncError.value = error.message;
-    }
-}
-
-function startStockEodhdSyncPolling(refreshId) {
-    stopStockEodhdSyncPolling();
-    stockEodhdSyncTimer.value = window.setInterval(() => pollStockEodhdSync(refreshId), 2000);
-}
-
-function stopStockEodhdSyncPolling() {
-    if (!stockEodhdSyncTimer.value) {
-        return;
-    }
-
-    window.clearInterval(stockEodhdSyncTimer.value);
-    stockEodhdSyncTimer.value = null;
-}
-
-async function pollStockEodhdSync(refreshId) {
-    try {
-        const data = await depotsStore.loadStockEodhdSync(refreshId);
-
-        if (!['queued', 'running'].includes(data.refresh?.status)) {
-            stopStockEodhdSyncPolling();
-            await refreshVisibleApplicationData();
-        }
-    } catch (error) {
-        stockEodhdSyncError.value = error.message;
-        stopStockEodhdSyncPolling();
-    }
-}
-
-function closeStockEodhdSyncResult() {
-    const refreshId = String(stockEodhdSync.value?.refresh_id ?? '');
-
-    if (refreshId !== '') {
-        dismissedStockEodhdSyncRefreshId.value = refreshId;
-        localStorage.setItem(STOCK_EODHD_SYNC_DISMISSED_REFRESH_ID_KEY, refreshId);
-    }
-
-    stopStockEodhdSyncPolling();
-    stockEodhdSyncError.value = '';
-    depotsStore.clearStockEodhdSync();
-}
-
 async function startIndexEodhdSync() {
     if (!EODHD_REQUESTS_ENABLED) {
         return;
@@ -2456,43 +2331,87 @@ function openCashTransactionDialog(type) {
         note: '',
         stock_holding_id: null,
     };
+    editingCashLedgerTransaction.value = null;
+    cashTransactionError.value = '';
     holdingError.value = '';
     holdingMessage.value = '';
     isCashTransactionDialogOpen.value = true;
 }
 
+function openCashLedgerEdit(transaction) {
+    editingCashLedgerTransaction.value = transaction;
+    cashTransactionForm.value = {
+        type: transaction.type,
+        stock_holding_id: transaction.stock_holding_id,
+        total_amount: transaction.total_amount,
+        pieces: transaction.pieces,
+        booked_at: transactionDateInputValue(transaction.booked_at),
+        note: transaction.note ?? '',
+    };
+    cashTransactionError.value = '';
+    isCashTransactionDialogOpen.value = true;
+    if (!isEditingStockTrade.value) {
+        depotsStore.loadWatchlistHoldings(1, { allHoldings: true, silent: true }).catch(() => {});
+    }
+}
+
 function abortCashTransactionDialog() {
     isCashTransactionDialogOpen.value = false;
+    editingCashLedgerTransaction.value = null;
     cashTransactionForm.value = emptyCashTransactionForm();
 }
 
-async function bookCashTransaction() {
+async function saveCashTransaction() {
+    if (cashTransactionSaving.value) {
+        return;
+    }
+
+    cashTransactionSaving.value = true;
+    cashTransactionError.value = '';
     holdingError.value = '';
     holdingMessage.value = '';
 
     try {
-        const data = await depotsStore.bookCashTransaction({
-            type: cashTransactionForm.value.type,
-            stock_holding_id: cashTransactionForm.value.stock_holding_id,
-            total_amount: Number(cashTransactionForm.value.total_amount),
-            booked_at: cashTransactionForm.value.booked_at || null,
-            note: cashTransactionForm.value.note || null,
-        });
+        const transaction = editingCashLedgerTransaction.value;
+        const form = cashTransactionForm.value;
+        const payload = {
+            type: form.type,
+            ...(!isEditingStockTrade.value ? { stock_holding_id: form.stock_holding_id } : {}),
+            total_amount: transaction ? form.total_amount : Number(form.total_amount),
+            booked_at: form.booked_at || null,
+            note: form.note || null,
+        };
+        if (isEditingStockTrade.value && transaction.stock_holding_id) {
+            payload.pieces = form.pieces;
+        }
 
+        const original = transaction && { ...transaction, booked_at: transactionDateInputValue(transaction.booked_at) };
+        const data = original
+            ? await depotsStore.updateCashLedgerTransaction(original.id, Object.fromEntries(
+                Object.entries(payload).filter(([key, value]) => value !== original[key]),
+            ))
+            : await depotsStore.bookCashTransaction(payload);
         holdingMessage.value = data.message;
         abortCashTransactionDialog();
-        await depotsStore.loadActiveDepot();
-    } catch (err) {
-        holdingError.value = err.message;
+        if (!transaction) {
+            await depotsStore.loadActiveDepot();
+        }
+    } catch (error) {
+        cashTransactionError.value = error.message;
+    } finally {
+        cashTransactionSaving.value = false;
     }
 }
 
 function openStockTransactionDialog(holding, type) {
+    const prefillPosition = activeSection.value === 'stocks' && type === 'sell'
+        && activeDepot.value && hasPositionPieces(holding);
+
     transactionHolding.value = holding;
     stockTransactionForm.value = {
         type,
         stock_holding_id: holding.id,
-        pieces: '',
+        pieces: prefillPosition ? holding.position_pieces : '',
         total_amount: '',
         booked_at: localDateInputValue(),
         note: '',
@@ -2564,49 +2483,6 @@ async function savePriceRefreshSchedule() {
         }
     } catch (err) {
         priceRefreshScheduleError.value = err.message;
-    }
-}
-
-function openLiveDataUpdateDialog() {
-    liveDataUpdateScheduleForm.value = priceRefreshScheduleFormFromSettings(priceRefreshSettings.value);
-    priceRefreshScheduleError.value = '';
-    priceRefreshScheduleMessage.value = '';
-    isLiveDataUpdateDialogOpen.value = true;
-}
-
-async function saveLiveDataUpdateSchedule() {
-    priceRefreshScheduleError.value = '';
-    priceRefreshScheduleMessage.value = '';
-    isLiveDataUpdateScheduleSaving.value = true;
-
-    try {
-        const data = await depotsStore.updatePriceRefreshSettings({
-            trading_interval_minutes: Number(liveDataUpdateScheduleForm.value.trading_interval_minutes),
-            trading_starts_before_minutes: Number(liveDataUpdateScheduleForm.value.trading_starts_before_minutes),
-            trading_ends_after_minutes: Number(liveDataUpdateScheduleForm.value.trading_ends_after_minutes),
-            trading_start_time: liveDataUpdateScheduleForm.value.trading_start_time || null,
-            trading_end_time: liveDataUpdateScheduleForm.value.trading_end_time || null,
-            closed_refresh_enabled: Boolean(liveDataUpdateScheduleForm.value.closed_refresh_enabled),
-            closed_interval_minutes: Number(liveDataUpdateScheduleForm.value.closed_interval_minutes),
-        });
-
-        priceRefreshScheduleMessage.value = data.message;
-        isLiveDataUpdateDialogOpen.value = false;
-        priceRefreshScheduleForm.value = priceRefreshScheduleFormFromSettings(
-            data.price_refresh_settings ?? priceRefreshSettings.value,
-        );
-        liveDataUpdateScheduleForm.value = priceRefreshScheduleFormFromSettings(
-            data.price_refresh_settings ?? priceRefreshSettings.value,
-        );
-
-        if (data.refresh) {
-            holdingMessage.value = data.refresh.message;
-            startPriceRefreshPolling(data.refresh.refresh_id);
-        }
-    } catch (err) {
-        priceRefreshScheduleError.value = err.message;
-    } finally {
-        isLiveDataUpdateScheduleSaving.value = false;
     }
 }
 
@@ -2794,6 +2670,7 @@ function openDeleteHoldingDialog(holding) {
 
 async function toggleStockWatchItemSelection(holding) {
     if (selectedStockWatchItem.value?.id === holding.id) {
+        stockChartRequestId += 1;
         selectedStockWatchItem.value = null;
         selectedStockPriceRange.value = 'intraday';
         stockPriceChartError.value = '';
@@ -2817,19 +2694,18 @@ async function loadSelectedStockPrices() {
         return;
     }
 
-    const stockId = selectedStockWatchItem.value.id;
-    const priceRange = selectedStockPriceRange.value;
+    const requestId = ++stockChartRequestId;
     stockPriceChartError.value = '';
     isStockPriceChartLoading.value = true;
 
     try {
         await loadWatchlistHoldingsForActiveSection(1, { silent: true });
     } catch (error) {
-        if (selectedStockWatchItem.value?.id === stockId && selectedStockPriceRange.value === priceRange) {
+        if (requestId === stockChartRequestId && selectedStockWatchItem.value) {
             stockPriceChartError.value = error.message;
         }
     } finally {
-        if (selectedStockWatchItem.value?.id === stockId && selectedStockPriceRange.value === priceRange) {
+        if (requestId === stockChartRequestId) {
             isStockPriceChartLoading.value = false;
         }
     }
@@ -2934,41 +2810,6 @@ function transactionDateInputValue(isoString) {
     }
 
     return localDateInputValue(date);
-}
-
-function transactionDateInputId(transactionId, scope) {
-    return `transaction-date-${scope}-${transactionId}`;
-}
-
-function openTransactionDatePicker(transactionId, scope) {
-    const dateInput = document.getElementById(transactionDateInputId(transactionId, scope));
-
-    if (!dateInput) {
-        return;
-    }
-
-    if (typeof dateInput.showPicker === 'function') {
-        dateInput.showPicker();
-
-        return;
-    }
-
-    dateInput.focus();
-    dateInput.click();
-}
-
-async function updateTransactionDate(transaction, bookedAt) {
-    if (!bookedAt || bookedAt === transactionDateInputValue(transaction.booked_at)) {
-        return;
-    }
-
-    transactionsError.value = '';
-
-    try {
-        await depotsStore.updateTransactionDate(transaction.id, bookedAt);
-    } catch (error) {
-        transactionsError.value = error.message;
-    }
 }
 
 function transactionTypeColor(type) {
@@ -3118,55 +2959,23 @@ function formatEodhdUsageReset(value) {
     return formatScheduleDateTime(value);
 }
 
-function isDepotPriceSource(source) {
-    return depotPriceSource.value === source;
-}
-
-async function selectDepotPriceSource(source) {
-    if (!['latest', 'flatex'].includes(source)) {
-        return;
-    }
-
-    const previousSource = depotPriceSource.value;
-    depotPriceSource.value = source;
-
-    try {
-        await depotsStore.updateUiPreferences({
-            depot_price_source: source,
-        });
-    } catch (error) {
-        depotPriceSource.value = previousSource;
-        transactionsError.value = error.message;
-    }
-}
-
-function depotPriceSourceButtonClass(source) {
-    return {
-        'depot-price-source-button--active': isDepotPriceSource(source),
-    };
-}
-
 function depotHoldingValueMarkers(holding) {
-    return depotPriceSource.value === 'latest' && hasPositionPieces(holding) && stockHoldingValue(holding) !== null
-        ? marketDataMarkers(holding, 'latest_price') : [];
+    return hasPositionPieces(holding) && stockHoldingValue(holding) !== null
+        ? marketDataMarkersWithoutFree(holding, 'latest_price') : [];
 }
 
 function depotHoldingsValueMarkers() {
-    return mergeMarketDataMarkers(...depotHoldings.value.map((holding) => depotHoldingValueMarkers(holding)));
+    return mergeMarketDataMarkers(...depotHoldings.value.map(depotYearStartChangeMarkers));
 }
 
-function depotValuationMarkers(field) {
-    return marketDataMarkers(selectedDepotValuation(), field);
-}
-
-function selectedDepotHoldingPrice(holding) {
-    return depotPriceSource.value === 'flatex'
-        ? holding.flatex_price
-        : holding.latest_price;
+function depotYearStartChangeMarkers(holding) {
+    return yearStartChangeAmount(holding) === null
+        ? []
+        : mergeMarketDataMarkers(depotHoldingValueMarkers(holding), marketDataMarkersWithoutFree(holding, 'year_start_price'));
 }
 
 function selectedDepotValuation() {
-    return depotValuations.value?.[depotPriceSource.value] ?? null;
+    return depotValuations.value?.latest ?? null;
 }
 
 function marketDataNumber(value) {
@@ -3177,57 +2986,25 @@ function depotValuationNumber(key) {
     return marketDataNumber(selectedDepotValuation()?.[key]);
 }
 
-function formatDepotStockBalance() {
-    return `${formatAccountBalance(depotValuationNumber('stock_balance'))} EUR`;
-}
-
 function formatDepotCashBalance() {
     return `${formatAccountBalance(depotValuationNumber('cash_balance'))} EUR`;
 }
 
-function formatDepotAccountBalance() {
-    return `${formatAccountBalance(depotValuationNumber('account_balance'))} EUR`;
+function formatDepotOverviewAmount(field) {
+    const amount = depotOverviewAmount(field);
+    const sign = field === 'change_amount' && amount > 0 ? '+' : '';
+
+    return Number.isFinite(amount) ? `${sign}${formatAccountBalance(amount)} EUR` : '-';
 }
 
-function formatDepotPreviousDayBalance() {
-    return `${formatAccountBalance(depotValuationNumber('previous_day_balance'))} EUR`;
+function depotOverviewAmount(field) {
+    return marketDataNumber(selectedDepotValuation()?.account_overview?.[field]);
 }
 
-function hasDepotPreviousDayExternalCashFlow() {
-    const amount = depotValuationNumber('previous_day_external_cash_flow_amount');
+function depotOverviewDate(field) {
+    const date = selectedDepotValuation()?.account_overview?.[field];
 
-    return Number.isFinite(amount) && amount !== 0;
-}
-
-function formatDepotPreviousDayExternalCashFlowAmount() {
-    const amount = depotValuationNumber('previous_day_external_cash_flow_amount');
-    const sign = amount > 0 ? '+' : '';
-
-    return `${sign}${formatAccountBalance(amount)} EUR`;
-}
-
-function formatDepotPreviousDayChangeAmount() {
-    const amount = depotValuationNumber('previous_day_change_amount');
-    const sign = amount > 0 ? '+' : '';
-
-    return `${sign}${formatAccountBalance(amount)} EUR`;
-}
-
-function formatDepotPreviousDayChangePercent() {
-    const amount = depotValuationNumber('previous_day_change_percent');
-    const sign = amount > 0 ? '+' : '';
-
-    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
-}
-
-function depotPreviousDayChangeClass() {
-    const amount = depotValuationNumber('previous_day_change_amount');
-
-    return {
-        'text-success': amount > 0,
-        'text-error': amount < 0,
-        'text-medium-emphasis': amount === 0,
-    };
+    return date ? formatDepotPerformanceDate(date) : undefined;
 }
 
 function formatDepotYearStockPrice(stock, key) {
@@ -3302,26 +3079,77 @@ function depotYearStockChangeClass(stock) {
     };
 }
 
-function formatDepotYearStartBalance() {
-    return `${formatAccountBalance(depotValuationNumber('year_start_balance'))} EUR`;
+function formatDepotYearCapital() {
+    const amount = depotValuationNumber('year_net_capital');
+
+    return Number.isFinite(amount) ? `${formatAccountBalance(amount)} EUR` : '-';
 }
 
 function formatDepotCurrentBalance() {
     return `${formatAccountBalance(depotValuationNumber('current_balance'))} EUR`;
 }
 
-function formatDepotOneWeekStartBalance() {
-    return `${formatAccountBalance(depotValuationNumber('one_week_start_balance'))} EUR`;
+function formatDepotPeriodBalance(value) {
+    const amount = marketDataNumber(value);
+
+    return Number.isFinite(amount) ? `${formatAccountBalance(amount)} EUR` : '-';
 }
 
-function formatDepotMonthStartBalance() {
-    return `${formatAccountBalance(depotValuationNumber('month_start_balance'))} EUR`;
+function depotPeriodRows() {
+    const valuation = selectedDepotValuation();
+    const completed = valuation?.completed_periods;
+    const currentLabel = `Balance ${formatCurrentDayMonth()}`;
+    const currentBalance = valuation?.current_balance;
+
+    return [
+        {
+            title: 'Aktuelle Woche',
+            openingLabel: `Balance ${formatOneWeekAgoDayMonth()}`,
+            openingBalance: valuation?.one_week_start_balance,
+            closingLabel: currentLabel,
+            closingBalance: currentBalance,
+            changeLabel: '1 week',
+            change: valuation?.one_week_change_amount,
+            percent: valuation?.one_week_change_percent,
+        },
+        completedDepotPeriodRow('Vorwoche', completed?.week, 'opening_date'),
+        {
+            title: 'Aktueller Monat',
+            openingLabel: `Balance ${formatCurrentMonthStartDayMonth()}`,
+            openingTitle: `Stand am Vormonatsende ${formatPreviousMonthEndDayMonth()}`,
+            openingBalance: valuation?.month_start_balance,
+            closingLabel: currentLabel,
+            closingBalance: currentBalance,
+            changeLabel: 'Month',
+            change: valuation?.month_change_amount,
+            percent: valuation?.month_change_percent,
+        },
+        completedDepotPeriodRow('Vormonat', completed?.month, 'start_date'),
+    ];
+}
+
+function completedDepotPeriodRow(title, period, openingLabelDate) {
+    const openingLabel = period?.[openingLabelDate];
+    const closingDate = period?.closing_date;
+
+    return {
+        title,
+        openingLabel: openingLabel ? `Balance ${formatDepotPerformanceDate(openingLabel).slice(0, 6)}` : 'Anfangsstand',
+        openingTitle: period?.opening_date ? formatDepotPerformanceDate(period.opening_date) : undefined,
+        openingBalance: period?.opening_balance,
+        closingLabel: closingDate ? `Balance ${formatDepotPerformanceDate(closingDate).slice(0, 6)}` : 'Schlussstand',
+        closingTitle: closingDate ? formatDepotPerformanceDate(closingDate) : undefined,
+        closingBalance: period?.closing_balance,
+        changeLabel: 'Performance +/-',
+        change: period?.change_amount,
+        percent: period?.change_percent,
+    };
 }
 
 function depotBalanceChangeTaxAmount() {
     const amount = depotValuationNumber('taxable_stock_gain_amount');
 
-    return amount > 0 ? roundCurrencyAmount(amount * kestTaxRate) : 0;
+    return Number.isFinite(amount) ? roundCurrencyAmount(Math.max(0, amount) * kestTaxRate) : Number.NaN;
 }
 
 function depotAfterTaxBalanceChangeAmount() {
@@ -3332,67 +3160,29 @@ function roundCurrencyAmount(value) {
     return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
-function formatDepotBalanceChangeAmount() {
-    const amount = depotValuationNumber('balance_change_amount');
-    const sign = amount > 0 ? '+' : '';
+function formatDepotPeriodChange(value, rate) {
+    const amount = marketDataNumber(value);
 
-    return `${sign}${formatAccountBalance(amount)} EUR`;
+    if (!Number.isFinite(amount)) {
+        return '-';
+    }
+
+    const percent = marketDataNumber(rate);
+
+    return `${formatPriceChangePercent(Number.isFinite(percent) ? percent : null)} · ${formatDepotEurChange(amount)} EUR`;
 }
 
 function formatDepotCorrectedBalance() {
-    return `${formatAccountBalance(depotValuationNumber('current_balance') - depotBalanceChangeTaxAmount())} EUR`;
+    const amount = depotValuationNumber('current_balance') - depotBalanceChangeTaxAmount();
+
+    return Number.isFinite(amount) ? `${formatAccountBalance(amount)} EUR` : '-';
 }
 
-function formatDepotCorrectedBalanceChangeAmount() {
+function formatDepotCorrectedBalanceChange() {
     const amount = depotAfterTaxBalanceChangeAmount();
-    const sign = amount > 0 ? '+' : '';
+    const netCapital = depotValuationNumber('year_net_capital');
 
-    return `${sign}${formatAccountBalance(amount)} EUR`;
-}
-
-function formatDepotOneWeekChangeAmount() {
-    const amount = depotValuationNumber('one_week_change_amount');
-    const sign = amount > 0 ? '+' : '';
-
-    return `${sign}${formatAccountBalance(amount)} EUR`;
-}
-
-function formatDepotMonthChangeAmount() {
-    const amount = depotValuationNumber('month_change_amount');
-    const sign = amount > 0 ? '+' : '';
-
-    return `${sign}${formatAccountBalance(amount)} EUR`;
-}
-
-function formatDepotBalanceChangePercent() {
-    const amount = depotValuationNumber('balance_change_percent');
-    const sign = amount > 0 ? '+' : '';
-
-    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
-}
-
-function formatDepotCorrectedBalanceChangePercent() {
-    const netCapital = marketDataNumber(selectedDepotValuation()?.year_net_capital ?? selectedDepotValuation()?.year_start_balance);
-    const amount = netCapital <= 0
-        ? Number.NaN
-        : (depotAfterTaxBalanceChangeAmount() / netCapital) * 100;
-    const sign = amount > 0 ? '+' : '';
-
-    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
-}
-
-function formatDepotOneWeekChangePercent() {
-    const amount = depotValuationNumber('one_week_change_percent');
-    const sign = amount > 0 ? '+' : '';
-
-    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
-}
-
-function formatDepotMonthChangePercent() {
-    const amount = depotValuationNumber('month_change_percent');
-    const sign = amount > 0 ? '+' : '';
-
-    return Number.isFinite(amount) ? `${sign}${amount.toFixed(2)}%` : '-';
+    return formatDepotPeriodChange(amount, netCapital > 0 ? amount / netCapital * 100 : null);
 }
 
 function formatDepotPerformanceBalance(value) {
@@ -3413,6 +3203,10 @@ function formatDepotPerformanceEndpoint(point) {
 
 function formatDepotAccountEndpoint(point) {
     return formatDepotPerformanceBalance(point?.account_balance);
+}
+
+function depotPerformancePointTitle(point, details = [point.as_of || point.date || point.trading_date]) {
+    return [...marketDataMarkersWithoutFree(point), ...details].filter(Boolean).join(' · ');
 }
 
 function depotPerformanceChangeClass() {
@@ -3480,43 +3274,13 @@ function depotPerformanceResult() {
     };
 }
 
-function depotBalanceChangeClass() {
-    const amount = depotValuationNumber('balance_change_amount');
+function depotBalanceChangeClass(value) {
+    const amount = marketDataNumber(value);
 
     return {
         'text-success': amount > 0,
         'text-error': amount < 0,
-        'text-medium-emphasis': amount === 0,
-    };
-}
-
-function depotCorrectedBalanceChangeClass() {
-    const amount = depotAfterTaxBalanceChangeAmount();
-
-    return {
-        'text-success': amount > 0,
-        'text-error': amount < 0,
-        'text-medium-emphasis': amount === 0,
-    };
-}
-
-function depotOneWeekChangeClass() {
-    const amount = depotValuationNumber('one_week_change_amount');
-
-    return {
-        'text-success': amount > 0,
-        'text-error': amount < 0,
-        'text-medium-emphasis': amount === 0,
-    };
-}
-
-function depotMonthChangeClass() {
-    const amount = depotValuationNumber('month_change_amount');
-
-    return {
-        'text-success': amount > 0,
-        'text-error': amount < 0,
-        'text-medium-emphasis': amount === 0,
+        'text-medium-emphasis': !Number.isFinite(amount) || amount === 0,
     };
 }
 
@@ -3537,6 +3301,13 @@ function formatOneWeekAgoDayMonth() {
 function formatPreviousMonthEndDayMonth() {
     const date = currentDisplayDate();
     date.setUTCDate(0);
+
+    return formatDayMonth(date);
+}
+
+function formatCurrentMonthStartDayMonth() {
+    const date = currentDisplayDate();
+    date.setUTCDate(1);
 
     return formatDayMonth(date);
 }
@@ -3592,37 +3363,6 @@ function hasPositionPieces(holding) {
     return !Number.isNaN(pieces) && pieces > 0;
 }
 
-function isEditingFlatexPrice(holding) {
-    return editingFlatexHoldingId.value === holding.id;
-}
-
-function activeFlatexPriceEditInput() {
-    if (Array.isArray(flatexPriceEditInput.value)) {
-        return flatexPriceEditInput.value[0] ?? null;
-    }
-
-    return flatexPriceEditInput.value;
-}
-
-async function startFlatexPriceEdit(holding) {
-    editingFlatexHoldingId.value = holding.id;
-    flatexPriceEditValue.value = holding.flatex_price ?? '';
-    transactionsError.value = '';
-
-    await nextTick();
-
-    const input = activeFlatexPriceEditInput();
-
-    input?.focus();
-    input?.select();
-}
-
-function abortFlatexPriceEdit() {
-    editingFlatexHoldingId.value = null;
-    flatexPriceEditValue.value = '';
-    flatexPriceEditInput.value = null;
-}
-
 function stockDisplayName(stock, fallback = '-') {
     return stock?.name || stock?.symbol || fallback;
 }
@@ -3634,28 +3374,6 @@ function stockDisplayLabel(stock, fallback = '-') {
     return subtitle ? `${name} · ${subtitle}` : name;
 }
 
-async function saveFlatexPriceEdit(holding) {
-    if (!isEditingFlatexPrice(holding)) {
-        return;
-    }
-
-    const rawValue = String(flatexPriceEditValue.value).trim();
-    const flatexPrice = rawValue === '' ? null : Number(rawValue);
-
-    if (flatexPrice !== null && (Number.isNaN(flatexPrice) || flatexPrice < 0)) {
-        transactionsError.value = 'Please enter a valid Flatex price.';
-
-        return;
-    }
-
-    try {
-        await depotsStore.updateHoldingFlatexPrice(holding.id, flatexPrice);
-        abortFlatexPriceEdit();
-    } catch (error) {
-        transactionsError.value = error.message;
-    }
-}
-
 function formatLatestPrice(holding) {
     if (holding.latest_price === null || holding.latest_price === undefined || holding.latest_price === '') {
         return '-';
@@ -3664,12 +3382,10 @@ function formatLatestPrice(holding) {
     return formatPriceValue(holding.latest_price, holding.currency);
 }
 
-function formatPreviousDayPrice(holding) {
-    if (holding.previous_day_price === null || holding.previous_day_price === undefined || holding.previous_day_price === '') {
-        return '-';
-    }
+function formatDepotDayReferencePrice(holding) {
+    const price = holding.day_reference_type === 'buy' ? holding.day_buy_price : holding.previous_day_price;
 
-    return formatPriceValue(holding.previous_day_price, holding.currency);
+    return formatPriceValue(price, holding.currency, { showCurrency: true });
 }
 
 function previousDayChangePercent(holding) {
@@ -3694,32 +3410,22 @@ function previousDayChangePercentClass(holding) {
     return priceChangePercentClass(previousDayChangePercent(holding));
 }
 
-function mobileHoldingPriceSource(holding) {
-    if (holding.latest_price !== null && holding.latest_price !== undefined && holding.latest_price !== '') {
-        return 'latest';
+function formatDepotEurChange(amount) {
+    if (!Number.isFinite(amount)) {
+        return '-';
     }
 
-    return null;
+    const sign = amount > 0 ? '+' : '';
+
+    return `${sign}${formatAccountBalance(amount)}`;
 }
 
 function formatMobileHoldingPrice(holding) {
     return formatLatestPrice(holding);
 }
 
-function formatMobileHoldingPriceLoadedAt(holding) {
-    if (holding.latest_price === null || holding.latest_price === undefined || holding.latest_price === '') {
-        return '';
-    }
-
-    const loadedAt = holding.latest_price_as_of || holding.latest_price_fetched_at;
-
-    if (!loadedAt) {
-        return '';
-    }
-
-    const formattedLoadedAt = formatCompactSourceDateTime(loadedAt);
-
-    return formattedLoadedAt === '-' ? '' : formattedLoadedAt;
+function marketDataMarkersWithoutFree(record, field = null) {
+    return marketDataMarkers(record, field).filter((marker) => marker !== 'free');
 }
 
 function mobileHoldingPriceClass(holding) {
@@ -3727,41 +3433,22 @@ function mobileHoldingPriceClass(holding) {
 }
 
 function mobileHoldingPriceChangePercent(holding) {
-    if (mobileHoldingPriceSource(holding) === 'latest' && formatLatestPriceChangePercent(holding)) {
-        return formatLatestPriceChangePercent(holding);
-    }
-
-    return '';
-}
-
-function mobileHoldingPriceReference(holding) {
-    if (holding.end_price_24 === null || holding.end_price_24 === undefined || holding.end_price_24 === '') {
+    if (!hasPriceValue(holding.latest_price) || formatSessionPrice(holding.end_price_24, holding) === '-') {
         return '';
     }
 
-    return formatSessionPrice(holding.end_price_24, holding);
-}
-
-function mobileHoldingPriceChangeText(holding) {
-    const changePercent = mobileHoldingPriceChangePercent(holding);
-    const referencePrice = mobileHoldingPriceReference(holding);
-
-    if (!changePercent || !referencePrice || referencePrice === '-') {
-        return '';
-    }
-
-    return `${changePercent} · ${referencePrice}`;
+    return formatLatestPriceChangePercent(holding);
 }
 
 function stockHoldingValue(holding) {
-    const selectedPrice = Number(selectedDepotHoldingPrice(holding));
-    const pieces = Number(holding.position_pieces ?? 0);
+    const latestPrice = marketDataNumber(holding.latest_price);
+    const pieces = marketDataNumber(holding.position_pieces);
 
-    if (Number.isNaN(selectedPrice) || Number.isNaN(pieces)) {
+    if (!Number.isFinite(latestPrice) || !Number.isFinite(pieces)) {
         return null;
     }
 
-    return selectedPrice * pieces;
+    return latestPrice * pieces;
 }
 
 function formatStockHoldingValue(holding) {
@@ -3771,7 +3458,7 @@ function formatStockHoldingValue(holding) {
         return '-';
     }
 
-    return formatPriceValue(value, holding.currency);
+    return formatPriceValue(value, holding.currency, { showCurrency: true });
 }
 
 function formatLatestPriceChangePercent(holding) {
@@ -3900,10 +3587,10 @@ function stockChartPrices(holding, range) {
                 actual_price: price.price,
                 actual_price_as_of: asOf,
                 chart_as_of: asOf,
-                chart_label: range === 'intraday' ? formatIndexIntradayTime(asOf) : null,
+                chart_label: range === 'intraday' ? formatViennaTime(asOf) : null,
             };
         })
-        .filter((price) => price.trading_date && !Number.isNaN(indexHistoryChartPrice(price)))
+        .filter((price) => price.trading_date && Number.isFinite(indexHistoryChartPrice(price)))
         .sort((firstPrice, secondPrice) => String(secondPrice.chart_as_of ?? secondPrice.trading_date)
             .localeCompare(String(firstPrice.chart_as_of ?? firstPrice.trading_date)));
 
@@ -3970,10 +3657,10 @@ function stockChartWindow(holding, range) {
     const intradayCandles = Array.isArray(holding.intraday_candles) ? holding.intraday_candles : [];
     const realtimePrices = Array.isArray(holding.recent_prices) ? holding.recent_prices : [];
     const sources = range === 'intraday'
-        ? [realtimePrices, intradayPrices, intradayCandles, dailyPrices]
+        ? [realtimePrices, intradayPrices, intradayCandles]
         : (range === '1w'
-            ? [intradayPrices, intradayCandles, dailyPrices, realtimePrices]
-            : [dailyPrices, intradayPrices, intradayCandles, realtimePrices]);
+            ? [intradayPrices, intradayCandles, dailyPrices]
+            : [dailyPrices]);
     const windows = sources.map((prices) => analyzeChartWindow(prices, stockChartRequestRange(range)));
 
     return windows.find((window) => window.prices.length >= 2)
@@ -3999,6 +3686,29 @@ function chartPriceDateRange(prices) {
         : `${formatIndexHistoryDate(earliestDate)} – ${formatIndexHistoryDate(latestDate)}`;
 }
 
+function stockChartCurvePath(points) {
+    if (points.length === 0) {
+        return '';
+    }
+
+    const commands = [`M ${points[0].x} ${points[0].y}`];
+    for (let index = 0; index < points.length - 1; index += 1) {
+        const start = points[index];
+        const end = points[index + 1];
+        const previous = points[index - 1] ?? start;
+        const following = points[index + 2] ?? end;
+        const handleWidth = (end.x - start.x) / 4;
+        const minimumY = Math.min(start.y, end.y);
+        const maximumY = Math.max(start.y, end.y);
+        const startHandleY = Math.min(maximumY, Math.max(minimumY, start.y + (end.y - previous.y) / 8));
+        const endHandleY = Math.min(maximumY, Math.max(minimumY, end.y - (following.y - start.y) / 8));
+
+        commands.push(`C ${start.x + handleWidth} ${startHandleY} ${end.x - handleWidth} ${endHandleY} ${end.x} ${end.y}`);
+    }
+
+    return commands.join(' ');
+}
+
 function indexIntradayChartPrices(prices, indexItem) {
     const latestPrice = prices[0];
 
@@ -4012,10 +3722,10 @@ function indexIntradayChartPrices(prices, indexItem) {
             ...realtimePrice,
             actual_price: realtimePrice.price,
             actual_price_as_of: realtimePrice.as_of,
-            chart_label: formatIndexIntradayTime(realtimePrice.as_of) ?? 'Latest',
+            chart_label: formatViennaTime(realtimePrice.as_of) ?? 'Latest',
         }))
         .filter((price) => indexHistoryActualPrice(price) !== null && indexHistoryActualPrice(price) !== undefined);
-    const latestTime = formatIndexIntradayTime(latestPrice.actual_price_as_of ?? latestPrice.last_price_as_of);
+    const latestTime = formatViennaTime(latestPrice.actual_price_as_of ?? latestPrice.last_price_as_of);
     const previousClose = indexItem?.last_price ?? latestPrice.last_price ?? latestPrice.start_price;
     const latestFallback = realtimePrices.length === 0
         ? [{
@@ -4036,7 +3746,7 @@ function indexIntradayChartPrices(prices, indexItem) {
     ].filter((price) => indexHistoryActualPrice(price) !== null && indexHistoryActualPrice(price) !== undefined);
 }
 
-function formatIndexIntradayTime(value) {
+function formatViennaTime(value) {
     const date = dateFromUtcValue(value);
 
     if (!date) {
@@ -4669,63 +4379,49 @@ function indexChangeClass(indexItem) {
 
 function yearStartChangePercent(holding) {
     if (
-        holding.year_start_price === null
+        holding.currency !== 'EUR'
+        || holding.year_start_price === null
         || holding.year_start_price === undefined
         || holding.year_start_price === ''
-        || selectedDepotHoldingPrice(holding) === null
-        || selectedDepotHoldingPrice(holding) === undefined
-        || selectedDepotHoldingPrice(holding) === ''
+        || holding.latest_price === null
+        || holding.latest_price === undefined
+        || holding.latest_price === ''
     ) {
         return null;
     }
 
     const yearStartPrice = Number(holding.year_start_price);
-    const selectedPrice = Number(selectedDepotHoldingPrice(holding));
+    const latestPrice = Number(holding.latest_price);
 
-    if (Number.isNaN(yearStartPrice) || Number.isNaN(selectedPrice) || yearStartPrice === 0) {
+    if (Number.isNaN(yearStartPrice) || Number.isNaN(latestPrice) || yearStartPrice === 0) {
         return null;
     }
 
-    return ((selectedPrice - yearStartPrice) / yearStartPrice) * 100;
+    return ((latestPrice - yearStartPrice) / yearStartPrice) * 100;
 }
 
 function yearStartChangeAmount(holding) {
     if (
-        holding.year_start_price === null
+        holding.currency !== 'EUR'
+        || holding.year_start_price === null
         || holding.year_start_price === undefined
         || holding.year_start_price === ''
-        || selectedDepotHoldingPrice(holding) === null
-        || selectedDepotHoldingPrice(holding) === undefined
-        || selectedDepotHoldingPrice(holding) === ''
+        || holding.latest_price === null
+        || holding.latest_price === undefined
+        || holding.latest_price === ''
     ) {
         return null;
     }
 
     const yearStartPrice = Number(holding.year_start_price);
-    const selectedPrice = Number(selectedDepotHoldingPrice(holding));
+    const latestPrice = Number(holding.latest_price);
     const pieces = Number(holding.position_pieces ?? 0);
 
-    if (Number.isNaN(yearStartPrice) || Number.isNaN(selectedPrice) || Number.isNaN(pieces)) {
+    if (Number.isNaN(yearStartPrice) || Number.isNaN(latestPrice) || Number.isNaN(pieces)) {
         return null;
     }
 
-    return (selectedPrice - yearStartPrice) * pieces;
-}
-
-function formatYearStartChangeAmount(holding) {
-    const amount = yearStartChangeAmount(holding);
-
-    if (amount === null) {
-        return '-';
-    }
-
-    const sign = amount > 0 ? '+' : '';
-    const formattedAmount = new Intl.NumberFormat('en-US', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-    }).format(amount);
-
-    return `${sign}${formattedAmount}`;
+    return (latestPrice - yearStartPrice) * pieces;
 }
 
 function depotHoldingsChangeAmountTotal() {
@@ -4745,10 +4441,7 @@ function depotHoldingsChangeAmountTotal() {
 }
 
 function formatDepotHoldingsChangeAmountTotal() {
-    const amount = depotHoldingsChangeAmountTotal();
-    const sign = amount > 0 ? '+' : '';
-
-    return `${sign}${formatAccountBalance(amount)}`;
+    return formatDepotEurChange(depotHoldingsChangeAmountTotal());
 }
 
 function depotHoldingsChangeAmountTotalClass() {
@@ -5272,47 +4965,6 @@ function formatCompactSourceDateTime(value) {
         .replace(/^(\d{2}\.\d{2}\.)\d{4}$/, '$1');
 }
 
-function formatSessionHeaderDate(daysAgo) {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-        timeZone: 'Europe/Vienna',
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-    }).formatToParts(new Date());
-    const dateParts = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-    const viennaDate = new Date(Date.UTC(
-        Number(dateParts.year),
-        Number(dateParts.month) - 1,
-        Number(dateParts.day) - daysAgo,
-    ));
-
-    return new Intl.DateTimeFormat('de-AT', {
-        timeZone: 'UTC',
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-    }).format(viennaDate);
-}
-
-function formatSessionHeaderDateValue(value) {
-    if (!value) {
-        return null;
-    }
-
-    const date = new Date(`${value}T00:00:00Z`);
-
-    if (Number.isNaN(date.getTime())) {
-        return null;
-    }
-
-    return new Intl.DateTimeFormat('de-AT', {
-        timeZone: 'UTC',
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-    }).format(date);
-}
-
 function parseSourceDateTime(value) {
     const trimmedValue = value.trim();
     const isoLikeMatch = trimmedValue.match(
@@ -5730,24 +5382,6 @@ function indexEodhdActivityColor(settings) {
     return settings.status === 'updating' ? 'success' : 'error';
 }
 
-function formatLiveDataUpdateSchedule(settings) {
-    const interval = settings?.trading_interval_minutes ?? 20;
-    const startTime = settings?.trading_start_time;
-    const endTime = settings?.trading_end_time;
-    const closedSchedule = settings?.closed_refresh_enabled
-        ? `closed: every ${settings?.closed_interval_minutes ?? 60} min`
-        : 'closed: off';
-
-    if (startTime && endTime) {
-        return `Mo-Fr ${startTime}-${endTime} · ${interval} min · ${closedSchedule}`;
-    }
-
-    const startOffset = settings?.trading_starts_before_minutes ?? 0;
-    const endOffset = settings?.trading_ends_after_minutes ?? 0;
-
-    return `Mo-Fr start ${startOffset} min before trading until ${endOffset} min after trading · ${interval} min · ${closedSchedule}`;
-}
-
 function buildStockHoldingRefreshSchedule(holding, settings, referenceDate) {
     const exchangeLabel = stockHoldingExchangeLabel(holding);
     const tradingTimes = stockHoldingTradingTimes(holding);
@@ -6053,14 +5687,6 @@ function isLiveUpdateActive(settings) {
     return settings.status === 'updating'
         || settings.is_trading_time === true
         || settings.closed_refresh_enabled === true;
-}
-
-function stockLiveUpdateStatusDetail(settings) {
-    if (settings?.status === 'updating') {
-        return 'The live refresh job is running.';
-    }
-
-    return '';
 }
 
 function formatPriceStatus(holding) {
@@ -6650,11 +6276,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                         </div>
 
                         <div v-if="activeSection === 'stocks'" aria-label="Stocks dashboard">
-                            <v-alert class="mb-4" type="info" variant="tonal" density="compact">
-                                Intraday: Deutsche Börse ca. 15 Minuten verzögert, beobachtete Trades mit Lücken;
-                                Yahoo Finance USA: echte 5-Minuten-OHLC, inoffiziell, Verzögerung unbekannt.
-                                Keine vollständige historische Nachlieferung. Bestehendes Abrufintervall bleibt einstellbar.
-                            </v-alert>
                             <div class="dashboard-heading mb-6">
                                 <div>
                                     <p class="text-overline text-primary mb-1">Dashboard</p>
@@ -6664,18 +6285,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </p>
                                 </div>
                                 <div class="dashboard-actions">
-                                    <v-btn
-                                        class="dashboard-action-button"
-                                        color="secondary"
-                                        prepend-icon="mdi-cloud-sync-outline"
-                                        type="button" title="EODHD is disabled; no paid provider requests are made."
-                                        variant="outlined"
-                                        disabled
-                                        :loading="isStockEodhdSyncRunning"
-                                        @click="startStockEodhdSync"
-                                    >
-                                        EODHD Sync
-                                    </v-btn>
                                     <v-btn
                                         class="dashboard-action-button"
                                         color="primary"
@@ -6699,249 +6308,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </v-btn>
                                 </div>
                             </div>
-
-                            <v-alert
-                                v-if="stockEodhdSyncError"
-                                class="mb-6"
-                                density="compact"
-                                type="error"
-                                variant="tonal"
-                            >
-                                {{ stockEodhdSyncError }}
-                            </v-alert>
-
-                            <v-card
-                                v-if="stockEodhdSyncVisible"
-                                class="stock-eodhd-sync-card mb-6"
-                                variant="outlined"
-                                aria-label="Stock EODHD synchronization status"
-                            >
-                                <v-card-title class="d-flex flex-wrap align-center justify-space-between ga-2">
-                                    <span>Stock EODHD synchronization</span>
-                                    <div class="d-flex align-center ga-2">
-                                        <v-chip
-                                            :color="indexEodhdSyncStatusColor(stockEodhdSync.status)"
-                                            size="small"
-                                            variant="tonal"
-                                        >
-                                            {{ indexEodhdSyncStatusLabel(stockEodhdSync.status) }}
-                                        </v-chip>
-                                        <v-btn
-                                            v-if="!isStockEodhdSyncRunning"
-                                            aria-label="Close stock EODHD synchronization result"
-                                            icon="mdi-close"
-                                            size="small"
-                                            title="Close result"
-                                            variant="text"
-                                            @click="closeStockEodhdSyncResult"
-                                        />
-                                    </div>
-                                </v-card-title>
-                                <v-card-text>
-                                    <div class="text-body-2 text-medium-emphasis mb-3">
-                                        Stored-data window: {{ formatIndexHistoryDate(stockEodhdSync.date_from) }} –
-                                        {{ formatIndexHistoryDate(stockEodhdSync.date_to) }}
-                                    </div>
-                                    <v-progress-linear
-                                        v-if="isStockEodhdSyncRunning"
-                                        class="mb-4"
-                                        color="primary"
-                                        height="7"
-                                        :model-value="stockEodhdSyncProgress.percent"
-                                        rounded
-                                    />
-                                    <div v-if="stockEodhdSyncProgress.total > 0" class="text-body-2 mb-3">
-                                        <strong>
-                                            {{ stockEodhdSyncProgress.completed }} / {{ stockEodhdSyncProgress.total }} processed
-                                        </strong>
-                                    </div>
-                                    <div v-if="stockEodhdSync.current" class="text-body-2 mb-3">
-                                        Currently running: {{ stockEodhdSync.current }}
-                                    </div>
-                                    <v-list density="compact">
-                                        <v-list-item
-                                            v-for="step in stockEodhdSync.steps"
-                                            :key="step.key"
-                                            :aria-label="`${step.label}: ${indexEodhdSyncChecklistStatusLabel(step.status)}`"
-                                        >
-                                            <template #prepend>
-                                                <v-icon
-                                                    :class="{ 'mdi-spin': step.status === 'running' }"
-                                                    :color="indexEodhdSyncStepColor(step.status)"
-                                                    :icon="indexEodhdSyncStepIcon(step.status)"
-                                                />
-                                            </template>
-                                            <v-list-item-title>{{ step.label }}</v-list-item-title>
-                                            <v-list-item-subtitle>{{ step.message }}</v-list-item-subtitle>
-                                        </v-list-item>
-                                    </v-list>
-                                    <div v-if="!isStockEodhdSyncRunning" class="d-flex flex-wrap ga-2 mt-4">
-                                        <v-chip color="primary" variant="tonal">
-                                            EOD: {{ stockEodhdSync.eod?.stored_count ?? 0 }} records
-                                        </v-chip>
-                                        <v-chip color="secondary" variant="tonal">
-                                            Intraday: {{ stockEodhdSync.intraday?.stored_count ?? 0 }} candles
-                                        </v-chip>
-                                        <v-chip
-                                            v-if="(stockEodhdSync.eod?.failed_count ?? 0) + (stockEodhdSync.intraday?.failed_count ?? 0) > 0"
-                                            color="warning"
-                                            variant="tonal"
-                                        >
-                                            {{ (stockEodhdSync.eod?.failed_count ?? 0) + (stockEodhdSync.intraday?.failed_count ?? 0) }} failures
-                                        </v-chip>
-                                    </div>
-                                    <v-alert
-                                        v-if="stockEodhdSync.error"
-                                        class="mt-4"
-                                        density="compact"
-                                        type="warning"
-                                        variant="tonal"
-                                    >
-                                        {{ stockEodhdSync.error }}
-                                    </v-alert>
-                                </v-card-text>
-                            </v-card>
-
-                            <v-card class="mb-6" variant="outlined" aria-label="Automatic free stock updates">
-                                <v-card-text>
-                                    <div
-                                        class="index-update-schedule-row d-flex flex-wrap align-center justify-space-between ga-3"
-                                        aria-label="Stock realtime schedule"
-                                    >
-                                        <div class="flex-grow-1">
-                                            <div class="text-body-2 font-weight-bold">Automatic free updates</div>
-                                            <div class="text-body-2">
-                                                {{ formatLiveDataUpdateSchedule(priceRefreshSettings) }}
-                                            </div>
-                                            <div
-                                                v-if="stockExchangeRefreshSchedules.length"
-                                                class="stock-refresh-exchange-windows text-caption text-medium-emphasis"
-                                            >
-                                                <div
-                                                    v-for="schedule in stockExchangeRefreshSchedules"
-                                                    :key="schedule.key"
-                                                >
-                                                    {{ schedule.text }}
-                                                </div>
-                                            </div>
-                                            <div
-                                                v-if="stockLiveUpdateStatusDetail(priceRefreshSettings)"
-                                                class="text-caption text-medium-emphasis"
-                                            >
-                                                {{ stockLiveUpdateStatusDetail(priceRefreshSettings) }}
-                                            </div>
-                                            <div class="text-caption text-medium-emphasis">
-                                                Latest {{ priceRefreshSettings?.last_refreshed_at
-                                                    ? formatDateTime(priceRefreshSettings.last_refreshed_at)
-                                                    : 'never' }}
-                                                · Next {{ priceRefreshSettings?.next_refresh_at
-                                                    ? formatDateTime(priceRefreshSettings.next_refresh_at)
-                                                    : '-' }}
-                                                · Europe/Vienna
-                                            </div>
-                                        </div>
-                                        <v-btn
-                                            prepend-icon="mdi-timer-edit-outline"
-                                            size="small"
-                                            type="button"
-                                            variant="text"
-                                            @click="openLiveDataUpdateDialog"
-                                        >
-                                            Edit live period
-                                        </v-btn>
-                                    </div>
-                                </v-card-text>
-                            </v-card>
-
-                            <v-dialog v-model="isLiveDataUpdateDialogOpen" persistent max-width="620">
-                                <v-card class="stock-live-schedule-dialog">
-                                    <v-card-title>Edit live/realtime update period</v-card-title>
-                                    <v-card-subtitle>
-                                        Refreshes each stock from free sources around its stored trading hours.
-                                    </v-card-subtitle>
-                                    <v-form @submit.prevent="saveLiveDataUpdateSchedule">
-                                        <v-card-text>
-                                            <v-alert
-                                                v-if="priceRefreshScheduleError"
-                                                class="mb-4"
-                                                density="compact"
-                                                type="error"
-                                                variant="tonal"
-                                            >
-                                                {{ priceRefreshScheduleError }}
-                                            </v-alert>
-                                            <v-row density="compact">
-                                                <v-col cols="12" sm="4">
-                                                    <v-text-field
-                                                        v-model="liveDataUpdateScheduleForm.trading_interval_minutes"
-                                                        label="Every (minutes)"
-                                                        min="1"
-                                                        max="1440"
-                                                        required
-                                                        type="number"
-                                                    />
-                                                </v-col>
-                                                <v-col cols="12" sm="4">
-                                                    <v-text-field
-                                                        v-model="liveDataUpdateScheduleForm.trading_starts_before_minutes"
-                                                        label="Start before (minutes)"
-                                                        min="0"
-                                                        max="720"
-                                                        required
-                                                        type="number"
-                                                    />
-                                                </v-col>
-                                                <v-col cols="12" sm="4">
-                                                    <v-text-field
-                                                        v-model="liveDataUpdateScheduleForm.trading_ends_after_minutes"
-                                                        label="End after (minutes)"
-                                                        min="0"
-                                                        max="720"
-                                                        required
-                                                        type="number"
-                                                    />
-                                                </v-col>
-                                            </v-row>
-                                            <v-switch
-                                                v-model="liveDataUpdateScheduleForm.closed_refresh_enabled"
-                                                color="primary"
-                                                density="compact"
-                                                hide-details
-                                                label="Also refresh while markets are closed"
-                                            />
-                                            <v-text-field
-                                                v-if="liveDataUpdateScheduleForm.closed_refresh_enabled"
-                                                v-model="liveDataUpdateScheduleForm.closed_interval_minutes"
-                                                class="mt-3"
-                                                label="Closed-market interval (minutes)"
-                                                min="1"
-                                                max="1440"
-                                                required
-                                                type="number"
-                                            />
-                                        </v-card-text>
-                                        <v-card-actions>
-                                            <v-spacer />
-                                            <v-btn
-                                                type="button"
-                                                variant="text"
-                                                :disabled="isLiveDataUpdateScheduleSaving"
-                                                @click="isLiveDataUpdateDialogOpen = false"
-                                            >
-                                                Cancel
-                                            </v-btn>
-                                            <v-btn
-                                                color="primary"
-                                                type="submit"
-                                                variant="flat"
-                                                :loading="isLiveDataUpdateScheduleSaving"
-                                            >
-                                                Save live schedule
-                                            </v-btn>
-                                        </v-card-actions>
-                                    </v-form>
-                                </v-card>
-                            </v-dialog>
                         </div>
 
                         <div v-if="activeSection === 'indices'" aria-label="Indices">
@@ -7113,9 +6479,9 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         @keydown.space.prevent="activeSection === 'stocks' && toggleStockWatchItemSelection(holding)"
                                     >
                                     <div class="mobile-stock-name">
-                                        {{ stockDisplayName(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding)" />
+                                        {{ stockDisplayName(holding) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding)" />
                                     </div>
-                                    <div v-if="holding.subtitle" class="stock-subtitle text-caption text-info font-weight-medium">
+                                    <div v-if="holding.subtitle" :title="holding.subtitle" class="stock-subtitle line-clamp-2 text-caption text-info font-weight-medium">
                                         {{ holding.subtitle }}
                                     </div>
                                     <div class="mobile-stock-position">
@@ -7143,30 +6509,42 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             {{ stockHoldingRefreshSchedule(holding).status }}
                                         </v-chip>
                                     </div>
-                                    <div class="mobile-stock-price-row">
-                                        <span
-                                            class="latest-price-value mobile-stock-price"
-                                            :class="mobileHoldingPriceClass(holding)"
-                                        >
-                                            <span class="mobile-stock-price-main">
-                                                <span>{{ formatMobileHoldingPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'latest_price')" /></span>
-                                                <span
-                                                    v-if="formatMobileHoldingPriceLoadedAt(holding)"
-                                                    class="mobile-price-loaded-at"
-                                                >
-                                                    {{ formatMobileHoldingPriceLoadedAt(holding) }}
-                                                </span>
-                                            </span>
-                                            <span
-                                                v-if="mobileHoldingPriceChangeText(holding)"
-                                                class="mobile-stock-price-change"
+                                    <dl class="mobile-stock-prices">
+                                        <div class="mobile-stock-price-row">
+                                            <dt class="text-caption text-medium-emphasis">Latest price</dt>
+                                            <dd
+                                                class="latest-price-value mobile-stock-price"
+                                                :class="mobileHoldingPriceClass(holding)"
                                             >
-                                                {{ mobileHoldingPriceChangeText(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'end_price_24')" />
-                                            </span>
-                                        </span>
-                                    </div>
+                                                <span class="mobile-stock-price-main">
+                                                    <span>{{ formatMobileHoldingPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'latest_price')" /></span>
+                                                    <time
+                                                        v-if="hasPriceValue(holding.latest_price) && holding.latest_price_as_of"
+                                                        :datetime="holding.latest_price_as_of"
+                                                        class="watch-list-price-time"
+                                                    >
+                                                        {{ formatCompactSourceDateTime(holding.latest_price_as_of) }}
+                                                    </time>
+                                                </span>
+                                                <span
+                                                    v-if="mobileHoldingPriceChangePercent(holding)"
+                                                    class="watch-list-price-change flex flex-wrap items-baseline gap-x-1"
+                                                >
+                                                    <span class="watch-list-change-percent text-lg/5 font-bold tabular-nums lg:text-xl/6">{{ mobileHoldingPriceChangePercent(holding) }}</span>
+                                                    <span>· {{ formatSessionPrice(holding.end_price_24, holding) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'end_price_24')" /></span>
+                                                </span>
+                                            </dd>
+                                        </div>
+                                        <div class="mobile-stock-last-day">
+                                            <dt class="text-caption text-medium-emphasis">Last day</dt>
+                                            <dd>{{ formatSessionPrice(holding.end_price_24, holding) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'end_price_24')" /></dd>
+                                            <dd v-if="hasPriceValue(holding.end_price_24) && holding.end_price_24_as_of">
+                                                <time :datetime="holding.end_price_24_as_of" class="watch-list-price-time">{{ formatViennaTime(holding.end_price_24_as_of) }}</time>
+                                            </dd>
+                                        </div>
+                                    </dl>
                                     <HoldingPriceReload :holding="holding" />
-                                    <div v-if="activeSection === 'stocks'" class="mobile-stock-actions">
+                                    <div v-if="activeSection === 'stocks'" class="mobile-stock-actions" @click.stop @keydown.stop>
                                         <v-btn
                                             aria-label="Edit stock"
                                             color="primary"
@@ -7174,7 +6552,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             size="small"
                                             variant="tonal"
                                             :disabled="holdingsLoading"
-                                            @click.stop="openEditHoldingDialog(holding)"
+                                            @click="openEditHoldingDialog(holding)"
                                         />
                                         <v-btn
                                             aria-label="Add"
@@ -7203,31 +6581,27 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     />
                                 </template>
                             </div>
-                            <v-table class="desktop-watch-list-table">
+                            <v-table
+                                class="desktop-watch-list-table"
+                                :class="{ 'desktop-watch-list-table--compact': isCompactWatchListTable }"
+                                density="compact"
+                            >
+                            <colgroup>
+                                <col v-if="!isCompactWatchListTable" class="watch-list-symbol-column" />
+                                <col class="watch-list-name-column" />
+                                <col class="watch-list-latest-column" />
+                                <col class="watch-list-last-day-column" />
+                                <col class="watch-list-actions-column" />
+                            </colgroup>
                             <thead>
                                 <tr>
-                                    <th v-if="!isCompactWatchListTable" class="watch-list-content-cell">Symbol</th>
-                                    <th class="watch-list-content-cell">Name</th>
-                                    <th v-if="isHandsetLandscape" class="watch-list-content-cell">Price</th>
-                                    <th v-else class="watch-list-content-cell">Latest price</th>
-                                    <th class="watch-list-content-cell">
-                                        <span class="d-inline-flex flex-column">
-                                            <span>Start price</span>
-                                            <span class="text-caption text-medium-emphasis">
-                                                {{ sessionHeaderDates.start }}
-                                            </span>
-                                        </span>
+                                    <th v-if="!isCompactWatchListTable" scope="col">Symbol</th>
+                                    <th scope="col">Name</th>
+                                    <th scope="col">{{ isHandsetLandscape ? 'Price' : 'Latest price' }}</th>
+                                    <th scope="col" title="Last observed free price of the previous trading day; not an official close. Missing observations stay unavailable.">
+                                        Last day
                                     </th>
-                                    <th class="watch-list-content-cell">
-                                        <span class="d-inline-flex flex-column">
-                                            <span title="Last observed free price of the previous trading day; not an official close. Missing observations stay unavailable.">Last day</span>
-                                            <span class="text-caption text-medium-emphasis">
-                                                {{ sessionHeaderDates.lastDay }}
-                                            </span>
-                                        </span>
-                                    </th>
-                                    <th v-if="!isCompactWatchListTable" class="watch-list-source-time-cell">Source time</th>
-                                    <th v-if="activeSection === 'stocks'" class="text-right watch-list-actions-cell">
+                                    <th scope="col" class="text-right watch-list-actions-cell">
                                         Actions
                                     </th>
                                 </tr>
@@ -7252,8 +6626,8 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         @keydown.enter.prevent="handleStockHoldingRowClick(holding)"
                                         @keydown.space.prevent="handleStockHoldingRowClick(holding)"
                                     >
-                                        <td v-if="!isCompactWatchListTable" class="watch-list-content-cell">
-                                            <div>{{ holding.symbol || '-' }}</div>
+                                        <td v-if="!isCompactWatchListTable" class="watch-list-symbol-cell">
+                                            <div class="font-weight-medium">{{ holding.symbol || '-' }}</div>
                                             <div class="text-caption text-medium-emphasis">
                                                 Exchange: {{ holding.exchange || '-' }}
                                             </div>
@@ -7261,35 +6635,50 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 Pieces: {{ formatPositionPieces(holding) }}
                                             </div>
                                         </td>
-                                        <td class="watch-list-content-cell">
-                                            <div>{{ stockDisplayName(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding)" /></div>
-                                            <div v-if="holding.subtitle" class="stock-subtitle text-caption text-info font-weight-medium">
+                                        <td class="watch-list-name-cell">
+                                            <div class="truncate font-weight-bold" :title="stockDisplayName(holding)">{{ stockDisplayName(holding) }}</div>
+                                            <div v-if="holding.subtitle" :title="holding.subtitle" class="stock-subtitle truncate text-caption text-medium-emphasis">
                                                 {{ holding.subtitle }}
                                             </div>
-                                            <div
-                                                v-if="isCompactWatchListTable"
-                                                class="text-caption text-medium-emphasis"
-                                            >
-                                                Pieces: {{ formatPositionPieces(holding) }}
-                                            </div>
-                                            <div v-else class="text-caption text-medium-emphasis">
-                                                {{ holding.isin || '-' }} · WKN: {{ holding.wkn || '-' }}
-                                            </div>
-                                            <div
-                                                v-if="recentPriceTrendDots(holding).length"
-                                                class="recent-price-trend-dots"
-                                                aria-label="Recent price trends"
-                                            >
-                                                <span
-                                                    v-for="recentPrice in recentPriceTrendDots(holding)"
-                                                    :key="`trend-dot-${recentPrice.id}`"
-                                                    class="recent-price-trend-dot"
-                                                    :class="recentStoredPriceTrendDotClass(recentPrice)"
-                                                    :title="recentStoredPriceTrendLabel(recentPrice)"
-                                                />
+                                            <div class="watch-list-meta d-flex flex-wrap align-center text-caption text-medium-emphasis">
+                                                <span v-if="isCompactWatchListTable">Pieces: {{ formatPositionPieces(holding) }}</span>
+                                                <span v-else>{{ holding.isin || '-' }} · WKN: {{ holding.wkn || '-' }}</span>
+                                                <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding)" />
+                                                <div
+                                                    v-if="recentPriceTrendDots(holding).length"
+                                                    class="recent-price-trend-dots"
+                                                    aria-label="Recent price trends"
+                                                >
+                                                    <span
+                                                        v-for="recentPrice in recentPriceTrendDots(holding)"
+                                                        :key="`trend-dot-${recentPrice.id}`"
+                                                        class="recent-price-trend-dot"
+                                                        :class="recentStoredPriceTrendDotClass(recentPrice)"
+                                                        :title="recentStoredPriceTrendLabel(recentPrice)"
+                                                    />
+                                                </div>
+                                                <div v-if="!isCompactWatchListTable" class="stock-holding-refresh-statuses d-flex align-center ga-1">
+                                                    <v-chip
+                                                        :aria-label="`${holding.symbol || 'Stock'} live update schedule status`"
+                                                        :color="stockHoldingRefreshSchedule(holding).scheduleColor"
+                                                        size="x-small"
+                                                        variant="tonal"
+                                                    >
+                                                        {{ stockHoldingRefreshSchedule(holding).scheduleStatus }}
+                                                    </v-chip>
+                                                    <v-chip
+                                                        :aria-label="`${holding.symbol || 'Stock'} live update activity status`"
+                                                        :color="stockHoldingRefreshSchedule(holding).color"
+                                                        size="x-small"
+                                                        variant="tonal"
+                                                    >
+                                                        <span class="live-update-status-dot" aria-hidden="true" />
+                                                        {{ stockHoldingRefreshSchedule(holding).status }}
+                                                    </v-chip>
+                                                </div>
                                             </div>
                                         </td>
-                                        <td v-if="isHandsetLandscape" class="watch-list-content-cell">
+                                        <td v-if="isHandsetLandscape" class="watch-list-price-cell">
                                             <span class="handset-landscape-price">
                                                 <span
                                                     v-if="holdingDayTrend(holding)"
@@ -7299,7 +6688,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                     :title="holdingDayTrendLabel(holding)"
                                                 />
                                                 <span class="latest-price-value d-inline-flex flex-column" :class="mobileHoldingPriceClass(holding)">
-                                                    <span class="d-inline-flex align-center ga-1">
+                                                    <span class="d-inline-flex flex-wrap align-center ga-1">
                                                         <span>{{ formatMobileHoldingPrice(holding) }}</span>
                                                         <span
                                                             v-if="latestPriceIsLive(holding)"
@@ -7309,27 +6698,29 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                             <span class="watch-list-live-dot" aria-hidden="true" />
                                                             LIVE
                                                         </span>
-                                                        <span
-                                                            v-if="formatMobileHoldingPriceLoadedAt(holding)"
-                                                            class="mobile-price-loaded-at"
-                                                        >
-                                                            {{ formatMobileHoldingPriceLoadedAt(holding) }}
-                                                        </span>
                                                     </span>
-                                                    <span
-                                                        v-if="mobileHoldingPriceChangeText(holding)"
-                                                        class="latest-price-change"
+                                                    <time
+                                                        v-if="hasPriceValue(holding.latest_price) && holding.latest_price_as_of"
+                                                        :datetime="holding.latest_price_as_of"
+                                                        class="watch-list-price-time"
                                                     >
-                                                        {{ mobileHoldingPriceChangeText(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'end_price_24')" />
+                                                        {{ formatCompactSourceDateTime(holding.latest_price_as_of) }}
+                                                    </time>
+                                                    <span
+                                                        v-if="mobileHoldingPriceChangePercent(holding)"
+                                                        class="watch-list-price-change flex flex-wrap items-baseline gap-x-1"
+                                                    >
+                                                        <span class="watch-list-change-percent text-lg/5 font-bold tabular-nums lg:text-xl/6">{{ mobileHoldingPriceChangePercent(holding) }}</span>
+                                                        <span>· {{ formatSessionPrice(holding.end_price_24, holding) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'end_price_24')" /></span>
                                                     </span>
                                                 </span>
                                             </span>
                                             <HoldingPriceReload :holding="holding" />
                                         </td>
-                                        <td v-else class="watch-list-content-cell">
+                                        <td v-else class="watch-list-price-cell">
                                             <span class="latest-price-value d-inline-flex flex-column" :class="watchListLatestPriceClass(holding)">
-                                                <span class="d-inline-flex align-center ga-1">
-                                                    <span>{{ formatLatestPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'latest_price')" /></span>
+                                                <span class="d-inline-flex flex-wrap align-center ga-1">
+                                                    <span>{{ formatLatestPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'latest_price')" /></span>
                                                     <span
                                                         v-if="latestPriceIsLive(holding)"
                                                         class="watch-list-live-badge latest-price-live-badge"
@@ -7338,89 +6729,65 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                         <span class="watch-list-live-dot" aria-hidden="true" />
                                                         LIVE
                                                     </span>
-                                                    <span
-                                                        v-if="isCompactWatchListTable && formatMobileHoldingPriceLoadedAt(holding)"
-                                                        class="mobile-price-loaded-at"
-                                                    >
-                                                        {{ formatMobileHoldingPriceLoadedAt(holding) }}
-                                                    </span>
                                                 </span>
+                                                <time
+                                                    v-if="hasPriceValue(holding.latest_price) && holding.latest_price_as_of"
+                                                    :datetime="holding.latest_price_as_of"
+                                                    class="watch-list-price-time"
+                                                >
+                                                    {{ isCompactWatchListTable ? formatCompactSourceDateTime(holding.latest_price_as_of) : formatSourceDateTime(holding.latest_price_as_of) }}
+                                                </time>
                                                 <span
                                                     v-if="formatLatestPriceChangePercent(holding)"
-                                                    class="latest-price-change"
+                                                    class="watch-list-change-percent text-lg/5 font-bold tabular-nums lg:text-xl/6"
                                                 >
                                                     {{ formatLatestPriceChangePercent(holding) }}
                                                 </span>
                                             </span>
-                                            <HoldingPriceReload v-if="isCompactWatchListTable" :holding="holding" />
-                                        </td>
-                                        <td class="watch-list-content-cell">
-                                            <span>{{ formatSessionPrice(holding.start_price, holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'start_price')" /></span>
-                                        </td>
-                                        <td class="watch-list-content-cell">
-                                            <span class="d-inline-flex flex-column">
-                                                <span class="d-inline-flex align-center ga-1">
-                                                    <span>{{ formatSessionPrice(holding.end_price_24, holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'end_price_24')" /></span>
-                                                </span>
-                                            </span>
-                                        </td>
-                                        <td v-if="!isCompactWatchListTable" class="watch-list-source-time-cell">
-                                            <div title="Time of the last reported trade or source observation, independently of when it was checked.">{{ formatSourceDateTime(holding.latest_price_as_of) }}</div>
                                             <HoldingPriceReload :holding="holding" />
-                                            <div
-                                                v-if="activeSection === 'stocks'"
-                                                class="stock-holding-refresh-statuses d-flex flex-wrap align-center ga-1"
-                                            >
-                                                <v-chip
-                                                    :aria-label="`${holding.symbol || 'Stock'} live update schedule status`"
-                                                    :color="stockHoldingRefreshSchedule(holding).scheduleColor"
-                                                    size="x-small"
-                                                    variant="tonal"
-                                                >
-                                                    {{ stockHoldingRefreshSchedule(holding).scheduleStatus }}
-                                                </v-chip>
-                                                <v-chip
-                                                    :aria-label="`${holding.symbol || 'Stock'} live update activity status`"
-                                                    :color="stockHoldingRefreshSchedule(holding).color"
-                                                    size="x-small"
-                                                    variant="tonal"
-                                                >
-                                                    <span class="live-update-status-dot" aria-hidden="true" />
-                                                    {{ stockHoldingRefreshSchedule(holding).status }}
-                                                </v-chip>
-                                            </div>
                                         </td>
-                                        <td v-if="activeSection === 'stocks'" class="text-right watch-list-actions-cell">
-                                            <v-btn
-                                                icon
-                                                variant="text"
-                                                color="primary"
-                                                aria-label="Edit stock"
-                                                :disabled="holdingsLoading"
-                                                @click.stop="openEditHoldingDialog(holding)"
-                                            >
-                                                <v-icon icon="mdi-pencil-outline" />
-                                            </v-btn>
-                                            <v-btn
-                                                icon
-                                                variant="text"
-                                                color="success"
-                                                aria-label="Buy stock"
-                                                :disabled="!activeDepot || holdingsLoading"
-                                                @click.stop="openStockTransactionDialog(holding, 'buy')"
-                                            >
-                                                <v-icon icon="mdi-cart-plus" />
-                                            </v-btn>
-                                            <v-btn
-                                                icon
-                                                variant="text"
-                                                color="warning"
-                                                aria-label="Sell stock"
-                                                :disabled="!activeDepot || holdingsLoading || !hasPositionPieces(holding)"
-                                                @click.stop="openStockTransactionDialog(holding, 'sell')"
-                                            >
-                                                <v-icon icon="mdi-cart-minus" />
-                                            </v-btn>
+                                        <td class="watch-list-price-cell">
+                                            <span>{{ formatSessionPrice(holding.end_price_24, holding) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'end_price_24')" /></span>
+                                            <time v-if="hasPriceValue(holding.end_price_24) && holding.end_price_24_as_of" :datetime="holding.end_price_24_as_of" class="d-block watch-list-price-time">
+                                                {{ formatViennaTime(holding.end_price_24_as_of) }}
+                                            </time>
+                                        </td>
+                                        <td class="watch-list-actions-cell">
+                                            <div class="d-flex justify-end gap-1" @keydown.stop>
+                                                <v-btn
+                                                    icon
+                                                    size="32"
+                                                    variant="text"
+                                                    color="primary"
+                                                    aria-label="Edit stock"
+                                                    :disabled="holdingsLoading"
+                                                    @click.stop="openEditHoldingDialog(holding)"
+                                                >
+                                                    <v-icon icon="mdi-pencil-outline" />
+                                                </v-btn>
+                                                <v-btn
+                                                    icon
+                                                    size="32"
+                                                    variant="text"
+                                                    color="success"
+                                                    aria-label="Buy stock"
+                                                    :disabled="!activeDepot || holdingsLoading"
+                                                    @click.stop="openStockTransactionDialog(holding, 'buy')"
+                                                >
+                                                    <v-icon icon="mdi-cart-plus" />
+                                                </v-btn>
+                                                <v-btn
+                                                    icon
+                                                    size="32"
+                                                    variant="text"
+                                                    color="warning"
+                                                    aria-label="Sell stock"
+                                                    :disabled="!activeDepot || holdingsLoading || !hasPositionPieces(holding)"
+                                                    @click.stop="openStockTransactionDialog(holding, 'sell')"
+                                                >
+                                                    <v-icon icon="mdi-cart-minus" />
+                                                </v-btn>
+                                            </div>
                                         </td>
                                     </tr>
                                     <tr
@@ -7674,7 +7041,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </v-tab>
                                 </v-tabs>
                                 <v-progress-linear
-                                    v-if="isStockPriceChartLoading"
+                                    v-if="isSelectedStockChartPending && !selectedStockChart.points.length"
                                     class="mb-4"
                                     color="primary"
                                     indeterminate
@@ -7699,7 +7066,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 </div>
 
                                 <v-alert
-                                    v-if="!selectedStockChartPrices.length && !isStockPriceChartLoading"
+                                    v-if="!selectedStockChart.points.length && !isSelectedStockChartPending && !stockPriceChartError"
                                     type="info"
                                     variant="tonal"
                                     density="compact"
@@ -7707,7 +7074,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     No stored stock prices yet.
                                 </v-alert>
 
-                                <div class="index-price-chart-panel mt-5">
+                                <div v-if="selectedStockChart.points.length" class="index-price-chart-panel mt-5">
                                     <div class="d-flex flex-wrap align-center justify-space-between ga-2 mb-2">
                                         <span class="text-caption text-medium-emphasis">Evolution</span>
                                         <span
@@ -7725,7 +7092,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </div>
                                     <DataSourceMarkers :markers="marketDataMarkers(selectedStockChart.points)" />
                                     <svg
-                                        v-if="selectedStockChart.points.length"
+                                        :key="`${selectedStockWatchItem.id}:${selectedStockPriceRange}`"
                                         class="stock-price-chart index-price-chart"
                                         :viewBox="`0 0 ${selectedStockChart.width} ${selectedStockChart.height}`"
                                         role="img"
@@ -7791,15 +7158,22 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             :x2="selectedStockChart.trendLine.x2"
                                             :y2="selectedStockChart.trendLine.y2"
                                         />
+                                        <path
+                                            v-if="roundSelectedStockChart"
+                                            class="stock-price-chart-line index-price-chart-line"
+                                            :class="selectedStockChartLineClass"
+                                            :d="selectedStockChartPath"
+                                        />
                                         <polyline
+                                            v-else
                                             class="stock-price-chart-line index-price-chart-line"
                                             :class="selectedStockChartLineClass"
                                             :points="selectedStockChart.linePoints"
                                         />
-                                        <template v-if="showSelectedStockChartPoints">
+                                        <template v-if="roundSelectedStockChart || selectedStockChart.points.length === 1">
                                             <circle
                                                 v-for="(point, index) in selectedStockChart.points"
-                                                :key="`stock-point-${point.chart_as_of || point.trading_date || index}`"
+                                                :key="index"
                                                 class="stock-price-chart-point index-price-chart-point"
                                                 :cx="point.x"
                                                 :cy="point.y"
@@ -7827,9 +7201,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             {{ selectedStockChart.latestLabel.changePercent }}
                                         </text>
                                     </svg>
-                                    <div v-else class="text-body-2 text-medium-emphasis">
-                                        No chart data available.
-                                    </div>
                                 </div>
                             </v-card-text>
                             </v-card>
@@ -8529,19 +7900,30 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                     <v-dialog v-model="isCashTransactionDialogOpen" persistent max-width="480">
                         <v-card>
                             <v-card-title>
-                                {{ transactionTypeLabel(cashTransactionForm.type) }}
+                                {{ editingCashLedgerTransaction ? 'Edit transaction' : transactionTypeLabel(cashTransactionForm.type) }}
                             </v-card-title>
                             <v-card-text>
-                                <form id="cash-transaction-form" @submit.prevent="bookCashTransaction">
+                                <form id="cash-transaction-form" @submit.prevent="saveCashTransaction">
+                                    <v-alert v-if="cashTransactionError" type="error" variant="tonal" density="compact" class="mb-3">
+                                        {{ cashTransactionError }}
+                                    </v-alert>
                                     <v-select
+                                        v-if="canEditCashTransactionType"
                                         v-model="cashTransactionForm.type"
-                                        :items="cashTransactionTypeOptions"
+                                        :items="availableCashTransactionTypes"
                                         item-title="title"
                                         item-value="value"
                                         label="Type"
                                         required
                                     />
+                                    <v-text-field
+                                        v-else
+                                        :model-value="transactionTypeLabel(cashTransactionForm.type)"
+                                        label="Type"
+                                        readonly
+                                    />
                                     <v-select
+                                        v-if="!isEditingStockTrade"
                                         v-model="cashTransactionForm.stock_holding_id"
                                         :items="cashTransactionStockOptions"
                                         clearable
@@ -8549,6 +7931,21 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         item-value="value"
                                         label="Related stock / ISIN"
                                         no-data-text="No depot stocks"
+                                    />
+                                    <v-text-field
+                                        v-else
+                                        :model-value="[editingCashLedgerTransaction.stock_label, editingCashLedgerTransaction.stock_isin].filter(Boolean).join(' · ') || '–'"
+                                        label="Stock / ISIN"
+                                        readonly
+                                    />
+                                    <v-text-field
+                                        v-if="isEditingStockTrade && editingCashLedgerTransaction.stock_holding_id"
+                                        v-model="cashTransactionForm.pieces"
+                                        label="Pieces"
+                                        type="number"
+                                        min="0.00000001"
+                                        step="0.00000001"
+                                        required
                                     />
                                     <v-text-field
                                         v-model="cashTransactionForm.total_amount"
@@ -8574,11 +7971,11 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             </v-card-text>
                             <v-card-actions>
                                 <v-spacer />
-                                <v-btn type="button" variant="text" :disabled="holdingsLoading" @click="abortCashTransactionDialog">
+                                <v-btn type="button" variant="text" :disabled="cashTransactionSaving" @click="abortCashTransactionDialog">
                                     Cancel
                                 </v-btn>
-                                <v-btn type="submit" form="cash-transaction-form" color="primary" variant="flat" :loading="holdingsLoading">
-                                    Book
+                                <v-btn type="submit" form="cash-transaction-form" color="primary" variant="flat" :loading="cashTransactionSaving">
+                                    {{ editingCashLedgerTransaction ? 'Save' : 'Book' }}
                                 </v-btn>
                             </v-card-actions>
                         </v-card>
@@ -9076,11 +8473,11 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         </div>
                                         <div class="mobile-depot-year-stock-row">
                                             <span class="text-caption text-medium-emphasis">{{ depotStockPeriodEntryLabel() }}</span>
-                                            <span>{{ formatDepotYearStockPrice(stock, 'average_buy_or_year_start_price') }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'average_buy_or_year_start_price')" /></span>
+                                            <span>{{ formatDepotYearStockPrice(stock, 'average_buy_or_year_start_price') }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(stock, 'average_buy_or_year_start_price')" /></span>
                                         </div>
                                         <div class="mobile-depot-year-stock-row">
                                             <span class="text-caption text-medium-emphasis">Ø Sell / in stock</span>
-                                            <span>{{ formatDepotYearStockPrice(stock, 'average_sell_or_current_price') }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'average_sell_or_current_price')" /></span>
+                                            <span>{{ formatDepotYearStockPrice(stock, 'average_sell_or_current_price') }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(stock, 'average_sell_or_current_price')" /></span>
                                         </div>
                                         <div class="mobile-depot-year-stock-row">
                                             <span class="text-caption text-medium-emphasis">Traded volume (money)</span>
@@ -9091,8 +8488,8 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             <span>{{ formatDepotStockTradedPieces(stock) }}</span>
                                         </div>
                                         <div class="mobile-depot-year-stock-row font-weight-medium" :class="depotYearStockChangeClass(stock)">
-                                            <span>{{ formatDepotYearStockChangePercent(stock) }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'change_percent')" /></span>
-                                            <span>{{ formatDepotYearStockChangeAmount(stock) }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'change_amount')" /> EUR</span>
+                                            <span>{{ formatDepotYearStockChangePercent(stock) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(stock, 'change_percent')" /></span>
+                                            <span>{{ formatDepotYearStockChangeAmount(stock) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(stock, 'change_amount')" /> EUR</span>
                                         </div>
                                     </article>
                                 </div>
@@ -9123,10 +8520,10 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 </div>
                                             </td>
                                             <td class="text-right">
-                                                {{ formatDepotYearStockPrice(stock, 'average_buy_or_year_start_price') }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'average_buy_or_year_start_price')" />
+                                                {{ formatDepotYearStockPrice(stock, 'average_buy_or_year_start_price') }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(stock, 'average_buy_or_year_start_price')" />
                                             </td>
                                             <td class="text-right">
-                                                {{ formatDepotYearStockPrice(stock, 'average_sell_or_current_price') }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'average_sell_or_current_price')" />
+                                                {{ formatDepotYearStockPrice(stock, 'average_sell_or_current_price') }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(stock, 'average_sell_or_current_price')" />
                                             </td>
                                             <td class="text-right">
                                                 {{ formatDepotStockTradedVolume(stock) }}
@@ -9135,10 +8532,10 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 {{ formatDepotStockTradedPieces(stock) }}
                                             </td>
                                             <td class="text-right font-weight-medium" :class="depotYearStockChangeClass(stock)">
-                                                {{ formatDepotYearStockChangePercent(stock) }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'change_percent')" />
+                                                {{ formatDepotYearStockChangePercent(stock) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(stock, 'change_percent')" />
                                             </td>
                                             <td class="text-right font-weight-medium" :class="depotYearStockChangeClass(stock)">
-                                                {{ formatDepotYearStockChangeAmount(stock) }} <DataSourceMarkers :markers="marketDataMarkers(stock, 'change_amount')" />
+                                                {{ formatDepotYearStockChangeAmount(stock) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(stock, 'change_amount')" />
                                             </td>
                                         </tr>
                                     </tbody>
@@ -9163,129 +8560,92 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                             <h1 class="text-h4">{{ activeDepot?.name ?? '–' }}</h1>
                         </div>
 
-                        <div v-if="activeDepot" class="d-flex flex-wrap align-start ga-4">
-                            <v-card class="depot-balance-card" variant="outlined" width="100%" max-width="480">
-                                <v-card-title class="text-subtitle-2 pb-0">Depot</v-card-title>
-                                <v-table density="compact">
-                                    <tbody>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">Depot balance</td>
-                                            <td class="text-right">{{ formatDepotStockBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('stock_balance')" /></td>
-                                        </tr>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">Cash balance</td>
-                                            <td class="text-right">{{ formatDepotCashBalance() }}</td>
-                                        </tr>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">Account balance</td>
-                                            <td class="text-right">{{ formatDepotAccountBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('account_balance')" /></td>
-                                        </tr>
-                                        <tr class="depot-account-yesterday-row">
-                                            <td class="text-medium-emphasis text-caption">Account Yesterday</td>
-                                            <td class="text-right">{{ formatDepotPreviousDayBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('previous_day_balance')" /></td>
-                                        </tr>
-                                        <tr v-if="hasDepotPreviousDayExternalCashFlow()" class="depot-account-external-cash-flow-row">
-                                            <td class="text-medium-emphasis text-caption">External cash flow today</td>
-                                            <td class="text-right">{{ formatDepotPreviousDayExternalCashFlowAmount() }}</td>
-                                        </tr>
-                                        <tr class="depot-account-yesterday-change-row">
-                                            <td class="text-medium-emphasis text-caption">Performance +/-</td>
-                                            <td class="text-right">
-                                                <span :class="depotPreviousDayChangeClass()">
-                                                    {{ formatDepotPreviousDayChangePercent() }} ·
-                                                    {{ formatDepotPreviousDayChangeAmount() }} <DataSourceMarkers :markers="depotValuationMarkers('previous_day_change_amount')" />
-                                                </span>
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </v-table>
-                            </v-card>
+                        <div v-if="activeDepot" class="depot-balance-summary min-w-0 tabular-nums">
+                            <section class="depot-balance-card depot-balance-card--day">
+                                <h2>Depot</h2>
+                                <dl class="depot-balance-metrics">
+                                    <div>
+                                        <dt>Depot Balance</dt>
+                                        <dd data-account-metric="stock_balance" :title="depotOverviewDate('valuation_date')">
+                                            {{ formatDepotOverviewAmount('stock_balance') }}
+                                        </dd>
+                                    </div>
+                                    <div>
+                                        <dt>Cash Balance</dt>
+                                        <dd data-account-metric="cash_balance" :title="depotOverviewDate('valuation_date')">
+                                            {{ formatDepotOverviewAmount('cash_balance') }}
+                                        </dd>
+                                    </div>
+                                    <div class="depot-balance-reference">
+                                        <dt>Account Yesterday</dt>
+                                        <dd data-account-metric="previous_day_balance" :title="depotOverviewDate('previous_valuation_date')">
+                                            {{ formatDepotOverviewAmount('previous_day_balance') }}
+                                        </dd>
+                                    </div>
+                                    <div class="depot-balance-current">
+                                        <dt>Account Balance</dt>
+                                        <dd data-account-metric="account_balance" :title="depotOverviewDate('valuation_date')">
+                                            {{ formatDepotOverviewAmount('account_balance') }}
+                                        </dd>
+                                    </div>
+                                    <div class="depot-balance-result depot-balance-performance">
+                                        <dt>Performance +/-</dt>
+                                        <dd data-account-metric="change_amount" :class="depotBalanceChangeClass(depotOverviewAmount('change_amount'))">
+                                            {{ formatDepotOverviewAmount('change_amount') }}
+                                        </dd>
+                                    </div>
+                                </dl>
+                            </section>
 
-                            <v-card class="depot-balance-card" variant="outlined" width="100%" max-width="480">
-                                <v-card-title class="text-subtitle-2 pb-0">Aktuelles Jahr</v-card-title>
-                                <v-table density="compact">
-                                    <tbody>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">Balance 01.01.</td>
-                                            <td class="text-right">{{ formatDepotYearStartBalance() }}</td>
-                                        </tr>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">Balance {{ formatCurrentDayMonth() }}</td>
-                                            <td class="text-right">{{ formatDepotCurrentBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('current_balance')" /></td>
-                                        </tr>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">+/-</td>
-                                            <td class="text-right">
-                                                <span :class="depotBalanceChangeClass()">
-                                                    {{ formatDepotBalanceChangePercent() }} · {{ formatDepotBalanceChangeAmount() }} <DataSourceMarkers :markers="depotValuationMarkers('balance_change_amount')" />
-                                                </span>
-                                            </td>
-                                        </tr>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">Corrected balance (-27,5%)</td>
-                                            <td class="text-right">{{ formatDepotCorrectedBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('current_balance')" /></td>
-                                        </tr>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">Corrected +/-</td>
-                                            <td class="text-right">
-                                                <span :class="depotCorrectedBalanceChangeClass()">
-                                                    {{ formatDepotCorrectedBalanceChangePercent() }} ·
-                                                    {{ formatDepotCorrectedBalanceChangeAmount() }} <DataSourceMarkers :markers="depotValuationMarkers('balance_change_amount')" />
-                                                </span>
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </v-table>
-                            </v-card>
+                            <section v-for="period in depotPeriodRows()" :key="period.title" class="depot-balance-card">
+                                <h2>{{ period.title }}</h2>
+                                <dl class="depot-balance-metrics">
+                                    <div class="depot-balance-reference">
+                                        <dt :title="period.openingTitle">{{ period.openingLabel }}</dt>
+                                        <dd>{{ formatDepotPeriodBalance(period.openingBalance) }}</dd>
+                                    </div>
+                                    <div class="depot-balance-current">
+                                        <dt :title="period.closingTitle">{{ period.closingLabel }}</dt>
+                                        <dd>{{ formatDepotPeriodBalance(period.closingBalance) }}</dd>
+                                    </div>
+                                    <div class="depot-balance-result">
+                                        <dt>{{ period.changeLabel }}</dt>
+                                        <dd :class="depotBalanceChangeClass(period.change)">
+                                            {{ formatDepotPeriodChange(period.change, period.percent) }}
+                                        </dd>
+                                    </div>
+                                </dl>
+                            </section>
 
-                            <v-card class="depot-balance-card" variant="outlined" width="100%" max-width="480">
-                                <v-card-title class="text-subtitle-2 pb-0">Aktuelle Woche</v-card-title>
-                                <v-table density="compact">
-                                    <tbody>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">Balance {{ formatOneWeekAgoDayMonth() }}</td>
-                                            <td class="text-right">{{ formatDepotOneWeekStartBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('one_week_start_balance')" /></td>
-                                        </tr>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">Balance {{ formatCurrentDayMonth() }}</td>
-                                            <td class="text-right">{{ formatDepotCurrentBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('current_balance')" /></td>
-                                        </tr>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">1 week</td>
-                                            <td class="text-right">
-                                                <span :class="depotOneWeekChangeClass()">
-                                                    {{ formatDepotOneWeekChangePercent() }} · {{ formatDepotOneWeekChangeAmount() }} <DataSourceMarkers :markers="depotValuationMarkers('one_week_change_amount')" />
-                                                </span>
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </v-table>
-                            </v-card>
-
-                            <v-card class="depot-balance-card" variant="outlined" width="100%" max-width="480">
-                                <v-card-title class="text-subtitle-2 pb-0">Aktueller Monat</v-card-title>
-                                <v-table density="compact">
-                                    <tbody>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">Balance {{ formatPreviousMonthEndDayMonth() }}</td>
-                                            <td class="text-right">{{ formatDepotMonthStartBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('month_start_balance')" /></td>
-                                        </tr>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">Balance {{ formatCurrentDayMonth() }}</td>
-                                            <td class="text-right">{{ formatDepotCurrentBalance() }} <DataSourceMarkers :markers="depotValuationMarkers('current_balance')" /></td>
-                                        </tr>
-                                        <tr>
-                                            <td class="text-medium-emphasis text-caption">Month</td>
-                                            <td class="text-right">
-                                                <span :class="depotMonthChangeClass()">
-                                                    {{ formatDepotMonthChangePercent() }} · {{ formatDepotMonthChangeAmount() }} <DataSourceMarkers :markers="depotValuationMarkers('month_change_amount')" />
-                                                </span>
-                                            </td>
-                                        </tr>
-                                    </tbody>
-                                </v-table>
-                            </v-card>
-
+                            <section class="depot-balance-card">
+                                <h2>Aktuelles Jahr</h2>
+                                <dl class="depot-balance-metrics">
+                                    <div class="depot-balance-reference">
+                                        <dt title="Eröffnungsstand plus Einzahlungen minus Auszahlungen">Basis 01.01. bereinigt</dt>
+                                        <dd>{{ formatDepotYearCapital() }}</dd>
+                                    </div>
+                                    <div class="depot-balance-current">
+                                        <dt>Balance {{ formatCurrentDayMonth() }}</dt>
+                                        <dd>{{ formatDepotCurrentBalance() }}</dd>
+                                    </div>
+                                    <div class="depot-balance-result">
+                                        <dt title="Ein- und Auszahlungen sowie Brokerbonus sind herausgerechnet">Ergebnis ohne Zu- und Abflüsse</dt>
+                                        <dd :class="depotBalanceChangeClass(depotValuationNumber('balance_change_amount'))">
+                                            {{ formatDepotPeriodChange(depotValuationNumber('balance_change_amount'), depotValuationNumber('balance_change_percent')) }}
+                                        </dd>
+                                    </div>
+                                    <div class="depot-balance-adjustment">
+                                        <dt>Stand nach KESt-Schätzung</dt>
+                                        <dd>{{ formatDepotCorrectedBalance() }}</dd>
+                                    </div>
+                                    <div class="depot-balance-adjustment">
+                                        <dt>Ergebnis nach KESt-Schätzung</dt>
+                                        <dd :class="depotBalanceChangeClass(depotAfterTaxBalanceChangeAmount())">
+                                            {{ formatDepotCorrectedBalanceChange() }}
+                                        </dd>
+                                    </div>
+                                </dl>
+                            </section>
                         </div>
 
                         <div v-if="activeDepot" class="mt-6">
@@ -9295,33 +8655,25 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 {{ transactionsError }}
                             </v-alert>
                             <div v-if="depotHoldings.length > 0" class="mobile-depot-stocks">
-                                <div class="mobile-depot-price-source">
-                                    <button
-                                        type="button"
-                                        class="depot-price-source-button"
-                                        :class="depotPriceSourceButtonClass('latest')"
-                                        :aria-pressed="isDepotPriceSource('latest')"
-                                        @click="selectDepotPriceSource('latest')"
-                                    >
-                                        Latest price
-                                    </button>
-                                    <button
-                                        type="button"
-                                        class="depot-price-source-button"
-                                        :class="depotPriceSourceButtonClass('flatex')"
-                                        :aria-pressed="isDepotPriceSource('flatex')"
-                                        @click="selectDepotPriceSource('flatex')"
-                                    >
-                                        Flatex price
-                                    </button>
-                                </div>
                                 <article
                                     v-for="holding in depotHoldings"
                                     :key="`mobile-depot-holding-${holding.id}`"
                                     class="mobile-depot-stock-card"
                                 >
-                                    <div class="mobile-depot-stock-name">
-                                        <div>{{ stockDisplayName(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding)" /></div>
+                                    <div>
+                                        <div class="mobile-depot-stock-heading">
+                                            <div class="mobile-depot-stock-name">
+                                                <span v-if="holding.symbol && holding.name && holding.symbol !== holding.name">{{ holding.symbol }} · </span>{{ stockDisplayName(holding) }}
+                                                <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding)" />
+                                            </div>
+                                            <div class="mobile-depot-stock-day">
+                                                <span class="depot-stock-day-change font-weight-bold" :class="previousDayChangePercentClass(holding)">
+                                                    {{ formatPreviousDayChangePercent(holding) }}
+                                                </span>
+                                                <span class="text-caption text-medium-emphasis">{{ holding.day_reference_type === 'buy' ? 'vs. Buy' : 'vs. Prev Day' }}</span>
+                                                <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'previous_day_change_percent')" />
+                                            </div>
+                                        </div>
                                         <div
                                             v-if="holding.subtitle"
                                             class="stock-subtitle text-caption text-info font-weight-medium"
@@ -9330,24 +8682,50 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         </div>
                                         <div class="mobile-depot-stock-isin">{{ holding.isin || '-' }}</div>
                                     </div>
-                                    <div class="mobile-depot-stock-row mobile-depot-stock-row--prices">
-                                        <span>{{ formatPositionPieces(holding) }}</span>
-                                        <span>{{ formatLatestPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'latest_price')" /></span>
-                                        <span>{{ formatStockHoldingValue(holding) }} <DataSourceMarkers :markers="depotHoldingValueMarkers(holding)" /></span>
-                                    </div>
-                                    <div class="mobile-depot-stock-row text-caption">
-                                        <span>Prev Day {{ formatPreviousDayPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'previous_day_price')" /></span>
-                                        <span :class="previousDayChangePercentClass(holding)">
-                                            {{ formatPreviousDayChangePercent(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'previous_day_change_percent')" />
-                                        </span>
-                                    </div>
-                                    <div class="mobile-depot-stock-row font-weight-medium" :class="yearStartChangeClass(holding)">
-                                        <span>
-                                            {{ yearStartChangeSymbol(holding) }}
-                                            {{ formatYearStartChangePercent(holding) }} <DataSourceMarkers :markers="depotHoldingValueMarkers(holding)" />
-                                        </span>
-                                        <span>{{ formatYearStartChangeAmount(holding) }} <DataSourceMarkers :markers="depotHoldingValueMarkers(holding)" /></span>
-                                    </div>
+                                    <dl class="mobile-depot-stock-metrics mobile-depot-stock-quotes">
+                                        <div>
+                                            <dt>Latest Price</dt>
+                                            <dd>{{ formatPriceValue(holding.latest_price, holding.currency, { showCurrency: true }) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'latest_price')" /></dd>
+                                        </div>
+                                        <div>
+                                            <dt>{{ holding.day_reference_type === 'buy' ? 'Buy Price' : 'Previous Day' }}</dt>
+                                            <dd>
+                                                {{ formatDepotDayReferencePrice(holding) }}
+                                                <DataSourceMarkers v-if="holding.day_reference_type !== 'buy'" :markers="marketDataMarkersWithoutFree(holding, 'previous_day_price')" />
+                                            </dd>
+                                        </div>
+                                        <div>
+                                            <dt>Day +/- €</dt>
+                                            <dd>{{ formatDepotEurChange(marketDataNumber(holding.day_change_amount_eur)) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'day_change_amount_eur')" /></dd>
+                                        </div>
+                                    </dl>
+                                    <dl class="mobile-depot-stock-metrics mobile-depot-stock-position">
+                                        <div>
+                                            <dt>Amount</dt>
+                                            <dd>{{ formatPositionPieces(holding) }}</dd>
+                                        </div>
+                                        <div>
+                                            <dt>Value</dt>
+                                            <dd>{{ formatStockHoldingValue(holding) }} <DataSourceMarkers :markers="depotHoldingValueMarkers(holding)" /></dd>
+                                        </div>
+                                        <div>
+                                            <dt>Buy / 1.1. €</dt>
+                                            <dd>{{ formatPriceValue(holding.year_start_price) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'year_start_price')" /></dd>
+                                        </div>
+                                        <div>
+                                            <dt>Since Buy / 1.1. (%)</dt>
+                                            <dd class="font-weight-medium" :class="yearStartChangeClass(holding)">
+                                                {{ yearStartChangeSymbol(holding) }}
+                                                {{ formatYearStartChangePercent(holding) }} <DataSourceMarkers :markers="depotYearStartChangeMarkers(holding)" />
+                                            </dd>
+                                        </div>
+                                        <div>
+                                            <dt>Since Buy / 1.1. (€)</dt>
+                                            <dd class="font-weight-medium" :class="yearStartChangeClass(holding)">
+                                                {{ formatDepotEurChange(yearStartChangeAmount(holding)) }} <DataSourceMarkers :markers="depotYearStartChangeMarkers(holding)" />
+                                            </dd>
+                                        </div>
+                                    </dl>
                                     <div class="mobile-depot-stock-actions">
                                         <v-btn
                                             icon
@@ -9377,43 +8755,26 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     <tr>
                                         <th v-if="!isCompactDepotStocksTable">Symbol</th>
                                         <th>Name</th>
+                                        <th class="text-right">Day +/- %</th>
+                                        <th class="text-right">Latest Price</th>
+                                        <th class="text-right">Previous Day</th>
+                                        <th class="text-right">Day +/- €</th>
                                         <th class="text-right">Amount</th>
                                         <th class="text-right">Value</th>
-                                        <th class="text-right">
-                                            <button
-                                                type="button"
-                                                class="depot-price-source-button"
-                                                :class="depotPriceSourceButtonClass('latest')"
-                                                :aria-pressed="isDepotPriceSource('latest')"
-                                                @click="selectDepotPriceSource('latest')"
-                                            >
-                                                Latest price
-                                            </button>
-                                        </th>
-                                        <th class="text-right">Prev Day</th>
-                                        <th class="text-right">+/- %</th>
-                                        <th class="text-right">
-                                            <button
-                                                type="button"
-                                                class="depot-price-source-button"
-                                                :class="depotPriceSourceButtonClass('flatex')"
-                                                :aria-pressed="isDepotPriceSource('flatex')"
-                                                @click="selectDepotPriceSource('flatex')"
-                                            >
-                                                Flatex price
-                                            </button>
-                                        </th>
-                                        <th v-if="!isCompactDepotStocksTable" class="text-right">1.1/Buy</th>
-                                        <th class="text-right">Change</th>
-                                        <th class="text-right">+/- EUR</th>
+                                        <th class="text-right">Buy / 1.1. €</th>
+                                        <th class="text-right">Change %</th>
+                                        <th class="text-right">Buy / 1.1. +/- €</th>
                                         <th class="text-right">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <tr v-for="holding in depotHoldings" :key="holding.id" :class="depotHoldingRowClass(holding)">
                                         <td v-if="!isCompactDepotStocksTable">{{ holding.symbol || '-' }}</td>
-                                        <td>
-                                            <div>{{ stockDisplayName(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding)" /></div>
+                                        <td class="depot-stock-name">
+                                            <div>
+                                                <span v-if="isCompactDepotStocksTable && holding.symbol && holding.name && holding.symbol !== holding.name">{{ holding.symbol }} · </span>{{ stockDisplayName(holding) }}
+                                                <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding)" />
+                                            </div>
                                             <div
                                                 v-if="holding.subtitle"
                                                 class="stock-subtitle text-caption text-info font-weight-medium"
@@ -9422,47 +8783,31 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             </div>
                                             <div class="depot-stock-isin">{{ holding.isin || '-' }}</div>
                                         </td>
+                                        <td class="text-right">
+                                            <span class="depot-stock-day-change font-weight-bold" :class="previousDayChangePercentClass(holding)">
+                                                {{ formatPreviousDayChangePercent(holding) }}
+                                            </span>
+                                            <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'previous_day_change_percent')" />
+                                        </td>
+                                        <td class="text-right">{{ formatPriceValue(holding.latest_price, holding.currency, { showCurrency: true }) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'latest_price')" /></td>
+                                        <td class="text-right">
+                                            {{ formatDepotDayReferencePrice(holding) }}
+                                            <div v-if="holding.day_reference_type === 'buy'" class="text-caption text-medium-emphasis">Buy Price</div>
+                                            <DataSourceMarkers v-else :markers="marketDataMarkersWithoutFree(holding, 'previous_day_price')" />
+                                        </td>
+                                        <td class="text-right">{{ formatDepotEurChange(marketDataNumber(holding.day_change_amount_eur)) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'day_change_amount_eur')" /></td>
                                         <td class="text-right">{{ formatPositionPieces(holding) }}</td>
                                         <td class="text-right">{{ formatStockHoldingValue(holding) }} <DataSourceMarkers :markers="depotHoldingValueMarkers(holding)" /></td>
-                                        <td class="text-right">{{ formatLatestPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'latest_price')" /></td>
-                                        <td class="text-right">{{ formatPreviousDayPrice(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'previous_day_price')" /></td>
-                                        <td class="text-right">
-                                            <span class="font-weight-medium" :class="previousDayChangePercentClass(holding)">
-                                                {{ formatPreviousDayChangePercent(holding) }} <DataSourceMarkers :markers="marketDataMarkers(holding, 'previous_day_change_percent')" />
-                                            </span>
-                                        </td>
-                                        <td class="text-right">
-                                            <input
-                                                v-if="isEditingFlatexPrice(holding)"
-                                                ref="flatexPriceEditInput"
-                                                v-model="flatexPriceEditValue"
-                                                aria-label="Flatex price"
-                                                class="flatex-price-input"
-                                                min="0"
-                                                step="0.000001"
-                                                type="number"
-                                                @keydown.enter.prevent="saveFlatexPriceEdit(holding)"
-                                                @keydown.esc.prevent="abortFlatexPriceEdit"
-                                            >
-                                            <button
-                                                v-else
-                                                type="button"
-                                                class="flatex-price-button"
-                                                @click="startFlatexPriceEdit(holding)"
-                                            >
-                                                {{ formatPriceValue(holding.flatex_price, holding.currency) }}
-                                            </button>
-                                        </td>
-                                        <td v-if="!isCompactDepotStocksTable" class="text-right">{{ formatPriceValue(holding.year_start_price, holding.currency) }}</td>
+                                        <td class="text-right">{{ formatPriceValue(holding.year_start_price) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(holding, 'year_start_price')" /></td>
                                         <td class="text-right">
                                             <span class="d-inline-flex align-center justify-end ga-1 font-weight-medium" :class="yearStartChangeClass(holding)">
                                                 <span>{{ yearStartChangeSymbol(holding) }}</span>
-                                                <span>{{ formatYearStartChangePercent(holding) }} <DataSourceMarkers :markers="depotHoldingValueMarkers(holding)" /></span>
+                                                <span>{{ formatYearStartChangePercent(holding) }} <DataSourceMarkers :markers="depotYearStartChangeMarkers(holding)" /></span>
                                             </span>
                                         </td>
                                         <td class="text-right">
                                             <span class="font-weight-medium" :class="yearStartChangeClass(holding)">
-                                                {{ formatYearStartChangeAmount(holding) }} <DataSourceMarkers :markers="depotHoldingValueMarkers(holding)" />
+                                                {{ formatDepotEurChange(yearStartChangeAmount(holding)) }} <DataSourceMarkers :markers="depotYearStartChangeMarkers(holding)" />
                                             </span>
                                         </td>
                                         <td class="text-right">
@@ -9491,7 +8836,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 </tbody>
                                 <tfoot>
                                     <tr>
-                                        <td :colspan="isCompactDepotStocksTable ? 8 : 10" class="text-right font-weight-bold">Sum</td>
+                                        <td :colspan="isCompactDepotStocksTable ? 9 : 10" class="text-right font-weight-bold">Sum</td>
                                         <td class="text-right">
                                             <span class="font-weight-bold" :class="depotHoldingsChangeAmountTotalClass()">
                                                 {{ formatDepotHoldingsChangeAmountTotal() }} <DataSourceMarkers :markers="depotHoldingsValueMarkers()" />
@@ -9515,33 +8860,29 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         <div class="text-caption text-medium-emphasis">
                                             Cash-flow adjusted ·
                                             {{ formatDepotPerformanceDate(depotPerformanceChart.first?.date) }}
-                                            {{ formatDepotPerformanceEndpoint(depotPerformanceChart.first) }} <DataSourceMarkers :markers="marketDataMarkers(depotPerformanceChart.first)" />
+                                            {{ formatDepotPerformanceEndpoint(depotPerformanceChart.first) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(depotPerformanceChart.first)" />
                                             -
                                             {{ formatDepotPerformanceDate(depotPerformanceChart.latest?.date) }}
-                                            {{ formatDepotPerformanceEndpoint(depotPerformanceChart.latest) }} <DataSourceMarkers :markers="marketDataMarkers(depotPerformanceChart.latest)" />
+                                            {{ formatDepotPerformanceEndpoint(depotPerformanceChart.latest) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(depotPerformanceChart.latest)" />
                                         </div>
                                         <div class="font-weight-bold" :class="depotPerformanceChangeClass()">
-                                            {{ formatDepotPerformanceChangePercent() }} · {{ formatDepotPerformanceChangeAmount() }} <DataSourceMarkers :markers="depotPerformanceResult()?.source_markers ?? []" />
+                                            {{ formatDepotPerformanceChangePercent() }} · {{ formatDepotPerformanceChangeAmount() }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(depotPerformanceResult())" />
                                         </div>
                                     </div>
                                 </div>
 
-                                <p class="text-caption text-medium-emphasis mb-2" aria-label="Depot performance calculation">
-                                    Cash-flow adjusted curve. Deposits and withdrawals do not create gains; percentage uses net capital.
-                                    Stored history keeps its original source. Gaps indicate missing valuations.
-                                </p>
                                 <p class="text-caption text-medium-emphasis mb-2" aria-label="Actual depot account balances">
                                     Actual account balances:
                                     {{ formatDepotPerformanceDate(depotPerformanceChart.first?.date) }}
-                                    {{ formatDepotAccountEndpoint(depotPerformanceChart.first) }} <DataSourceMarkers :markers="marketDataMarkers(depotPerformanceChart.first)" />
+                                    {{ formatDepotAccountEndpoint(depotPerformanceChart.first) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(depotPerformanceChart.first)" />
                                     –
                                     {{ formatDepotPerformanceDate(depotPerformanceChart.latest?.date) }}
-                                    {{ formatDepotAccountEndpoint(depotPerformanceChart.latest) }} <DataSourceMarkers :markers="marketDataMarkers(depotPerformanceChart.latest)" />
+                                    {{ formatDepotAccountEndpoint(depotPerformanceChart.latest) }} <DataSourceMarkers :markers="marketDataMarkersWithoutFree(depotPerformanceChart.latest)" />
                                 </p>
                                 <p v-if="!depotPerformanceResult()" class="text-caption text-medium-emphasis mb-2" aria-label="Missing depot performance baseline">
                                     Full-period gain unavailable: the opening or latest valuation is missing.
                                 </p>
-                                <DataSourceMarkers :markers="marketDataMarkers(depotPerformanceChart.points)" />
+                                <DataSourceMarkers :markers="marketDataMarkersWithoutFree(depotPerformanceChart.points)" />
 
                                 <svg
                                     v-if="depotPerformanceChart.points.length"
@@ -9621,21 +8962,21 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         v-for="point in depotPerformanceChart.points"
                                         :key="'depot-source-' + point.date"
                                         :cx="point.x" :cy="point.y" r="6" fill="transparent" pointer-events="all"
-                                    ><title>{{ marketDataSourceText(point) }} · {{ point.date }} · {{ formatDepotPerformanceEndpoint(point) }}</title></circle>
+                                    ><title>{{ depotPerformancePointTitle(point, [point.date, formatDepotPerformanceEndpoint(point)]) }}</title></circle>
                                     <circle
                                         v-if="depotPerformanceChart.first"
                                         class="index-price-chart-point"
                                         :cx="depotPerformanceChart.first.x"
                                         :cy="depotPerformanceChart.first.y"
                                         r="4"
-                                    ><title>{{ marketDataSourceText(depotPerformanceChart.first) }} · {{ depotPerformanceChart.first.as_of || depotPerformanceChart.first.date || depotPerformanceChart.first.trading_date || '' }}</title></circle>
+                                    ><title>{{ depotPerformancePointTitle(depotPerformanceChart.first) }}</title></circle>
                                     <circle
                                         v-if="depotPerformanceChart.latest"
                                         class="index-price-chart-point"
                                         :cx="depotPerformanceChart.latest.x"
                                         :cy="depotPerformanceChart.latest.y"
                                         r="4"
-                                    ><title>{{ marketDataSourceText(depotPerformanceChart.latest) }} · {{ depotPerformanceChart.latest.as_of || depotPerformanceChart.latest.date || depotPerformanceChart.latest.trading_date || '' }}</title></circle>
+                                    ><title>{{ depotPerformancePointTitle(depotPerformanceChart.latest) }}</title></circle>
                                     <template v-if="depotPerformanceChart.highMarker">
                                         <line
                                             class="depot-performance-chart-extremum-line depot-performance-chart-extremum-line--high"
@@ -9649,14 +8990,14 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             :cx="depotPerformanceChart.highMarker.x"
                                             :cy="depotPerformanceChart.highMarker.y"
                                             r="5"
-                                        ><title>{{ marketDataSourceText(depotPerformanceChart.highMarker) }} · {{ depotPerformanceChart.highMarker.as_of || depotPerformanceChart.highMarker.date || depotPerformanceChart.highMarker.trading_date || '' }}</title></circle>
+                                        ><title>{{ depotPerformancePointTitle(depotPerformanceChart.highMarker) }}</title></circle>
                                         <text
                                             class="depot-performance-chart-extremum-label depot-performance-chart-extremum-label--high"
                                             :x="depotPerformanceChart.highMarker.labelX"
                                             :y="depotPerformanceChart.highMarker.labelY"
                                             :text-anchor="depotPerformanceChart.highMarker.labelAnchor"
                                         >
-                                            High {{ formatDepotPerformanceEndpoint(depotPerformanceChart.highMarker) }} <tspan>{{ marketDataSourceText(depotPerformanceChart.highMarker) }}</tspan>
+                                            High {{ formatDepotPerformanceEndpoint(depotPerformanceChart.highMarker) }} <tspan>{{ marketDataMarkersWithoutFree(depotPerformanceChart.highMarker).join(' · ') }}</tspan>
                                         </text>
                                     </template>
                                     <template v-if="depotPerformanceChart.lowMarker">
@@ -9672,14 +9013,14 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             :cx="depotPerformanceChart.lowMarker.x"
                                             :cy="depotPerformanceChart.lowMarker.y"
                                             r="5"
-                                        ><title>{{ marketDataSourceText(depotPerformanceChart.lowMarker) }} · {{ depotPerformanceChart.lowMarker.as_of || depotPerformanceChart.lowMarker.date || depotPerformanceChart.lowMarker.trading_date || '' }}</title></circle>
+                                        ><title>{{ depotPerformancePointTitle(depotPerformanceChart.lowMarker) }}</title></circle>
                                         <text
                                             class="depot-performance-chart-extremum-label depot-performance-chart-extremum-label--low"
                                             :x="depotPerformanceChart.lowMarker.labelX"
                                             :y="depotPerformanceChart.lowMarker.labelY"
                                             :text-anchor="depotPerformanceChart.lowMarker.labelAnchor"
                                         >
-                                            Low {{ formatDepotPerformanceEndpoint(depotPerformanceChart.lowMarker) }} <tspan>{{ marketDataSourceText(depotPerformanceChart.lowMarker) }}</tspan>
+                                            Low {{ formatDepotPerformanceEndpoint(depotPerformanceChart.lowMarker) }} <tspan>{{ marketDataMarkersWithoutFree(depotPerformanceChart.lowMarker).join(' · ') }}</tspan>
                                         </text>
                                     </template>
                                     <text
@@ -9689,7 +9030,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         :y="depotPerformanceChart.firstLabel.labelY"
                                         :text-anchor="depotPerformanceChart.firstLabel.labelAnchor"
                                     >
-                                        {{ formatDepotPerformanceEndpoint(depotPerformanceChart.firstLabel) }} <tspan>{{ marketDataSourceText(depotPerformanceChart.firstLabel) }}</tspan>
+                                        {{ formatDepotPerformanceEndpoint(depotPerformanceChart.firstLabel) }} <tspan>{{ marketDataMarkersWithoutFree(depotPerformanceChart.firstLabel).join(' · ') }}</tspan>
                                     </text>
                                     <text
                                         v-if="depotPerformanceChart.latestLabel"
@@ -9698,7 +9039,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         :y="depotPerformanceChart.latestLabel.labelY"
                                         :text-anchor="depotPerformanceChart.latestLabel.labelAnchor"
                                     >
-                                        {{ formatDepotPerformanceEndpoint(depotPerformanceChart.latestLabel) }} <tspan>{{ marketDataSourceText(depotPerformanceChart.latestLabel) }}</tspan>
+                                        {{ formatDepotPerformanceEndpoint(depotPerformanceChart.latestLabel) }} <tspan>{{ marketDataMarkersWithoutFree(depotPerformanceChart.latestLabel).join(' · ') }}</tspan>
                                     </text>
                                 </svg>
                                 <p v-else class="text-medium-emphasis text-body-2 mb-0">
@@ -9769,28 +9110,16 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 {{ transactionTypeLabel(tx.type) }}
                                             </v-chip>
                                         </span>
-                                        <span class="cash-ledger-date-control">
-                                            <button
-                                                type="button"
-                                                class="cash-ledger-date-button"
-                                                :disabled="transactionsLoading"
-                                                :aria-label="`Edit transaction date ${formatTransactionDate(tx.booked_at)}`"
-                                                @click="openTransactionDatePicker(tx.id, 'mobile')"
-                                            >
-                                                <span>{{ formatTransactionDate(tx.booked_at) }}</span>
-                                                <v-icon icon="mdi-calendar-edit" size="x-small" />
-                                            </button>
-                                            <input
-                                                :id="transactionDateInputId(tx.id, 'mobile')"
-                                                class="cash-ledger-date-picker"
-                                                type="date"
-                                                :value="transactionDateInputValue(tx.booked_at)"
-                                                :disabled="transactionsLoading"
-                                                tabindex="-1"
-                                                aria-label="Transaction date"
-                                                @change="updateTransactionDate(tx, $event.target.value)"
-                                            >
-                                        </span>
+                                        <button
+                                            type="button"
+                                            class="cash-ledger-edit-button"
+                                            :disabled="transactionsLoading"
+                                            :aria-label="`Edit transaction: ${transactionTypeLabel(tx.type)}, ${formatTransactionDate(tx.booked_at)}`"
+                                            @click="openCashLedgerEdit(tx)"
+                                        >
+                                            <span>{{ formatTransactionDate(tx.booked_at) }}</span>
+                                            <v-icon icon="mdi-pencil" size="x-small" />
+                                        </button>
                                     </div>
                                     <div v-if="tx.stock_label" class="mobile-cash-ledger-stock">
                                         <div>{{ tx.stock_label }}</div>
@@ -9821,28 +9150,16 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                 <tbody>
                                     <tr v-for="tx in paginatedCashLedgerTransactions" :key="tx.id">
                                         <td class="text-caption text-medium-emphasis">
-                                            <span class="cash-ledger-date-control">
-                                                <button
-                                                    type="button"
-                                                    class="cash-ledger-date-button"
-                                                    :disabled="transactionsLoading"
-                                                    :aria-label="`Edit transaction date ${formatTransactionDate(tx.booked_at)}`"
-                                                    @click="openTransactionDatePicker(tx.id, 'desktop')"
-                                                >
-                                                    <span>{{ formatTransactionDate(tx.booked_at) }}</span>
-                                                    <v-icon icon="mdi-calendar-edit" size="x-small" />
-                                                </button>
-                                                <input
-                                                    :id="transactionDateInputId(tx.id, 'desktop')"
-                                                    class="cash-ledger-date-picker"
-                                                    type="date"
-                                                    :value="transactionDateInputValue(tx.booked_at)"
-                                                    :disabled="transactionsLoading"
-                                                    tabindex="-1"
-                                                    aria-label="Transaction date"
-                                                    @change="updateTransactionDate(tx, $event.target.value)"
-                                                >
-                                            </span>
+                                            <button
+                                                type="button"
+                                                class="cash-ledger-edit-button"
+                                                :disabled="transactionsLoading"
+                                                :aria-label="`Edit transaction: ${transactionTypeLabel(tx.type)}, ${formatTransactionDate(tx.booked_at)}`"
+                                                @click="openCashLedgerEdit(tx)"
+                                            >
+                                                <span>{{ formatTransactionDate(tx.booked_at) }}</span>
+                                                <v-icon icon="mdi-pencil" size="x-small" />
+                                            </button>
                                         </td>
                                         <td>
                                             <v-chip :color="transactionTypeColor(tx.type)" density="comfortable" size="x-small" variant="tonal">
@@ -10660,6 +9977,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 }
 
 .watch-list-section {
+    --watch-list-price-meta-size: 0.6875rem;
     background: rgb(var(--v-theme-surface));
     border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
     border-radius: 8px;
@@ -10763,7 +10081,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 
 .desktop-watch-list-table :deep(th),
 .desktop-watch-list-table :deep(td) {
-    padding-inline: 6px !important;
+    padding-inline: 8px !important;
 }
 
 .desktop-watch-list-table :deep(th:first-child),
@@ -10777,8 +10095,76 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 }
 
 .desktop-watch-list-table :deep(table) {
-    table-layout: auto;
+    min-width: 39rem;
+    table-layout: fixed;
     width: 100%;
+}
+
+.desktop-watch-list-table--compact :deep(table) {
+    min-width: 27rem;
+}
+
+.watch-list-symbol-column {
+    width: 6.5rem;
+}
+
+.watch-list-latest-column {
+    width: 9.5rem;
+}
+
+.watch-list-last-day-column {
+    width: 6.25rem;
+}
+
+.watch-list-actions-column {
+    width: 7.75rem;
+}
+
+.desktop-watch-list-table--compact .watch-list-latest-column {
+    width: 7.75rem;
+}
+
+.desktop-watch-list-table--compact .watch-list-last-day-column {
+    width: 5.25rem;
+}
+
+@media (max-width: 960px) and (max-height: 600px) and (orientation: landscape) {
+    .desktop-watch-list-table--compact .watch-list-latest-column {
+        width: 9.75rem;
+    }
+}
+
+.desktop-watch-list-table :deep(.stock-holding-row > td) {
+    padding-block: 8px;
+}
+
+.watch-list-symbol-cell,
+.watch-list-price-cell,
+.watch-list-meta {
+    overflow-wrap: anywhere;
+}
+
+.watch-list-price-cell {
+    font-variant-numeric: tabular-nums;
+}
+
+.watch-list-meta {
+    gap: 2px 8px;
+}
+
+.watch-list-price-cell .latest-price-value,
+.watch-list-price-cell .handset-landscape-price {
+    max-width: 100%;
+}
+
+.watch-list-meta .recent-price-trend-dots {
+    gap: 2px;
+    margin: 0;
+}
+
+.watch-list-meta .recent-price-trend-dot {
+    height: 6px;
+    width: 6px;
 }
 
 .desktop-watch-list-table :deep(.stock-price-chart-row > td) {
@@ -10789,23 +10175,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 .stock-price-chart-mobile-target {
     min-width: 0;
     width: 100%;
-}
-
-.watch-list-content-cell {
-    white-space: nowrap;
-    width: 1%;
-}
-
-.watch-list-source-time-cell {
-    white-space: nowrap;
-    width: 100%;
-}
-
-.watch-list-actions-cell {
-    min-width: 132px;
-    text-align: right;
-    white-space: nowrap;
-    width: 132px;
 }
 
 .dashboard-compact-menu {
@@ -10842,14 +10211,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     display: none;
 }
 
-.cash-ledger-date-control {
-    align-items: center;
-    display: inline-flex;
-    gap: 4px;
-    position: relative;
-}
-
-.cash-ledger-date-button {
+.cash-ledger-edit-button {
     align-items: center;
     background: transparent;
     border: 0;
@@ -10858,28 +10220,201 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     display: inline-flex;
     font: inherit;
     gap: 4px;
+    min-height: 24px;
     padding: 0;
     text-decoration: underline;
     text-decoration-style: dotted;
     text-underline-offset: 3px;
 }
 
-.cash-ledger-date-button:disabled {
+.cash-ledger-edit-button:disabled {
     cursor: default;
     opacity: 0.62;
 }
 
-.cash-ledger-date-picker {
-    height: 1px;
-    opacity: 0;
-    position: absolute;
-    right: 0;
-    top: 100%;
-    width: 1px;
-}
-
 .cash-ledger-section {
     max-width: 920px;
+}
+
+.depot-balance-summary {
+    background: rgb(var(--v-theme-surface));
+    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+    border-radius: 10px;
+    container-type: inline-size;
+    display: grid;
+    grid-template-columns: 8.5rem repeat(4, minmax(0, 1fr)) minmax(0, 1.4fr);
+}
+
+.depot-balance-card {
+    --depot-performance-accent: var(--v-theme-on-surface);
+
+    display: grid;
+    gap: 6px;
+    grid-column: 1 / -1;
+    min-width: 0;
+    padding: 8px 10px;
+}
+
+.depot-balance-card:has(.depot-balance-result > .text-success) {
+    --depot-performance-accent: var(--v-theme-success);
+
+    background: rgba(var(--depot-performance-accent), 0.045);
+}
+
+.depot-balance-card:has(.depot-balance-result > .text-error) {
+    --depot-performance-accent: var(--v-theme-error);
+
+    background: rgba(var(--depot-performance-accent), 0.045);
+}
+
+.depot-balance-card:first-child {
+    border-radius: 9px 9px 0 0;
+}
+
+.depot-balance-card:last-child {
+    border-radius: 0 0 9px 9px;
+}
+
+.depot-balance-card + .depot-balance-card {
+    border-block-start: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+}
+
+.depot-balance-card h2 {
+    font-size: 0.875rem;
+    font-weight: 700;
+    line-height: 1.3;
+}
+
+.depot-balance-card--day h2 {
+    color: rgb(var(--v-theme-primary));
+}
+
+.depot-balance-metrics {
+    display: grid;
+    gap: 4px 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.depot-balance-metrics > div {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    padding-block: 4px;
+}
+
+.depot-balance-metrics dt {
+    color: rgba(var(--v-theme-on-surface), 0.72);
+    font-size: 0.75rem;
+    line-height: 1.3;
+}
+
+.depot-balance-metrics dd {
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1.35;
+    margin: 0;
+}
+
+.depot-balance-result {
+    grid-column: 1 / -1;
+}
+
+.depot-balance-adjustment,
+.depot-balance-card--day .depot-balance-current {
+    background: rgb(var(--v-theme-surface-variant));
+    border-radius: 6px;
+    padding-inline: 6px;
+}
+
+.depot-balance-card--day .depot-balance-current dd {
+    font-size: 0.9375rem;
+    font-weight: 700;
+}
+
+.depot-balance-performance {
+    background: rgba(var(--depot-performance-accent), 0.08);
+    border-inline-start: 3px solid rgb(var(--depot-performance-accent));
+    border-radius: 6px;
+    padding-inline: 10px;
+}
+
+.depot-balance-performance dt {
+    color: rgb(var(--v-theme-on-surface));
+    font-weight: 600;
+}
+
+.depot-balance-performance dd {
+    font-size: 1.25rem;
+    font-weight: 750;
+    line-height: 1.2;
+}
+
+@container (max-width: 15rem) {
+    .depot-balance-card {
+        padding-inline: 8px;
+    }
+
+    .depot-balance-card--day .depot-balance-metrics {
+        column-gap: 6px;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.08fr);
+    }
+
+    .depot-balance-card--day .depot-balance-current {
+        padding-inline: 4px;
+    }
+}
+
+@container (min-width: 50rem) {
+    .depot-balance-card {
+        column-gap: 0;
+        grid-template-columns: subgrid;
+        padding-inline: 0;
+    }
+
+    .depot-balance-card h2 {
+        align-self: center;
+        padding-inline: 12px;
+    }
+
+    .depot-balance-metrics {
+        column-gap: 8px;
+        grid-auto-flow: column;
+        grid-column: 2 / -1;
+        grid-template-columns: subgrid;
+        grid-template-rows: auto auto;
+        padding-inline-end: 10px;
+    }
+
+    .depot-balance-metrics > div {
+        display: grid;
+        grid-row: 1 / -1;
+        grid-template-rows: subgrid;
+        padding-inline: 10px;
+        row-gap: 2px;
+    }
+
+    .depot-balance-adjustment {
+        grid-column: 1;
+    }
+
+    .depot-balance-adjustment + .depot-balance-adjustment {
+        grid-column: 2;
+    }
+
+    .depot-balance-reference {
+        grid-column: 3;
+    }
+
+    .depot-balance-current {
+        grid-column: 4;
+    }
+
+    .depot-balance-result {
+        grid-column: 5;
+    }
+
+    .depot-balance-card--day .depot-balance-current dd {
+        font-size: 1.0625rem;
+    }
 }
 
 .cash-ledger-stock-isin,
@@ -10892,12 +10427,101 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     margin-top: 2px;
 }
 
+.depot-stock-name {
+    min-width: 8rem;
+    overflow-wrap: anywhere;
+}
+
+.depot-stock-day-change {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
 .cash-ledger-note {
     color: rgba(var(--v-theme-on-surface), 0.72);
     font-size: 0.82rem;
     line-height: 1.35;
     margin-top: 4px;
     overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px), (max-width: 960px) and (max-height: 600px) and (orientation: landscape) {
+    .desktop-depot-stocks-table {
+        display: none;
+    }
+
+    .mobile-depot-stocks {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .mobile-depot-stock-card {
+        background: rgb(var(--v-theme-surface));
+        border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+        border-radius: 8px;
+        display: grid;
+        gap: 10px;
+        grid-template-columns: minmax(0, 1fr);
+        padding: 12px;
+    }
+
+    .mobile-depot-stock-heading {
+        align-items: start;
+        display: grid;
+        gap: 8px;
+        grid-template-columns: minmax(0, 1fr) max-content;
+    }
+
+    .mobile-depot-stock-day {
+        display: grid;
+        justify-items: end;
+    }
+
+    .mobile-depot-stock-day :deep(.data-source-markers) {
+        margin-inline: 0;
+    }
+
+    .mobile-depot-stock-name {
+        color: rgb(var(--v-theme-primary));
+        font-size: 0.95rem;
+        font-weight: 600;
+        line-height: 1.25;
+        overflow-wrap: anywhere;
+    }
+
+    .mobile-depot-stock-metrics {
+        display: grid;
+        gap: 4px;
+    }
+
+    .mobile-depot-stock-metrics > div {
+        align-items: baseline;
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        overflow-wrap: anywhere;
+    }
+
+    .mobile-depot-stock-metrics dt {
+        color: rgba(var(--v-theme-on-surface), 0.72);
+        font-size: 0.75rem;
+    }
+
+    .mobile-depot-stock-metrics dd {
+        text-align: right;
+    }
+
+    .mobile-depot-stock-actions {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .mobile-depot-stock-actions :deep(.v-btn) {
+        min-width: 0;
+        width: 100%;
+    }
 }
 
 @media (max-width: 960px) {
@@ -10946,10 +10570,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     }
 
     .desktop-watch-list-table {
-        display: none;
-    }
-
-    .desktop-depot-stocks-table {
         display: none;
     }
 
@@ -11029,76 +10649,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
         text-align: right;
     }
 
-    .mobile-depot-stocks {
-        display: grid;
-        gap: 10px;
-        grid-template-columns: minmax(0, 1fr);
-    }
-
-    .mobile-depot-price-source {
-        display: grid;
-        gap: 8px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .mobile-depot-price-source .depot-price-source-button {
-        text-align: center;
-    }
-
-    .mobile-depot-stock-card {
-        background: rgb(var(--v-theme-surface));
-        border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-        border-radius: 8px;
-        display: grid;
-        gap: 10px;
-        grid-template-columns: minmax(0, 1fr);
-        padding: 12px;
-    }
-
-    .mobile-depot-stock-name {
-        color: rgb(var(--v-theme-primary));
-        font-size: 0.95rem;
-        font-weight: 600;
-        line-height: 1.25;
-        overflow-wrap: anywhere;
-    }
-
-    .mobile-depot-stock-row {
-        align-items: center;
-        display: flex;
-        gap: 12px;
-        justify-content: space-between;
-    }
-
-    .mobile-depot-stock-row > span:last-child {
-        text-align: right;
-    }
-
-    .mobile-depot-stock-row--prices {
-        display: grid;
-        grid-template-columns: minmax(44px, 0.65fr) minmax(0, 1fr) minmax(0, 1fr);
-    }
-
-    .mobile-depot-stock-row--prices > span {
-        min-width: 0;
-        overflow-wrap: anywhere;
-    }
-
-    .mobile-depot-stock-row--prices > span:not(:first-child) {
-        text-align: right;
-    }
-
-    .mobile-depot-stock-actions {
-        display: grid;
-        gap: 8px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .mobile-depot-stock-actions :deep(.v-btn) {
-        min-width: 0;
-        width: 100%;
-    }
-
     .mobile-watch-list {
         display: flex;
         flex-direction: column;
@@ -11107,6 +10657,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     }
 
     .mobile-stock-card {
+        --watch-list-price-meta-size: 0.78rem;
         background: rgb(var(--v-theme-surface));
         border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
         border-radius: 8px;
@@ -11131,6 +10682,11 @@ function intradayBackfillScheduleFormFromSettings(settings) {
         font-size: 0.95rem;
         font-weight: 600;
         line-height: 1.25;
+        overflow-wrap: anywhere;
+    }
+
+    .mobile-stock-card .stock-subtitle {
+        overflow-wrap: anywhere;
     }
 
     .mobile-stock-position {
@@ -11139,9 +10695,11 @@ function intradayBackfillScheduleFormFromSettings(settings) {
         line-height: 1.2;
     }
 
-    .mobile-stock-price-row {
-        align-items: center;
-        display: flex;
+    .mobile-stock-prices {
+        display: grid;
+        gap: 8px 12px;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 7rem), 1fr));
+        overflow-wrap: anywhere;
     }
 
     .mobile-stock-price {
@@ -11150,6 +10708,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
         font-weight: 600;
         gap: 2px;
         line-height: 1.2;
+        max-width: 100%;
         padding: 3px 6px;
     }
 
@@ -11160,9 +10719,8 @@ function intradayBackfillScheduleFormFromSettings(settings) {
         gap: 6px;
     }
 
-    .mobile-stock-price-change {
-        font-size: 0.78rem;
-        font-weight: 700;
+    .mobile-stock-card :deep(.holding-price-reload-button) {
+        min-height: 44px;
     }
 
     .mobile-stock-actions {
@@ -11241,20 +10799,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 
 .price-refresh-status-dot--waiting {
     background: #2e7d32;
-}
-
-.depot-price-source-button {
-    border: 1px solid transparent;
-    border-radius: 4px;
-    color: inherit;
-    font: inherit;
-    font-weight: 600;
-    padding: 2px 6px;
-    text-align: right;
-}
-
-.depot-price-source-button--active {
-    border-color: rgb(var(--v-theme-success));
 }
 
 .index-watch-strip {
@@ -11657,13 +11201,6 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     fill: rgb(var(--v-theme-primary));
 }
 
-.flatex-price-button {
-    color: inherit;
-    font: inherit;
-    text-align: right;
-    width: 100%;
-}
-
 .depot-holding-row--positive td {
     background-color: rgba(var(--v-theme-success), 0.06);
 }
@@ -11672,26 +11209,15 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     background-color: rgba(var(--v-theme-error), 0.06);
 }
 
-.flatex-price-input {
-    border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-    border-radius: 4px;
-    font: inherit;
-    max-width: 130px;
-    padding: 2px 6px;
-    text-align: right;
-    width: 100%;
-}
-
 .latest-price-value {
     border-radius: 4px;
     line-height: 1.2;
     padding: 2px 5px;
 }
 
-.latest-price-change {
-    font-size: 0.6875rem;
-    font-weight: 700;
-    line-height: 1;
+.watch-list-price-time,
+.watch-list-price-change {
+    font-size: var(--watch-list-price-meta-size);
 }
 
 .session-price-change {
@@ -11889,14 +11415,13 @@ function intradayBackfillScheduleFormFromSettings(settings) {
     gap: 8px;
 }
 
-.mobile-price-loaded-at {
+.watch-list-price-time {
     color: rgba(var(--v-theme-on-surface), 0.58);
-    font-size: 0.6875rem;
     font-weight: 600;
     line-height: 1;
 }
 
-.latest-price-value.text-white .mobile-price-loaded-at {
+.latest-price-value.text-white .watch-list-price-time {
     color: rgba(255, 255, 255, 0.82);
 }
 

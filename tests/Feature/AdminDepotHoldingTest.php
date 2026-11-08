@@ -2553,64 +2553,52 @@ class AdminDepotHoldingTest extends TestCase
             ->assertJsonValidationErrors('subtitle');
     }
 
-    public function test_admin_can_update_a_holding_flatex_price(): void
+    public function test_legacy_flatex_price_endpoints_leave_existing_prices_readable(): void
     {
         $admin = $this->adminUser();
         $holding = StockHolding::factory()->create([
             'symbol' => 'AAPL',
-            'isin' => null,
-            'wkn' => null,
             'latest_price' => '191.500000',
             'flatex_price' => '191.500000',
-        ]);
-        $matchingHolding = StockHolding::factory()->create([
-            'symbol' => 'AAPL',
-            'isin' => null,
-            'wkn' => null,
-            'latest_price' => '190.000000',
-            'flatex_price' => '190.000000',
-        ]);
-        $otherHolding = StockHolding::factory()->create([
-            'symbol' => 'MSFT',
-            'isin' => null,
-            'wkn' => null,
-            'flatex_price' => '300.000000',
         ]);
 
         $this->actingAs($admin)
             ->patchJson("/admin/watchlist/holdings/{$holding->id}/flatex-price", [
                 'flatex_price' => '180.250000',
             ])
+            ->assertGone();
+
+        $this->patchJson("/admin/active-depot/holdings/{$holding->id}/flatex-price", [
+            'flatex_price' => null,
+        ])->assertGone();
+
+        $this->getJson('/admin/watchlist/holdings')
             ->assertOk()
-            ->assertJsonPath('message', 'Flatex price updated.')
-            ->assertJsonPath('holding.id', $holding->id)
-            ->assertJsonPath('holding.flatex_price', '180.250000')
-            ->assertJsonCount(2, 'holdings')
             ->assertJsonPath('holdings.0.id', $holding->id)
-            ->assertJsonPath('holdings.0.flatex_price', '180.250000')
-            ->assertJsonPath('holdings.1.id', $matchingHolding->id)
-            ->assertJsonPath('holdings.1.flatex_price', '180.250000');
-
-        $this->assertSame('180.250000', $holding->refresh()->flatex_price);
-        $this->assertSame('180.250000', $matchingHolding->refresh()->flatex_price);
-        $this->assertSame('300.000000', $otherHolding->refresh()->flatex_price);
-    }
-
-    public function test_admin_must_provide_a_valid_flatex_price(): void
-    {
-        $admin = $this->adminUser();
-        $holding = StockHolding::factory()->create([
-            'flatex_price' => '191.500000',
-        ]);
-
-        $this->actingAs($admin)
-            ->patchJson("/admin/watchlist/holdings/{$holding->id}/flatex-price", [
-                'flatex_price' => -1,
-            ])
-            ->assertUnprocessable()
-            ->assertJsonValidationErrors('flatex_price');
+            ->assertJsonPath('holdings.0.flatex_price', '191.500000');
 
         $this->assertSame('191.500000', $holding->refresh()->flatex_price);
+    }
+
+    public function test_creating_a_priced_holding_does_not_seed_a_flatex_price(): void
+    {
+        StockHolding::creating(function (StockHolding $holding): void {
+            $holding->latest_price = '191.500000';
+        });
+
+        $this->actingAs($this->adminUser())
+            ->postJson('/admin/watchlist/holdings', [
+                'symbol' => 'AAPL',
+                'currency' => 'USD',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('holding.flatex_price', null);
+
+        $this->assertDatabaseHas('stock_holdings', [
+            'symbol' => 'AAPL',
+            'latest_price' => '191.500000',
+            'flatex_price' => null,
+        ]);
     }
 
     public function test_admin_can_delete_a_watchlist_holding(): void

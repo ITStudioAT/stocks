@@ -49,7 +49,7 @@ class StockPreviousCloseResolver
     /**
      * Last observed free prices on the expected venue days; never official closes.
      *
-     * @return array{previous_close: ?string, previous_close_date: ?string, previous_close_source_markers: array<int, string>, earlier_close: ?string, earlier_close_date: ?string, earlier_close_source_markers: array<int, string>}
+     * @return array{previous_close: ?string, previous_close_date: ?string, previous_close_as_of: ?string, previous_close_source_markers: array<int, string>, earlier_close: ?string, earlier_close_date: ?string, earlier_close_source_markers: array<int, string>}
      */
     public function resolve(StockHolding $holding): array
     {
@@ -62,7 +62,7 @@ class StockPreviousCloseResolver
         return $this->beforeDay($holding, $reference);
     }
 
-    /** @return array{previous_close: ?string, previous_close_date: ?string, previous_close_source_markers: array<int, string>, earlier_close: ?string, earlier_close_date: ?string, earlier_close_source_markers: array<int, string>} */
+    /** @return array{previous_close: ?string, previous_close_date: ?string, previous_close_as_of: ?string, previous_close_source_markers: array<int, string>, earlier_close: ?string, earlier_close_date: ?string, earlier_close_source_markers: array<int, string>} */
     public function forObservation(StockHolding $holding, StockPrice|StockRealtimePrice|StockHoldingIntradayCandle|null $observation): array
     {
         if (! MarketPriceStore::enabled()) {
@@ -90,7 +90,7 @@ class StockPreviousCloseResolver
         return $timezone === null || $asOf === null ? null : Carbon::parse($asOf, 'UTC')->setTimezone($timezone)->toDateString();
     }
 
-    /** @return array{previous_close: ?string, previous_close_date: ?string, previous_close_source_markers: array<int, string>, earlier_close: ?string, earlier_close_date: ?string, earlier_close_source_markers: array<int, string>} */
+    /** @return array{previous_close: ?string, previous_close_date: ?string, previous_close_as_of: ?string, previous_close_source_markers: array<int, string>, earlier_close: ?string, earlier_close_date: ?string, earlier_close_source_markers: array<int, string>} */
     private function beforeDay(StockHolding $holding, ?Carbon $reference): array
     {
         $previousDay = $reference === null ? null : $this->calendar->previousDay($holding, $reference);
@@ -100,10 +100,11 @@ class StockPreviousCloseResolver
         $earlier = $earlierDay === null ? null : $this->lastObservation($holding, $observations, $earlierDay);
 
         return [
-            'previous_close' => $previous,
+            'previous_close' => $this->observationPrice($previous),
             'previous_close_date' => $previousDay?->toDateString(),
+            'previous_close_as_of' => $this->observationTimestamp($previous),
             'previous_close_source_markers' => $previous === null ? [] : ['free'],
-            'earlier_close' => $earlier,
+            'earlier_close' => $this->observationPrice($earlier),
             'earlier_close_date' => $earlierDay?->toDateString(),
             'earlier_close_source_markers' => $earlier === null ? [] : ['free'],
         ];
@@ -161,7 +162,9 @@ class StockPreviousCloseResolver
             return null;
         }
 
-        return $this->lastObservation($holding, $this->observations($holding, $day, $day->copy()->addDay()), $day);
+        $observation = $this->lastObservation($holding, $this->observations($holding, $day, $day->copy()->addDay()), $day);
+
+        return $this->observationPrice($observation);
     }
 
     /**
@@ -192,7 +195,7 @@ class StockPreviousCloseResolver
         $columns = ['id', 'source_key', 'source_name', 'source_url', 'currency', 'as_of', 'created_at', 'updated_at'];
         $columns = [...$columns, ...($model instanceof StockHoldingIntradayCandle
             ? ['stock_holding_id', 'close', 'trading_date', 'interval']
-            : [$model instanceof StockPrice ? 'instrument_key' : 'stock_holding_id', 'price', 'fetched_at', 'validation_status', 'freshness_status'])];
+            : [$model instanceof StockPrice ? 'instrument_key' : 'stock_holding_id', 'price', 'price_type', 'fetched_at', 'validation_status', 'freshness_status'])];
         $ranked = $query->select(array_map(fn (string $column): string => "{$table}.{$column}", $columns))
             ->selectRaw("ROW_NUMBER() OVER (PARTITION BY {$partition}, SUBSTR(as_of, 1, 13) ORDER BY {$order}) AS observation_rank");
 
@@ -228,12 +231,13 @@ class StockPreviousCloseResolver
     }
 
     /** @param Collection<int, StockPrice|StockRealtimePrice|StockHoldingIntradayCandle> $observations */
-    private function lastObservation(StockHolding $holding, Collection $observations, Carbon $day): ?string
+    private function lastObservation(StockHolding $holding, Collection $observations, Carbon $day): StockPrice|StockRealtimePrice|StockHoldingIntradayCandle|null
     {
         $from = $day->copy()->utc()->toDateTimeString();
         $until = $day->copy()->addDay()->utc()->toDateTimeString();
         $central = MarketPriceStore::enabled();
-        $observation = $observations->filter(function ($record) use ($holding, $from, $until, $day, $central): bool {
+
+        return $observations->filter(function ($record) use ($holding, $from, $until, $day, $central): bool {
             $asOf = $record->getRawOriginal('as_of');
             $price = $record instanceof StockHoldingIntradayCandle ? $record->close : $record->price;
 
@@ -247,8 +251,35 @@ class StockPreviousCloseResolver
                 && ! ($record->raw_payload['quarantined'] ?? false)
                 && ! in_array($record->validation_status, ['invalid', 'rejected'], true);
         })->sortByDesc(fn ($record): string => $record->getRawOriginal('as_of').'|'.($record->getRawOriginal('fetched_at') ?? ''))->first();
+    }
 
-        return $observation === null ? null : (string) ($observation instanceof StockHoldingIntradayCandle ? $observation->close : $observation->price);
+    private function observationPrice(StockPrice|StockRealtimePrice|StockHoldingIntradayCandle|null $observation): ?string
+    {
+        $price = $observation instanceof StockHoldingIntradayCandle ? $observation->close : $observation?->price;
+
+        return $price === null ? null : (string) $price;
+    }
+
+    private function observationTimestamp(StockPrice|StockRealtimePrice|StockHoldingIntradayCandle|null $observation): ?string
+    {
+        if ($observation === null || $observation->source_key === 'yahoo_daily') {
+            return null;
+        }
+
+        if (MarketPriceStore::enabled()) {
+            if ($observation->record_kind === 'bar' || $observation->interval_code === '1d') {
+                return null;
+            }
+
+            $timestamp = $observation->getRawOriginal('observed_at');
+        } else {
+            $hasSourceTime = $observation instanceof StockHoldingIntradayCandle
+                ? in_array($observation->interval, ['trade', 'xtrade'], true)
+                : ! in_array($observation->price_type, ['historical_eod', 'daily_close', 'ohlc'], true);
+            $timestamp = $hasSourceTime ? $observation->getRawOriginal('as_of') : null;
+        }
+
+        return blank($timestamp) ? null : Carbon::parse($timestamp, 'UTC')->utc()->toIso8601String();
     }
 
     /** @param array<string, array<string, mixed>> $history
@@ -257,7 +288,7 @@ class StockPreviousCloseResolver
     private function centralObservations(array $history): Collection
     {
         return collect($history)->map(fn (array $row) => (new StockRealtimePrice)->newFromBuilder([
-            'price' => $row['price'], 'as_of' => $row['as_of'], 'source_key' => $row['source_key'], 'currency' => $row['currency'],
+            'price' => $row['price'], 'as_of' => $row['as_of'], 'observed_at' => $row['observed_at'], 'source_key' => $row['source_key'], 'currency' => $row['currency'],
             'trading_date' => $row['trading_date'], 'adjustment_basis' => $row['adjustment_basis'], 'interval_code' => $row['interval_code'],
             'record_kind' => $row['record_kind'], 'validation_status' => 'valid']))->values();
     }

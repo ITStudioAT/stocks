@@ -43,7 +43,43 @@ class DashboardPerformanceSnapshots
      */
     public function periodPerformance(Depot $depot, string $period, Carbon $start, Carbon $end, array $closing): array
     {
-        $opening = $this->closingBalance($depot, $start);
+        return $this->performanceBetween($depot, $period, $start, $end, $this->closingBalance($depot, $start), $closing);
+    }
+
+    /**
+     * @return array{period: string, source_markers: list<string>, change_amount: ?string, change_percent: ?string, opening_date: string, start_date: string, closing_date: string, opening_balance: ?string, closing_balance: ?string}
+     */
+    public function completedDepotPeriod(Depot $depot, string $period, Carbon $end): array
+    {
+        $start = $this->periodOpening($period, $end);
+        $opening = $this->history->tradingAccountValuesAt($depot, $start->copy()->endOfDay(), freeOnly: null);
+        $closing = $this->history->tradingAccountValuesAt($depot, $end->copy()->endOfDay(), freeOnly: null);
+        $performance = $this->performanceBetween(
+            $depot,
+            $period,
+            $start,
+            $end,
+            ['balance' => $opening['account_balance'], 'source_markers' => $opening['source_markers']],
+            ['balance' => $closing['account_balance'], 'source_markers' => $closing['source_markers']],
+        );
+
+        return [
+            ...$performance,
+            'opening_date' => $start->toDateString(),
+            'start_date' => $start->copy()->addDay()->toDateString(),
+            'closing_date' => $end->toDateString(),
+            'opening_balance' => $this->decimal($opening['account_balance']),
+            'closing_balance' => $this->decimal($closing['account_balance']),
+        ];
+    }
+
+    /**
+     * @param  array{balance: ?float, source_markers: list<string>}  $opening
+     * @param  array{balance: ?float, source_markers: list<string>}  $closing
+     * @return array{period: string, source_markers: list<string>, change_amount: ?string, change_percent: ?string}
+     */
+    private function performanceBetween(Depot $depot, string $period, Carbon $start, Carbon $end, array $opening, array $closing): array
+    {
         $cutoff = $start->copy()->endOfDay();
         $end = $end->copy()->endOfDay();
         $capital = $opening['balance'] === null ? null
@@ -61,9 +97,14 @@ class DashboardPerformanceSnapshots
         return [
             'period' => $period,
             'source_markers' => $change === null ? [] : MarketDataProvenance::merge($opening['source_markers'], $closing['source_markers']),
-            'change_amount' => $change === null ? null : number_format($change, 2, '.', ''),
-            'change_percent' => $change === null || $capital <= 0 ? null : number_format($change / $capital * 100, 2, '.', ''),
+            'change_amount' => $this->decimal($change),
+            'change_percent' => $change === null || $capital <= 0 ? null : $this->decimal($change / $capital * 100),
         ];
+    }
+
+    private function decimal(?float $value): ?string
+    {
+        return $value === null ? null : number_format($value, 2, '.', '');
     }
 
     public function backfill(Depot $depot): void
@@ -160,23 +201,17 @@ class DashboardPerformanceSnapshots
     public function calculatePeriodFresh(Depot $depot, string $period, Carbon $end): array
     {
         $start = $this->periodOpening($period, $end);
-        $cutoff = $start->copy()->endOfDay();
-        $opening = $this->history->performanceAccountBalanceAt($depot, $cutoff, $openingSources);
+        $opening = $this->history->performanceAccountBalanceAt($depot, $start->copy()->endOfDay(), $openingSources);
         $closing = $this->history->performanceAccountBalanceAt($depot, $end->copy()->endOfDay(), $closingSources);
-        $capital = $opening === null ? null : $opening + $this->history->externalCashFlowAfter($depot, $cutoff, $end->copy()->endOfDay());
-        $change = $closing === null || $capital === null ? null : $closing - $capital;
 
-        if ($period === 'year' && $change !== null) {
-            $change -= (float) $depot->transactions()->where('type', 'broker_bonus')
-                ->where('booked_at', '>', $cutoff)->where('booked_at', '<=', $end->copy()->endOfDay())->sum('cash_delta');
-        }
-
-        return [
-            'period' => $period,
-            'source_markers' => $change === null ? [] : MarketDataProvenance::merge($openingSources ?? [], $closingSources ?? []),
-            'change_amount' => $change === null ? null : number_format($change, 2, '.', ''),
-            'change_percent' => $change === null || $capital <= 0 ? null : number_format($change / $capital * 100, 2, '.', ''),
-        ];
+        return $this->performanceBetween(
+            $depot,
+            $period,
+            $start,
+            $end,
+            ['balance' => $opening, 'source_markers' => $openingSources ?? []],
+            ['balance' => $closing, 'source_markers' => $closingSources ?? []],
+        );
     }
 
     /**

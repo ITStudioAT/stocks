@@ -43,6 +43,7 @@ class FreePreviousTradingDayTest extends TestCase
         $result = $resolver->resolve($holding);
         $this->assertSame('106.00000000', $result['previous_close']);
         $this->assertSame('2026-11-03', $result['previous_close_date']);
+        $this->assertSame('2026-11-03T16:30:00+00:00', $result['previous_close_as_of']);
         $this->assertSame(['free'], $result['previous_close_source_markers']);
         $this->assertNull($result['earlier_close']);
         $resolver->prime(StockHolding::query()->whereKey($holding->id)->get());
@@ -62,8 +63,23 @@ class FreePreviousTradingDayTest extends TestCase
 
         $this->assertNull($result['previous_close']);
         $this->assertSame('2026-11-03', $result['previous_close_date']);
+        $this->assertNull($result['previous_close_as_of']);
         $this->assertSame([], $result['previous_close_source_markers']);
         $this->assertSame('100.00000000', $result['earlier_close']);
+    }
+
+    public function test_legacy_daily_price_does_not_supply_a_timestamp_from_its_placeholder(): void
+    {
+        $holding = $this->holding();
+        $this->quote($holding, '2026-11-03 16:30:00', 200)->update(['price_type' => 'historical_eod']);
+        $resolver = app(StockPreviousCloseResolver::class);
+
+        $result = $resolver->resolve($holding);
+        $resolver->prime(collect([$holding]));
+
+        $this->assertSame('200.00000000', $result['previous_close']);
+        $this->assertNull($result['previous_close_as_of']);
+        $this->assertSame($result, $resolver->resolve($holding));
     }
 
     public function test_it_ignores_wrong_currency_and_quarantined_observations(): void

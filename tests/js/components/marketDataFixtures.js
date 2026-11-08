@@ -5,6 +5,7 @@ export const provenanceHolding = {
     latest_price_status: 'fresh', price_status: 'fresh', price_type: 'regular_market_last',
     previous_day_price: '54', previous_day_price_source_markers: ['EODHD'],
     previous_day_change_percent: '3.70', previous_day_change_percent_source_markers: ['free', 'EODHD'],
+    day_change_amount_eur: '4.00', day_change_amount_eur_source_markers: ['free', 'EODHD'],
     end_price_24: '54', end_price_24_source_markers: ['EODHD'], end_price_24_date: '2026-11-03',
     start_price: '55', start_price_source_markers: ['free'], flatex_price: '57', year_start_price: '50',
     data_source_markers: ['free', 'EODHD'], trading_times: 'Monday-Friday 09:00-17:30 Europe/Berlin',
@@ -56,7 +57,14 @@ export function provenanceResponse(path) {
     if (path === '/admin/depot-transactions') {
         return {
             depot_holdings: [provenanceHolding], transactions: [], depot_valuations: {
-                latest: valuation,
+                latest: {
+                    ...valuation,
+                    account_overview: {
+                        valuation_date: '2026-11-04', previous_valuation_date: '2026-11-03',
+                        stock_balance: '112', cash_balance: '1000', account_balance: '1112', previous_day_balance: '1108',
+                        change_amount: '4.00', stock_balance_source_markers: ['free'], previous_day_balance_source_markers: ['EODHD'],
+                    },
+                },
                 flatex: {
                     ...valuation, stock_balance: '114', account_balance: '1114', current_balance: '1114',
                     ...Object.fromEntries(['stock_balance', 'account_balance', 'current_balance', 'balance_change_amount', 'taxable_stock_gain_amount'].map((field) => [`${field}_source_markers`, []])),

@@ -161,6 +161,7 @@ Route::middleware(['auth', 'auth.session', 'role:admin|super_admin'])->group(fun
     Route::get('/admin/depot-stocks/{period}', [AdminDepotStockPeriodController::class, 'index'])
         ->whereIn('period', ['actual-year', 'last-year', '4-ever'])
         ->name('admin.depot-stocks.period.index');
+    Route::patch('/admin/depot-transactions/{depotTransaction}', [AdminDepotTransactionController::class, 'update'])->name('admin.depot-transactions.update');
     Route::patch('/admin/depot-transactions/{depotTransaction}/date', [AdminDepotTransactionController::class, 'updateDate'])->name('admin.depot-transactions.date.update');
     Route::post('/admin/depot-transactions/cash', [AdminDepotTransactionController::class, 'storeCash'])->name('admin.depot-transactions.cash.store');
     Route::post('/admin/depot-transactions/stocks', [AdminDepotTransactionController::class, 'storeStock'])->name('admin.depot-transactions.stocks.store');

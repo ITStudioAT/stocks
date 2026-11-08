@@ -1,5 +1,9 @@
+export function hasPriceValue(value) {
+    return value !== null && value !== undefined && value !== '';
+}
+
 export function formatPriceValue(value, currency, { showCurrency = false } = {}) {
-    if (value === null || value === undefined || value === '') {
+    if (!hasPriceValue(value)) {
         return '-';
     }
 
