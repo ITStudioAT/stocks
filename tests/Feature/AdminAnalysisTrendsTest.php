@@ -6,6 +6,7 @@ use App\Models\Depot;
 use App\Models\DepotTransaction;
 use App\Models\StockHolding;
 use App\Models\StockHoldingDailyPrice;
+use App\Models\StockHoldingIntradayCandle;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -85,6 +86,31 @@ class AdminAnalysisTrendsTest extends TestCase
     public function test_summary_requires_authentication(): void
     {
         $this->getJson('/admin/analysis/trends')->assertUnauthorized();
+    }
+
+    public function test_summary_includes_the_latest_valid_intraday_price_for_each_stock(): void
+    {
+        $this->travelTo(Carbon::parse('2026-06-05 12:00:00', 'UTC'));
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin', 'web'));
+        $holding = $this->holdingWithPrices('Stock', [100, 110]);
+        $empty = StockHolding::factory()->create(['name' => 'Empty']);
+
+        foreach ([['09:00', '120', 'EUR'], ['10:00', '125', 'EUR'], ['11:00', '200', 'USD'], ['13:00', '300', 'EUR']] as [$time, $close, $currency]) {
+            $asOf = Carbon::parse("2026-06-05 {$time}", 'UTC');
+            StockHoldingIntradayCandle::query()->create([
+                'stock_holding_id' => $holding->id, 'trading_date' => '2026-06-05', 'interval' => '5m',
+                'as_of' => $asOf, 'timestamp' => $asOf->timestamp, 'datetime' => $asOf->toDateTimeString(),
+                'close' => $close, 'currency' => $currency, 'source_key' => 'eodhd_intraday',
+            ]);
+        }
+
+        $trends = collect($this->actingAs($admin)->getJson('/admin/analysis/trends')->assertOk()->json('trends'))->keyBy('id');
+        $this->assertEquals(125, $trends[$holding->id]['intraday']['price']);
+        $this->assertSame('2026-06-05T10:00:00+00:00', $trends[$holding->id]['intraday']['as_of']);
+        $this->assertSame(['EODHD'], $trends[$holding->id]['intraday']['source_markers']);
+        $this->assertSame('up', $trends[$holding->id]['direction']);
+        $this->assertNull($trends[$empty->id]['intraday']);
     }
 
     /** @param array<int, int> $values */

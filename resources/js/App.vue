@@ -130,6 +130,8 @@ const loginMode = ref('password');
 const localError = ref('');
 const activeSection = ref('dashboard');
 let privateIndexRefreshTimer = null;
+let analysisRefreshTimer = null;
+let analysisTrendsRequestInFlight = false;
 let privateIndexQuotesTimer = null;
 let privateIndexStatusVersion = 0;
 let privateIndexStatusRequest = false;
@@ -186,6 +188,7 @@ const expandedAnalysisHoldingId = ref(null);
 const expandedAnalysisCardId = ref(null);
 const analysisOverviewBackButton = ref(null);
 const analysisTrends = ref([]);
+const analysisIntradayByHolding = computed(() => Object.fromEntries(analysisTrends.value.map((trend) => [trend.id, trend.intraday])));
 const analysisTrendsLoading = ref(false);
 const analysisTrendsError = ref('');
 const expandedAnalysisCard = computed(() => analysisTrends.value.find((trend) => trend.id === expandedAnalysisCardId.value) ?? null);
@@ -771,8 +774,12 @@ watch(
 );
 
 watch(activeSection, (section) => {
+    window.clearInterval(analysisRefreshTimer);
     if (section === 'analysis') {
         loadAnalysisTrends();
+        analysisRefreshTimer = window.setInterval(() => {
+            if (!document.hidden) loadAnalysisTrends({ silent: true });
+        }, 60000);
     }
 });
 
@@ -898,6 +905,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+    window.clearInterval(analysisRefreshTimer);
     window.clearInterval(privateIndexRefreshTimer);
     window.clearInterval(privateIndexQuotesTimer);
     depotsStore.cancelIntradayRefreshes();
@@ -2748,21 +2756,24 @@ async function loadSelectedStockPrices() {
     }
 }
 
-async function loadAnalysisTrends() {
-    if (analysisTrendsLoading.value) {
+async function loadAnalysisTrends({ silent = false } = {}) {
+    if (analysisTrendsRequestInFlight) {
         return;
     }
 
-    analysisTrendsLoading.value = true;
-    analysisTrendsError.value = '';
+    analysisTrendsRequestInFlight = true;
+    if (!silent) analysisTrendsLoading.value = true;
+    if (!silent) analysisTrendsError.value = '';
 
     try {
         const response = await request('/admin/analysis/trends');
         analysisTrends.value = response.trends ?? [];
+        analysisTrendsError.value = '';
     } catch (error) {
-        analysisTrendsError.value = error.message || 'Unable to load trend overview.';
+        if (!silent) analysisTrendsError.value = error.message || 'Unable to load trend overview.';
     } finally {
         analysisTrendsLoading.value = false;
+        analysisTrendsRequestInFlight = false;
     }
 }
 
@@ -6459,6 +6470,8 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                                 <span class="analysis-trend-position-state">{{ hasPositionPieces(trend) ? 'Held' : 'Not held' }}</span>
                                             </span>
                                             <span class="analysis-trend-name">{{ trend.name || `Stock ${trend.id}` }}</span>
+                                            <span v-if="trend.intraday">Intraday: {{ formatPriceValue(trend.intraday.price, trend.intraday.currency, { showCurrency: true }) }} <DataSourceMarkers :markers="trend.intraday.source_markers" /><br><time :datetime="trend.intraday.as_of">{{ formatDateTime(trend.intraday.as_of) }}</time></span>
+                                            <span v-else>Intraday: –</span>
                                             <span class="analysis-trend-pieces"><span>Pieces</span><strong>{{ formatPositionPieces(trend) }}</strong></span>
                                         </button>
                                     </article>
@@ -6478,6 +6491,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     </div>
                                     <AnalysisPriceHistory
                                         :holding="expandedAnalysisCard"
+                                        :intraday="expandedAnalysisCard.intraday"
                                         :history="analysisPriceHistories[expandedAnalysisCard.id]"
                                         @close="returnToAnalysisCards"
                                         @retry="loadAnalysisPriceHistory(expandedAnalysisCard)"
@@ -6755,6 +6769,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                     <AnalysisPriceHistory
                                         v-if="activeSection === 'analysis' && expandedAnalysisHoldingId === holding.id"
                                         :holding="holding"
+                                        :intraday="analysisIntradayByHolding[holding.id]"
                                         :history="analysisPriceHistories[holding.id]"
                                         @close="expandedAnalysisHoldingId = null"
                                         @retry="loadAnalysisPriceHistory(holding)"
@@ -6980,6 +6995,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                         <td :colspan="watchListTableColumnCount">
                                             <AnalysisPriceHistory
                                                 :holding="holding"
+                                                :intraday="analysisIntradayByHolding[holding.id]"
                                                 :history="analysisPriceHistories[holding.id]"
                                                 @close="expandedAnalysisHoldingId = null"
                                                 @retry="loadAnalysisPriceHistory(holding)"

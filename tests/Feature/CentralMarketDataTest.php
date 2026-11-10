@@ -216,6 +216,11 @@ class CentralMarketDataTest extends TestCase
             ]);
         }
         app(MarketPriceLegacyImporter::class)->run(1);
+        $listing = app(MarketIdentityRegistry::class)->listing($holding->refresh());
+        app(MarketPriceStore::class)->store($listing->id, $this->quote([
+            'source_key' => 'eodhd_intraday', 'record_kind' => 'bar', 'interval_code' => '5m',
+            'adjustment_basis' => 'unadjusted', 'price' => '195', 'close' => '195',
+        ]));
         config(['services.market_data.central_enabled' => true]);
         $admin = User::factory()->create();
         $admin->assignRole(Role::findOrCreate('admin'));
@@ -223,6 +228,8 @@ class CentralMarketDataTest extends TestCase
         $this->actingAs($admin)->getJson('/admin/analysis/trends')->assertOk()
             ->assertJsonCount(1, 'trends')
             ->assertJsonPath('trends.0.id', $holding->id)
+            ->assertJsonPath('trends.0.intraday.as_of', '2026-11-06T15:00:00+00:00')
+            ->assertJsonPath('trends.0.intraday.source_markers', ['EODHD'])
             ->assertJsonPath('trends.0.direction', 'up')
             ->assertJsonPath('trends.0.count', 2);
     }

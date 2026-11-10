@@ -231,6 +231,31 @@ describe('visible market data provenance across navigation', () => {
         expect(wrapper.get('[aria-label="Longest current trends"]').text()).toContain('No stocks are available');
     });
 
+    it('updates the latest intraday price on cards and in an open history', async () => {
+        const intervals = vi.spyOn(window, 'setInterval');
+        let price = '125';
+        await renderPage('/admin/menu/analysis', 1440, (response, path) => {
+            if (path === '/admin/analysis/trends') {
+                return { trends: [{ id: 1, name: 'Demo investment', position_pieces: '0', direction: null, count: null,
+                    intraday: { price, currency: 'EUR', as_of: '2026-11-04T10:00:00Z', source_markers: ['EODHD'] } }] };
+            }
+
+            return response;
+        });
+
+        expect(wrapper.get('#analysis-trend-card-1').text()).toContain('Intraday: 125.');
+        await wrapper.get('#analysis-trend-card-1').trigger('click');
+        await flushPromises();
+        expect(wrapper.get('#analysis-card-history').text()).toContain('Latest stored intraday: 125.');
+
+        price = '130';
+        const refresh = intervals.mock.calls.find(([, delay]) => delay === 60000)[0];
+        refresh();
+        await flushPromises();
+        expect(wrapper.get('#analysis-card-history').text()).toContain('Latest stored intraday: 130.');
+        intervals.mockRestore();
+    });
+
     it('opens the same cached history from a card and the stock list', async () => {
         await renderPage('/admin/menu/analysis', 1440, (response, path) => {
             if (path === '/admin/analysis/trends') {

@@ -5,18 +5,22 @@ namespace App\Services;
 use App\Models\Depot;
 use App\Models\StockHolding;
 use App\Models\StockHoldingDailyPrice;
+use App\Models\StockHoldingIntradayCandle;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 
 class AnalysisTrendSummary
 {
     public function __construct(private DepotTransactionBooker $depotTransactionBooker) {}
 
-    /** @return array<int, array{id: int, name: ?string, symbol: ?string, position_pieces: string, direction: ?string, count: ?int, trading_date: ?string}> */
+    /** @return array<int, array{id: int, name: ?string, symbol: ?string, position_pieces: string, direction: ?string, count: ?int, trading_date: ?string, intraday: ?array{price: string, currency: string, as_of: string, source_markers: array<int, string>}}> */
     public function all(): array
     {
         $holdings = StockHolding::query()->get(['id', 'name', 'symbol'])->keyBy('id');
         $activeDepot = Depot::query()->where('is_active', true)->first();
         $positions = $activeDepot ? $this->depotTransactionBooker->positionPiecesByHolding($activeDepot) : collect();
+        $intradayPrices = $this->latestIntradayPrices();
         $summaries = $holdings->map(fn (StockHolding $holding): array => [
             'id' => $holding->id,
             'name' => $holding->name,
@@ -25,6 +29,7 @@ class AnalysisTrendSummary
             'direction' => null,
             'count' => null,
             'trading_date' => null,
+            'intraday' => $intradayPrices->get($holding->id),
         ])->all();
         $holdingId = null;
         $previous = null;
@@ -107,7 +112,30 @@ class AnalysisTrendSummary
         return $summaries;
     }
 
-    /** @param array<int, array{id: int, name: ?string, symbol: ?string, position_pieces: string, direction: ?string, count: ?int, trading_date: ?string}> $summaries */
+    private function latestIntradayPrices(): Collection
+    {
+        $latestIds = StockHolding::query()->select('id')->selectSub(StockHoldingIntradayCandle::query()
+            ->select('id')
+            ->whereColumn('stock_holding_id', 'stock_holdings.id')
+            ->whereColumn('currency', 'stock_holdings.currency')
+            ->where('close', '>', 0)
+            ->whereNotNull('as_of')
+            ->where('as_of', '<=', now()->utc())
+            ->orderByDesc('as_of')->orderByDesc('id')->limit(1), 'intraday_id')
+            ->get()->pluck('intraday_id', 'id')->filter();
+
+        return StockHoldingIntradayCandle::query()->whereIn('id', $latestIds->unique())
+            ->get(['id', 'stock_holding_id', 'close', 'currency', 'as_of', 'source_key', 'source_name', 'source_url'])
+            ->filter(fn (StockHoldingIntradayCandle $price): bool => (int) $latestIds->get($price->stock_holding_id) === $price->id)
+            ->mapWithKeys(fn ($price): array => [$price->stock_holding_id => [
+                'price' => (string) $price->close,
+                'currency' => $price->currency,
+                'as_of' => Carbon::parse($price->getRawOriginal('as_of'), 'UTC')->toIso8601String(),
+                'source_markers' => MarketDataProvenance::forRecord($price),
+            ]]);
+    }
+
+    /** @param array<int, array{id: int, name: ?string, symbol: ?string, position_pieces: string, direction: ?string, count: ?int, trading_date: ?string, intraday: ?array{price: string, currency: string, as_of: string, source_markers: array<int, string>}}> $summaries */
     private function applySummary(array &$summaries, ?int $holdingId, ?string $latestDate, int $direction, int $count): void
     {
         if ($holdingId === null || ! isset($summaries[$holdingId])) {

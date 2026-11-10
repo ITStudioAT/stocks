@@ -7,6 +7,7 @@ import { formatPriceValue, hasPriceValue } from './utils/numberFormatters';
 const props = defineProps({
     holding: { type: Object, required: true },
     history: { type: Object, default: null },
+    intraday: { type: Object, default: null },
 });
 
 const emit = defineEmits(['retry', 'close']);
@@ -75,6 +76,15 @@ function formatDate(date) {
     return parts.length === 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : date;
 }
 
+function formatIntradayTime(value) {
+    const date = new Date(value);
+
+    return Number.isNaN(date.getTime()) ? '–' : new Intl.DateTimeFormat('de-AT', {
+        dateStyle: 'short',
+        timeStyle: 'short',
+    }).format(date);
+}
+
 function formatChange(value, currency) {
     if (value === null) {
         return '–';
@@ -99,6 +109,8 @@ function changeClass(value) {
 <template>
     <section class="analysis-price-history pa-4" :aria-label="`${holding.name || holding.symbol} historical prices`" @click.stop="handleHistoryClick">
         <h3 class="text-subtitle-1 mb-2">Historical prices</h3>
+        <p v-if="intraday" class="text-body-2 mb-2">Latest stored intraday: {{ formatPriceValue(intraday.price, intraday.currency, { showCurrency: true }) }} <DataSourceMarkers :markers="intraday.source_markers ?? []" /> · <time :datetime="intraday.as_of">{{ formatIntradayTime(intraday.as_of) }}</time></p>
+        <p v-else class="text-body-2 mb-2">No stored intraday price available.</p>
         <p class="text-caption text-medium-emphasis mb-2">Click the history to close it.</p>
         <p class="text-caption text-medium-emphasis mb-3">Last 100 available daily prices, newest first. Adjusted close where available; otherwise close. Trend % compares with the price before the current rise or fall; Count includes each observation in the trend, including unchanged prices. If no earlier reversal is stored, the oldest available price is the starting point.</p>
         <div v-if="!history || history.loading" role="status" class="text-body-2">Loading historical prices…</div>

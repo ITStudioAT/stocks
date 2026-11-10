@@ -18,6 +18,18 @@ function price(index, value, currency = 'EUR') {
 }
 
 describe('AnalysisPriceHistory', () => {
+    it('shows the latest intraday price independently of daily trend history', () => {
+        const wrapper = mount(AnalysisPriceHistory, {
+            props: { holding: { id: 1 }, history: { prices: [] }, intraday: { price: '125', currency: 'EUR', as_of: '2026-06-05T10:00:00Z', source_markers: ['EODHD'] } },
+            global: { plugins: [createStocksVuetify()] },
+        });
+
+        expect(wrapper.text()).toContain('Latest stored intraday: 125.');
+        expect(wrapper.get('time').attributes('datetime')).toBe('2026-06-05T10:00:00Z');
+        expect(wrapper.text()).toContain('No stored historical prices available.');
+        wrapper.unmount();
+    });
+
     it('shows the latest 100 values with changes against the previous available price', () => {
         const prices = Array.from({ length: 101 }, (_, index) => price(index, 200 - index));
         prices[0].price = '10';
