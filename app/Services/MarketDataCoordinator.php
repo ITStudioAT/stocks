@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\StockHolding;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Throwable;
@@ -23,18 +24,24 @@ class MarketDataCoordinator
         app(PreviewIsolation::class)->assertIntegrationAllowed();
         $result = Cache::lock('market-data.coordinator', 240)->get(fn (): array => $this->collectLocked($only));
 
-        return $result ?? $this->result(0, 0, ['Another coordinated collection is running.']);
+        return is_array($result) ? $result : $this->result(0, 0, ['Another coordinated collection is running.']);
     }
 
     /** @return array<string, mixed> */
     private function collectLocked(?StockHolding $only): array
     {
         $holdings = $only ? collect([$only]) : StockHolding::query()->orderBy('id')->get();
-        $unique = $holdings->map(function (StockHolding $holding): StockHolding {
+        $listings = $holdings->map(function (StockHolding $holding): StockHolding {
             $this->identities->listing($holding);
 
             return $holding;
-        })->unique('market_listing_id')->filter(fn (StockHolding $holding): bool => $this->calendar->shouldCollect($holding));
+        })->unique('market_listing_id');
+        $latestDates = DB::table('market_prices')->whereIn('market_listing_id', $listings->pluck('market_listing_id'))
+            ->where('is_current', true)->where('validation_status', 'valid')->where('interval_code', '!=', '1d')
+            ->where('effective_at', '<=', now()->utc())->selectRaw('market_listing_id, MAX(effective_at) as latest_at')
+            ->groupBy('market_listing_id')->pluck('latest_at', 'market_listing_id');
+        $unique = $listings->filter(fn (StockHolding $holding): bool => $this->calendar->shouldCollect($holding)
+            || $this->hasMissedSession($holding, $latestDates->get($holding->market_listing_id)));
         $stored = 0;
         $invalidated = false;
         $errors = [];
@@ -68,6 +75,10 @@ class MarketDataCoordinator
             if ((! $us && ! $supplement) || ! $this->reserveYahoo($symbol)) {
                 continue;
             }
+            if (! $this->calendar->shouldCollect($holding)
+                && ! Cache::add('market-data.recovery.'.$holding->market_listing_id, true, now()->addMinutes(30))) {
+                continue;
+            }
             try {
                 $report = $us ? $this->yahoo->run(collect([$holding->toArray()]), includeSeries: true, coordinated: true) : $this->yahoo->runXetra($holding->toArray(), coordinated: true);
                 $row = $report['instruments'][0] ?? [];
@@ -95,6 +106,23 @@ class MarketDataCoordinator
         }
 
         return $this->result($unique->count(), $stored, $errors);
+    }
+
+    private function hasMissedSession(StockHolding $holding, ?string $latestAt): bool
+    {
+        $timezone = $this->calendar->timezone($holding);
+        if ($timezone === null) {
+            return false;
+        }
+        $today = now($timezone);
+        $session = $this->calendar->session($holding, $today);
+        $expectedDay = $session !== null && now()->greaterThan($session['close']->copy()->addMinutes(30))
+            ? $today
+            : $this->calendar->previousDay($holding, $today);
+        $expectedSession = $expectedDay === null ? null : $this->calendar->session($holding, $expectedDay);
+
+        return $expectedSession !== null && ($latestAt === null
+            || Carbon::parse($latestAt, 'UTC')->lessThan($expectedSession['close']->copy()->subMinutes(30)));
     }
 
     public function prepareReads(): void

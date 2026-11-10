@@ -221,6 +221,10 @@ class CentralMarketDataTest extends TestCase
             'source_key' => 'eodhd_intraday', 'record_kind' => 'bar', 'interval_code' => '5m',
             'adjustment_basis' => 'unadjusted', 'price' => '195', 'close' => '195',
         ]));
+        app(MarketPriceStore::class)->store($listing->id, $this->quote([
+            'source_key' => 'eodhd_realtime', 'observed_at' => '2026-11-06 15:04:00',
+            'effective_at' => '2026-11-06 15:04:00', 'adjustment_basis' => 'unadjusted', 'price' => '196',
+        ]));
         config(['services.market_data.central_enabled' => true]);
         $admin = User::factory()->create();
         $admin->assignRole(Role::findOrCreate('admin'));
@@ -228,7 +232,7 @@ class CentralMarketDataTest extends TestCase
         $this->actingAs($admin)->getJson('/admin/analysis/trends')->assertOk()
             ->assertJsonCount(1, 'trends')
             ->assertJsonPath('trends.0.id', $holding->id)
-            ->assertJsonPath('trends.0.intraday.as_of', '2026-11-06T15:00:00+00:00')
+            ->assertJsonPath('trends.0.intraday.as_of', '2026-11-06T15:04:00+00:00')
             ->assertJsonPath('trends.0.intraday.source_markers', ['EODHD'])
             ->assertJsonPath('trends.0.direction', 'up')
             ->assertJsonPath('trends.0.count', 2);

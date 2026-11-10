@@ -7,6 +7,7 @@ use App\Models\DepotTransaction;
 use App\Models\StockHolding;
 use App\Models\StockHoldingDailyPrice;
 use App\Models\StockHoldingIntradayCandle;
+use App\Models\StockRealtimePrice;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
@@ -111,6 +112,14 @@ class AdminAnalysisTrendsTest extends TestCase
         $this->assertSame(['EODHD'], $trends[$holding->id]['intraday']['source_markers']);
         $this->assertSame('up', $trends[$holding->id]['direction']);
         $this->assertNull($trends[$empty->id]['intraday']);
+
+        StockRealtimePrice::factory()->create(['stock_holding_id' => $holding->id, 'currency' => 'EUR', 'price' => '130',
+            'as_of' => Carbon::parse('2026-06-05 10:05:00', 'UTC')]);
+        StockRealtimePrice::factory()->create(['stock_holding_id' => $holding->id, 'currency' => 'EUR', 'price' => '500',
+            'as_of' => Carbon::parse('2026-06-05 10:10:00', 'UTC'), 'validation_status' => 'invalid']);
+        $trends = collect($this->getJson('/admin/analysis/trends')->assertOk()->json('trends'))->keyBy('id');
+        $this->assertEquals(130, $trends[$holding->id]['intraday']['price']);
+        $this->assertSame('2026-06-05T10:05:00+00:00', $trends[$holding->id]['intraday']['as_of']);
     }
 
     /** @param array<int, int> $values */

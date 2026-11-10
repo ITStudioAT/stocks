@@ -10,6 +10,7 @@ use App\Services\MarketPriceStore;
 use App\Services\XetraIntradayCollector;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schedule;
 use Tests\TestCase;
@@ -17,6 +18,18 @@ use Tests\TestCase;
 class MarketDataCoordinatorTest extends TestCase
 {
     use RefreshDatabase;
+
+    public function test_collection_reports_when_another_collector_holds_the_lock(): void
+    {
+        $lock = Cache::lock('market-data.coordinator', 60);
+        $this->assertTrue($lock->get());
+        try {
+            $result = app(MarketDataCoordinator::class)->collect();
+            $this->assertSame(['Another coordinated collection is running.'], $result['errors']);
+        } finally {
+            $lock->release();
+        }
+    }
 
     public function test_five_minute_gate_and_calendar_handle_dst_holidays_early_close_and_bounded_tail(): void
     {
@@ -66,12 +79,65 @@ class MarketDataCoordinatorTest extends TestCase
     {
         config(['services.market_data.central_enabled' => true]);
         $this->travelTo(Carbon::parse('2026-11-07 12:00:00', 'UTC'));
-        StockHolding::factory()->create(['isin' => 'US0378331005', 'symbol' => 'AAPL', 'exchange' => 'NASDAQ', 'currency' => 'USD', 'mic_code' => 'XNAS']);
+        $holding = StockHolding::factory()->create(['isin' => 'US0378331005', 'symbol' => 'AAPL', 'exchange' => 'NASDAQ', 'currency' => 'USD', 'mic_code' => 'XNAS']);
+        app(MarketDataCoordinator::class)->persist($holding, [[
+            'source_key' => 'yahoo_intraday', 'currency' => 'USD', 'price' => 200, 'as_of' => '2026-11-06 20:50:00',
+        ]]);
         $this->mock(MarketPriceCompatibility::class, function ($mock): void {
             $mock->shouldReceive('history')->twice()->andReturn([]);
         });
         $this->artisan('market-data:collect')->assertSuccessful();
         Http::assertNothingSent();
+    }
+
+    public function test_collection_recovers_a_missed_session_after_market_close_and_throttles_retries(): void
+    {
+        config(['services.market_data.central_enabled' => true]);
+        $this->travelTo(Carbon::parse('2026-11-10 06:00:00', 'UTC'));
+        $holding = StockHolding::factory()->create(['isin' => 'US0378331005', 'symbol' => 'AAPL', 'exchange' => 'NASDAQ', 'currency' => 'USD', 'mic_code' => 'XNAS']);
+        $this->fakeYahooMarketData(['AAPL' => ['price' => 210, 'at' => '2026-11-09 20:50:00']]);
+
+        $coordinator = app(MarketDataCoordinator::class);
+        $result = $coordinator->collect();
+
+        $this->assertGreaterThan(0, $result['stored_count']);
+        $this->assertDatabaseHas('market_prices', ['market_listing_id' => $holding->refresh()->market_listing_id, 'trading_date' => '2026-11-09']);
+        Http::assertSentCount(1);
+        $this->travel(5)->minutes();
+        $coordinator->collect();
+        Http::assertSentCount(1);
+    }
+
+    public function test_failed_recovery_is_rate_limited_outside_market_hours(): void
+    {
+        config(['services.market_data.central_enabled' => true]);
+        $this->travelTo(Carbon::parse('2026-11-10 06:00:00', 'UTC'));
+        StockHolding::factory()->create(['isin' => 'US0378331005', 'symbol' => 'AAPL', 'exchange' => 'NASDAQ', 'currency' => 'USD', 'mic_code' => 'XNAS']);
+        Http::fake(['query1.finance.yahoo.com/*' => Http::response([], 500)]);
+
+        $coordinator = app(MarketDataCoordinator::class);
+        $coordinator->collect();
+        $this->travel(5)->minutes();
+        $coordinator->collect();
+        Http::assertSentCount(1);
+        $this->travel(25)->minutes();
+        $coordinator->collect();
+        Http::assertSentCount(2);
+    }
+
+    public function test_collection_recovers_an_incomplete_latest_session_after_close(): void
+    {
+        config(['services.market_data.central_enabled' => true]);
+        $this->travelTo(Carbon::parse('2026-11-10 06:00:00', 'UTC'));
+        $holding = StockHolding::factory()->create(['isin' => 'US0378331005', 'symbol' => 'AAPL', 'exchange' => 'NASDAQ', 'currency' => 'USD', 'mic_code' => 'XNAS']);
+        $coordinator = app(MarketDataCoordinator::class);
+        $coordinator->persist($holding, [['source_key' => 'yahoo_intraday', 'currency' => 'USD', 'price' => 200, 'as_of' => '2026-11-09 15:00:00']]);
+        $this->fakeYahooMarketData(['AAPL' => ['price' => 210, 'at' => '2026-11-09 20:50:00']]);
+
+        $coordinator->collect();
+
+        Http::assertSentCount(1);
+        $this->assertDatabaseHas('market_prices', ['market_listing_id' => $holding->refresh()->market_listing_id, 'trading_date' => '2026-11-09', 'price' => '210']);
     }
 
     public function test_xetra_supplement_uses_verified_provider_symbol_for_its_shared_gate(): void
