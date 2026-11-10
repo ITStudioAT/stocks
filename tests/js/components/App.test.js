@@ -2724,9 +2724,8 @@ describe('App', () => {
         expect(downPriceValue.classes()).not.toContain('bg-error');
         expect(downPriceValue.text()).toBe('-');
         expect(downPriceValue.find('.watch-list-live-badge').exists()).toBe(false);
-        expect(intradayPriceValue.classes()).toContain('text-success');
-        expect(intradayPriceValue.classes()).not.toContain('bg-success');
-        expect(intradayPriceValue.classes()).not.toContain('text-white');
+        expect(intradayPriceValue.classes()).toContain('bg-success');
+        expect(intradayPriceValue.classes()).toContain('text-white');
         expect(intradayPriceValue.find('.watch-list-live-badge').exists()).toBe(false);
         expect(upPriceValue.text()).toContain('+2.28%');
         expect(upPriceValue.find('.latest-price-tick').exists()).toBe(false);
@@ -2940,6 +2939,15 @@ describe('App', () => {
         expect(appleStockRow.find('.stock-holding-refresh-schedule').exists()).toBe(false);
         expect(closedMarketStockRow.get('[aria-label="DOWN live update schedule status"]').text()).toBe('Waiting');
         expect(closedMarketStockRow.get('[aria-label="DOWN live update activity status"]').text()).toBe('Inactive');
+        const xetraStockRow = stocksTable.get('[aria-label="FLAT live update activity status"]').element.closest('tr');
+        wrapper.vm.liveDataStatusNow = Date.parse('2026-08-06T12:00:00+02:00');
+        await wrapper.vm.$nextTick();
+        expect(xetraStockRow.querySelector('[aria-label="FLAT live update activity status"]').textContent).toContain('Active');
+        expect(xetraStockRow.querySelector('.latest-price-value').classList.contains('bg-success')).toBe(true);
+        wrapper.vm.liveDataStatusNow = Date.parse('2026-08-06T18:49:00+02:00');
+        await wrapper.vm.$nextTick();
+        expect(xetraStockRow.querySelector('[aria-label="FLAT live update activity status"]').textContent).toContain('Inactive');
+        expect(xetraStockRow.querySelector('.latest-price-value').classList.contains('bg-success')).toBe(false);
         expect(closedMarketStockRow.get('[aria-label="DOWN live update activity status"]').classes()).toContain('text-error');
         wrapper.vm.holdings.find((holding) => holding.id === 4).latest_price = '190.000000';
         wrapper.vm.holdings.find((holding) => holding.id === 4).latest_price_trend = 'down';

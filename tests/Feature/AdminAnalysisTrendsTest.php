@@ -63,6 +63,27 @@ class AdminAnalysisTrendsTest extends TestCase
             ->assertJsonPath('trends.14.name', 'Stock 15');
     }
 
+    public function test_summary_adds_rounded_daily_percentages_for_the_current_trend(): void
+    {
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin', 'web'));
+        $up = $this->holdingWithPrices('Up', [100, 110, 110, 121]);
+        $down = $this->holdingWithPrices('Down', [100, 90, 81]);
+        $reversal = $this->holdingWithPrices('Reversal', [100, 120, 108]);
+        $rounding = $this->holdingWithPrices('Rounding', [100, 103, 106]);
+        $zero = $this->holdingWithPrices('Zero base', [0, 100]);
+        $flat = $this->holdingWithPrices('Flat', [100, 100]);
+        $trends = collect($this->actingAs($admin)->getJson('/admin/analysis/trends')->assertOk()->json('trends'))->keyBy('id');
+
+        $this->assertEquals(20, $trends[$up->id]['percentage_sum']);
+        $this->assertSame(3, $trends[$up->id]['count']);
+        $this->assertEquals(-20, $trends[$down->id]['percentage_sum']);
+        $this->assertEquals(-10, $trends[$reversal->id]['percentage_sum']);
+        $this->assertEquals(5.91, $trends[$rounding->id]['percentage_sum']);
+        $this->assertNull($trends[$zero->id]['percentage_sum']);
+        $this->assertNull($trends[$flat->id]['percentage_sum']);
+    }
+
     public function test_summary_uses_the_active_depot_positions_like_the_stocks_list(): void
     {
         $admin = User::factory()->create();

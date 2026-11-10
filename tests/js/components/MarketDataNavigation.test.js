@@ -191,8 +191,8 @@ describe('visible market data provenance across navigation', () => {
         await renderPage('/admin/menu/analysis', width, (response, path) => {
             if (path === '/admin/analysis/trends') {
                 return { trends: [
-                    { id: 2, name: 'Falling stock SupercalifragilisticexpialidociousLongCompanyName', symbol: 'DOWN', position_pieces: '4.12500000', direction: 'down', count: 9, trading_date: '2026-11-04' },
-                    { id: 1, name: 'Rising stock', symbol: 'UP', position_pieces: '0', direction: 'up', count: 7, trading_date: '2026-11-03' },
+                    { id: 2, name: 'Falling stock SupercalifragilisticexpialidociousLongCompanyName', symbol: 'DOWN', position_pieces: '4.12500000', direction: 'down', count: 9, percentage_sum: -21.11, trading_date: '2026-11-04', intraday: { price: '125', currency: 'EUR', as_of: '2026-11-03T10:00:00Z' } },
+                    { id: 1, name: 'Rising stock', symbol: 'UP', position_pieces: '0', direction: 'up', count: 7, percentage_sum: 20, trading_date: '2026-11-03', intraday: { price: '125', currency: 'USD', as_of: '2026-11-03T10:00:00Z' } },
                     { id: 3, name: 'No history', symbol: 'NONE', position_pieces: '0', direction: null, count: null, trading_date: null },
                 ] };
             }
@@ -209,7 +209,11 @@ describe('visible market data provenance across navigation', () => {
         expect(cards[0].find('.truncate').exists()).toBe(false);
         expect(cards[0].get('.analysis-trend-name').text()).toBe('Falling stock SupercalifragilisticexpialidociousLongCompanyName');
         expect(cards[0].get('.analysis-trend-badge--down').text()).toMatch(/Down\s*9/);
+        expect(cards[0].get('.analysis-trend-badge--down').text()).toContain('Σ -21.11%');
+        expect(cards[0].get('.analysis-trend-intraday').text()).not.toContain('EUR');
+        expect(cards[1].get('.analysis-trend-intraday').text()).toContain('USD');
         expect(cards[1].get('.analysis-trend-badge--up').text()).toMatch(/Up\s*7/);
+        expect(cards[1].get('.analysis-trend-badge--up').text()).toContain('Σ +20.00%');
         expect(cards[1].get('.analysis-trend-position-state').text()).toBe('Not held');
         expect(cards[1].get('.analysis-trend-pieces').text()).toBe('Pieces0');
         expect(cards[1].text()).not.toContain('UP');
@@ -291,6 +295,7 @@ describe('visible market data provenance across navigation', () => {
         expect(wrapper.get('#analysis-card-history h3').text()).toBe('Demo investment');
         const backButton = wrapper.get('[aria-label="Back to all stocks"]');
         expect(document.activeElement).toBe(backButton.element);
+        expect(backButton.text()).toContain('Back to all stocks');
         const cardHistory = wrapper.get('#analysis-card-history .analysis-price-history');
         expect(cardHistory.text()).toContain('+21.00%');
         const cardRows = cardHistory.findAll('.analysis-price-history-table > tbody > tr').map((row) => row.text());

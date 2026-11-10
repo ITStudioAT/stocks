@@ -16,7 +16,7 @@ class AnalysisTrendSummary
 {
     public function __construct(private DepotTransactionBooker $depotTransactionBooker) {}
 
-    /** @return array<int, array{id: int, name: ?string, symbol: ?string, position_pieces: string, direction: ?string, count: ?int, trading_date: ?string, intraday: ?array{price: string, currency: string, as_of: string, source_markers: array<int, string>}}> */
+    /** @return array<int, array{id: int, name: ?string, symbol: ?string, position_pieces: string, direction: ?string, count: ?int, percentage_sum: ?float, trading_date: ?string, intraday: ?array{price: string, currency: string, as_of: string, source_markers: array<int, string>}}> */
     public function all(): array
     {
         $holdings = StockHolding::query()->get(['id', 'name', 'symbol'])->keyBy('id');
@@ -30,6 +30,7 @@ class AnalysisTrendSummary
             'position_pieces' => $positions->get($holding->id, '0.00000000'),
             'direction' => null,
             'count' => null,
+            'percentage_sum' => null,
             'trading_date' => null,
             'intraday' => $intradayPrices->get($holding->id),
         ])->all();
@@ -38,6 +39,7 @@ class AnalysisTrendSummary
         $latestDate = null;
         $direction = 0;
         $count = 0;
+        $percentageSum = 0.0;
         $pendingFlatCount = 0;
         $finished = false;
 
@@ -53,13 +55,14 @@ class AnalysisTrendSummary
 
         foreach ($prices as $price) {
             if ((int) $price->stock_holding_id !== $holdingId) {
-                $this->applySummary($summaries, $holdingId, $latestDate, $direction, $count);
+                $this->applySummary($summaries, $holdingId, $latestDate, $direction, $count, $percentageSum);
 
                 $holdingId = (int) $price->stock_holding_id;
                 $previous = null;
                 $latestDate = $price->trading_date->toDateString();
                 $direction = 0;
                 $count = 0;
+                $percentageSum = 0.0;
                 $pendingFlatCount = 0;
                 $finished = false;
             }
@@ -85,13 +88,20 @@ class AnalysisTrendSummary
             }
 
             $olderDirection = $this->direction($previous, $current);
-            $previous = $current;
 
             if ($olderDirection === null || ($direction !== 0 && $olderDirection !== 0 && $olderDirection !== $direction)) {
                 $finished = true;
 
                 continue;
             }
+
+            $olderPrice = (float) $current['price'];
+            if ($olderPrice === 0.0) {
+                $percentageSum = null;
+            } elseif ($percentageSum !== null) {
+                $percentageSum += round(((float) $previous['price'] - $olderPrice) / $olderPrice * 100, 2);
+            }
+            $previous = $current;
 
             if ($olderDirection === 0) {
                 $pendingFlatCount++;
@@ -104,7 +114,7 @@ class AnalysisTrendSummary
             $pendingFlatCount = 0;
         }
 
-        $this->applySummary($summaries, $holdingId, $latestDate, $direction, $count);
+        $this->applySummary($summaries, $holdingId, $latestDate, $direction, $count, $percentageSum);
         $summaries = array_values($summaries);
 
         usort($summaries, fn (array $first, array $second): int => (($second['count'] ?? -1) <=> ($first['count'] ?? -1))
@@ -197,8 +207,8 @@ class AnalysisTrendSummary
             });
     }
 
-    /** @param array<int, array{id: int, name: ?string, symbol: ?string, position_pieces: string, direction: ?string, count: ?int, trading_date: ?string, intraday: ?array{price: string, currency: string, as_of: string, source_markers: array<int, string>}}> $summaries */
-    private function applySummary(array &$summaries, ?int $holdingId, ?string $latestDate, int $direction, int $count): void
+    /** @param array<int, array{id: int, name: ?string, symbol: ?string, position_pieces: string, direction: ?string, count: ?int, percentage_sum: ?float, trading_date: ?string, intraday: ?array{price: string, currency: string, as_of: string, source_markers: array<int, string>}}> $summaries */
+    private function applySummary(array &$summaries, ?int $holdingId, ?string $latestDate, int $direction, int $count, ?float $percentageSum): void
     {
         if ($holdingId === null || ! isset($summaries[$holdingId])) {
             return;
@@ -207,6 +217,7 @@ class AnalysisTrendSummary
         $summaries[$holdingId]['trading_date'] = $latestDate;
         $summaries[$holdingId]['direction'] = $direction === 0 ? null : ($direction > 0 ? 'up' : 'down');
         $summaries[$holdingId]['count'] = $direction === 0 ? null : $count;
+        $summaries[$holdingId]['percentage_sum'] = $direction === 0 || $percentageSum === null ? null : round($percentageSum, 2);
     }
 
     /**

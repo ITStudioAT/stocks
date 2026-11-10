@@ -5016,6 +5016,13 @@ function watchListLatestPriceClass(holding) {
         };
     }
 
+    if (['stocks', 'analysis'].includes(activeSection.value)) {
+        return {
+            'bg-success text-white': holding.latest_price_trend === 'up',
+            'bg-error text-white': holding.latest_price_trend === 'down',
+        };
+    }
+
     return latestPriceClass(holding);
 }
 
@@ -5625,6 +5632,10 @@ function stockHoldingTradingTimes(holding) {
 
     const exchange = String(holding?.exchange ?? '').trim().toUpperCase();
     const micCode = String(holding?.mic_code ?? '').trim().toUpperCase();
+    if (['XETRA', 'XETR'].includes(exchange) || micCode === 'XETR') {
+        return 'Monday-Friday 09:00-17:30 Europe/Berlin';
+    }
+
     const usExchangeCodes = ['US', 'NASDAQ', 'NYSE', 'AMEX'];
     const usMicCodes = ['XNAS', 'XNYS', 'XASE', 'ARCX', 'BATS'];
 
@@ -6457,7 +6468,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 
                         <section v-if="activeSection === 'analysis'" class="mb-6" aria-label="Longest current trends">
                             <h2 class="text-subtitle-1 mb-2">Longest current trends</h2>
-                            <p class="text-caption text-medium-emphasis mb-3">All stocks ranked by consecutive observations; unchanged prices count. Based on the latest stored daily prices.</p>
+                            <p class="text-caption text-medium-emphasis mb-3">All stocks ranked by consecutive observations; unchanged prices count. Σ is the sum of daily percentage changes in the current trend. Based on the latest stored daily prices.</p>
                             <p v-if="analysisTrendsLoading" role="status" class="text-body-2">Loading trends…</p>
                             <v-alert v-else-if="analysisTrendsError" type="error" variant="tonal" density="compact">
                                 {{ marketDataDisplayText(analysisTrendsError) }}
@@ -6476,13 +6487,13 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             <span class="sr-only">Show price history for </span>
                                             <span class="analysis-trend-card-top">
                                                 <span v-if="trend.direction" class="analysis-trend-badge" :class="trend.direction === 'up' ? 'analysis-trend-badge--up' : 'analysis-trend-badge--down'">
-                                                    {{ trend.direction === 'up' ? '↑ Up' : '↓ Down' }} <strong>{{ trend.count }}</strong>
+                                                    {{ trend.direction === 'up' ? '↑ Up' : '↓ Down' }} <strong>{{ trend.count }}</strong> · Σ {{ formatPriceChangePercent(trend.percentage_sum ?? null) }}
                                                 </span>
                                                 <span v-else class="analysis-trend-badge analysis-trend-badge--neutral">No trend</span>
                                                 <span class="analysis-trend-position-state">{{ hasPositionPieces(trend) ? 'Held' : 'Not held' }}</span>
                                             </span>
                                             <span class="analysis-trend-name">{{ trend.name || `Stock ${trend.id}` }}</span>
-                                            <span v-if="trend.intraday">Intraday: {{ formatPriceValue(trend.intraday.price, trend.intraday.currency, { showCurrency: true }) }} <DataSourceMarkers :markers="trend.intraday.source_markers" /><br><time :datetime="trend.intraday.as_of">{{ formatDateTime(trend.intraday.as_of) }}</time></span>
+                                            <span v-if="trend.intraday" class="analysis-trend-intraday">Intraday: {{ formatPriceValue(trend.intraday.price, trend.intraday.currency) }} <DataSourceMarkers :markers="trend.intraday.source_markers" /><br><time :datetime="trend.intraday.as_of">{{ formatDateTime(trend.intraday.as_of) }}</time></span>
                                             <span v-else>Intraday: –</span>
                                             <span class="analysis-trend-pieces"><span>Pieces</span><strong>{{ formatPositionPieces(trend) }}</strong></span>
                                         </button>
@@ -6497,7 +6508,7 @@ function intradayBackfillScheduleFormFromSettings(settings) {
                                             aria-label="Back to all stocks"
                                             @click="returnToAnalysisCards"
                                         >
-                                            ← All stocks
+                                            <span aria-hidden="true">←</span> Back to all stocks
                                         </button>
                                         <h3 class="text-subtitle-2 break-words [overflow-wrap:anywhere]">{{ expandedAnalysisCard.name || `Stock ${expandedAnalysisCard.id}` }}</h3>
                                     </div>
@@ -11722,9 +11733,22 @@ function intradayBackfillScheduleFormFromSettings(settings) {
 }
 
 .analysis-trend-back {
-    color: rgb(var(--v-theme-primary));
-    font-size: 0.8rem;
-    font-weight: 600;
+    align-items: center;
+    background: rgb(var(--v-theme-primary));
+    border: 1px solid rgb(var(--v-theme-primary));
+    border-radius: 6px;
+    color: rgb(var(--v-theme-on-primary));
+    display: inline-flex;
+    font-size: 0.9rem;
+    font-weight: 700;
+    gap: 0.5rem;
+    min-height: 44px;
+    padding: 0.5rem 1rem;
+    transition: filter 0.15s ease;
+}
+
+.analysis-trend-back:hover {
+    filter: brightness(0.9);
 }
 
 .analysis-trend-back:focus-visible {

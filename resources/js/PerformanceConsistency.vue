@@ -144,7 +144,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
                 <div v-if="run.issues?.length" class="consistency-section">
                     <h3>Feststellungen</h3>
                     <p class="consistency-muted">Abweichend bedeutet, dass Betrag, Prozentwert oder Quellenangabe vom neu berechneten Ergebnis abweichen.</p>
-                    <div class="consistency-issues">
+                    <div class="consistency-issues consistency-issues--scrollable">
                         <div v-for="(issue, index) in run.issues" :key="index" class="consistency-issue">
                             <div><strong>{{ issue.depot }} · {{ periodLabels[issue.period] }} bis {{ formatDate(issue.end_date) }}</strong><br><span>{{ reasons[issue.reason] }}<template v-if="issue.reason === 'incorrect' && issue.differences?.length">: {{ issue.differences.join(', ') }}</template></span></div>
                             <div v-if="issue.reason === 'incorrect'" class="consistency-amounts">
@@ -190,7 +190,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
 .consistency-periods { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
 .consistency-period { display: flex; flex-direction: column; gap: 4px; padding: 13px; border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); border-radius: 10px; }
 .consistency-period small { color: rgba(var(--v-theme-on-surface), .65); }
-.consistency-issues { max-height: 340px; overflow: auto; margin-top: 10px; }
+.consistency-issues { margin-top: 10px; }
+.consistency-issues--scrollable { max-height: 340px; overflow: auto; }
 .consistency-issue { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 0; border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity)); font-size: .88rem; }
 .consistency-issue span, .consistency-amounts { color: rgba(var(--v-theme-on-surface), .7); }
 .consistency-steps { padding-left: 20px; color: rgba(var(--v-theme-on-surface), .7); font-size: .88rem; }
