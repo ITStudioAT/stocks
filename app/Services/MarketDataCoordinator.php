@@ -122,7 +122,7 @@ class MarketDataCoordinator
         $expectedSession = $expectedDay === null ? null : $this->calendar->session($holding, $expectedDay);
 
         return $expectedSession !== null && ($latestAt === null
-            || Carbon::parse($latestAt, 'UTC')->lessThan($expectedSession['close']->copy()->subMinutes(30)));
+            || Carbon::parse($latestAt, 'UTC')->lessThan($expectedSession['close']->copy()->subMinutes(5)));
     }
 
     public function prepareReads(): void

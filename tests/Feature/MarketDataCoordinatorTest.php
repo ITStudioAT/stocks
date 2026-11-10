@@ -81,7 +81,7 @@ class MarketDataCoordinatorTest extends TestCase
         $this->travelTo(Carbon::parse('2026-11-07 12:00:00', 'UTC'));
         $holding = StockHolding::factory()->create(['isin' => 'US0378331005', 'symbol' => 'AAPL', 'exchange' => 'NASDAQ', 'currency' => 'USD', 'mic_code' => 'XNAS']);
         app(MarketDataCoordinator::class)->persist($holding, [[
-            'source_key' => 'yahoo_intraday', 'currency' => 'USD', 'price' => 200, 'as_of' => '2026-11-06 20:50:00',
+            'source_key' => 'yahoo_intraday', 'currency' => 'USD', 'price' => 200, 'as_of' => '2026-11-06 20:58:00',
         ]]);
         $this->mock(MarketPriceCompatibility::class, function ($mock): void {
             $mock->shouldReceive('history')->twice()->andReturn([]);
@@ -95,7 +95,7 @@ class MarketDataCoordinatorTest extends TestCase
         config(['services.market_data.central_enabled' => true]);
         $this->travelTo(Carbon::parse('2026-11-10 06:00:00', 'UTC'));
         $holding = StockHolding::factory()->create(['isin' => 'US0378331005', 'symbol' => 'AAPL', 'exchange' => 'NASDAQ', 'currency' => 'USD', 'mic_code' => 'XNAS']);
-        $this->fakeYahooMarketData(['AAPL' => ['price' => 210, 'at' => '2026-11-09 20:50:00']]);
+        $this->fakeYahooMarketData(['AAPL' => ['price' => 210, 'at' => '2026-11-09 20:58:00']]);
 
         $coordinator = app(MarketDataCoordinator::class);
         $result = $coordinator->collect();
@@ -131,8 +131,8 @@ class MarketDataCoordinatorTest extends TestCase
         $this->travelTo(Carbon::parse('2026-11-10 06:00:00', 'UTC'));
         $holding = StockHolding::factory()->create(['isin' => 'US0378331005', 'symbol' => 'AAPL', 'exchange' => 'NASDAQ', 'currency' => 'USD', 'mic_code' => 'XNAS']);
         $coordinator = app(MarketDataCoordinator::class);
-        $coordinator->persist($holding, [['source_key' => 'yahoo_intraday', 'currency' => 'USD', 'price' => 200, 'as_of' => '2026-11-09 15:00:00']]);
-        $this->fakeYahooMarketData(['AAPL' => ['price' => 210, 'at' => '2026-11-09 20:50:00']]);
+        $coordinator->persist($holding, [['source_key' => 'yahoo_intraday', 'currency' => 'USD', 'price' => 200, 'as_of' => '2026-11-09 20:45:00']]);
+        $this->fakeYahooMarketData(['AAPL' => ['price' => 210, 'at' => '2026-11-09 20:58:00']]);
 
         $coordinator->collect();
 
