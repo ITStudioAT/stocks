@@ -29,6 +29,15 @@ return [
             'IE00B3RBWM25' => 'VGWL.DE',
             'IE00BKWQ0F09' => 'SPYN.DE',
             'IE00BYPLS672' => 'USPY.DE',
+            // Xetra ISIN and trading symbols verified against issuer and exchange listings.
+            'LU1900066462' => 'LEER.DE',
+            'IE000I8KRLL9' => 'SEC0.DE',
+            'IE00BYXG2H39' => '2B70.DE',
+            'IE00063FT9K6' => 'CEBS.DE',
+            'IE000YYE6WK5' => 'DFEN.DE',
+            'DE000A0H08K7' => 'EXH5.DE',
+            'US88160R1014' => 'TL0.DE',
+            'IE00BGV5VN51' => 'XAIX.DE',
         ],
     ],
 

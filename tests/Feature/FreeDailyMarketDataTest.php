@@ -11,11 +11,13 @@ use App\Services\DashboardPerformanceSnapshots;
 use App\Services\FreeDailyMarketData;
 use App\Services\MarketDataCoordinator;
 use App\Services\MarketPriceStore;
+use App\Services\YahooFinanceMarketData;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
 
@@ -44,6 +46,46 @@ class FreeDailyMarketDataTest extends TestCase
             'indicators' => ['quote' => [['open' => [190.2, null], 'high' => [194.0, null], 'low' => [189.5, null],
                 'close' => [193.99000549316406, null], 'volume' => [1614, null]]], 'adjclose' => [['adjclose' => [192.25, null]]]],
         ]]]];
+    }
+
+    /** @return array<string, array{string, string, string}> */
+    public static function newlyVerifiedXetraSymbols(): array
+    {
+        return [
+            'Eastern Europe ETF' => ['LU1900066462', 'LEER', 'ETF'],
+            'Semiconductors ETF' => ['IE000I8KRLL9', 'SEC0', 'ETF'],
+            'Biotechnology ETF' => ['IE00BYXG2H39', '2B70', 'ETF'],
+            'Copper miners ETF' => ['IE00063FT9K6', 'CEBS', 'ETF'],
+            'Defense ETF' => ['IE000YYE6WK5', 'DFEN', 'ETF'],
+            'Insurance ETF' => ['DE000A0H08K7', 'EXH5', 'ETF'],
+            'Tesla Xetra' => ['US88160R1014', 'TL0', 'EQUITY'],
+            'Artificial intelligence ETF' => ['IE00BGV5VN51', 'XAIX', 'ETF'],
+        ];
+    }
+
+    #[DataProvider('newlyVerifiedXetraSymbols')]
+    public function test_verified_xetra_instruments_can_import_free_daily_history(string $isin, string $symbol, string $type): void
+    {
+        $holding = StockHolding::factory()->create([
+            'isin' => $isin, 'symbol' => $symbol, 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR',
+        ]);
+        $chart = $this->chart();
+        $chart['chart']['result'][0]['meta']['symbol'] = "{$symbol}.DE";
+        $chart['chart']['result'][0]['meta']['instrumentType'] = $type;
+        Http::fake(['query1.finance.yahoo.com/*' => Http::response($chart)]);
+
+        $this->assertTrue(YahooFinanceMarketData::supportsXetra($holding->toArray()));
+        $this->assertDatabaseHas('market_source_instruments', [
+            'market_listing_id' => $holding->market_listing_id, 'source_key' => 'yahoo', 'symbol' => "{$symbol}.DE",
+        ]);
+        $result = app(FreeDailyMarketData::class)->import($holding, 2);
+
+        $this->assertSame(1, $result['stored_count']);
+        $this->assertDatabaseHas('market_prices', [
+            'market_listing_id' => $holding->market_listing_id, 'source_key' => 'yahoo_daily',
+            'trading_date' => '2026-11-05', 'currency' => 'EUR', 'interval_code' => '1d',
+        ]);
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), "/{$symbol}.DE"));
     }
 
     public function test_daily_import_preserves_real_semantics_skips_gaps_and_is_repeatable(): void
