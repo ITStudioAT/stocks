@@ -820,7 +820,7 @@ describe('App', () => {
         expect(wrapper.find('.dashboard-navigation-drawer').classes()).toContain('dashboard-navigation-drawer--compact');
         expect(wrapper.findComponent({ name: 'VNavigationDrawer' }).props('width')).toBe(64);
         expect(wrapper.findAll('.dashboard-compact-menu-item').map((item) => item.attributes('aria-label')))
-            .toEqual(['Dashboard', 'Depot', 'Indices', 'Stocks', 'Data', 'Admin', 'Profile']);
+            .toEqual(['Dashboard', 'Depot', 'Indices', 'Stocks', 'Analysis', 'Data', 'Admin', 'Profile']);
         expect(wrapper.find('.dashboard-compact-menu-item--active').exists()).toBe(true);
         expect(wrapper.find('[aria-label="Enhance dashboard menu"]').exists()).toBe(true);
         expect(wrapper.find('.dashboard-navigation-drawer').text()).not.toContain('Stocks');
@@ -1095,18 +1095,18 @@ describe('App', () => {
         const navigation = wrapper.get('.dashboard-navigation-drawer');
         const desktopMenu = navigation.findAll('.v-list-item');
         expect(desktopMenu.map((item) => item.get('.v-list-item-title').text()))
-            .toEqual(['Dashboard', 'Depot', 'Indices', 'Stocks', 'Data', 'Admin', 'Profile']);
-        await desktopMenu[4].trigger('click');
+            .toEqual(['Dashboard', 'Depot', 'Indices', 'Stocks', 'Analysis', 'Data', 'Admin', 'Profile']);
+        await desktopMenu.find((item) => item.get('.v-list-item-title').text() === 'Data').trigger('click');
         await flushPromises();
         expect(window.location.pathname).toBe('/admin/menu/data/overview');
-        await desktopMenu[5].trigger('click');
+        await desktopMenu.find((item) => item.get('.v-list-item-title').text() === 'Admin').trigger('click');
         await flushPromises();
         expect(window.location.pathname).toBe('/admin/menu/depots');
 
         setViewportSize(320, 844);
         await wrapper.get('[aria-label="Minify dashboard menu"]').trigger('click');
         expect(navigation.findAll('.dashboard-compact-menu-item').map((item) => item.attributes('aria-label')))
-            .toEqual(['Dashboard', 'Depot', 'Indices', 'Stocks', 'Data', 'Admin', 'Profile']);
+            .toEqual(['Dashboard', 'Depot', 'Indices', 'Stocks', 'Analysis', 'Data', 'Admin', 'Profile']);
         await navigation.get('button[aria-label="Data"]').trigger('click');
         await flushPromises();
         expect(window.location.pathname).toBe('/admin/menu/data/overview');
