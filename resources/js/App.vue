@@ -132,6 +132,7 @@ const activeSection = ref('dashboard');
 let privateIndexRefreshTimer = null;
 let analysisRefreshTimer = null;
 let analysisTrendsRequestInFlight = false;
+const analysisHistoryRequestsInFlight = new Set();
 let privateIndexQuotesTimer = null;
 let privateIndexStatusVersion = 0;
 let privateIndexStatusRequest = false;
@@ -778,7 +779,11 @@ watch(activeSection, (section) => {
     if (section === 'analysis') {
         loadAnalysisTrends();
         analysisRefreshTimer = window.setInterval(() => {
-            if (!document.hidden) loadAnalysisTrends({ silent: true });
+            if (document.hidden) return;
+            loadAnalysisTrends({ silent: true });
+            for (const id of new Set([expandedAnalysisHoldingId.value, expandedAnalysisCardId.value])) {
+                if (id !== null) loadAnalysisPriceHistory({ id }, { silent: true });
+            }
         }, 60000);
     }
 });
@@ -2777,8 +2782,10 @@ async function loadAnalysisTrends({ silent = false } = {}) {
     }
 }
 
-async function loadAnalysisPriceHistory(holding) {
-    analysisPriceHistories.value[holding.id] = { loading: true, error: '', prices: [] };
+async function loadAnalysisPriceHistory(holding, { silent = false } = {}) {
+    if (analysisHistoryRequestsInFlight.has(holding.id)) return;
+    analysisHistoryRequestsInFlight.add(holding.id);
+    if (!silent) analysisPriceHistories.value[holding.id] = { loading: true, error: '', prices: [] };
 
     try {
         const response = await request(`/admin/analysis/holdings/${holding.id}/historical-prices`);
@@ -2788,13 +2795,18 @@ async function loadAnalysisPriceHistory(holding) {
             prices: response.prices ?? [],
             trend_anchor: response.trend_anchor ?? null,
             trend_prior_count: response.trend_prior_count ?? null,
+            loadedAt: Date.now(),
         };
     } catch (error) {
-        analysisPriceHistories.value[holding.id] = {
-            loading: false,
-            error: error.message || 'Unable to load historical prices.',
-            prices: [],
-        };
+        if (!silent) {
+            analysisPriceHistories.value[holding.id] = {
+                loading: false,
+                error: error.message || 'Unable to load historical prices.',
+                prices: [],
+            };
+        }
+    } finally {
+        analysisHistoryRequestsInFlight.delete(holding.id);
     }
 }
 
@@ -2826,7 +2838,7 @@ async function returnToAnalysisCards() {
 function ensureAnalysisPriceHistory(holding) {
     const history = analysisPriceHistories.value[holding.id];
 
-    if (!history || history.error) {
+    if (!history || history.error || Date.now() - history.loadedAt >= 60000) {
         loadAnalysisPriceHistory(holding);
     }
 }

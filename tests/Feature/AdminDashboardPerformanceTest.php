@@ -427,11 +427,13 @@ class AdminDashboardPerformanceTest extends TestCase
         Http::assertSentCount(1);
     }
 
-    public function test_market_collection_stays_scheduled_without_recurring_daily_history_imports(): void
+    public function test_market_collection_schedules_bounded_missing_daily_bar_imports(): void
     {
         $events = collect(Schedule::events());
 
-        $this->assertFalse($events->contains(fn ($event): bool => str_contains($event->command ?? '', 'market-data:daily')));
+        $daily = $events->first(fn ($event): bool => str_contains($event->command ?? '', 'market-data:daily'));
+        $this->assertStringContainsString('--days=14 --limit=3 --missing-settled', $daily->command);
+        $this->assertSame('7,22,37,52 * * * *', $daily->expression);
         $this->assertSame('*/5 * * * *', $events->first(fn ($event): bool => str_contains($event->command ?? '', 'market-data:collect'))?->expression);
     }
 

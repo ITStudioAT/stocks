@@ -13,6 +13,7 @@ use App\Services\MarketDataCoordinator;
 use App\Services\MarketPriceStore;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Spatie\Permission\Models\Role;
@@ -88,6 +89,71 @@ class FreeDailyMarketDataTest extends TestCase
         Http::fake(['query1.finance.yahoo.com/*' => Http::response($this->chart('USD'))]);
         $this->assertSame('failed', $daily->import($holding)['status']);
         $this->assertSame(0, MarketPrice::count());
+    }
+
+    public function test_missing_settled_daily_bars_are_imported_even_when_intraday_prices_exist(): void
+    {
+        $holding = $this->holding();
+        app(MarketDataCoordinator::class)->persist($holding, [[
+            'source_key' => 'xetra_posttrade', 'currency' => 'EUR', 'price' => 195,
+            'as_of' => '2026-11-06 16:20:00',
+        ]]);
+        $chart = $this->chart();
+        foreach (['open', 'high', 'low', 'close'] as $field) {
+            $chart['chart']['result'][0]['indicators']['quote'][0][$field][1] = 195;
+        }
+        $chart['chart']['result'][0]['indicators']['adjclose'][0]['adjclose'][1] = 195;
+        Http::fake(['query1.finance.yahoo.com/*' => Http::response($chart)]);
+        Cache::put('market-data.daily.checked.'.$holding->market_listing_id, true, now()->addHours(24));
+
+        $this->artisan('market-data:daily --days=3 --limit=3 --missing-settled')->assertSuccessful();
+        $this->assertDatabaseHas('market_prices', [
+            'market_listing_id' => $holding->refresh()->market_listing_id,
+            'source_key' => 'yahoo_daily', 'interval_code' => '1d', 'trading_date' => '2026-11-06',
+        ]);
+        Http::assertSentCount(1);
+
+        $this->travel(7)->hours();
+        $this->artisan('market-data:daily --days=3 --limit=3 --missing-settled')->assertSuccessful();
+        Http::assertSentCount(1);
+    }
+
+    public function test_missing_daily_bar_waits_until_the_trading_session_has_closed(): void
+    {
+        $this->travelTo(Carbon::parse('2026-11-05 18:00:00', 'UTC'));
+        $this->holding();
+        $chart = $this->chart();
+        foreach (['open', 'high', 'low', 'close'] as $field) {
+            $chart['chart']['result'][0]['indicators']['quote'][0][$field][1] = 195;
+        }
+        $chart['chart']['result'][0]['indicators']['adjclose'][0]['adjclose'][1] = 195;
+        Http::fake(['query1.finance.yahoo.com/*' => Http::response($chart)]);
+
+        $this->artisan('market-data:daily --days=3 --missing-settled')->assertSuccessful();
+        Http::assertSentCount(1);
+        $this->travelTo(Carbon::parse('2026-11-06 14:00:00', 'UTC'));
+        $this->artisan('market-data:daily --days=3 --missing-settled')->assertSuccessful();
+        Http::assertSentCount(1);
+        $this->assertDatabaseMissing('market_prices', ['source_key' => 'yahoo_daily', 'trading_date' => '2026-11-06']);
+
+        $this->travelTo(Carbon::parse('2026-11-06 17:01:00', 'UTC'));
+        $this->artisan('market-data:daily --days=3 --missing-settled')->assertSuccessful();
+        Http::assertSentCount(2);
+        $this->assertDatabaseHas('market_prices', ['source_key' => 'yahoo_daily', 'trading_date' => '2026-11-06']);
+    }
+
+    public function test_missing_daily_bar_retries_provider_failures_with_a_backoff(): void
+    {
+        $this->holding();
+        Http::fake(['query1.finance.yahoo.com/*' => Http::response([], 503)]);
+
+        $this->artisan('market-data:daily --days=3 --missing-settled')->assertFailed();
+        $this->travel(15)->minutes();
+        $this->artisan('market-data:daily --days=3 --missing-settled')->assertSuccessful();
+        Http::assertSentCount(1);
+        $this->travel(15)->minutes();
+        $this->artisan('market-data:daily --days=3 --missing-settled')->assertFailed();
+        Http::assertSentCount(2);
     }
 
     public function test_scheduled_gap_fill_restores_dashboard_boundaries_without_replacing_priced_days(): void

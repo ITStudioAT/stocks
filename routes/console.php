@@ -33,6 +33,9 @@ Schedule::call(fn () => app(PrivateIndexQuotes::class)->queueRefresh())->name('p
 Schedule::command('market-data:collect')->everyFiveMinutes()
     ->when(static fn (): bool => ! $preview && MarketPriceStore::enabled())->withoutOverlapping(5);
 
+Schedule::command('market-data:daily --days=14 --limit=3 --missing-settled')->cron('7,22,37,52 * * * *')
+    ->when(static fn (): bool => ! $preview && MarketPriceStore::enabled())->withoutOverlapping(15);
+
 Schedule::command('intraday:collect-free --queue')
     ->everyMinute()
     ->weekdays()
