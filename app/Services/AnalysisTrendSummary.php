@@ -16,13 +16,21 @@ class AnalysisTrendSummary
 {
     public function __construct(private DepotTransactionBooker $depotTransactionBooker) {}
 
-    /** @return array<int, array{id: int, name: ?string, symbol: ?string, position_pieces: string, direction: ?string, count: ?int, percentage_sum: ?float, trading_date: ?string, intraday: ?array{price: string, currency: string, as_of: string, source_markers: array<int, string>}}> */
+    /** @return array<int, array{id: int, name: ?string, symbol: ?string, position_pieces: string, direction: ?string, count: ?int, percentage_sum: ?float, trading_date: ?string, intraday: ?array{price: string, currency: string, as_of: string, trend_date: ?string, source_markers: array<int, string>}}> */
     public function all(): array
     {
         $holdings = StockHolding::query()->get(['id', 'name', 'symbol'])->keyBy('id');
         $activeDepot = Depot::query()->where('is_active', true)->first();
         $positions = $activeDepot ? $this->depotTransactionBooker->positionPiecesByHolding($activeDepot) : collect();
         $intradayPrices = $this->latestIntradayPrices();
+        $today = now(config('app.timezone'))->toDateString();
+        $intradayPrices = $intradayPrices->map(function (array $price) use ($today): array {
+            $price['trend_date'] = Carbon::parse($price['as_of'])->setTimezone(config('app.timezone'))->toDateString() === $today
+                ? $today
+                : null;
+
+            return $price;
+        });
         $summaries = $holdings->map(fn (StockHolding $holding): array => [
             'id' => $holding->id,
             'name' => $holding->name,
@@ -31,7 +39,7 @@ class AnalysisTrendSummary
             'direction' => null,
             'count' => null,
             'percentage_sum' => null,
-            'trading_date' => null,
+            'trading_date' => $intradayPrices->get($holding->id)['trend_date'] ?? null,
             'intraday' => $intradayPrices->get($holding->id),
         ])->all();
         $holdingId = null;
@@ -58,8 +66,10 @@ class AnalysisTrendSummary
                 $this->applySummary($summaries, $holdingId, $latestDate, $direction, $count, $percentageSum);
 
                 $holdingId = (int) $price->stock_holding_id;
-                $previous = null;
-                $latestDate = $price->trading_date->toDateString();
+                $intraday = $intradayPrices->get($holdingId);
+                $useIntraday = $intraday && $intraday['trend_date'] !== null && $price->trading_date->toDateString() <= $intraday['trend_date'];
+                $previous = $useIntraday ? [...$intraday, 'trading_date' => $intraday['trend_date']] : null;
+                $latestDate = $useIntraday ? $intraday['trend_date'] : $price->trading_date->toDateString();
                 $direction = 0;
                 $count = 0;
                 $percentageSum = 0.0;
@@ -186,7 +196,7 @@ class AnalysisTrendSummary
                 ->whereColumn('currency', 'stock_holdings.currency')
                 ->where('is_current', true)->where('validation_status', 'valid')
                 ->where('interval_code', '!=', '1d')->whereNotIn('price_type', ['indicative', 'nav'])
-                ->whereNotNull('observed_at')->where('effective_at', '<=', now()->utc())
+                ->whereNotNull('observed_at')->where('observed_at', '<=', now()->utc())->where('effective_at', '<=', now()->utc())
                 ->whereRaw('COALESCE(price, close) > 0')
                 ->orderByDesc('effective_at')->orderByDesc('id')->limit(1), 'intraday_id',
         )->get();
@@ -207,7 +217,7 @@ class AnalysisTrendSummary
             });
     }
 
-    /** @param array<int, array{id: int, name: ?string, symbol: ?string, position_pieces: string, direction: ?string, count: ?int, percentage_sum: ?float, trading_date: ?string, intraday: ?array{price: string, currency: string, as_of: string, source_markers: array<int, string>}}> $summaries */
+    /** @param array<int, array{id: int, name: ?string, symbol: ?string, position_pieces: string, direction: ?string, count: ?int, percentage_sum: ?float, trading_date: ?string, intraday: ?array{price: string, currency: string, as_of: string, trend_date: ?string, source_markers: array<int, string>}}> $summaries */
     private function applySummary(array &$summaries, ?int $holdingId, ?string $latestDate, int $direction, int $count, ?float $percentageSum): void
     {
         if ($holdingId === null || ! isset($summaries[$holdingId])) {

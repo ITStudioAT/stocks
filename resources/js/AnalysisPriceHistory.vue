@@ -14,13 +14,9 @@ const emit = defineEmits(['retry', 'close']);
 
 const rows = computed(() => {
     let prices = props.history?.prices ?? [];
-    const intradayDate = props.intraday ? new Date(props.intraday.as_of) : null;
-    const now = new Date();
+    const today = props.intraday?.trend_date;
 
-    if (intradayDate && !Number.isNaN(intradayDate.getTime()) && intradayDate <= now
-        && localDate(intradayDate) === localDate(now)
-        && (!prices.length || prices[0].trading_date <= localDate(now))) {
-        const today = localDate(now);
+    if (today && (!prices.length || prices[0].trading_date <= today)) {
         const intradayPrice = { ...props.intraday, trading_date: today };
         prices = [intradayPrice, ...prices.filter((price) => price.trading_date !== today)];
     }
@@ -71,14 +67,6 @@ const rows = computed(() => {
 
     return chronologicalRows.reverse().slice(0, 100);
 });
-
-function localDate(date) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-
-    return `${year}-${month}-${day}`;
-}
 
 function handleHistoryClick(event) {
     if (event.target instanceof Element && event.target.closest('button, a, input, select, textarea, [role="button"], [contenteditable="true"]')) {
