@@ -63,7 +63,7 @@ class AdminAnalysisTrendsTest extends TestCase
             ->assertJsonPath('trends.14.name', 'Stock 15');
     }
 
-    public function test_summary_pairs_opposite_directions_for_each_trend_count(): void
+    public function test_summary_groups_directions_for_each_trend_count(): void
     {
         $admin = User::factory()->create();
         $admin->assignRole(Role::findOrCreate('admin', 'web'));
@@ -79,11 +79,11 @@ class AdminAnalysisTrendsTest extends TestCase
         $trends = $this->actingAs($admin)->getJson('/admin/analysis/trends')->assertOk()->json('trends');
 
         $this->assertSame(
-            [$upOne->id, $downOne->id, $upTwo->id, $downTwo->id, $upThree->id, $shortDown->id, $shortUp->id, $neutral->id],
+            [$upOne->id, $upTwo->id, $upThree->id, $downOne->id, $downTwo->id, $shortUp->id, $shortDown->id, $neutral->id],
             array_column($trends, 'id'),
         );
         $this->assertSame([4, 4, 4, 4, 4, 2, 2, null], array_column($trends, 'count'));
-        $this->assertSame(['up', 'down', 'up', 'down', 'up', 'down', 'up', null], array_column($trends, 'direction'));
+        $this->assertSame(['up', 'up', 'up', 'down', 'down', 'up', 'down', null], array_column($trends, 'direction'));
     }
 
     public function test_summary_adds_rounded_daily_percentages_for_the_current_trend(): void
@@ -151,12 +151,12 @@ class AdminAnalysisTrendsTest extends TestCase
         }
 
         $response = $this->actingAs($admin)->getJson('/admin/analysis/trends')->assertOk();
-        $response->assertJsonPath('trends.0.id', $down->id)->assertJsonPath('trends.0.direction', 'down')->assertJsonPath('trends.0.count', 3)
-            ->assertJsonPath('trends.1.id', $up->id)->assertJsonPath('trends.1.direction', 'up')->assertJsonPath('trends.1.count', 3)
-            ->assertJsonPath('trends.1.trading_date', '2026-01-04')->assertJsonPath('trends.1.intraday.trend_date', '2026-01-04')
+        $response->assertJsonPath('trends.0.id', $up->id)->assertJsonPath('trends.0.direction', 'up')->assertJsonPath('trends.0.count', 3)
+            ->assertJsonPath('trends.1.id', $down->id)->assertJsonPath('trends.1.direction', 'down')->assertJsonPath('trends.1.count', 3)
+            ->assertJsonPath('trends.0.trading_date', '2026-01-04')->assertJsonPath('trends.0.intraday.trend_date', '2026-01-04')
             ->assertJsonPath('trends.2.id', $stale->id)->assertJsonPath('trends.2.count', 2)->assertJsonPath('trends.2.intraday.trend_date', null)
             ->assertJsonPath('trends.3.id', $reverse->id)->assertJsonPath('trends.3.direction', 'down')->assertJsonPath('trends.3.count', 1);
-        $this->assertEquals(23.26, $response->json('trends.1.percentage_sum'));
+        $this->assertEquals(23.26, $response->json('trends.0.percentage_sum'));
     }
 
     public function test_intraday_date_uses_application_timezone_and_does_not_override_a_newer_daily_price(): void

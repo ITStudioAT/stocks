@@ -128,32 +128,11 @@ class AnalysisTrendSummary
         $summaries = array_values($summaries);
 
         usort($summaries, fn (array $first, array $second): int => (($second['count'] ?? -1) <=> ($first['count'] ?? -1))
+            ?: (($first['direction'] === 'up' ? 0 : 1) <=> ($second['direction'] === 'up' ? 0 : 1))
             ?: strcasecmp($first['name'] ?: $first['symbol'] ?: '', $second['name'] ?: $second['symbol'] ?: '')
             ?: ($first['id'] <=> $second['id']));
 
-        return collect($summaries)->groupBy(fn (array $summary): int => $summary['count'] ?? -1)
-            ->flatMap(function (Collection $group): array {
-                if ($group->first()['direction'] === null) {
-                    return $group->all();
-                }
-
-                $firstDirection = $group->first()['direction'];
-                $secondDirection = $firstDirection === 'up' ? 'down' : 'up';
-                $first = $group->where('direction', $firstDirection)->values();
-                $second = $group->where('direction', $secondDirection)->values();
-                $paired = [];
-
-                for ($index = 0; $index < max($first->count(), $second->count()); $index++) {
-                    if ($first->has($index)) {
-                        $paired[] = $first[$index];
-                    }
-                    if ($second->has($index)) {
-                        $paired[] = $second[$index];
-                    }
-                }
-
-                return $paired;
-            })->all();
+        return $summaries;
     }
 
     private function latestIntradayPrices(): Collection
