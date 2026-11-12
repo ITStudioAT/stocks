@@ -13,7 +13,17 @@ const props = defineProps({
 const emit = defineEmits(['retry', 'close']);
 
 const rows = computed(() => {
-    const prices = props.history?.prices ?? [];
+    let prices = props.history?.prices ?? [];
+    const intradayDate = props.intraday ? new Date(props.intraday.as_of) : null;
+    const now = new Date();
+
+    if (intradayDate && !Number.isNaN(intradayDate.getTime()) && intradayDate <= now
+        && localDate(intradayDate) === localDate(now)
+        && (!prices.length || prices[0].trading_date <= localDate(now))) {
+        const today = localDate(now);
+        const intradayPrice = { ...props.intraday, trading_date: today };
+        prices = [intradayPrice, ...prices.filter((price) => price.trading_date !== today)];
+    }
     let previous = props.history?.trend_anchor ?? null;
     let direction = 0;
     let basePrice = null;
@@ -61,6 +71,14 @@ const rows = computed(() => {
 
     return chronologicalRows.reverse().slice(0, 100);
 });
+
+function localDate(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+}
 
 function handleHistoryClick(event) {
     if (event.target instanceof Element && event.target.closest('button, a, input, select, textarea, [role="button"], [contenteditable="true"]')) {
@@ -112,7 +130,7 @@ function changeClass(value) {
         <p v-if="intraday" class="text-body-2 mb-2">Latest stored intraday: {{ formatPriceValue(intraday.price, intraday.currency, { showCurrency: true }) }} <DataSourceMarkers :markers="intraday.source_markers ?? []" /> · <time :datetime="intraday.as_of">{{ formatIntradayTime(intraday.as_of) }}</time></p>
         <p v-else class="text-body-2 mb-2">No stored intraday price available.</p>
         <p class="text-caption text-medium-emphasis mb-2">Click the history to close it.</p>
-        <p class="text-caption text-medium-emphasis mb-3">Last 100 available daily prices, newest first. Adjusted close where available; otherwise close. Trend % compares with the price before the current rise or fall; Count includes each observation in the trend, including unchanged prices. If no earlier reversal is stored, the oldest available price is the starting point.</p>
+        <p class="text-caption text-medium-emphasis mb-3">Last 100 available daily prices, newest first. Today's intraday price replaces today's daily price when available. Adjusted close where available; otherwise close. Trend % compares with the price before the current rise or fall; Count includes each observation in the trend, including unchanged prices. If no earlier reversal is stored, the oldest available price is the starting point.</p>
         <div v-if="!history || history.loading" role="status" class="text-body-2">Loading historical prices…</div>
         <v-alert v-else-if="history.error" type="error" variant="tonal" density="compact">
             <span>{{ marketDataDisplayText(history.error) }}</span>
