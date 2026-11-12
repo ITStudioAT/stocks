@@ -110,6 +110,50 @@ class AdminAnalysisTrendsTest extends TestCase
         $this->getJson('/admin/analysis/trends')->assertUnauthorized();
     }
 
+    public function test_current_intraday_prices_recalculate_and_rank_trends_without_duplicate_days(): void
+    {
+        $this->travelTo(Carbon::parse('2026-01-04 12:00:00', 'Europe/Vienna'));
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin', 'web'));
+        $up = $this->holdingWithPrices('Up', [100, 110, 120, 150]);
+        $down = $this->holdingWithPrices('Down', [150, 140, 130]);
+        $reverse = $this->holdingWithPrices('Reversal', [100, 110, 120]);
+        $stale = $this->holdingWithPrices('Stale', [100, 110, 120]);
+
+        foreach ([[$up, 125, '2026-01-04 10:00:00'], [$down, 120, '2026-01-04 10:00:00'], [$reverse, 100, '2026-01-04 10:00:00'], [$stale, 90, '2026-01-03 10:00:00']] as [$holding, $value, $time]) {
+            StockRealtimePrice::factory()->create([
+                'stock_holding_id' => $holding->id, 'currency' => 'EUR', 'price' => $value,
+                'as_of' => Carbon::parse($time, 'Europe/Vienna')->utc(),
+            ]);
+        }
+
+        $response = $this->actingAs($admin)->getJson('/admin/analysis/trends')->assertOk();
+        $response->assertJsonPath('trends.0.id', $down->id)->assertJsonPath('trends.0.direction', 'down')->assertJsonPath('trends.0.count', 3)
+            ->assertJsonPath('trends.1.id', $up->id)->assertJsonPath('trends.1.direction', 'up')->assertJsonPath('trends.1.count', 3)
+            ->assertJsonPath('trends.1.trading_date', '2026-01-04')->assertJsonPath('trends.1.intraday.trend_date', '2026-01-04')
+            ->assertJsonPath('trends.2.id', $stale->id)->assertJsonPath('trends.2.count', 2)->assertJsonPath('trends.2.intraday.trend_date', null)
+            ->assertJsonPath('trends.3.id', $reverse->id)->assertJsonPath('trends.3.direction', 'down')->assertJsonPath('trends.3.count', 1);
+        $this->assertEquals(23.26, $response->json('trends.1.percentage_sum'));
+    }
+
+    public function test_intraday_date_uses_application_timezone_and_does_not_override_a_newer_daily_price(): void
+    {
+        $this->travelTo(Carbon::parse('2026-01-04 00:30:00', 'Europe/Vienna'));
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin', 'web'));
+        $current = $this->holdingWithPrices('Current', [100, 110, 120]);
+        $newer = $this->holdingWithPrices('Newer daily', [100, 110, 120, 130, 140]);
+        foreach ([$current, $newer] as $holding) {
+            StockRealtimePrice::factory()->create(['stock_holding_id' => $holding->id, 'currency' => 'EUR', 'price' => 130,
+                'as_of' => Carbon::parse('2026-01-03 23:15:00', 'UTC')]);
+        }
+        $trends = collect($this->actingAs($admin)->getJson('/admin/analysis/trends')->assertOk()->json('trends'))->keyBy('id');
+        $this->assertSame('2026-01-04', $trends[$current->id]['intraday']['trend_date']);
+        $this->assertSame(3, $trends[$current->id]['count']);
+        $this->assertSame('2026-01-05', $trends[$newer->id]['trading_date']);
+        $this->assertSame(4, $trends[$newer->id]['count']);
+    }
+
     public function test_summary_includes_the_latest_valid_intraday_price_for_each_stock(): void
     {
         $this->travelTo(Carbon::parse('2026-06-05 12:00:00', 'UTC'));

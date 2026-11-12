@@ -35,7 +35,7 @@ describe('AnalysisPriceHistory', () => {
         vi.setSystemTime(new Date(2026, 5, 1, 12));
         try {
             const wrapper = renderHistory({ prices: [price(0, 120), price(1, 110), price(2, 100)] });
-            await wrapper.setProps({ intraday: { price: '105', currency: 'EUR', as_of: new Date(2026, 5, 1, 10).toISOString(), source_markers: ['EODHD'] } });
+            await wrapper.setProps({ intraday: { price: '105', currency: 'EUR', as_of: new Date(2026, 5, 1, 10).toISOString(), trend_date: '2026-06-01', source_markers: ['EODHD'] } });
             const rows = wrapper.findAll('tbody tr');
             expect(rows).toHaveLength(3);
             expect(rows[0].text()).toContain('105.');
@@ -53,14 +53,14 @@ describe('AnalysisPriceHistory', () => {
         vi.setSystemTime(new Date(2026, 5, 2, 12));
         try {
             const wrapper = renderHistory({ prices: [price(0, 110), price(1, 100)] });
-            await wrapper.setProps({ intraday: { price: '121', currency: 'EUR', as_of: new Date(2026, 5, 2, 10).toISOString() } });
+            await wrapper.setProps({ intraday: { price: '121', currency: 'EUR', as_of: new Date(2026, 5, 2, 10).toISOString(), trend_date: '2026-06-02' } });
             expect(wrapper.findAll('tbody tr')).toHaveLength(3);
             expect(wrapper.findAll('tbody tr')[0].findAll('td')[4].text()).toBe('+21.00%');
             expect(wrapper.findAll('tbody tr')[0].findAll('td')[5].text()).toBe('2');
 
-            await wrapper.setProps({ intraday: { price: '121', currency: 'EUR', as_of: new Date(2026, 5, 1, 10).toISOString() } });
+            await wrapper.setProps({ intraday: { price: '121', currency: 'EUR', as_of: new Date(2026, 5, 1, 10).toISOString(), trend_date: null } });
             expect(wrapper.findAll('tbody tr')).toHaveLength(2);
-            await wrapper.setProps({ intraday: { price: '121', currency: 'EUR', as_of: new Date(2026, 5, 2, 13).toISOString() } });
+            await wrapper.setProps({ intraday: { price: '121', currency: 'EUR', as_of: new Date(2026, 5, 2, 13).toISOString(), trend_date: null } });
             expect(wrapper.findAll('tbody tr')).toHaveLength(2);
             wrapper.unmount();
         } finally {
