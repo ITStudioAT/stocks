@@ -63,6 +63,29 @@ class AdminAnalysisTrendsTest extends TestCase
             ->assertJsonPath('trends.14.name', 'Stock 15');
     }
 
+    public function test_summary_pairs_opposite_directions_for_each_trend_count(): void
+    {
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin', 'web'));
+        $upOne = $this->holdingWithPrices('A Up', [100, 110, 120, 130, 140]);
+        $upTwo = $this->holdingWithPrices('C Up', [100, 110, 120, 130, 140]);
+        $upThree = $this->holdingWithPrices('E Up', [100, 110, 120, 130, 140]);
+        $downOne = $this->holdingWithPrices('B Down', [140, 130, 120, 110, 100]);
+        $downTwo = $this->holdingWithPrices('D Down', [140, 130, 120, 110, 100]);
+        $shortDown = $this->holdingWithPrices('A Short Down', [120, 110, 100]);
+        $shortUp = $this->holdingWithPrices('B Short Up', [100, 110, 120]);
+        $neutral = $this->holdingWithPrices('Neutral', [100, 100]);
+
+        $trends = $this->actingAs($admin)->getJson('/admin/analysis/trends')->assertOk()->json('trends');
+
+        $this->assertSame(
+            [$upOne->id, $downOne->id, $upTwo->id, $downTwo->id, $upThree->id, $shortDown->id, $shortUp->id, $neutral->id],
+            array_column($trends, 'id'),
+        );
+        $this->assertSame([4, 4, 4, 4, 4, 2, 2, null], array_column($trends, 'count'));
+        $this->assertSame(['up', 'down', 'up', 'down', 'up', 'down', 'up', null], array_column($trends, 'direction'));
+    }
+
     public function test_summary_adds_rounded_daily_percentages_for_the_current_trend(): void
     {
         $admin = User::factory()->create();
