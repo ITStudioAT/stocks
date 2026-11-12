@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import AnalysisPriceHistory from '../../../resources/js/AnalysisPriceHistory.vue';
 import analysisPriceHistorySource from '../../../resources/js/AnalysisPriceHistory.vue?raw';
 import { createStocksVuetify } from '../../../resources/js/plugins/vuetify';
@@ -28,6 +28,44 @@ describe('AnalysisPriceHistory', () => {
         expect(wrapper.get('time').attributes('datetime')).toBe('2026-06-05T10:00:00Z');
         expect(wrapper.text()).toContain('No stored historical prices available.');
         wrapper.unmount();
+    });
+
+    it('includes today’s intraday price in the trend and replaces a daily price for the same date', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date(2026, 5, 1, 12));
+        try {
+            const wrapper = renderHistory({ prices: [price(0, 120), price(1, 110), price(2, 100)] });
+            await wrapper.setProps({ intraday: { price: '105', currency: 'EUR', as_of: new Date(2026, 5, 1, 10).toISOString(), source_markers: ['EODHD'] } });
+            const rows = wrapper.findAll('tbody tr');
+            expect(rows).toHaveLength(3);
+            expect(rows[0].text()).toContain('105.');
+            expect(rows[0].findAll('td')[2].text()).toContain('-5.0000 EUR');
+            expect(rows[0].findAll('td')[4].text()).toBe('-4.55%');
+            expect(rows[0].findAll('td')[5].text()).toBe('1');
+            wrapper.unmount();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('adds a current intraday day but excludes stale and future quotes', async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date(2026, 5, 2, 12));
+        try {
+            const wrapper = renderHistory({ prices: [price(0, 110), price(1, 100)] });
+            await wrapper.setProps({ intraday: { price: '121', currency: 'EUR', as_of: new Date(2026, 5, 2, 10).toISOString() } });
+            expect(wrapper.findAll('tbody tr')).toHaveLength(3);
+            expect(wrapper.findAll('tbody tr')[0].findAll('td')[4].text()).toBe('+21.00%');
+            expect(wrapper.findAll('tbody tr')[0].findAll('td')[5].text()).toBe('2');
+
+            await wrapper.setProps({ intraday: { price: '121', currency: 'EUR', as_of: new Date(2026, 5, 1, 10).toISOString() } });
+            expect(wrapper.findAll('tbody tr')).toHaveLength(2);
+            await wrapper.setProps({ intraday: { price: '121', currency: 'EUR', as_of: new Date(2026, 5, 2, 13).toISOString() } });
+            expect(wrapper.findAll('tbody tr')).toHaveLength(2);
+            wrapper.unmount();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('shows the latest 100 values with changes against the previous available price', () => {
