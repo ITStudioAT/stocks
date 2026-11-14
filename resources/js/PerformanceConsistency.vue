@@ -37,7 +37,6 @@ function historyStatus(row) {
     if (row.status === 'unsupported') return 'Keine verifizierte Gratisquelle';
     if (row.repair_status === 'cooldown') return 'Abruf pausiert. Später erneut starten.';
     if (row.repair_status === 'failed') return 'Abruf fehlgeschlagen';
-    if (row.repair_status === 'preview') return 'Abruf in der Vorschau deaktiviert';
     return 'Tageskurse fehlen';
 }
 

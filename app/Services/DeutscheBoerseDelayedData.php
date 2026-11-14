@@ -80,7 +80,6 @@ class DeutscheBoerseDelayedData
      */
     public function run(Collection $instruments, string $source = 'DETR', int $round = 0, ?string $before = null, bool $sampleOlder = false): array
     {
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
         if (Cache::has('free-intraday.cooldown.deutsche-boerse')) {
             throw new RuntimeException('Deutsche Börse: provider cooldown after HTTP 429.', 429);
         }

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('gitstart', 'gitwork', 'gitmain', 'gitsave', 'gitpush', 'gitupdate', 'gitcheck', 'gitpreview', 'gitrelease', 'gitdeploy', 'gitdiscard')]
+    [ValidateSet('gitstart', 'gitwork', 'gitmain', 'gitsave', 'gitpush', 'gitupdate', 'gitcheck', 'gitrelease', 'gitdeploy', 'gitdiscard')]
     [string]$Command,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$CommandArguments
@@ -45,35 +45,6 @@ switch ($Command) {
         if ($arguments.Count -lt 1 -or $arguments.Count -gt 2) { throw 'Usage: gitrelease "DESCRIPTION" [VERSION]' }
         $parameters.Message = $arguments[0]
         if ($arguments.Count -eq 2) { $parameters.Version = $arguments[1] }
-    }
-    'gitpreview' {
-        $expectFeature = $false
-        $expectBundle = $false
-        foreach ($argument in $arguments) {
-            if ($expectFeature) {
-                $parameters.FeatureName = $argument
-                $expectFeature = $false
-            }
-            elseif ($expectBundle) {
-                $parameters.BundleId = $argument
-                $expectBundle = $false
-            }
-            elseif ($argument -ceq '-Feature' -and -not $parameters.ContainsKey('FeatureName')) {
-                $expectFeature = $true
-            }
-            elseif ($argument -ceq '-Main' -and -not $parameters.ContainsKey('Main')) {
-                $parameters.Main = $true
-            }
-            elseif ($argument -ceq '-RefreshData' -and -not $parameters.ContainsKey('RefreshData')) {
-                $parameters.RefreshData = $true
-            }
-            elseif ($argument -cin @('deploy', 'prepare', 'resume') -and -not $parameters.ContainsKey('Mode')) {
-                $parameters.Mode = $argument
-                if ($argument -ceq 'resume') { $expectBundle = $true }
-            }
-            else { throw 'Usage: gitpreview [deploy|prepare|resume BUNDLE_ID] [-Feature NAME | -Main] [-RefreshData]' }
-        }
-        if ($expectFeature -or $expectBundle) { throw 'Usage: gitpreview [deploy|prepare|resume BUNDLE_ID] [-Feature NAME | -Main] [-RefreshData]' }
     }
     default {
         if ($arguments.Count -gt 0) { throw "Unexpected arguments for $Command." }

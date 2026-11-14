@@ -72,7 +72,6 @@ class YahooFinanceMarketData
         if (app(MarketDataMode::class)->paused()) {
             throw new MarketDataSourceBusy('Market-data deployment upgrade is in progress.');
         }
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
         $started = hrtime(true) / 1e9;
         $deadline = $started + 6;
         $requests = 0;

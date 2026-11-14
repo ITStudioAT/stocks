@@ -4,8 +4,6 @@ set -Eeuo pipefail
 project_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_directory"
 
-php scripts/preview-guard.php
-
 if [ ! -f .env ] || [ -L .env ]; then
     echo 'The deployment environment file is missing or is a symbolic link.' >&2
     exit 1

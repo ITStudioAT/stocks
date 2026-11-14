@@ -201,7 +201,7 @@ function Enter-StocksCandidateEnvironment {
         APP_ENV = 'testing'; APP_KEY = 'base64:' + [Convert]::ToBase64String($keyBytes); APP_URL = 'http://localhost'
         APP_DEBUG = 'false'; DB_CONNECTION = 'sqlite'; DB_DATABASE = ':memory:'; DB_URL = '(null)'
         CACHE_STORE = 'array'; SESSION_DRIVER = 'array'; QUEUE_CONNECTION = 'sync'; MAIL_MAILER = 'array'
-        BROADCAST_CONNECTION = 'log'; FILESYSTEM_DISK = 'local'; STOCKS_PREVIEW = 'false'
+        BROADCAST_CONNECTION = 'log'; FILESYSTEM_DISK = 'local'
     }
     $keys = @([Environment]::GetEnvironmentVariables('Process').Keys | Where-Object {
         $_ -match '^(APP_|DB_|DATABASE_|LARAVEL_|CACHE_|SESSION_|QUEUE_|REDIS_|MAIL_|BROADCAST_|REVERB_|PUSHER_|CLOUDWAYS_|AWS_|LOG_|OPENAI_|ANTHROPIC_|GEMINI_|GROQ_|COHERE_|DEEPSEEK_|MISTRAL_|OPENROUTER_|JINA_|XAI_|ELEVENLABS_|EODHD_|POSTMARK_|RESEND_|SLACK_|PREVIEW_|SUPER_ADMIN_|STOCKS_)' -and $_ -notmatch '^STOCKS_TEST_'
@@ -435,7 +435,7 @@ function gitcheck {
     $branch = Invoke-StocksGit branch --show-current
     $features = @(Get-StocksOpenFeatures)
     Write-Host "Branch: $branch" -ForegroundColor Cyan
-    Write-Host "Open features: $($features -join ', '). Select with gitwork NAME; preview with gitpreview -Feature NAME." -ForegroundColor Cyan
+    Write-Host "Open features: $($features -join ', '). Select with gitwork NAME." -ForegroundColor Cyan
     Invoke-StocksGit status --short
     if (Test-StocksRef "refs/remotes/origin/$branch") {
         $counts = (Invoke-StocksGit rev-list --left-right --count "HEAD...refs/remotes/origin/$branch") -split '\s+'
@@ -452,85 +452,7 @@ function gitcheck {
             $schemaChanges
         }
     }
-    Write-Host 'Live deploys main; the isolated preview deploys the feature. gitcheck does not inspect either server.' -ForegroundColor Cyan
-}
-
-function gitpreview {
-    param(
-        [ValidateSet('deploy', 'prepare', 'resume')][string]$Mode = 'deploy',
-        [string]$BundleId,
-        [string]$FeatureName,
-        [switch]$Main,
-        [switch]$RefreshData
-    )
-    Assert-StocksRepository
-    Assert-StocksClean
-    if ($Mode -ceq 'prepare' -and $RefreshData) { throw 'RefreshData requires an online preview deployment.' }
-    $branch = Invoke-StocksGit branch --show-current
-    if ($Main -and $FeatureName) { throw 'Choose either -Main or -Feature NAME.' }
-    if ($Main) {
-        if ($branch -cne 'main') { throw 'Use gitmain before gitpreview -Main.' }
-    }
-    else {
-        $null = Assert-StocksFeature
-        Update-StocksRemote
-        $null = Get-StocksActiveFeature -Branch $branch
-        if ($FeatureName -and (Get-StocksFeatureBranch $FeatureName) -cne $branch) {
-            throw 'The selected preview feature differs from the checkout. Use gitwork NAME first.'
-        }
-        $features = @(Get-StocksOpenFeatures)
-        if (-not $FeatureName -and $features.Count -gt 1) {
-            throw 'Choose the shared preview explicitly with gitpreview -Feature NAME.'
-        }
-    }
-    Update-StocksRemote
-    $commit = Invoke-StocksGit rev-parse HEAD
-    if ($commit -cne (Invoke-StocksGit rev-parse "refs/remotes/origin/$branch")) {
-        throw 'Save the exact preview commit with gitsave before publishing it.'
-    }
-    if (-not $Main -and -not (Test-StocksAncestor refs/remotes/origin/main HEAD)) {
-        throw 'Integrate current main with gitupdate, test and gitsave before preview.'
-    }
-    . (Join-Path $PSScriptRoot 'git_preview_helpers.ps1')
-    $mainCommit = Invoke-StocksGit rev-parse refs/remotes/origin/main
-    if ((Test-StocksRef refs/heads/main) -and -not (Test-StocksAncestor refs/heads/main $mainCommit)) {
-        throw 'Local main has unpublished or divergent commits. Resolve them before releasing.'
-    }
-    $bundle = if ($Mode -ceq 'resume') {
-        Read-StocksPreviewReceipt -Id $BundleId -Branch $branch -Commit $commit -MainCommit $mainCommit
-    }
-    else {
-        $prepared = New-StocksPreviewBundle -Branch $branch -Commit $commit
-        Save-StocksPreviewReceipt -Bundle $prepared -Branch $branch -MainCommit $mainCommit
-        $prepared
-    }
-    if ($Mode -ceq 'prepare') { return }
-    $target = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'stocks_preview_target.json') -Raw | ConvertFrom-Json
-    $destination = "$($target.sshUser)@$($target.serverAddress)"
-    $root = $target.canonicalTargetRoot
-    $markerJson = @(Invoke-StocksPreviewSsh -Destination $destination -Command "cat '$root/storage/framework/stocks-preview-instance'") -join "`n"
-    $marker = $markerJson | ConvertFrom-Json
-    $oldCommit = $marker.commit
-    if ($marker.format -cne 'stocks-preview-instance-v1' -or $marker.state -cne 'active' -or
-        $marker.root -cne $root -or $marker.source_app_id -cne $target.sourceAppId -or
-        $marker.target_app_id -cne $target.targetAppId -or $oldCommit -cnotmatch '^[a-f0-9]{40}$') {
-        throw 'The installed preview marker does not match the trusted target.'
-    }
-    if (-not $RefreshData -and (-not (Test-StocksAncestor $oldCommit HEAD) -or
-        ($Main -and -not (Test-StocksAncestor $oldCommit refs/remotes/origin/main)) -or
-        (-not $Main -and (Test-StocksAncestor $oldCommit refs/remotes/origin/main)))) {
-        throw 'The selected preview would change its feature identity. A fresh data snapshot is required before switching.'
-    }
-    & git cat-file -e "$oldCommit^{commit}"
-    if ($LASTEXITCODE -ne 0) { throw 'The installed preview commit is not available locally for a migration comparison.' }
-    if (Invoke-StocksGit diff --name-only "$oldCommit..HEAD" '--' database/migrations) {
-        throw 'The preview update contains database migrations. A migration-aware preview deploy is required.'
-    }
-    Update-StocksRemote
-    if ((Invoke-StocksGit rev-parse "refs/remotes/origin/$branch") -cne $commit) {
-        throw 'The preview branch changed during preparation. Review and retry.'
-    }
-    Send-StocksPreviewBundle -Bundle $bundle -OldCommit $oldCommit -RefreshData:$RefreshData
+    Write-Host 'Live deploys main; gitcheck does not inspect the server.' -ForegroundColor Cyan
 }
 
 function gitrelease {
@@ -661,20 +583,6 @@ function gitdiscard {
     $worktrees = @(Invoke-StocksGit worktree list --porcelain)
     if ($worktrees -ccontains "branch refs/heads/$branch") {
         throw "Feature $branch is checked out in a worktree. Switch it away before discarding."
-    }
-    . (Join-Path $PSScriptRoot 'git_preview_helpers.ps1')
-    $target = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'stocks_preview_target.json') -Raw | ConvertFrom-Json
-    $destination = "$($target.sshUser)@$($target.serverAddress)"
-    $root = $target.canonicalTargetRoot
-    $markerJson = @(Invoke-StocksPreviewSsh -Destination $destination -Command "cat '$root/storage/framework/stocks-preview-instance'") -join "`n"
-    $marker = $markerJson | ConvertFrom-Json
-    if ($marker.format -cne 'stocks-preview-instance-v1' -or $marker.state -cne 'active' -or
-        $marker.root -cne $root -or $marker.target_app_id -cne '6690486' -or $marker.commit -cnotmatch '^[a-f0-9]{40}$') {
-        throw 'Cannot verify the active preview identity. Feature was not discarded.'
-    }
-    if ((Test-StocksAncestor $marker.commit "refs/remotes/origin/$branch") -and
-        -not (Test-StocksAncestor $marker.commit refs/remotes/origin/main)) {
-        throw "Feature $branch is active on preview. Install another preview release first."
     }
     Write-Host "Discard $branch at $featureCommit without merging it into main." -ForegroundColor Yellow
     if ((Read-Host "Type DISCARD $branch") -cne "DISCARD $branch") {

@@ -351,7 +351,6 @@ class FreeIntradayMarketData
         if (MarketPriceStore::enabled()) {
             return app(MarketDataCoordinator::class)->collect($holding);
         }
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
 
         return $this->syncHoldings(collect([$holding]), reload: true);
     }

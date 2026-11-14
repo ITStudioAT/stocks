@@ -106,8 +106,8 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertSame(['contents' => 'read'], $continuousIntegrationConfiguration['permissions']);
         $approvedActions = [
             'actions/checkout' => '11d5960a326750d5838078e36cf38b85af677262',
-            'actions/setup-node' => '49933ea5288caeca8642d1e84afbd3f7d6820020',
-            'shivammathur/setup-php' => 'f3e473d116dcccaddc5834248c87452386958240',
+            'actions/setup-node' => '949feb2413d6458794dcd2491c4babbbce0c15c1',
+            'shivammathur/setup-php' => 'eb7c497e18156a6bbabfef1d3a82760b9eda3962',
         ];
         foreach ($continuousIntegrationConfiguration['jobs'] as $name => $job) {
             foreach ($job['steps'] as $step) {

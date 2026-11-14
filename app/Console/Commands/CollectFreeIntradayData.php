@@ -6,7 +6,6 @@ use App\Jobs\CollectFreeIntradayData as CollectJob;
 use App\Models\StockHolding;
 use App\Services\FreeIntradayMarketData;
 use App\Services\MarketPriceStore;
-use App\Services\PreviewIsolation;
 use App\Services\YahooFinanceMarketData;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
@@ -21,7 +20,6 @@ class CollectFreeIntradayData extends Command
         if (MarketPriceStore::enabled()) {
             return $this->call('market-data:collect');
         }
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
         if ($this->option('queue')) {
             CollectJob::dispatch();
 

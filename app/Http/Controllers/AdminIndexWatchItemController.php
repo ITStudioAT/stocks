@@ -11,7 +11,6 @@ use App\Services\IndexMarketHours;
 use App\Services\IndexWatchItemPriceRefresher;
 use App\Services\KnownInstrumentMetadataCorrections;
 use App\Services\MarketDataProvenance;
-use App\Services\PreviewIsolation;
 use App\Services\PrivateIndexQuotes;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Http\JsonResponse;
@@ -77,7 +76,6 @@ class AdminIndexWatchItemController extends Controller
 
     public function refreshFree(Request $request): JsonResponse
     {
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
         $validated = $request->validate(['force' => ['sometimes', 'boolean']]);
         if (config('queue.default') === 'sync') {
             return response()->json(['message' => 'Für die Aktualisierung muss eine Hintergrund-Queue eingerichtet sein.'], 503);

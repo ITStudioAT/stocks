@@ -4,8 +4,6 @@ set -Eeuo pipefail
 project_directory="${STOCKS_DEPLOY_PROJECT_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd "$project_directory"
 
-php scripts/preview-guard.php
-
 maintenance_marker="${project_directory}/storage/framework/cloudways-deploy-maintenance"
 maintenance_prepared=false
 deployment_handed_off=false

@@ -27,7 +27,7 @@ Ausführen erzeugt keine doppelten Helfer. Er aktiviert den vorhandenen
 bereits gesetzt sein (`git config user.name`, `git config user.email`).
 
 Der gemeinsame Dispatcher unterstützt Stocks und Schooltool, einschließlich
-`gitpush`, `gitpreview`, `gitrelease` und `gitdeploy`. Innerhalb von Stocks
+`gitpush`, `gitrelease` und `gitdeploy`. Innerhalb von Stocks
 verwendet `gitpush` den geprüften Projekt-Release; in anderen Repositories bleibt
 ein zuvor vorhandener persönlicher `gitpush`-Helfer unverändert.
 Ein älterer Schooltool-Installer kann den gemeinsamen Dispatcher wieder auf seinen
@@ -188,9 +188,3 @@ Dann `composer setup:powershell`, ein neues Terminal und `gitprepare`. Die tägl
 | --- | --- |
 | `gitsave "Describe changes"` erfolgreich abwarten | `gitwork depot-filter` |
 | Einen fertigen main-Release veröffentlichen | `gitmain` |
-
-Die getrennte Cloudways-Vorschau wird mit `gitpreview -Feature NAME` oder
-`gitpreview -Main` aktualisiert. `gitpreview prepare` erstellt nur das geprüfte
-Paket; `gitpreview resume BUNDLE_ID` setzt einen vorbereiteten Vorgang fort.
-`-RefreshData` ist ein eigener Datenwechsel und verlangt die passende
-Wiederherstellung. Details stehen in [preview-cloudways.md](preview-cloudways.md).

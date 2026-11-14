@@ -18,7 +18,6 @@ class DashboardPerformanceRepair
         private StoredHistoricalPriceResolver $prices,
         private FreeDailyMarketData $daily,
         private DashboardPerformanceSnapshots $snapshots,
-        private PreviewIsolation $preview,
     ) {}
 
     /**
@@ -68,7 +67,7 @@ class DashboardPerformanceRepair
         $this->finish($depotId, $runId, 'running');
         $depot = Depot::query()->findOrFail($depotId);
         $requests = [];
-        if (MarketPriceStore::enabled() && ! $this->preview->active()) {
+        if (MarketPriceStore::enabled()) {
             foreach ($run['dates'] as $date) {
                 $cutoff = Carbon::parse($date)->endOfDay();
                 foreach ($this->history->missingHoldingsAt($depot, $cutoff) as $holding) {

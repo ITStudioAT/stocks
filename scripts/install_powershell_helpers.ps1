@@ -122,7 +122,6 @@ function gitupdate { Invoke-ProjectGitWorkflow 'gitupdate' `$args }
 function gitcheck { Invoke-ProjectGitWorkflow 'gitcheck' `$args }
 function gitrelease { Invoke-ProjectGitWorkflow 'gitrelease' `$args }
 function gitdiscard { Invoke-ProjectGitWorkflow 'gitdiscard' `$args }
-function gitpreview { Invoke-ProjectGitWorkflow 'gitpreview' `$args }
 function gitdeploy { Invoke-ProjectGitWorkflow 'gitdeploy' `$args }
 $endMarker
 "@
@@ -231,4 +230,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host 'Open a new PowerShell terminal or run: . $PROFILE' -ForegroundColor Cyan
-Write-Host 'Stocks Git: gitstart, gitwork, gitmain, gitsave, gitpush, gitupdate, gitcheck, gitpreview, gitrelease, gitdeploy, gitdiscard.' -ForegroundColor Cyan
+Write-Host 'Stocks Git: gitstart, gitwork, gitmain, gitsave, gitpush, gitupdate, gitcheck, gitrelease, gitdeploy, gitdiscard.' -ForegroundColor Cyan

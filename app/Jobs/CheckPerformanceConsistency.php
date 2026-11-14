@@ -8,7 +8,6 @@ use App\Models\StockHolding;
 use App\Services\DashboardPerformanceSnapshots;
 use App\Services\FreeDailyMarketData;
 use App\Services\MarketPriceStore;
-use App\Services\PreviewIsolation;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -45,7 +44,7 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
         $run['periods'] ??= [];
         $run['status'] = 'running';
         if (MarketPriceStore::enabled()) {
-            $this->checkDailyHistory($run, app(FreeDailyMarketData::class), ! app(PreviewIsolation::class)->active());
+            $this->checkDailyHistory($run, app(FreeDailyMarketData::class));
         }
         $run['step'] = 'Depots werden geprüft';
         $this->save($run);
@@ -131,7 +130,7 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
         $this->save($run);
     }
 
-    private function checkDailyHistory(array &$run, FreeDailyMarketData $daily, bool $canFetch): void
+    private function checkDailyHistory(array &$run, FreeDailyMarketData $daily): void
     {
         $run['daily_history'] = [];
         foreach (StockHolding::query()->orderBy('id')->lazyById() as $holding) {
@@ -142,14 +141,10 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
             $after = $before;
             $repairStatus = null;
             if ($run['repair'] && $before['status'] === 'missing') {
-                if ($canFetch) {
-                    $run['step'] = "{$label}: Fehlende Tageskurse werden nachgeladen";
-                    $this->save($run);
-                    $repairStatus = $daily->import($holding)['status'];
-                    $after = $daily->coverage($holding);
-                } else {
-                    $repairStatus = 'preview';
-                }
+                $run['step'] = "{$label}: Fehlende Tageskurse werden nachgeladen";
+                $this->save($run);
+                $repairStatus = $daily->import($holding)['status'];
+                $after = $daily->coverage($holding);
             }
 
             $run['daily_history'][] = [

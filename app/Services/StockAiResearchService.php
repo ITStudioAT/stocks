@@ -66,7 +66,6 @@ class StockAiResearchService
 
     public function dispatch(User $user, StockHolding $stockHolding): StockAiResearch
     {
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
         $lockKey = "stock-ai-research-dispatch:{$user->getKey()}:{$stockHolding->getKey()}";
 
         return Cache::lock($lockKey, 10)->block(5, function () use ($user, $stockHolding): StockAiResearch {
@@ -109,7 +108,6 @@ class StockAiResearchService
 
     public function run(string $researchId): void
     {
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
         $research = StockAiResearch::query()->find($researchId);
 
         if (! $research || ! in_array($research->status, ['queued', 'running'], true)) {

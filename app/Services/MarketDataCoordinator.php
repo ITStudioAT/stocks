@@ -21,7 +21,6 @@ class MarketDataCoordinator
         if (app(MarketDataMode::class)->paused()) {
             return $this->result(0, 0, ['Market-data deployment upgrade is in progress.']);
         }
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
         $result = Cache::lock('market-data.coordinator', 240)->get(fn (): array => $this->collectLocked($only));
 
         return is_array($result) ? $result : $this->result(0, 0, ['Another coordinated collection is running.']);

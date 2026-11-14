@@ -93,7 +93,6 @@ class PrivateIndexQuotes
 
     public function refresh(bool $force = false): void
     {
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
         if (app(MarketDataMode::class)->paused()) {
             return;
         }

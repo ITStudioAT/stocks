@@ -47,7 +47,6 @@ class FreeDailyMarketData
         if (app(MarketDataMode::class)->paused()) {
             return ['status' => 'cooldown', 'stored_count' => 0, 'pause_reason' => 'market_data_upgrade'];
         }
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
         $listing = $this->identities->listing($holding);
         $mapping = $this->mapping($listing->id);
         if ($mapping === null || $listing->status !== 'verified') {

@@ -54,7 +54,6 @@ class CloudwaysDatabaseSync
         ?callable $onTableCompared = null,
         ?callable $onProgress = null,
     ): array {
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
         $sourceConnectionName ??= $this->sourceConnectionName();
         $targetConnectionName ??= (string) config('database.default');
 
@@ -135,7 +134,6 @@ class CloudwaysDatabaseSync
         ?callable $onTableSynced = null,
         ?callable $onProgress = null,
     ): array {
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
         $sourceConnectionName ??= $this->sourceConnectionName();
         $targetConnectionName ??= (string) config('database.default');
 

@@ -4,12 +4,10 @@ namespace Tests\Feature;
 
 use App\Services\EodhdApiClient;
 use App\Services\EodhdApiUsage;
-use App\Services\PreviewBackgroundState;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
-use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\TestCase;
@@ -29,8 +27,6 @@ class EodhdIntegrationSwitchTest extends TestCase
             'cache.default' => 'array',
             'database.default' => 'sqlite',
             'database.connections.sqlite.database' => ':memory:',
-            'security.preview.enabled' => false,
-            'security.preview.control_enabled' => false,
         ]);
 
         DB::shouldReceive('connection')->never();
@@ -122,24 +118,6 @@ class EodhdIntegrationSwitchTest extends TestCase
         Http::assertNothingSent();
     }
 
-    public function test_disabled_integration_takes_precedence_over_preview_background_access(): void
-    {
-        config([
-            'services.eodhd.enabled' => false,
-            'security.preview.enabled' => true,
-            'security.preview.control_enabled' => true,
-        ]);
-        $state = Mockery::mock(PreviewBackgroundState::class);
-        $state->shouldNotReceive('enabled');
-        app()->instance(PreviewBackgroundState::class, $state);
-
-        $this->assertFalse(app(EodhdApiClient::class)->configured());
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('EODHD integration is disabled by configuration.');
-
-        app(EodhdApiClient::class)->get('eod/AAPL.US');
-    }
-
     public function test_enabled_integration_preserves_requests_and_usage_accounting(): void
     {
         $apiClient = app(EodhdApiClient::class);
@@ -167,30 +145,5 @@ class EodhdIntegrationSwitchTest extends TestCase
         $this->expectExceptionMessage('EODHD API token is not configured.');
 
         app(EodhdApiClient::class)->get('eod/AAPL.US');
-    }
-
-    public function test_enabled_integration_preserves_preview_restrictions(): void
-    {
-        config(['security.preview.enabled' => true]);
-
-        $this->assertFalse(app(EodhdApiClient::class)->configured());
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('EODHD synchronization is stopped in the Stocks preview.');
-
-        app(EodhdApiClient::class)->get('eod/AAPL.US');
-    }
-
-    public function test_enabled_controlled_preview_is_only_configured_while_background_processing_is_enabled(): void
-    {
-        config([
-            'security.preview.enabled' => true,
-            'security.preview.control_enabled' => true,
-        ]);
-        $state = Mockery::mock(PreviewBackgroundState::class);
-        $state->shouldReceive('enabled')->twice()->andReturn(false, true);
-        app()->instance(PreviewBackgroundState::class, $state);
-
-        $this->assertFalse(app(EodhdApiClient::class)->configured());
-        $this->assertTrue(app(EodhdApiClient::class)->configured());
     }
 }

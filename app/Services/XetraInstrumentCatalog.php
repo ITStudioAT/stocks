@@ -44,7 +44,6 @@ class XetraInstrumentCatalog
         }
 
         try {
-            app(PreviewIsolation::class)->assertIntegrationAllowed();
             $catalog = Cache::lock(self::CacheKey.'.lock', 30)->get(function (): array {
                 $cached = Cache::get(self::CacheKey);
                 if (is_array($cached)) {

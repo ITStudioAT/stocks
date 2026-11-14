@@ -22,7 +22,6 @@ class EodhdApiClient
             throw new RuntimeException('EODHD integration is disabled by configuration.');
         }
 
-        app(PreviewIsolation::class)->assertEodhdAllowed();
         $apiToken = config('services.eodhd.key');
 
         if (! is_string($apiToken) || trim($apiToken) === '') {
@@ -58,12 +57,6 @@ class EodhdApiClient
         }
 
         $apiToken = config('services.eodhd.key');
-
-        if (app(PreviewIsolation::class)->active()) {
-            return config('security.preview.control_enabled') === true
-                && app(PreviewBackgroundState::class)->enabled()
-                && is_string($apiToken) && trim($apiToken) !== '';
-        }
 
         return is_string($apiToken) && trim($apiToken) !== '';
     }

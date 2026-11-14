@@ -2,8 +2,6 @@
 
 declare(strict_types=1);
 
-require __DIR__.'/preview-guard.php';
-
 function updateProjectPath(string $relativePath = ''): string
 {
     $projectDirectory = dirname(__DIR__);

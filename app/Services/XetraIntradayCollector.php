@@ -32,7 +32,6 @@ class XetraIntradayCollector
         if (app(MarketDataMode::class)->paused()) {
             throw new MarketDataSourceBusy('Market-data deployment upgrade is in progress.');
         }
-        app(PreviewIsolation::class)->assertIntegrationAllowed();
         if ($this->result !== null && ! $advance) {
             return $this->result;
         }
