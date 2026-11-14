@@ -3,7 +3,10 @@
     "name": "kron/stocks",
     "type": "project",
     "description": "Stocks Laravel application.",
-    "keywords": ["laravel", "framework"],
+    "keywords": [
+        "laravel",
+        "framework"
+    ],
     "license": "MIT",
     "require": {
         "php": "^8.4.1",

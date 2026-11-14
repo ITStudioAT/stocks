@@ -1,3 +1,8 @@
+## 2.0.2
+
+### System
+
+- Composer update
 
 ## 2.0.1
 
@@ -19,7 +24,6 @@
 ### System
 
 - Veröffentlichung: Flow mit Ankündigung und Refresh
-
 
 ## 1.2.0
 
