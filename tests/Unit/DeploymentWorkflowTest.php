@@ -282,8 +282,8 @@ class DeploymentWorkflowTest extends TestCase
     public function test_local_frontend_dependency_install_stops_vite_before_npm_ci_on_windows(): void
     {
         $updateLauncher = file_get_contents($this->projectPath('scripts/update.php'));
-        $installFunctionPosition = strpos($updateLauncher, 'function installFrontendDependencies(): int');
-        $runLocalUpdatePosition = strpos($updateLauncher, 'function runLocalUpdate(bool $prepareOnly): int');
+        $installFunctionPosition = strpos($updateLauncher, 'function installFrontendDependencies(');
+        $runLocalUpdatePosition = strpos($updateLauncher, 'function runLocalUpdate(');
 
         $this->assertIsInt($installFunctionPosition);
         $this->assertIsInt($runLocalUpdatePosition);
@@ -296,7 +296,8 @@ class DeploymentWorkflowTest extends TestCase
         $cleanupPosition = strpos($installFunction, "updateProjectPath('scripts/dev-stop-stale-vite.mjs')");
         $npmCiPosition = strpos($installFunction, "['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund']");
 
-        $this->assertStringContainsString("if (PHP_OS_FAMILY === 'Windows')", $installFunction);
+        $this->assertStringContainsString("if (PHP_OS_FAMILY === 'Windows' && ! \$preserveRunningDevelopment)", $installFunction);
+        $this->assertStringContainsString('Frontend dependencies changed while a development server is running.', $installFunction);
         $this->assertStringContainsString("'--strict'", $installFunction);
         $this->assertStringContainsString('if ($cleanupExitCode !== 0)', $installFunction);
         $this->assertStringContainsString('return $cleanupExitCode;', $installFunction);
