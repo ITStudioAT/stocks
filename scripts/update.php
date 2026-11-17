@@ -147,6 +147,13 @@ function composerDependenciesAreCurrent(): bool
         return false;
     }
 
+    foreach ($installed['versions'] ?? [] as $package) {
+        $path = $package['install_path'] ?? null;
+        if (is_string($path) && ! is_dir($path)) {
+            return false;
+        }
+    }
+
     $lockHash = hash_file('sha256', $lockPath);
 
     if (! is_string($lockHash)) {
@@ -210,6 +217,19 @@ function frontendDependenciesAreCurrent(): bool
         return false;
     }
 
+    $manifest = json_decode((string) file_get_contents(updateProjectPath('package.json')), true);
+    $lock = json_decode((string) file_get_contents($lockPath), true);
+    if (! is_array($manifest) || ! is_array($lock)) {
+        return false;
+    }
+    foreach (array_keys(($manifest['dependencies'] ?? []) + ($manifest['devDependencies'] ?? [])) as $name) {
+        $installedManifest = updateProjectPath("node_modules/{$name}/package.json");
+        $package = is_file($installedManifest) ? json_decode((string) file_get_contents($installedManifest), true) : null;
+        if (! is_array($package) || ($package['version'] ?? null) !== ($lock['packages']["node_modules/{$name}"]['version'] ?? null)) {
+            return false;
+        }
+    }
+
     $lockHash = hash_file('sha256', $lockPath);
 
     if (! is_string($lockHash)) {
@@ -236,7 +256,7 @@ function frontendDependenciesAreCurrent(): bool
     return true;
 }
 
-function installFrontendDependencies(): int
+function installFrontendDependencies(bool $preserveRunningDevelopment = false): int
 {
     if (frontendDependenciesAreCurrent()) {
         fwrite(STDOUT, "Frontend dependencies match package-lock.json; skipping npm ci.\n");
@@ -244,7 +264,28 @@ function installFrontendDependencies(): int
         return 0;
     }
 
-    if (PHP_OS_FAMILY === 'Windows') {
+    if ($preserveRunningDevelopment) {
+        $endpoints = [['127.0.0.1', (int) (getenv('VITE_DEV_SERVER_PORT') ?: 5173)], ['[::1]', (int) (getenv('VITE_DEV_SERVER_PORT') ?: 5173)]];
+        if (is_file(updateProjectPath('public/hot'))) {
+            $url = trim((string) file_get_contents(updateProjectPath('public/hot')));
+            $host = parse_url($url, PHP_URL_HOST);
+            $port = parse_url($url, PHP_URL_PORT);
+            if (is_string($host) && is_int($port) && in_array($host, ['localhost', '127.0.0.1', '[::1]'], true)) {
+                $endpoints[] = [$host, $port];
+            }
+        }
+        foreach ($endpoints as [$host, $port]) {
+            $socket = @fsockopen($host, $port, $errorCode, $errorMessage, 1);
+            if (is_resource($socket)) {
+                fclose($socket);
+                fwrite(STDERR, "Frontend dependencies changed while a development server is running. Stop it before updating dependencies.\n");
+
+                return 1;
+            }
+        }
+    }
+
+    if (PHP_OS_FAMILY === 'Windows' && ! $preserveRunningDevelopment) {
         $cleanupCommand = ['node', updateProjectPath('scripts/dev-stop-stale-vite.mjs'), '--strict'];
         $cleanupExitCode = runUpdateCommand(windowsShellCommand($cleanupCommand));
 
@@ -272,7 +313,7 @@ function installFrontendDependencies(): int
     return 0;
 }
 
-function runLocalUpdate(bool $prepareOnly): int
+function runLocalUpdate(bool $prepareOnly, bool $preserveRunningDevelopment = false): int
 {
     fwrite(STDOUT, "Update target: Windows development workstation.\n");
 
@@ -282,7 +323,7 @@ function runLocalUpdate(bool $prepareOnly): int
         return $composerExitCode;
     }
 
-    $npmExitCode = installFrontendDependencies();
+    $npmExitCode = installFrontendDependencies($preserveRunningDevelopment);
 
     if ($npmExitCode !== 0 || $prepareOnly) {
         return $npmExitCode;
@@ -337,7 +378,7 @@ if ($dryRun) {
 }
 
 if ($target === 'local') {
-    exit(runLocalUpdate($prepareOnly));
+    exit(runLocalUpdate($prepareOnly, in_array('--development', $arguments, true)));
 }
 
 if ($prepareOnly) {

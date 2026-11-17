@@ -44,7 +44,8 @@ class MarketIdentityRegistry
             if ((int) $holding->market_listing_id !== $listing->id) {
                 $holding->forceFill(['market_listing_id' => $listing->id, 'latest_market_price_id' => null])->saveQuietly();
             }
-            $symbol = $us ? $holding->symbol : config('services.free_intraday.yahoo_xetra_symbols.'.$holding->isin);
+            $symbol = $us ? $holding->symbol : (YahooFinanceMarketData::supportsXetra($holding->toArray())
+                ? config('services.free_intraday.yahoo_xetra_symbols.'.$holding->isin) : null);
             if ($symbol && $known) {
                 DB::table('market_source_instruments')->insertOrIgnore(['market_listing_id' => $listing->id, 'source_key' => 'yahoo',
                     'symbol' => $symbol, 'verified_at' => now(), 'created_at' => now(), 'updated_at' => now()]);

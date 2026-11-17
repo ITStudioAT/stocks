@@ -212,7 +212,7 @@ class DeploymentWorkflowTest extends TestCase
         $this->assertStringContainsString('php artisan serve', $windows->getOutput());
         $this->assertStringContainsString('php artisan queue:listen', $windows->getOutput());
         $this->assertStringContainsString('php artisan schedule:work', $windows->getOutput());
-        $this->assertStringContainsString('npm run dev', $windows->getOutput());
+        $this->assertStringContainsString('npx vite', $windows->getOutput());
         $this->assertStringContainsString('php scripts/dev-logs.php', $windows->getOutput());
         $this->assertStringContainsString('--names=server,queue,scheduler,logs,vite', $windows->getOutput());
         $this->assertStringNotContainsString('php artisan pail', $windows->getOutput());

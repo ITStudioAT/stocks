@@ -16,7 +16,7 @@ function developmentProcesses(bool $supportsPail): array
         ['queue', '#c4b5fd', 'php artisan queue:listen --tries=1 --timeout=0'],
         ['scheduler', '#86efac', 'php artisan schedule:work'],
         ['logs', '#fb7185', $supportsPail ? 'php artisan pail --timeout=0' : 'php scripts/dev-logs.php'],
-        ['vite', '#fdba74', 'npm run dev'],
+        ['vite', '#fdba74', 'npx vite'],
     ];
 
     return [
@@ -113,9 +113,42 @@ $command = [
 ];
 
 if ($isDryRun) {
+    fwrite(STDOUT, "Preparation: PHP and Node dependencies, then safe local database migrations.\n");
     fwrite(STDOUT, displayDevelopmentCommand($command)."\n");
 
     exit(0);
+}
+
+$preparation = [PHP_BINARY, __DIR__.'/update.php', '--target=local', '--prepare', '--development'];
+$preparationExitCode = runDevelopmentCommand($preparation);
+if ($preparationExitCode !== 0) {
+    fwrite(STDERR, "Dependency preparation failed; development processes were not started.\n");
+
+    exit($preparationExitCode);
+}
+
+$migrationExitCode = runDevelopmentCommand([PHP_BINARY, dirname(__DIR__).'/artisan', 'app:prepare-local-development', '--no-interaction']);
+if ($migrationExitCode !== 0) {
+    fwrite(STDERR, "Local database preparation failed; development processes were not started.\n");
+
+    exit($migrationExitCode);
+}
+
+if (in_array('--prepare-only', $argv, true)) {
+    fwrite(STDOUT, "Development preparation completed.\n");
+
+    exit(0);
+}
+
+$vitePort = (int) (getenv('VITE_DEV_SERVER_PORT') ?: 5173);
+foreach (['127.0.0.1', '[::1]'] as $viteHost) {
+    $viteSocket = @fsockopen($viteHost, $vitePort, $errorCode, $errorMessage, 1);
+    if (is_resource($viteSocket)) {
+        fclose($viteSocket);
+        fwrite(STDERR, "A development server is already listening on port {$vitePort}; it was left running.\n");
+
+        exit(1);
+    }
 }
 
 exit(runDevelopmentCommand($command));

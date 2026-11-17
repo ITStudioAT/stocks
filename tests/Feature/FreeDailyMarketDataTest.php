@@ -9,12 +9,14 @@ use App\Models\StockHolding;
 use App\Models\User;
 use App\Services\DashboardPerformanceSnapshots;
 use App\Services\FreeDailyMarketData;
+use App\Services\FreeTradingCalendar;
 use App\Services\MarketDataCoordinator;
 use App\Services\MarketPriceStore;
 use App\Services\YahooFinanceMarketData;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -60,6 +62,8 @@ class FreeDailyMarketDataTest extends TestCase
             'Insurance ETF' => ['DE000A0H08K7', 'EXH5', 'ETF'],
             'Tesla Xetra' => ['US88160R1014', 'TL0', 'EQUITY'],
             'Artificial intelligence ETF' => ['IE00BGV5VN51', 'XAIX', 'ETF'],
+            'Travel and leisure ETF' => ['DE000A0H08S0', 'EXV9', 'ETF'],
+            'Chemicals ETF' => ['IE00B5MTY077', 'SC00', 'ETF'],
         ];
     }
 
@@ -327,5 +331,133 @@ class FreeDailyMarketDataTest extends TestCase
             ->assertJsonPath('run.daily_history.0.missing_count', $checked['missing_count'] - 2)
             ->assertJsonPath('run.daily_history.1.status', 'unsupported');
         Http::assertSentCount(1);
+    }
+
+    public function test_coverage_waits_for_the_next_exchange_local_day_and_keeps_prior_gaps_visible(): void
+    {
+        $holding = $this->holding();
+        $daily = app(FreeDailyMarketData::class);
+        $this->travelTo(Carbon::parse('2026-11-06 15:00:00', 'Europe/Berlin'));
+        $chart = $this->chart();
+        $chart['chart']['result'][0]['timestamp'][0] = Carbon::parse('2025-11-06 08:00:00', 'UTC')->timestamp;
+        Http::fake(['query1.finance.yahoo.com/*' => Http::response($chart)]);
+        $daily->import($holding);
+        $open = $daily->coverage($holding);
+        $this->travelTo(Carbon::parse('2026-11-06 23:59:00', 'Europe/Berlin'));
+        $closed = $daily->coverage($holding);
+        $this->assertSame($open['expected_count'], $closed['expected_count']);
+        $this->assertSame('2026-11-05', $closed['to']);
+        $this->assertGreaterThan(0, $closed['missing_count']);
+        $this->travelTo(Carbon::parse('2026-11-07 00:01:00', 'Europe/Berlin'));
+        $nextDay = $daily->coverage($holding);
+        $this->assertSame('2026-11-06', $nextDay['to']);
+        $this->assertSame($closed['expected_count'], $nextDay['expected_count']);
+        $this->assertSame($closed['missing_count'] + 1, $nextDay['missing_count']);
+    }
+
+    public function test_rebuild_restores_missing_verified_xetra_mapping_without_guessing_the_symbol(): void
+    {
+        config(['queue.default' => 'database']);
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin'));
+        $holding = $this->holding();
+        DB::table('market_source_instruments')->where('market_listing_id', $holding->market_listing_id)->delete();
+        DB::table('stock_holdings')->where('id', $holding->id)->update(['market_listing_id' => null]);
+        $holding->refresh();
+        $this->assertSame('missing', app(FreeDailyMarketData::class)->coverage($holding)['status']);
+
+        $wrong = StockHolding::factory()->create(['isin' => 'IE000YYE6WK5', 'symbol' => 'WRONG', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
+        $this->assertSame('unsupported', app(FreeDailyMarketData::class)->coverage($wrong)['status']);
+
+        Http::fake(['query1.finance.yahoo.com/*' => Http::response($this->chart())]);
+        $this->actingAs($admin)->postJson('/admin/data/performance-consistency', ['repair' => true])->assertOk();
+        Queue::pop()->fire();
+        $this->assertDatabaseHas('market_source_instruments', ['market_listing_id' => $holding->refresh()->market_listing_id, 'symbol' => 'TKE.DE']);
+        $this->assertDatabaseHas('market_prices', ['market_listing_id' => $holding->market_listing_id, 'source_key' => 'yahoo_daily', 'trading_date' => '2026-11-05']);
+        Http::assertSentCount(1);
+    }
+
+    public function test_us_coverage_uses_new_york_dates_and_excludes_thanksgiving(): void
+    {
+        $holding = StockHolding::factory()->create(['isin' => 'US37950E2596', 'symbol' => 'ARGT',
+            'exchange' => 'US', 'mic_code' => null, 'currency' => 'USD']);
+        $this->travelTo(Carbon::parse('2026-11-27 14:00:00', 'America/New_York'));
+        $this->assertSame('2026-11-25', app(FreeDailyMarketData::class)->coverage($holding)['to']);
+        $this->travelTo(Carbon::parse('2026-11-28 00:01:00', 'America/New_York'));
+        $this->assertSame('2026-11-27', app(FreeDailyMarketData::class)->coverage($holding)['to']);
+    }
+
+    /** @return array<string, array{string, string}> */
+    public static function newlyAddedFunds(): array
+    {
+        return ['travel' => ['DE000A0H08S0', 'EXV9'], 'chemicals' => ['IE00B5MTY077', 'SC00']];
+    }
+
+    #[DataProvider('newlyAddedFunds')]
+    public function test_rebuild_imports_both_new_funds_when_their_source_mapping_was_not_saved(string $isin, string $symbol): void
+    {
+        config(['queue.default' => 'database']);
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin'));
+        $holding = StockHolding::factory()->create(['isin' => $isin, 'symbol' => $symbol,
+            'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
+        DB::table('market_source_instruments')->where('market_listing_id', $holding->market_listing_id)->delete();
+        $chart = $this->chart();
+        $chart['chart']['result'][0]['meta']['symbol'] = "{$symbol}.DE";
+        $chart['chart']['result'][0]['meta']['instrumentType'] = 'ETF';
+        Http::fake(['query1.finance.yahoo.com/*' => Http::response($chart)]);
+
+        $this->actingAs($admin)->postJson('/admin/data/performance-consistency', ['repair' => true])->assertOk();
+        Queue::pop()->fire();
+        $this->getJson('/admin/data/performance-consistency')->assertJsonPath('run.daily_history.0.filled_count', 1);
+        $this->assertDatabaseHas('market_prices', ['market_listing_id' => $holding->market_listing_id,
+            'source_key' => 'yahoo_daily', 'trading_date' => '2026-11-05']);
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), "/{$symbol}.DE"));
+        $this->postJson('/admin/data/performance-consistency', ['repair' => true])->assertOk();
+        Queue::pop()->fire();
+        $this->assertSame(1, MarketPrice::query()->where('market_listing_id', $holding->market_listing_id)->count());
+    }
+
+    public function test_live_rebuild_imports_the_two_verified_funds_into_an_isolated_database(): void
+    {
+        if (getenv('STOCKS_TEST_LIVE_DAILY') !== '1') {
+            $this->markTestSkipped('Live public-provider check is opt-in.');
+        }
+        $this->travelBack();
+        Http::preventStrayRequests(false);
+        config(['queue.default' => 'database']);
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin'));
+        foreach (self::newlyAddedFunds() as [$isin, $symbol]) {
+            $holding = StockHolding::factory()->create(['isin' => $isin, 'symbol' => $symbol,
+                'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
+            DB::table('market_source_instruments')->where('market_listing_id', $holding->market_listing_id)->delete();
+        }
+
+        $this->actingAs($admin)->postJson('/admin/data/performance-consistency', ['repair' => true])->assertOk();
+        Queue::pop()->fire();
+        $rows = $this->getJson('/admin/data/performance-consistency')->assertOk()->json('run.daily_history');
+        foreach ($rows as $row) {
+            $this->assertGreaterThan(200, $row['filled_count'], json_encode($row));
+            $this->assertNotSame('unsupported', $row['status']);
+            $holding = StockHolding::findOrFail($row['holding_id']);
+            $expectedDates = [];
+            for ($day = Carbon::parse($row['from'], 'Europe/Berlin'); $day->toDateString() <= $row['to']; $day->addDay()) {
+                if (app(FreeTradingCalendar::class)->session($holding, $day) !== null) {
+                    $expectedDates[] = $day->toDateString();
+                }
+            }
+            $actualDates = MarketPrice::query()->where('market_listing_id', $holding->market_listing_id)
+                ->where('source_key', 'yahoo_daily')->where('interval_code', '1d')
+                ->where('is_current', true)->where('validation_status', 'valid')->where('close', '>', 0)
+                ->whereBetween('trading_date', [$row['from'], $row['to']])->distinct()->pluck('trading_date')->all();
+            $missingDates = array_values(array_diff($expectedDates, $actualDates));
+            $this->assertCount($row['expected_count'], $expectedDates);
+            $this->assertCount($row['missing_count'], $missingDates);
+            fwrite(STDOUT, json_encode(['symbol' => $holding->symbol, 'from' => $row['from'], 'to' => $row['to'],
+                'expected' => count($expectedDates), 'received' => count(array_intersect($expectedDates, $actualDates)),
+                'missing' => $missingDates], JSON_THROW_ON_ERROR).PHP_EOL);
+        }
+        $this->assertCount(2, $rows);
     }
 }

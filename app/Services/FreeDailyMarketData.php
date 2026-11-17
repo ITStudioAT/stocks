@@ -28,9 +28,11 @@ class FreeDailyMarketData
 
         [$from, $until, $expectedDays] = $this->historyWindow($holding, $timezone, null);
         $coverage = $this->countCoverage($listing?->id, $holding->currency, $from, $until, $expectedDays);
+        $mapping = $listing === null ? null : $this->mapping($listing->id);
+        $canImport = $mapping === null ? $this->hasVerifiedCandidate($holding) : $this->mappingMatchesHolding($mapping, $holding);
         $status = match (true) {
             $coverage['missing_count'] === 0 => 'complete',
-            $listing === null || $this->mapping($listing->id) === null => 'unsupported',
+            ! $canImport => 'unsupported',
             default => 'missing',
         };
 
@@ -49,11 +51,11 @@ class FreeDailyMarketData
         }
         $listing = $this->identities->listing($holding);
         $mapping = $this->mapping($listing->id);
-        if ($mapping === null || $listing->status !== 'verified') {
+        if ($mapping === null || $listing->status !== 'verified' || ! $this->mappingMatchesHolding($mapping, $holding)) {
             return ['status' => 'unsupported', 'stored_count' => 0];
         }
         if ($tradingDates === []) {
-            [$from, $until, $expectedDays] = $this->historyWindow($holding, $listing->timezone, $days);
+            [$from, $until, $expectedDays] = $this->historyWindow($holding, $listing->timezone, $days, includeSettledToday: true);
         } else {
             $from = Carbon::parse(min($tradingDates), $listing->timezone)->startOfDay();
             $until = Carbon::parse(max($tradingDates), $listing->timezone)->startOfDay()->addDay();
@@ -204,18 +206,33 @@ class FreeDailyMarketData
             ->whereNotNull('verified_at')->where(fn ($query) => $query->whereNull('valid_until')->orWhere('valid_until', '>', now()))->first();
     }
 
+    private function hasVerifiedCandidate(StockHolding $holding): bool
+    {
+        return YahooFinanceMarketData::supportsXetra($holding->toArray());
+    }
+
+    private function mappingMatchesHolding(object $mapping, StockHolding $holding): bool
+    {
+        if (YahooFinanceMarketData::supportsXetra($holding->toArray())) {
+            return $mapping->symbol === config('services.free_intraday.yahoo_xetra_symbols.'.$holding->isin);
+        }
+
+        return YahooFinanceMarketData::supports($holding->toArray()) && $mapping->symbol === $holding->symbol;
+    }
+
     /** @return array{Carbon, Carbon, array<string, true>} */
-    private function historyWindow(StockHolding $holding, string $timezone, ?int $days): array
+    private function historyWindow(StockHolding $holding, string $timezone, ?int $days, bool $includeSettledToday = false): array
     {
         $reference = now($timezone);
         $from = $reference->copy()->startOfDay();
         $from = $days === null ? $from->subYearNoOverflow() : $from->subDays(max(1, min(3650, $days)) - 1);
         $until = $reference->copy()->startOfDay()->addDay();
-        $delayMinutes = $timezone === 'America/New_York' ? 30 : 20;
         $expectedDays = [];
         for ($day = $from->copy(); $day->lessThan($until); $day->addDay()) {
             $session = $this->calendar->session($holding, $day);
-            if ($session !== null && $session['close']->copy()->addMinutes($delayMinutes)->lessThanOrEqualTo($reference)) {
+            $delayMinutes = $timezone === 'America/New_York' ? 30 : 20;
+            if ($session !== null && ($day->lt($reference->copy()->startOfDay())
+                || ($includeSettledToday && $session['close']->copy()->addMinutes($delayMinutes)->lte($reference)))) {
                 $expectedDays[$day->toDateString()] = true;
             }
         }
@@ -229,7 +246,7 @@ class FreeDailyMarketData
      */
     private function countCoverage(?int $listingId, ?string $currency, Carbon $from, Carbon $until, array $expectedDays): array
     {
-        $to = $until->copy()->subDay()->toDateString();
+        $to = array_key_last($expectedDays) ?? $until->copy()->subDay()->toDateString();
         $coveredDays = $listingId === null ? [] : MarketPrice::query()->where('market_listing_id', $listingId)
             ->where('currency', $currency)->whereIn('source_key', StockPreviousCloseResolver::FreeSources)
             ->where('interval_code', '1d')->where('adjustment_basis', 'unadjusted')
