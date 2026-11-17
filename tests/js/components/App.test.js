@@ -4214,10 +4214,11 @@ describe('App', () => {
         await flushPromises();
 
         const report = wrapper.get('[aria-label="Datenkonsistenz"]');
-        expect(report.text()).toContain('3 von 250 Handelstagen fehlen');
-        expect(report.text()).toContain('10 ergänzt');
+        expect(report.text()).toContain('247 von 250 Tagen vorhanden');
+        expect(report.text()).toContain('3 offen');
+        expect(report.text()).toContain('10 nachgeladen');
         expect(report.text()).toContain('Keine verifizierte Gratisquelle');
-        expect(report.text()).toContain('Prüfung mit Hinweisen');
+        expect(report.text()).toContain('Neuaufbau mit Hinweisen');
     });
 
     it.each(['/admin/menu/data/cloudways', '/admin/menu/cloudways'])('opens Cloudways from %s', async (path) => {

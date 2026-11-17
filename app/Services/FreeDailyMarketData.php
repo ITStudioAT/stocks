@@ -17,7 +17,7 @@ class FreeDailyMarketData
         private MarketPriceLegacyImporter $normalizer, private MarketPriceStore $store, private FreeTradingCalendar $calendar,
         private DashboardPerformanceSnapshots $performanceSnapshots) {}
 
-    /** @return array{status: string, from: ?string, to: ?string, expected_count: ?int, missing_count: ?int} */
+    /** @return array{status: string, from: ?string, to: ?string, expected_count: ?int, missing_count: ?int, missing_dates?: list<string>} */
     public function coverage(StockHolding $holding): array
     {
         $listing = DB::table('market_listings')->where('id', $holding->market_listing_id)->where('status', 'verified')->first();
@@ -43,7 +43,7 @@ class FreeDailyMarketData
      * @param  list<string>  $tradingDates
      * @return array<string, mixed>
      */
-    public function import(StockHolding $holding, ?int $days = null, bool $fillGaps = false, array $tradingDates = [], bool $prioritizeRepair = false): array
+    public function import(StockHolding $holding, ?int $days = null, bool $fillGaps = false, array $tradingDates = [], bool $prioritizeRepair = false, bool $dailyGapsOnly = false): array
     {
         $fillGaps = $fillGaps || $tradingDates !== [];
         if (app(MarketDataMode::class)->paused()) {
@@ -68,7 +68,7 @@ class FreeDailyMarketData
             }
         }
         $importDays = $expectedDays;
-        if ($fillGaps) {
+        if ($fillGaps && ! $dailyGapsOnly) {
             $history = app(MarketPriceCompatibility::class)->history(collect([$holding]), $from, $until, freeOnly: true)[$listing->id] ?? [];
             $importDays = array_filter($expectedDays, function (string $day) use ($history): bool {
                 $price = $history[$day] ?? null;
@@ -92,6 +92,7 @@ class FreeDailyMarketData
         }
         $xetra = $listing->calendar_key === 'XETRA';
         $stored = 0;
+        $importedDates = [];
         $skipped = 0;
         $firstHistoricalChange = null;
         $today = now()->toDateString();
@@ -135,7 +136,9 @@ class FreeDailyMarketData
                 }
                 $date = Carbon::createFromTimestampUTC($timestamp)->setTimezone($listing->timezone)->toDateString();
                 if (! isset($expectedDays[$date])) {
-                    $skipped++;
+                    if (! $dailyGapsOnly) {
+                        $skipped++;
+                    }
 
                     continue;
                 }
@@ -167,6 +170,9 @@ class FreeDailyMarketData
                 $attributes['reported_mic'] = $xetra ? 'XETR' : null;
                 $observation = $this->store->store($listing->id, $attributes);
                 $stored += (int) $observation->wasRecentlyCreated;
+                if ($observation->wasRecentlyCreated && $observation->is_current && $observation->validation_status === 'valid') {
+                    $importedDates[$date] = true;
+                }
                 if ($observation->wasRecentlyCreated && $observation->is_current && $row['trading_date'] < $today
                     && ($firstHistoricalChange === null || $row['trading_date'] < $firstHistoricalChange)) {
                     $firstHistoricalChange = $row['trading_date'];
@@ -180,16 +186,16 @@ class FreeDailyMarketData
             }
             $coverage = $this->countCoverage($listing->id, $listing->currency, $from, $until, $importDays);
             $result = ['status' => $skipped > 0 || $coverage['missing_count'] > 0 ? 'partial' : 'complete',
-                'stored_count' => $stored, 'skipped_count' => $skipped, ...$coverage];
+                'stored_count' => $stored, 'imported_dates' => array_keys($importedDates), 'skipped_count' => $skipped, ...$coverage];
         } catch (Throwable $exception) {
             $result = ['status' => 'failed', 'stored_count' => $stored, 'error' => $exception->getMessage(),
-                'failure_reason' => $failureReason, 'provider_http_status' => $httpStatus, ...$pause];
+                'imported_dates' => array_keys($importedDates), 'failure_reason' => $failureReason, 'provider_http_status' => $httpStatus, ...$pause];
             if ($tradingDates === [] && $fillGaps && ! Cache::has(YahooFinanceMarketData::CooldownKey)) {
                 Cache::put('market-data.daily.checked.'.$listing->id, true, now()->addHours(6));
             }
         }
-        if ($firstHistoricalChange !== null && $tradingDates === []) {
-            if ($fillGaps) {
+        if ($firstHistoricalChange !== null && ($tradingDates === [] || $dailyGapsOnly)) {
+            if ($fillGaps || $dailyGapsOnly) {
                 $this->performanceSnapshots->expireIncompleteFrom(Carbon::parse($firstHistoricalChange));
             } else {
                 $this->performanceSnapshots->invalidate(from: Carbon::parse($firstHistoricalChange));
@@ -242,7 +248,7 @@ class FreeDailyMarketData
 
     /**
      * @param  array<string, true>  $expectedDays
-     * @return array{from: string, to: string, expected_count: int, missing_count: int}
+     * @return array{from: string, to: string, expected_count: int, missing_count: int, missing_dates: list<string>}
      */
     private function countCoverage(?int $listingId, ?string $currency, Carbon $from, Carbon $until, array $expectedDays): array
     {
@@ -253,7 +259,9 @@ class FreeDailyMarketData
             ->where('is_current', true)->where('validation_status', 'valid')->where('close', '>', 0)
             ->whereBetween('trading_date', [$from->toDateString(), $to])->pluck('trading_date')->flip()->all();
 
+        $missingDates = array_keys(array_diff_key($expectedDays, $coveredDays));
+
         return ['from' => $from->toDateString(), 'to' => $to,
-            'expected_count' => count($expectedDays), 'missing_count' => count(array_diff_key($expectedDays, $coveredDays))];
+            'expected_count' => count($expectedDays), 'missing_count' => count($missingDates), 'missing_dates' => $missingDates];
     }
 }

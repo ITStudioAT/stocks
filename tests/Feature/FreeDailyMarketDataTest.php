@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Jobs\CheckPerformanceConsistency;
+use App\Models\AppConfig;
 use App\Models\Depot;
 use App\Models\DepotTransaction;
 use App\Models\MarketPrice;
@@ -14,6 +16,7 @@ use App\Services\MarketDataCoordinator;
 use App\Services\MarketPriceStore;
 use App\Services\YahooFinanceMarketData;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -385,6 +388,72 @@ class FreeDailyMarketDataTest extends TestCase
         $this->assertSame('2026-11-25', app(FreeDailyMarketData::class)->coverage($holding)['to']);
         $this->travelTo(Carbon::parse('2026-11-28 00:01:00', 'America/New_York'));
         $this->assertSame('2026-11-27', app(FreeDailyMarketData::class)->coverage($holding)['to']);
+    }
+
+    public function test_check_and_rebuild_report_real_progress_partial_import_and_provider_pause(): void
+    {
+        config(['queue.default' => 'database']);
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin'));
+        $complete = $this->holding();
+        $partial = StockHolding::factory()->create(['isin' => 'DE000A0H08S0', 'symbol' => 'EXV9', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
+        $paused = StockHolding::factory()->create(['isin' => 'IE00B5MTY077', 'symbol' => 'SC00', 'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR']);
+        $chart = $this->chart();
+        $dates = [];
+        for ($day = Carbon::parse('2025-11-06', 'Europe/Berlin'); $day->toDateString() <= '2026-11-05'; $day->addDay()) {
+            if (app(FreeTradingCalendar::class)->session($complete, $day) !== null) {
+                $dates[] = $day->copy()->setTime(9, 0)->timestamp;
+            }
+        }
+        $chart['chart']['result'][0]['timestamp'] = $dates;
+        $chart['chart']['result'][0]['indicators']['quote'][0] = array_fill_keys(['open', 'high', 'low', 'close', 'volume'], array_fill(0, count($dates), 190));
+        Http::fake(['query1.finance.yahoo.com/*' => Http::response($chart)]);
+        app(FreeDailyMarketData::class)->import($complete);
+        $this->assertSame('complete', app(FreeDailyMarketData::class)->coverage($complete)['status']);
+        $beforeRows = MarketPrice::query()->where('market_listing_id', $complete->market_listing_id)->count();
+
+        Http::swap(new Factory);
+        Http::preventStrayRequests();
+        $observedProgress = [];
+        Http::fake(function ($request) use (&$observedProgress) {
+            $current = AppConfig::query()->where('key', CheckPerformanceConsistency::Key)->first()->value;
+            $observedProgress[] = [$current['step'], $current['history_checked'], $current['history_total']];
+            if (str_contains($request->url(), 'SC00.DE')) {
+                return Http::response('', 429, ['Retry-After' => '1800']);
+            }
+            $chart = $this->chart();
+            $chart['chart']['result'][0]['meta']['symbol'] = 'EXV9.DE';
+            $chart['chart']['result'][0]['meta']['instrumentType'] = 'ETF';
+
+            return Http::response($chart);
+        });
+        $this->actingAs($admin)->postJson('/admin/data/performance-consistency', ['repair' => false])->assertOk();
+        Queue::pop()->fire();
+        Http::assertNothingSent();
+        $this->postJson('/admin/data/performance-consistency', ['repair' => true])->assertOk();
+        Queue::pop()->fire();
+        $run = $this->getJson('/admin/data/performance-consistency')->assertOk()->json('run');
+        $this->assertSame(3, $run['history_total']);
+        $this->assertSame(3, $run['history_checked']);
+        $this->assertSame(1, $observedProgress[0][1]);
+        $this->assertSame(3, $observedProgress[0][2]);
+        $this->assertStringContainsString('Fehlende Tageskurse werden nachgeladen', $observedProgress[0][0]);
+        $this->assertSame('complete', $run['daily_history'][0]['status']);
+        $this->assertSame(0, $run['daily_history'][0]['filled_count']);
+        $this->assertSame(1, $run['daily_history'][1]['filled_count']);
+        $this->assertSame($run['daily_history'][1]['initial_missing_count'] - 1, $run['daily_history'][1]['missing_count']);
+        $this->assertSame('partial', $run['daily_history'][1]['repair_status']);
+        $this->assertSame('provider', $run['daily_history'][2]['pause_reason']);
+        $this->assertSame(0, $run['daily_history'][2]['filled_count']);
+        $this->assertSame($beforeRows, MarketPrice::query()->where('market_listing_id', $complete->market_listing_id)->count());
+        Http::assertSentCount(2);
+        $partialRows = MarketPrice::query()->where('market_listing_id', $partial->market_listing_id)->count();
+        $this->postJson('/admin/data/performance-consistency', ['repair' => true])->assertOk();
+        Queue::pop()->fire();
+        $again = $this->getJson('/admin/data/performance-consistency')->assertOk()->json('run.daily_history');
+        $this->assertSame(0, $again[1]['filled_count']);
+        $this->assertSame($partialRows, MarketPrice::query()->where('market_listing_id', $partial->market_listing_id)->count());
+        Http::assertSentCount(2);
     }
 
     /** @return array<string, array{string, string}> */

@@ -26,7 +26,7 @@ class AdminPerformanceConsistencyController extends Controller
             if (in_array($run['status'] ?? null, ['queued', 'running'], true)) {
                 return response()->json(['run' => $run]);
             }
-            $run = ['id' => (string) Str::uuid(), 'status' => 'queued', 'repair' => $validated['repair'], 'step' => 'Wartet auf die Queue', 'steps' => [], 'periods' => [], 'issues' => [], 'checked' => 0, 'missing' => 0, 'incorrect' => 0, 'unavailable' => 0, 'repaired' => 0];
+            $run = ['id' => (string) Str::uuid(), 'status' => 'queued', 'repair' => $validated['repair'], 'step' => 'Wartet auf den Start', 'steps' => [], 'periods' => [], 'issues' => [], 'history_total' => null, 'history_checked' => 0, 'checked' => 0, 'missing' => 0, 'incorrect' => 0, 'unavailable' => 0, 'repaired' => 0];
             AppConfig::query()->updateOrCreate(['key' => CheckPerformanceConsistency::Key], ['value' => $run]);
             try {
                 CheckPerformanceConsistency::dispatch($run['id']);

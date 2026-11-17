@@ -46,16 +46,11 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
         if (MarketPriceStore::enabled()) {
             $this->checkDailyHistory($run, app(FreeDailyMarketData::class));
         }
+        $run['phase'] = 'periods';
         $run['step'] = 'Depots werden geprüft';
         $this->save($run);
 
         foreach (Depot::query()->orderBy('id')->get() as $depot) {
-            if ($run['repair']) {
-                DB::transaction(function () use ($depot): void {
-                    Depot::query()->lockForUpdate()->findOrFail($depot->id);
-                    DB::table(DashboardPerformanceSnapshots::Table)->where('depot_id', $depot->id)->where('period', 'day')->delete();
-                }, attempts: 3);
-            }
             $first = $depot->transactions()->min('booked_at');
             $firstDate = $first === null ? $depot->created_at : Carbon::parse($first);
             if ($firstDate === null) {
@@ -63,7 +58,9 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
             }
             foreach (['week' => 'Wochen', 'month' => 'Monate', 'year' => 'Jahre'] as $period => $label) {
                 $run['periods'][$period] ??= ['checked' => 0, 'missing' => 0, 'incorrect' => 0, 'unavailable' => 0];
-                $run['step'] = "{$depot->name}: {$label} werden geprüft";
+                $run['step'] = $run['repair']
+                    ? "{$depot->name}: {$label} werden geprüft und bei Bedarf neu aufgebaut"
+                    : "{$depot->name}: {$label} werden geprüft";
                 $this->save($run);
                 $end = $snapshots->periodEnd($firstDate, $period);
                 while ($end->lt(now()->startOfDay())) {
@@ -117,7 +114,9 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
                             $run['repaired']++;
                         }
                     }, attempts: 3);
-                    $this->save($run);
+                    if ($run['checked'] % 10 === 0) {
+                        $this->save($run);
+                    }
                     $end = $snapshots->periodEnd($end->copy()->addDay(), $period);
                 }
                 $run['steps'][] = "{$depot->name}: {$label} geprüft";
@@ -133,17 +132,23 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
     private function checkDailyHistory(array &$run, FreeDailyMarketData $daily): void
     {
         $run['daily_history'] = [];
-        foreach (StockHolding::query()->orderBy('id')->lazyById() as $holding) {
+        $run['phase'] = 'daily';
+        $holdingIds = StockHolding::query()->orderBy('id')->pluck('id')->all();
+        $run['history_total'] = count($holdingIds);
+        $run['history_checked'] = 0;
+        $run['step'] = 'Tageskurse werden geprüft';
+        $this->save($run);
+        foreach (StockHolding::query()->whereIn('id', $holdingIds)->orderBy('id')->lazyById() as $holding) {
             $label = $holding->name ?? $holding->symbol;
             $run['step'] = "{$label}: Jahreskurse werden geprüft";
             $this->save($run);
             $before = $daily->coverage($holding);
             $after = $before;
-            $repairStatus = null;
+            $result = null;
             if ($run['repair'] && $before['status'] === 'missing') {
                 $run['step'] = "{$label}: Fehlende Tageskurse werden nachgeladen";
                 $this->save($run);
-                $repairStatus = $daily->import($holding)['status'];
+                $result = $daily->import($holding, tradingDates: $before['missing_dates'], dailyGapsOnly: true);
                 $after = $daily->coverage($holding);
             }
 
@@ -153,9 +158,15 @@ class CheckPerformanceConsistency implements ShouldBeUnique, ShouldQueue
                 'symbol' => $holding->symbol,
                 'exchange' => $holding->exchange,
                 ...$after,
-                'filled_count' => max(0, ($before['missing_count'] ?? 0) - ($after['missing_count'] ?? 0)),
-                'repair_status' => $repairStatus,
+                'initial_missing_count' => $before['missing_count'],
+                'initial_missing_dates' => $before['missing_dates'] ?? null,
+                'filled_count' => count(array_intersect($before['missing_dates'] ?? [], $result['imported_dates'] ?? [])),
+                'repair_status' => $result['status'] ?? null,
+                'pause_reason' => $result['pause_reason'] ?? null,
+                'retry_at' => $result['retry_at'] ?? null,
+                'failure_reason' => $result['failure_reason'] ?? null,
             ];
+            $run['history_checked']++;
             $this->save($run);
         }
     }

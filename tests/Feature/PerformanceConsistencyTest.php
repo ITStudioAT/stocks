@@ -104,4 +104,18 @@ class PerformanceConsistencyTest extends TestCase
         (new CheckPerformanceConsistency($id))->handle($snapshots);
         $this->getJson('/admin/data/performance-consistency')->assertJsonPath('run.periods.month.incorrect', 0);
     }
+
+    public function test_rebuild_preserves_unrelated_daily_snapshots(): void
+    {
+        $this->travelTo(Carbon::parse('2026-02-15 12:00:00'));
+        Queue::fake();
+        $admin = User::factory()->create();
+        $admin->assignRole(Role::findOrCreate('admin'));
+        $depot = Depot::factory()->create(['created_at' => '2026-02-01 10:00:00']);
+        $payload = json_encode(['balance' => 100, 'source_markers' => [], '_source_policy' => app(DashboardPerformanceSnapshots::class)->sourcePolicy()]);
+        DB::table('depot_performance_snapshots')->insert(['depot_id' => $depot->id, 'period' => 'day', 'end_date' => '2026-02-10', 'payload' => $payload]);
+        $id = $this->actingAs($admin)->postJson('/admin/data/performance-consistency', ['repair' => true])->json('run.id');
+        (new CheckPerformanceConsistency($id))->handle(app(DashboardPerformanceSnapshots::class));
+        $this->assertSame($payload, DB::table('depot_performance_snapshots')->where('depot_id', $depot->id)->where('period', 'day')->value('payload'));
+    }
 }

@@ -1,3 +1,10 @@
+## 2.0.4
+
+### Data
+
+- Prüfung und Neuaufbau zeigen den Fortschritt und die Ergebnisse übersichtlich nach Tageskursen und Depotzeiträumen.
+- Fehlende Tageskurse werden gezielt nachgeladen; Pausen und offene Lücken bleiben sichtbar.
+
 ## 2.0.3
 
 ### System
