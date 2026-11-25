@@ -5,10 +5,12 @@ namespace Tests\Feature;
 use App\Models\StockHolding;
 use App\Models\User;
 use App\Services\FreeIntradayMarketData;
+use App\Services\XetraIntradayCollector;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Factory;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Spatie\Permission\Models\Role;
 use Tests\TestCase;
@@ -172,6 +174,52 @@ class HoldingPriceReloadTest extends TestCase
             ->assertJsonPath('holdings.0.price_reload_available', false)
             ->assertJsonPath('holdings.0.daily_history_available', false);
         Http::assertNothingSent();
+    }
+
+    public function test_a_saved_nvidia_xetra_listing_can_reload_intraday_and_daily_prices(): void
+    {
+        config(['services.market_data.central_enabled' => true]);
+        $holding = StockHolding::factory()->create([
+            'symbol' => 'NVD', 'isin' => 'US67066G1040', 'wkn' => '918422',
+            'exchange' => 'XETRA', 'mic_code' => 'XETR', 'currency' => 'EUR',
+        ]);
+        DB::table('market_source_instruments')->where('market_listing_id', $holding->market_listing_id)->delete();
+        $this->mock(XetraIntradayCollector::class, function ($mock): void {
+            $mock->shouldReceive('collect')->once()->andReturn(['series' => [], 'warnings' => [], 'days' => [], 'complete' => true]);
+        });
+        $meta = [
+            'symbol' => 'NVD.DE', 'currency' => 'EUR', 'exchangeName' => 'GER', 'fullExchangeName' => 'XETRA',
+            'exchangeTimezoneName' => 'Europe/Berlin', 'instrumentType' => 'EQUITY',
+        ];
+        $intradayTimestamp = Carbon::parse('2026-11-04 08:30:00', 'UTC')->timestamp;
+        $dailyTimestamp = Carbon::parse('2026-11-03 08:00:00', 'UTC')->timestamp;
+        $url = 'https://query1.finance.yahoo.com/v8/finance/chart/NVD.DE';
+        Http::fake([
+            "{$url}?*interval=5m*" => Http::response(['chart' => ['result' => [[
+                'meta' => [...$meta, 'dataGranularity' => '5m', 'regularMarketPrice' => 157.25, 'regularMarketTime' => $intradayTimestamp],
+                'timestamp' => [$intradayTimestamp],
+                'indicators' => ['quote' => [['open' => [157], 'high' => [158], 'low' => [157], 'close' => [157.25]]]],
+            ]]]]),
+            "{$url}?*interval=1d*" => Http::response(['chart' => ['result' => [[
+                'meta' => [...$meta, 'dataGranularity' => '1d'],
+                'timestamp' => [$dailyTimestamp],
+                'indicators' => ['quote' => [['open' => [154], 'high' => [157], 'low' => [153], 'close' => [156.5]]]],
+            ]]]]),
+        ]);
+        $this->actingAs($this->admin());
+
+        $this->postJson("/admin/watchlist/holdings/{$holding->id}/price/reload")->assertOk()
+            ->assertJsonPath('status', 'updated')
+            ->assertJsonPath('holding.latest_price', '157.250000')
+            ->assertJsonPath('holding.daily_history_available', true);
+        $this->travel(5)->minutes();
+        $this->postJson("/admin/watchlist/holdings/{$holding->id}/daily-history", ['days' => 2])->assertOk()
+            ->assertJsonPath('status', 'complete')
+            ->assertJsonPath('stored_count', 1);
+        $this->getJson('/admin/watchlist/holdings?all=1')->assertOk()
+            ->assertJsonPath('holdings.0.latest_price', '157.250000')
+            ->assertJsonPath('holdings.0.end_price_24', '156.500000');
+        Http::assertSentCount(2);
     }
 
     private function holding(): StockHolding

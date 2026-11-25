@@ -37,6 +37,7 @@ return [
             'IE000YYE6WK5' => 'DFEN.DE',
             'DE000A0H08K7' => 'EXH5.DE',
             'US88160R1014' => 'TL0.DE',
+            'US67066G1040' => 'NVD.DE',
             'IE00BGV5VN51' => 'XAIX.DE',
             'DE000A0H08S0' => 'EXV9.DE',
             'IE00B5MTY077' => 'SC00.DE',
